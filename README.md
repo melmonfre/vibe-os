@@ -1,4 +1,7 @@
-# Bootloader x86 (BIOS) com Userland Gráfica e Mouse
+# VIBE OS - Sistema Operacional Vibe Coded 
+
+## AVISO
+Não leve esse repositório a sério, foi uma demonstração de como criar código low-level com IA de modo a mostrar as falhas e problemas existentes. O código quebrou no final quando foi solicitada a criação de um sistema de arquivos simples, portanto isso aqui vale para melhorias e avaliação da qualidade de código!!! 
 
 Projeto mínimo de bootloader x86 em dois estágios:
 
