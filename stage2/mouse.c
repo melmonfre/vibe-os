@@ -5,7 +5,7 @@
 /* prototypes of the new kernel implementations */
 extern void kernel_mouse_init(void);
 extern int kernel_mouse_has_data(void);
-extern void kernel_mouse_read(int8_t *x, int8_t *y, uint8_t *buttons);
+extern void kernel_mouse_read(int *x, int *y, uint8_t *buttons);
 extern void kernel_mouse_irq_handler(void);
 
 int mouse_read(struct mouse_state *state) {
@@ -13,13 +13,13 @@ int mouse_read(struct mouse_state *state) {
         return 0;
     }
     
-    int8_t x = 0, y = 0;
+    int x = 0, y = 0;
     uint8_t buttons = 0;
     kernel_mouse_read(&x, &y, &buttons);
     
     if (state != NULL) {
-        state->x = (int)x;
-        state->y = (int)y;
+        state->x = x;
+        state->y = y;
         state->buttons = buttons;
     }
     

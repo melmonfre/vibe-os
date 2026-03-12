@@ -18,8 +18,11 @@ void kernel_mouse_init(void);
 /* Check if mouse has data */
 int kernel_mouse_has_data(void);
 
-/* Read mouse data (x_delta, y_delta, buttons) */
-void kernel_mouse_read(int8_t *x, int8_t *y, uint8_t *buttons);
+/* Read absolute mouse state in screen coordinates. */
+void kernel_mouse_read(int *x, int *y, uint8_t *buttons);
+
+/* Re-center and clamp the mouse to the current video mode. */
+void kernel_mouse_sync_to_video(void);
 
 /* Mouse IRQ handler (called from assembly) */
 void kernel_mouse_irq_handler(void);

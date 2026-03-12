@@ -95,3 +95,18 @@ struct rect window_close_button(const struct rect *w) {
     struct rect close = {w->x + w->w - 14, w->y + 2, 10, 10};
     return close;
 }
+
+struct rect window_max_button(const struct rect *w) {
+    struct rect max = {w->x + w->w - 26, w->y + 2, 10, 10};
+    return max;
+}
+
+struct rect window_min_button(const struct rect *w) {
+    struct rect min = {w->x + w->w - 38, w->y + 2, 10, 10};
+    return min;
+}
+
+struct rect window_resize_grip(const struct rect *w) {
+    struct rect grip = {w->x + w->w - 12, w->y + w->h - 12, 12, 12};
+    return grip;
+}

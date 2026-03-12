@@ -21,5 +21,8 @@ char *next_token(char **cursor);
 int to_upper(int c);
 int point_in_rect(const struct rect *r, int x, int y);
 struct rect window_close_button(const struct rect *w);
+struct rect window_max_button(const struct rect *w);
+struct rect window_min_button(const struct rect *w);
+struct rect window_resize_grip(const struct rect *w);
 
 #endif // UTILS_H

@@ -255,11 +255,12 @@ int terminal_execute_command(struct terminal_state *t) {
     return 0;
 }
 
-void terminal_draw_window(struct terminal_state *t, int close_hover) {
+void terminal_draw_window(struct terminal_state *t, int active,
+                          int min_hover, int max_hover, int close_hover) {
     const int text_x = t->window.x + 8;
     const int text_y = t->window.y + 22;
 
-    draw_window_frame(&t->window, "TERMINAL", close_hover);
+    draw_window_frame(&t->window, "TERMINAL", active, min_hover, max_hover, close_hover);
     sys_rect(t->window.x + 4, t->window.y + 18, t->window.w - 8,
              t->window.h - 22, 0);
 

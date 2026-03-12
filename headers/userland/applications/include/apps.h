@@ -10,6 +10,7 @@ enum app_type {
     APP_CLOCK,
     APP_FILEMANAGER,
     APP_TASKMANAGER,
+    APP_PERSONALIZE,
 };
 
 #define MAX_WINDOWS 8
@@ -23,7 +24,10 @@ struct window {
     int active;
     enum app_type type;
     struct rect rect;
+    struct rect restore_rect;
     int close_hover;
+    int minimized;
+    int maximized;
     uint32_t start_ticks;
     int instance; /* index into type-specific state array */
 };

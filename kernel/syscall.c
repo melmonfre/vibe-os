@@ -20,14 +20,12 @@ static uint32_t sys_gfx_clear(uint32_t color, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
     kernel_video_clear((uint8_t)(color & 0xFFu));
-    kernel_video_flip();
     return 0;
 }
 
 static uint32_t sys_gfx_rect(uint32_t x, uint32_t y, uint32_t w,
                              uint32_t h, uint32_t color) {
     kernel_gfx_rect((int)x, (int)y, (int)w, (int)h, (uint8_t)(color & 0xFFu));
-    kernel_video_flip();
     return 0;
 }
 
@@ -36,7 +34,20 @@ static uint32_t sys_gfx_text(uint32_t x, uint32_t y, uint32_t text_ptr,
     (void)e;
     const char *msg = (const char *)(uintptr_t)text_ptr;
     kernel_gfx_draw_text((int)x, (int)y, msg, (uint8_t)(color & 0xFFu));
+    return 0;
+}
+
+static uint32_t sys_gfx_flip(uint32_t a, uint32_t b, uint32_t c,
+                             uint32_t d, uint32_t e) {
+    (void)a; (void)b; (void)c; (void)d; (void)e;
     kernel_video_flip();
+    return 0;
+}
+
+static uint32_t sys_gfx_leave(uint32_t a, uint32_t b, uint32_t c,
+                              uint32_t d, uint32_t e) {
+    (void)a; (void)b; (void)c; (void)d; (void)e;
+    kernel_video_leave_graphics();
     return 0;
 }
 
@@ -46,14 +57,13 @@ static uint32_t sys_input_mouse(uint32_t state_ptr, uint32_t b, uint32_t c,
     if (state_ptr == 0)
         return 0;
     struct mouse_state *out = (struct mouse_state *)(uintptr_t)state_ptr;
-    int8_t dx = 0, dy = 0;
+    int x = 0, y = 0;
     uint8_t buttons = 0;
     if (!kernel_mouse_has_data())
         return 0;
-    kernel_mouse_read(&dx, &dy, &buttons);
-    /* accumulate deltas into absolute coords (clamp on caller side if needed) */
-    out->x += dx;
-    out->y += dy;
+    kernel_mouse_read(&x, &y, &buttons);
+    out->x = x;
+    out->y = y;
     out->buttons = buttons;
     return 1;
 }
@@ -142,6 +152,8 @@ void syscall_init(void) {
     syscall_table[SYSCALL_GFX_CLEAR] = sys_gfx_clear;
     syscall_table[SYSCALL_GFX_RECT] = sys_gfx_rect;
     syscall_table[SYSCALL_GFX_TEXT] = sys_gfx_text;
+    syscall_table[SYSCALL_GFX_FLIP] = sys_gfx_flip;
+    syscall_table[SYSCALL_GFX_LEAVE] = sys_gfx_leave;
     syscall_table[SYSCALL_INPUT_MOUSE] = sys_input_mouse;
     syscall_table[SYSCALL_INPUT_KEY] = sys_input_key;
     syscall_table[12] = sys_text_putc;     /* legacy text mode */

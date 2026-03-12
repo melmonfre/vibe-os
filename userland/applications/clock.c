@@ -21,18 +21,40 @@ static void clock_format(char out[9], uint32_t ticks) {
     out[8] = '\0';
 }
 
+static void append_two_digits(char *out, uint32_t value) {
+    out[0] = (char)('0' + ((value / 10u) % 10u));
+    out[1] = (char)('0' + (value % 10u));
+    out[2] = '\0';
+}
+
 void clock_init_state(struct clock_state *c) {
     c->window = DEFAULT_CLOCK_WINDOW;
     c->last_second = 0xFFFFFFFFu;
 }
 
-void clock_draw_window(struct clock_state *c, uint32_t ticks, int close_hover) {
+void clock_draw_window(struct clock_state *c, uint32_t ticks, int active,
+                       int min_hover, int max_hover, int close_hover) {
     char time_text[9];
-    draw_window_frame(&c->window, "RELOGIO", close_hover);
+    char seconds_text[3];
+    uint32_t total_seconds = ticks / 100u;
+    uint32_t seconds = total_seconds % 60u;
+    int bar_w;
+
+    draw_window_frame(&c->window, "RELOGIO", active, min_hover, max_hover, close_hover);
     sys_rect(c->window.x + 4, c->window.y + 18, c->window.w - 8,
              c->window.h - 22, 1);
+    sys_rect(c->window.x + 10, c->window.y + 24, c->window.w - 20, 16, 8);
 
     clock_format(time_text, ticks);
-    sys_text(c->window.x + 14, c->window.y + 34, 15, time_text);
-    sys_text(c->window.x + 10, c->window.y + 50, 14, "UPTIME");
+    append_two_digits(seconds_text, seconds);
+    sys_text(c->window.x + 18, c->window.y + 30, 15, time_text);
+    sys_text(c->window.x + 10, c->window.y + 50, 14, "SEG");
+    sys_text(c->window.x + 42, c->window.y + 50, 15, seconds_text);
+
+    bar_w = (int)((seconds * (uint32_t)(c->window.w - 24)) / 59u);
+    if (bar_w < 0) {
+        bar_w = 0;
+    }
+    sys_rect(c->window.x + 10, c->window.y + 62, c->window.w - 20, 6, 8);
+    sys_rect(c->window.x + 10, c->window.y + 62, bar_w, 6, 10);
 }

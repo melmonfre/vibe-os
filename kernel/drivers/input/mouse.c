@@ -15,6 +15,26 @@ static volatile uint8_t g_kernel_mouse_packet_index = 0u;
 static volatile uint8_t g_kernel_mouse_updated = 0u;
 static volatile uint8_t g_kernel_mouse_ready = 0u;
 
+static void kernel_mouse_clamp_to_mode(const struct video_mode *mode) {
+    if (mode == NULL || mode->width == 0u || mode->height == 0u) {
+        g_kernel_mouse.x = 0;
+        g_kernel_mouse.y = 0;
+        return;
+    }
+
+    if (g_kernel_mouse.x < 0) {
+        g_kernel_mouse.x = 0;
+    } else if (g_kernel_mouse.x >= (int)mode->width) {
+        g_kernel_mouse.x = (int)mode->width - 1;
+    }
+
+    if (g_kernel_mouse.y < 0) {
+        g_kernel_mouse.y = 0;
+    } else if (g_kernel_mouse.y >= (int)mode->height) {
+        g_kernel_mouse.y = (int)mode->height - 1;
+    }
+}
+
 static void ps2_wait_write(void) {
     while ((inb(0x64) & 0x02u) != 0u) {
     }
@@ -84,7 +104,7 @@ void kernel_mouse_init(void) {
 
     g_kernel_mouse_packet_index = 0u;
     g_kernel_mouse_ready = 1u;
-    
+
     struct video_mode *mode = kernel_video_get_mode();
     g_kernel_mouse.x = (int)(mode->width / 2u);
     g_kernel_mouse.y = (int)(mode->height / 2u);
@@ -98,20 +118,35 @@ int kernel_mouse_has_data(void) {
     return updated;
 }
 
-void kernel_mouse_read(int8_t *x, int8_t *y, uint8_t *buttons) {
+void kernel_mouse_read(int *x, int *y, uint8_t *buttons) {
     uint32_t flags = kernel_irq_save();
-    
+
     if (x != NULL) {
-        *x = (int8_t)(g_kernel_mouse.x >> 8);
+        *x = g_kernel_mouse.x;
     }
     if (y != NULL) {
-        *y = (int8_t)(g_kernel_mouse.y >> 8);
+        *y = g_kernel_mouse.y;
     }
     if (buttons != NULL) {
         *buttons = g_kernel_mouse.buttons;
     }
     
     g_kernel_mouse_updated = 0u;
+    kernel_irq_restore(flags);
+}
+
+void kernel_mouse_sync_to_video(void) {
+    uint32_t flags = kernel_irq_save();
+    struct video_mode *mode = kernel_video_get_mode();
+
+    if (mode != NULL && mode->width != 0u && mode->height != 0u) {
+        g_kernel_mouse.x = (int)(mode->width / 2u);
+        g_kernel_mouse.y = (int)(mode->height / 2u);
+    } else {
+        g_kernel_mouse.x = 0;
+        g_kernel_mouse.y = 0;
+    }
+    g_kernel_mouse_updated = 1u;
     kernel_irq_restore(flags);
 }
 
@@ -141,18 +176,7 @@ void kernel_mouse_irq_handler(void) {
 
     g_kernel_mouse.x += (int)(int8_t)g_kernel_mouse_packet[1];
     g_kernel_mouse.y -= (int)(int8_t)g_kernel_mouse_packet[2];
-
-    if (g_kernel_mouse.x < 0) {
-        g_kernel_mouse.x = 0;
-    } else if (g_kernel_mouse.x >= (int)mode->width) {
-        g_kernel_mouse.x = (int)mode->width - 1;
-    }
-
-    if (g_kernel_mouse.y < 0) {
-        g_kernel_mouse.y = 0;
-    } else if (g_kernel_mouse.y >= (int)mode->height) {
-        g_kernel_mouse.y = (int)mode->height - 1;
-    }
+    kernel_mouse_clamp_to_mode(mode);
 
     g_kernel_mouse.buttons = g_kernel_mouse_packet[0] & 0x07u;
     g_kernel_mouse_updated = 1u;

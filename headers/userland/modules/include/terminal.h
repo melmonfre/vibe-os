@@ -30,6 +30,7 @@ void terminal_reset_input(struct terminal_state *t);
 
 /* execute/draw */
 int terminal_execute_command(struct terminal_state *t);
-void terminal_draw_window(struct terminal_state *t, int close_hover);
+void terminal_draw_window(struct terminal_state *t, int active,
+                          int min_hover, int max_hover, int close_hover);
 
 #endif // TERMINAL_H

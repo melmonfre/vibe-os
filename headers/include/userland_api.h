@@ -14,7 +14,9 @@ enum syscall_id {
     SYSCALL_GFX_INFO = 8,
     SYSCALL_GETPID = 9,
     SYSCALL_YIELD = 10,
-    SYSCALL_WRITE_DEBUG = 11
+    SYSCALL_WRITE_DEBUG = 11,
+    SYSCALL_GFX_FLIP = 14,
+    SYSCALL_GFX_LEAVE = 15
 };
 
 struct mouse_state {

@@ -10,6 +10,7 @@ struct clock_state {
 };
 
 void clock_init_state(struct clock_state *c);
-void clock_draw_window(struct clock_state *c, uint32_t ticks, int close_hover);
+void clock_draw_window(struct clock_state *c, uint32_t ticks, int active,
+                       int min_hover, int max_hover, int close_hover);
 
 #endif // CLOCK_H

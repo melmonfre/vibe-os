@@ -29,6 +29,14 @@ void sys_text(int x, int y, uint8_t color, const char *text) {
     (void)syscall5(SYSCALL_GFX_TEXT, x, y, (int)(uintptr_t)text, color, 0);
 }
 
+void sys_present(void) {
+    (void)syscall5(SYSCALL_GFX_FLIP, 0, 0, 0, 0, 0);
+}
+
+void sys_leave_graphics(void) {
+    (void)syscall5(SYSCALL_GFX_LEAVE, 0, 0, 0, 0, 0);
+}
+
 void sys_sleep(void) {
     (void)syscall5(SYSCALL_SLEEP, 0, 0, 0, 0, 0);
 }

@@ -10,6 +10,7 @@ uint32_t SCREEN_WIDTH = 320;
 uint32_t SCREEN_HEIGHT = 200;
 uint32_t SCREEN_PITCH = 320;
 struct video_mode g_screen_mode = {0};
+static struct desktop_theme g_theme = {3, 7, 8, 7, 9};
 
 void ui_init(void) {
     /* Query actual screen resolution from kernel */
@@ -25,17 +26,147 @@ void ui_init(void) {
     cursor_init();
 }
 
-void draw_window_frame(const struct rect *w, const char *title, int close_hover) {
-    const struct rect close = window_close_button(w);
-    sys_rect(w->x, w->y, w->w, w->h, 8);
-    sys_rect(w->x, w->y, w->w, 14, 7);
-    sys_text(w->x + 6, w->y + 3, 0, title);
-    sys_rect(close.x, close.y, close.w, close.h, close_hover ? 12 : 4);
-    sys_text(close.x + 3, close.y + 2, 15, "X");
+const struct desktop_theme *ui_theme_get(void) {
+    return &g_theme;
 }
 
-static void draw_cursor(const struct mouse_state *mouse) {
-    cursor_draw(mouse->x, mouse->y);
+void ui_theme_set_slot(enum theme_slot slot, uint8_t color) {
+    switch (slot) {
+    case THEME_SLOT_BACKGROUND:
+        g_theme.background = color;
+        break;
+    case THEME_SLOT_MENU:
+        g_theme.menu = color;
+        break;
+    case THEME_SLOT_MENU_BUTTON:
+        g_theme.menu_button = color;
+        break;
+    case THEME_SLOT_TASKBAR:
+        g_theme.taskbar = color;
+        break;
+    case THEME_SLOT_WINDOW:
+        g_theme.window = color;
+        break;
+    default:
+        break;
+    }
+}
+
+const char *ui_theme_slot_name(enum theme_slot slot) {
+    switch (slot) {
+    case THEME_SLOT_BACKGROUND: return "Plano";
+    case THEME_SLOT_MENU: return "Menu";
+    case THEME_SLOT_MENU_BUTTON: return "Botao";
+    case THEME_SLOT_TASKBAR: return "Barra";
+    case THEME_SLOT_WINDOW: return "Janela";
+    default: return "Tema";
+    }
+}
+
+static void draw_panel(const struct rect *r, uint8_t face, uint8_t light, uint8_t dark) {
+    sys_rect(r->x, r->y, r->w, r->h, face);
+    sys_rect(r->x, r->y, r->w, 1, light);
+    sys_rect(r->x, r->y, 1, r->h, light);
+    sys_rect(r->x, r->y + r->h - 1, r->w, 1, dark);
+    sys_rect(r->x + r->w - 1, r->y, 1, r->h, dark);
+}
+
+static const char *app_caption(enum app_type type) {
+    switch (type) {
+    case APP_TERMINAL: return "Terminal";
+    case APP_CLOCK: return "Relogio";
+    case APP_FILEMANAGER: return "Arquivos";
+    case APP_TASKMANAGER: return "Tasks";
+    case APP_PERSONALIZE: return "Cores";
+    default: return "App";
+    }
+}
+
+static void draw_task_button(const struct rect *r, const char *label, int active) {
+    uint8_t face = active ? g_theme.window : g_theme.menu_button;
+    draw_panel(r, face, 15, 0);
+    sys_text(r->x + 5, r->y + 4, 0, label);
+}
+
+void draw_window_frame(const struct rect *w, const char *title,
+                       int active,
+                       int min_hover,
+                       int max_hover,
+                       int close_hover) {
+    const struct rect min = window_min_button(w);
+    const struct rect max = window_max_button(w);
+    const struct rect close = window_close_button(w);
+    const struct rect outer = {w->x, w->y, w->w, w->h};
+    const struct rect title_bar = {w->x + 2, w->y + 2, w->w - 4, 12};
+
+    draw_panel(&outer, 7, 15, 0);
+    sys_rect(title_bar.x, title_bar.y, title_bar.w, title_bar.h, active ? g_theme.window : 8);
+    sys_text(w->x + 6, w->y + 4, 15, title);
+
+    draw_panel(&min, min_hover ? 15 : g_theme.menu_button, 15, 0);
+    draw_panel(&max, max_hover ? 15 : g_theme.menu_button, 15, 0);
+    draw_panel(&close, close_hover ? 12 : g_theme.menu_button, 15, 0);
+    sys_text(min.x + 3, min.y + 2, 0, "-");
+    sys_text(max.x + 3, max.y + 2, 0, "0");
+    sys_text(close.x + 3, close.y + 2, 0, "X");
+}
+
+static void draw_start_menu(int taskbar_y,
+                            int terminal_item_hover,
+                            int clock_item_hover,
+                            int filemgr_item_hover,
+                            int taskmgr_item_hover,
+                            int logout_item_hover) {
+    const struct rect menu_rect = {2, taskbar_y - 116, 158, 114};
+    const struct rect blue_strip = {menu_rect.x + 2, menu_rect.y + 2, 22, menu_rect.h - 4};
+    const struct rect terminal_item = {menu_rect.x + 28, menu_rect.y + 8, 126, 16};
+    const struct rect clock_item = {menu_rect.x + 28, menu_rect.y + 26, 126, 16};
+    const struct rect filemgr_item = {menu_rect.x + 28, menu_rect.y + 44, 126, 16};
+    const struct rect taskmgr_item = {menu_rect.x + 28, menu_rect.y + 62, 126, 16};
+    const struct rect logout_item = {menu_rect.x + 28, menu_rect.y + 88, 126, 16};
+
+    draw_panel(&menu_rect, g_theme.menu, 15, 0);
+    sys_rect(blue_strip.x, blue_strip.y, blue_strip.w, blue_strip.h, 9);
+    sys_text(blue_strip.x + 4, blue_strip.y + 6, 15, "V");
+    sys_text(blue_strip.x + 4, blue_strip.y + 18, 15, "I");
+    sys_text(blue_strip.x + 4, blue_strip.y + 30, 15,  "B");
+    sys_text(blue_strip.x + 4, blue_strip.y + 42, 15, "E");
+
+    draw_task_button(&terminal_item, "Terminal", terminal_item_hover);
+    draw_task_button(&clock_item, "Relogio", clock_item_hover);
+    draw_task_button(&filemgr_item, "Arquivos", filemgr_item_hover);
+    draw_task_button(&taskmgr_item, "Tasks", taskmgr_item_hover);
+    sys_rect(menu_rect.x + 28, menu_rect.y + 82, 126, 1, 8);
+    draw_task_button(&logout_item, "Encerrar sessao", logout_item_hover);
+}
+
+static void draw_taskbar(const struct window *wins, int win_count, int focused, int start_hover) {
+    const int taskbar_y = (int)SCREEN_HEIGHT - 22;
+    struct rect start_button = {4, taskbar_y + 3, 56, 16};
+    int x = 66;
+
+    sys_rect(0, taskbar_y, (int)SCREEN_WIDTH, 22, g_theme.taskbar);
+    sys_rect(0, taskbar_y, (int)SCREEN_WIDTH, 1, 15);
+    sys_rect(0, taskbar_y + 21, (int)SCREEN_WIDTH, 1, 0);
+    draw_task_button(&start_button, "Iniciar", start_hover);
+
+    for (int i = 0; i < win_count; ++i) {
+        struct rect button;
+
+        if (!wins[i].active) {
+            continue;
+        }
+
+        button.x = x;
+        button.y = taskbar_y + 3;
+        button.w = 68;
+        button.h = 16;
+        if (button.x + button.w > (int)SCREEN_WIDTH - 4) {
+            break;
+        }
+        draw_task_button(&button, app_caption(wins[i].type), i == focused && !wins[i].minimized);
+        x += button.w + 4;
+    }
 }
 
 void draw_desktop(const struct mouse_state *mouse,
@@ -44,34 +175,29 @@ void draw_desktop(const struct mouse_state *mouse,
                   int terminal_item_hover,
                   int clock_item_hover,
                   int filemgr_item_hover,
-                  int taskmgr_item_hover) {
-    int taskbar_y = (int)SCREEN_HEIGHT - 16;
-    const struct rect taskbar = {0, taskbar_y, (int)SCREEN_WIDTH, 16};
-    const struct rect start_button = {4, taskbar_y + 2, 48, 12};
-    const struct rect menu_rect = {4, taskbar_y - 80, 130, 80};
-    const struct rect terminal_item = {8, taskbar_y - 68, 122, 14};
-    const struct rect clock_item = {8, taskbar_y - 48, 122, 14};
-    const struct rect filemgr_item = {8, taskbar_y - 28, 122, 14};
-    const struct rect taskmgr_item = {8, taskbar_y - 8, 122, 14};
+                  int taskmgr_item_hover,
+                  int logout_item_hover,
+                  const struct window *wins,
+                  int win_count,
+                  int focused) {
+    const int desktop_h = (int)SCREEN_HEIGHT - 22;
 
-    sys_clear(1);
-    sys_rect(6, 6, 118, 12, 9);
-    sys_text(10, 8, 15, "BOOTLOADER VIBE");
-    sys_rect(taskbar.x, taskbar.y, taskbar.w, taskbar.h, 8);
-    sys_rect(start_button.x, start_button.y, start_button.w, start_button.h, start_hover ? 14 : 10);
-    sys_text(start_button.x + 10, start_button.y + 3, 0, "START");
+    sys_clear(g_theme.background);
+    sys_rect(0, 0, (int)SCREEN_WIDTH, desktop_h, g_theme.background);
+    sys_rect(20, 18, 140, 18, g_theme.window);
+    sys_text(28, 24, 15, "VIBE DESKTOP");
+    sys_rect((int)SCREEN_WIDTH - 108, 24, 72, 72, 11);
+    sys_text((int)SCREEN_WIDTH - 94, 52, 0, "Meu PC");
+
+    draw_taskbar(wins, win_count, focused, start_hover);
 
     if (menu_open) {
-        sys_rect(menu_rect.x, menu_rect.y, menu_rect.w, menu_rect.h, 7);
-        sys_text(menu_rect.x + 6, menu_rect.y + 4, 0, "APPS");
-        sys_rect(terminal_item.x, terminal_item.y, terminal_item.w, terminal_item.h, terminal_item_hover ? 14 : 9);
-        sys_text(terminal_item.x + 6, terminal_item.y + 4, 0, "TERMINAL");
-        sys_rect(clock_item.x, clock_item.y, clock_item.w, clock_item.h, clock_item_hover ? 14 : 9);
-        sys_text(clock_item.x + 6, clock_item.y + 4, 0, "RELOGIO");
-        sys_rect(filemgr_item.x, filemgr_item.y, filemgr_item.w, filemgr_item.h, filemgr_item_hover ? 14 : 9);
-        sys_text(filemgr_item.x + 6, filemgr_item.y + 4, 0, "FILEMANAGER");
-        sys_rect(taskmgr_item.x, taskmgr_item.y, taskmgr_item.w, taskmgr_item.h, taskmgr_item_hover ? 14 : 9);
-        sys_text(taskmgr_item.x + 6, taskmgr_item.y + 4, 0, "TASKS");
+        draw_start_menu((int)SCREEN_HEIGHT - 22,
+                        terminal_item_hover,
+                        clock_item_hover,
+                        filemgr_item_hover,
+                        taskmgr_item_hover,
+                        logout_item_hover);
     }
-    draw_cursor(mouse);
+    (void)mouse;
 }

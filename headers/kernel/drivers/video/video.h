@@ -34,6 +34,7 @@ size_t kernel_video_get_pixel_count(void);
 /* Simple pixel operations */
 void kernel_video_clear(uint8_t color);
 void kernel_video_flip(void);
+void kernel_video_leave_graphics(void);
 
 /* Graphics helpers */
 void kernel_gfx_putpixel(int x, int y, uint8_t color);
