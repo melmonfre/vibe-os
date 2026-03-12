@@ -2,6 +2,7 @@
 #include <userland/modules/include/console.h>
 #include <userland/modules/include/busybox.h>
 #include <userland/modules/include/fs.h>
+#include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h>  /* for str_copy_limited */
 
 #define LINE_MAX 128
@@ -10,6 +11,13 @@
 
 static char history[HISTORY_MAX][LINE_MAX];
 static int history_count = 0;
+
+
+void shell_start(void) {
+    console_init();
+    console_write("VibeOS shell ready. Type 'help' for commands.\n");
+    shell_main();
+}
 
 void shell_history_add(const char *line) {
     if (history_count < HISTORY_MAX) {
@@ -70,7 +78,14 @@ static int parse_args(char *line, char **argv) {
 static int read_line(char *buf, int maxlen) {
     int len = 0;
     while (1) {
-        int c = console_getchar();
+        int c = sys_poll_key();
+
+        if (c <= 0) {
+            /* avoid a busy-loop while waiting for keyboard input */
+            sys_sleep();
+            continue;
+        }
+
         if (c == '\r') {
             c = '\n';
         }
@@ -104,7 +119,12 @@ void shell_main(void) {
         /* prompt */
         console_write("user@vibeos:");
         char cwd[80];
-        fs_build_path(g_fs_cwd, cwd, sizeof(cwd));
+        if (g_fs_cwd >= 0) {
+            fs_build_path(g_fs_cwd, cwd, sizeof(cwd));
+        } else {
+            cwd[0] = '/';
+            cwd[1] = '\0';
+        }
         console_write(cwd);
         console_write(" $ ");
 
