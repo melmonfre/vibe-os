@@ -118,10 +118,34 @@ $(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) | check-tools
 	@echo "Imagem gerada: $(IMAGE)"
 
 run: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE),if=floppy -boot a
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -drive format=raw,file=$(IMAGE),if=floppy -boot a; \
+	else \
+		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			echo "Usando qemu-system-x86_64"; \
+			qemu-system-x86_64 -drive format=raw,file=$(IMAGE),if=floppy -boot a; \
+		else \
+			echo "Erro: QEMU não encontrado no sistema."; \
+			echo "macOS (Homebrew): brew install qemu"; \
+			exit 1; \
+		fi; \
+	fi
 
 debug: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE),if=floppy -boot a -s -S
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -drive format=raw,file=$(IMAGE),if=floppy -boot a -s -S; \
+	else \
+		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			echo "Usando qemu-system-x86_64 com debug"; \
+			qemu-system-x86_64 -drive format=raw,file=$(IMAGE),if=floppy -boot a -s -S; \
+		else \
+			echo "Erro: QEMU não encontrado no sistema."; \
+			echo "macOS (Homebrew): brew install qemu"; \
+			exit 1; \
+		fi; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR)

@@ -47,8 +47,7 @@ A estrutura de diretórios reflete a arquitetura modular com headers centralizad
 │   │   ├── process/            # Process management
 │   │   └── *.h                 # Headers de topo (kernel.h, hal.h, etc.)
 │   ├── stage2/                 # Headers do stage2
-│   │   ├── include/            # graphics, io, irq, keyboard, mouse, syscalls, timer, types, userland, video
-│   │   └── modules/            # common.h
+│   │   └── include/            # graphics, io, irq, keyboard, mouse, syscalls, timer, types, userland, video
 │   └── userland/               # Headers de userland
 │       ├── applications/       # apps, clock, filemanager, taskmgr
 │       └── modules/            # busybox, console, fs, shell, ui, utils, syscalls, etc.

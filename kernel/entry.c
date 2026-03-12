@@ -18,6 +18,9 @@ __attribute__((noreturn)) void kernel_entry(void) {
     /* initialize the screen (vesa or vga) */
     video_init();
 
+    /* show startup message */
+    kernel_debug_puts("VIBE OS Booting...\r\n");
+
     /* setup interrupt subsystem */
     kernel_idt_init();
     kernel_pic_init();
@@ -37,6 +40,8 @@ __attribute__((noreturn)) void kernel_entry(void) {
     /* setup new subsystems */
     scheduler_init();
     driver_manager_init();
+
+    kernel_debug_puts("Starting userland...\r\n");
 
     /* hand off to userland blob */
     userland_run();

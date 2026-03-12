@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include <include/userland_api.h>
+#include <userland/applications/include/apps.h>
 #include <userland/modules/include/console.h>
 #include <userland/modules/include/shell.h>
 #include <userland/modules/include/fs.h>
