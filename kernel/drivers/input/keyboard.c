@@ -8,14 +8,6 @@
 #define PS2_STATUS_OUTPUT_FULL 0x01u
 #define PS2_STATUS_INPUT_FULL 0x02u
 
-#define KBD_MARK_IRQ 176
-#define KBD_MARK_QUEUE 177
-#define KBD_MARK_READ 178
-#define KBD_MARK_INIT 179
-#define KBD_MARK_SCAN_HI 180
-#define KBD_MARK_SCAN_LO 181
-#define KBD_MARK_DISCARD 182
-
 static volatile char g_kernel_kbd_queue[KBD_QUEUE_SIZE];
 static volatile uint8_t g_kernel_kbd_head = 0u;
 static volatile uint8_t g_kernel_kbd_tail = 0u;
@@ -24,19 +16,6 @@ static volatile uint8_t g_kernel_kbd_extended = 0u;
 static volatile uint8_t g_kernel_kbd_ready = 0u;
 static char g_kernel_kbd_map[128];
 static char g_kernel_kbd_shift_map[128];
-
-static void kbd_mark(int pos, char c) {
-    volatile uint16_t *vga = (volatile uint16_t *)0xB8000;
-    vga[pos] = (0x0F << 8) | (uint8_t)c;
-}
-
-static char hex_digit(uint8_t value) {
-    value &= 0x0Fu;
-    if (value < 10u) {
-        return (char)('0' + (char)value);
-    }
-    return (char)('A' + (char)(value - 10u));
-}
 
 static void ps2_wait_write(void) {
     while ((inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL) != 0u) {
@@ -136,7 +115,6 @@ static void kbd_push_char(char c) {
     }
     g_kernel_kbd_queue[g_kernel_kbd_head] = c;
     g_kernel_kbd_head = next;
-    kbd_mark(KBD_MARK_QUEUE, 'Q');
 }
 
 int kernel_keyboard_read(void) {
@@ -152,52 +130,42 @@ int kernel_keyboard_read(void) {
 
 void kernel_keyboard_irq_handler(void) {
     const uint8_t scancode = inb(PS2_DATA_PORT);
-    kbd_mark(KBD_MARK_IRQ, 'I');
-    kbd_mark(KBD_MARK_SCAN_HI, hex_digit((uint8_t)(scancode >> 4)));
-    kbd_mark(KBD_MARK_SCAN_LO, hex_digit(scancode));
 
     if (!g_kernel_kbd_ready) {
-        kbd_mark(KBD_MARK_DISCARD, 'N');
         kernel_pic_send_eoi(1);
         return;
     }
 
     if (scancode == 0xE0u) {
         g_kernel_kbd_extended = 1u;
-        kbd_mark(KBD_MARK_DISCARD, 'X');
         kernel_pic_send_eoi(1);
         return;
     }
 
     if (g_kernel_kbd_extended) {
         g_kernel_kbd_extended = 0u;
-        kbd_mark(KBD_MARK_DISCARD, 'x');
         kernel_pic_send_eoi(1);
         return;
     }
 
     if (scancode == 0x2Au || scancode == 0x36u) {
         g_kernel_kbd_shift = 1u;
-        kbd_mark(KBD_MARK_DISCARD, 'S');
         kernel_pic_send_eoi(1);
         return;
     }
 
     if (scancode == 0xAAu || scancode == 0xB6u) {
         g_kernel_kbd_shift = 0u;
-        kbd_mark(KBD_MARK_DISCARD, 's');
         kernel_pic_send_eoi(1);
         return;
     }
 
     if ((scancode & 0x80u) != 0u) {
-        kbd_mark(KBD_MARK_DISCARD, 'B');
         kernel_pic_send_eoi(1);
         return;
     }
 
     if (scancode == 0xFAu || scancode == 0xFEu) {
-        kbd_mark(KBD_MARK_DISCARD, 'A');
         kernel_pic_send_eoi(1);
         return;
     }
@@ -205,9 +173,6 @@ void kernel_keyboard_irq_handler(void) {
     const char c = g_kernel_kbd_shift ? g_kernel_kbd_shift_map[scancode] : g_kernel_kbd_map[scancode];
     if (c != '\0') {
         kbd_push_char(c);
-        kbd_mark(KBD_MARK_DISCARD, 'P');
-    } else {
-        kbd_mark(KBD_MARK_DISCARD, '?');
     }
 
     kernel_pic_send_eoi(1);
@@ -222,7 +187,6 @@ void kernel_keyboard_init(void) {
     g_kernel_kbd_extended = 0u;
     g_kernel_kbd_ready = 0u;
     kbd_init_maps();
-    kbd_mark(KBD_MARK_INIT, 'i');
 
     ps2_drain_output();
 
@@ -232,7 +196,6 @@ void kernel_keyboard_init(void) {
     ps2_wait_write();
     outb(PS2_STATUS_PORT, 0x20u);
     if (!ps2_wait_read_timeout()) {
-        kbd_mark(KBD_MARK_INIT, '!');
         return;
     }
 
@@ -247,16 +210,13 @@ void kernel_keyboard_init(void) {
 
     kbd_write_cmd(0xF6u);
     if (!kbd_expect_ack()) {
-        kbd_mark(KBD_MARK_INIT, 'F');
         return;
     }
 
     kbd_write_cmd(0xF4u);
     if (!kbd_expect_ack()) {
-        kbd_mark(KBD_MARK_INIT, 'S');
         return;
     }
 
     g_kernel_kbd_ready = 1u;
-    kbd_mark(KBD_MARK_INIT, 'K');
 }

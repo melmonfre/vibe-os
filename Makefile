@@ -77,8 +77,9 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
 
 $(IMAGE): $(BOOT_BIN) $(KERNEL_BIN)
-	cp $(BOOT_BIN) $@
-	cat $(KERNEL_BIN) >> $@
+	dd if=/dev/zero of=$@ bs=1474560 count=1
+	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc
+	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 conv=notrunc
 	@echo "Imagem gerada: $(IMAGE)"
 
 run: $(IMAGE)
