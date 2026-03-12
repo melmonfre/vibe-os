@@ -8,6 +8,9 @@
 #define VGA_ROWS 25
 #define VGA_ATTR 0x0F
 #define LINE_MAX 128
+#define ARGV_MAX 8
+#define DBG_ROW (VGA_ROWS - 1)
+#define DBG_BASE (DBG_ROW * VGA_COLS)
 
 /* history stubs for busybox compatibility */
 void shell_history_add(const char *line) { (void)line; }
@@ -17,6 +20,46 @@ static int cur_x = 0, cur_y = 0;
 static volatile uint32_t shell_state = 0;
 static volatile uint32_t shell_last_len = 0;
 static volatile uint32_t shell_last_cmd0 = 0;
+
+static char hex_digit(uint32_t value) {
+    value &= 0x0Fu;
+    return (char)(value < 10u ? ('0' + value) : ('A' + (value - 10u)));
+}
+
+static void debug_put(int col, char c) {
+    VGA_MEM[DBG_BASE + col] = (VGA_ATTR << 8) | (uint8_t)c;
+}
+
+static void debug_clear(void) {
+    for (int col = 0; col < VGA_COLS; ++col) {
+        debug_put(col, ' ');
+    }
+}
+
+static void debug_dump_line(const char *line, int len) {
+    for (int i = 0; i < 8; ++i) {
+        char c = line[i];
+        debug_put(i, c == '\0' ? '.' : c);
+    }
+    debug_put(8, '|');
+    debug_put(9, hex_digit((uint32_t)len >> 4));
+    debug_put(10, hex_digit((uint32_t)len));
+    debug_put(11, '|');
+    debug_put(25, line[len] == '\0' ? '0' : '!');
+}
+
+static void debug_dump_argc(int argc) {
+    debug_put(12, hex_digit((uint32_t)argc));
+    debug_put(13, '|');
+}
+
+static void debug_dump_argv0(const char *s) {
+    for (int i = 0; i < 8; ++i) {
+        char c = (s != 0) ? s[i] : '\0';
+        debug_put(14 + i, c == '\0' ? '.' : c);
+    }
+    debug_put(22, '|');
+}
 
 static void vga_putc(char c) {
     if (c == 0) return;
@@ -69,6 +112,40 @@ static void echo_backspace(void) {
     vga_putc('\b');
     vga_putc(' ');
     vga_putc('\b');
+}
+
+static char *skip_spaces(char *s) {
+    while (*s == ' ') {
+        ++s;
+    }
+    return s;
+}
+
+static int tokenize_line(char *line, char **argv, int max_args) {
+    int argc = 0;
+    char *cursor = line;
+
+    while (argc < max_args) {
+        cursor = skip_spaces(cursor);
+        if (*cursor == '\0') {
+            break;
+        }
+
+        argv[argc++] = cursor;
+
+        while (*cursor != '\0' && *cursor != ' ') {
+            ++cursor;
+        }
+
+        if (*cursor == '\0') {
+            break;
+        }
+
+        *cursor = '\0';
+        ++cursor;
+    }
+
+    return argc;
 }
 
 static int is_help(const char *cmd) {
@@ -132,6 +209,54 @@ static void print_bye(void) {
     vga_putc('\n');
 }
 
+static int command_echo(int argc, char **argv) {
+    for (int i = 1; i < argc; ++i) {
+        vga_write(argv[i]);
+        if (i + 1 < argc) {
+            vga_putc(' ');
+        }
+    }
+    vga_putc('\n');
+    return 0;
+}
+
+static int dispatch_command(int argc, char **argv) {
+    debug_put(23, 'D');
+
+    if (argc == 0 || argv[0] == 0) {
+        return 0;
+    }
+
+    if (is_help(argv[0])) {
+        debug_put(24, 'H');
+        shell_state = 5;
+        print_help();
+        return 0;
+    }
+
+    if (is_echo(argv[0])) {
+        shell_state = 6;
+        return command_echo(argc, argv);
+    }
+
+    if (is_clear(argv[0])) {
+        shell_state = 7;
+        for (int i = 0; i < VGA_COLS * VGA_ROWS; ++i)
+            VGA_MEM[i] = (VGA_ATTR << 8) | ' ';
+        cur_x = cur_y = 0;
+        return 0;
+    }
+
+    if (is_exit(argv[0])) {
+        shell_state = 8;
+        return 1;
+    }
+
+    shell_state = 9;
+    print_unknown();
+    return 0;
+}
+
 static int read_line(char *buf, int maxlen) {
     int len = 0;
     
@@ -174,6 +299,7 @@ void shell_start(void) {
     shell_state = 1;
 
     char line[LINE_MAX];
+    char *argv[ARGV_MAX];
 
     for (;;) {
         prompt_print();
@@ -182,34 +308,22 @@ void shell_start(void) {
         shell_state = 4;
         if (len == 0) continue;
 
-        /* split into cmd + arg remainder */
-        char *p = line;
-        while (*p == ' ') ++p;
-        char *cmd = p;
-        shell_last_cmd0 = (uint32_t)(uint8_t)cmd[0];
-        while (*p && *p != ' ') ++p;
-        if (*p) *p++ = '\0';
-        while (*p == ' ') ++p;
-        char *arg = p;
+        debug_clear();
+        debug_dump_line(line, len);
 
-        if (is_help(cmd)) {
-            shell_state = 5;
-            print_help();
-        } else if (is_echo(cmd)) {
-            shell_state = 6;
-            vga_write(arg);
-            vga_putc('\n');
-        } else if (is_clear(cmd)) {
-            shell_state = 7;
-            for (int i = 0; i < VGA_COLS * VGA_ROWS; ++i)
-                VGA_MEM[i] = (VGA_ATTR << 8) | ' ';
-            cur_x = cur_y = 0;
-        } else if (is_exit(cmd)) {
-            shell_state = 8;
+        int argc = tokenize_line(line, argv, ARGV_MAX);
+        debug_dump_argc(argc);
+
+        if (argc == 0) {
+            shell_last_cmd0 = 0;
+            continue;
+        }
+
+        shell_last_cmd0 = (uint32_t)(uint8_t)argv[0][0];
+        debug_dump_argv0(argv[0]);
+
+        if (dispatch_command(argc, argv) != 0) {
             break;
-        } else {
-            shell_state = 9;
-            print_unknown();
         }
     }
     shell_state = 10;
