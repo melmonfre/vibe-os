@@ -9,6 +9,9 @@ __attribute__((noreturn)) void kernel_entry(void);
 /* panic support */
 void kernel_panic(const char *msg);
 
+/* debug output */
+void kernel_debug_puts(const char *str);
+
 /* hal and syscall stubs */
 void hal_init(void);
 void syscall_init(void);
