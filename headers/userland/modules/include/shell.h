@@ -3,7 +3,10 @@
 
 /* public interface for the UNIX-like shell */
 
-/* start the main interactive shell loop; does not return unless /exit */
+/* initialize console state and start the interactive shell loop */
+void shell_start(void);
+
+/* start the main interactive shell loop; does not return unless exit */
 void shell_main(void);
 
 /* history helpers used by busybox/history command */
