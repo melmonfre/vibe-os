@@ -18,10 +18,24 @@ KERNEL_OBJS := $(patsubst kernel/%.c,$(BUILD_DIR)/kernel_%.o,$(KERNEL_SRCS))
 KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm')
 KERNEL_ASM_OBJS := $(patsubst kernel_asm/%.asm,$(BUILD_DIR)/kernel_asm_%.o,$(KERNEL_ASM_SRCS))
 
-# Minimal userland linked into the kernel image.
+# Userland linked into the kernel image.
 USERLAND_SRCS := \
 	$(USERLAND_DIR)/userland.c \
-	$(USERLAND_DIR)/modules/shell.c
+	$(USERLAND_DIR)/modules/shell.c \
+	$(USERLAND_DIR)/modules/busybox.c \
+	$(USERLAND_DIR)/modules/console.c \
+	$(USERLAND_DIR)/modules/fs.c \
+	$(USERLAND_DIR)/modules/utils.c \
+	$(USERLAND_DIR)/modules/syscalls.c \
+	$(USERLAND_DIR)/modules/ui.c \
+	$(USERLAND_DIR)/modules/dirty_rects.c \
+	$(USERLAND_DIR)/modules/ui_clip.c \
+	$(USERLAND_DIR)/modules/ui_cursor.c \
+	$(USERLAND_DIR)/applications/desktop.c \
+	$(USERLAND_DIR)/applications/terminal.c \
+	$(USERLAND_DIR)/applications/clock.c \
+	$(USERLAND_DIR)/applications/filemanager.c \
+	$(USERLAND_DIR)/applications/taskmgr.c
 USERLAND_OBJS := $(patsubst $(USERLAND_DIR)/%.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
 
 BOOT_BIN := $(BUILD_DIR)/boot.bin

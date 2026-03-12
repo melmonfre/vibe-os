@@ -1,237 +1,85 @@
 #include <userland/modules/include/shell.h>
-#include <kernel/drivers/input/input.h>
-#include <kernel/scheduler.h>
+#include <userland/modules/include/busybox.h>
+#include <userland/modules/include/console.h>
+#include <userland/modules/include/fs.h>
+#include <userland/modules/include/syscalls.h>
+#include <userland/modules/include/utils.h>
 #include <stdint.h>
 
-#define VGA_MEM ((volatile uint16_t *)0xB8000)
-#define VGA_COLS 80
-#define VGA_ROWS 25
-#define VGA_ATTR 0x0F
 #define LINE_MAX 128
+#define SHELL_MAX_ARGS 16
+#define SHELL_HISTORY_MAX 16
 
-void shell_history_add(const char *line) { (void)line; }
-void shell_history_print(void) { }
-
-static int cur_x = 0;
-static int cur_y = 0;
-
-static void shell_irq_disable(void) {
-    __asm__ volatile("cli" : : : "memory");
-}
-
-static void shell_irq_enable(void) {
-    __asm__ volatile("sti" : : : "memory");
-}
-
-static void vga_putc(char c) {
-    if (c == 0) {
-        return;
-    }
-
-    if (c == '\n') {
-        cur_x = 0;
-        ++cur_y;
-    } else if (c == '\r') {
-        cur_x = 0;
-    } else if (c == '\b') {
-        if (cur_x > 0) {
-            --cur_x;
-        }
-        VGA_MEM[cur_y * VGA_COLS + cur_x] = (VGA_ATTR << 8) | ' ';
-    } else {
-        VGA_MEM[cur_y * VGA_COLS + cur_x] = (VGA_ATTR << 8) | (uint8_t)c;
-        ++cur_x;
-    }
-
-    if (cur_x >= VGA_COLS) {
-        cur_x = 0;
-        ++cur_y;
-    }
-
-    if (cur_y >= VGA_ROWS) {
-        for (int row = 0; row < VGA_ROWS - 1; ++row) {
-            for (int col = 0; col < VGA_COLS; ++col) {
-                VGA_MEM[row * VGA_COLS + col] = VGA_MEM[(row + 1) * VGA_COLS + col];
-            }
-        }
-        for (int col = 0; col < VGA_COLS; ++col) {
-            VGA_MEM[(VGA_ROWS - 1) * VGA_COLS + col] = (VGA_ATTR << 8) | ' ';
-        }
-        cur_y = VGA_ROWS - 1;
-    }
-}
-
-static void vga_write(const char *s) {
-    while (*s != '\0') {
-        vga_putc(*s++);
-    }
-}
-
-static void clear_screen(void) {
-    for (int i = 0; i < VGA_COLS * VGA_ROWS; ++i) {
-        VGA_MEM[i] = (VGA_ATTR << 8) | ' ';
-    }
-    cur_x = 0;
-    cur_y = 0;
-}
+static char g_shell_history[SHELL_HISTORY_MAX][LINE_MAX];
+static int g_shell_history_count = 0;
+static int g_shell_history_next = 0;
 
 static void prompt_print(void) {
-    vga_putc('u');
-    vga_putc('s');
-    vga_putc('e');
-    vga_putc('r');
-    vga_putc('@');
-    vga_putc('v');
-    vga_putc('i');
-    vga_putc('b');
-    vga_putc('e');
-    vga_putc('-');
-    vga_putc('o');
-    vga_putc('s');
-    vga_putc(':');
-    vga_putc('/');
-    vga_putc(' ');
-    vga_putc('%');
-    vga_putc(' ');
+    char cwd[80];
+
+    fs_build_path(g_fs_cwd, cwd, (int)sizeof(cwd));
+    console_write("user@vibe-os:");
+    console_write(cwd);
+    console_write(" % ");
 }
 
 static void echo_backspace(void) {
-    vga_putc('\b');
-    vga_putc(' ');
-    vga_putc('\b');
+    console_putc('\b');
+    console_putc(' ');
+    console_putc('\b');
 }
 
-static char *skip_spaces(char *s) {
-    while (*s == ' ') {
-        ++s;
-    }
-    return s;
-}
-
-static int split_line(char *line, char **cmd, char **arg) {
-    char *cursor = skip_spaces(line);
-
-    if (*cursor == '\0') {
-        *cmd = cursor;
-        *arg = cursor;
-        return 0;
+void shell_history_add(const char *line) {
+    if (line == 0 || line[0] == '\0') {
+        return;
     }
 
-    *cmd = cursor;
+    str_copy_limited(g_shell_history[g_shell_history_next], line, LINE_MAX);
+    g_shell_history_next = (g_shell_history_next + 1) % SHELL_HISTORY_MAX;
+    if (g_shell_history_count < SHELL_HISTORY_MAX) {
+        ++g_shell_history_count;
+    }
+}
 
-    while (*cursor != '\0' && *cursor != ' ') {
-        ++cursor;
+void shell_history_print(void) {
+    if (g_shell_history_count == 0) {
+        console_write("(empty)\n");
+        return;
     }
 
-    if (*cursor == '\0') {
-        *arg = cursor;
-        return 1;
+    for (int i = 0; i < g_shell_history_count; ++i) {
+        int idx = g_shell_history_next - g_shell_history_count + i;
+        if (idx < 0) {
+            idx += SHELL_HISTORY_MAX;
+        }
+        console_write(g_shell_history[idx]);
+        console_putc('\n');
     }
-
-    *cursor = '\0';
-    ++cursor;
-    *arg = skip_spaces(cursor);
-    return 1;
 }
 
-static int is_help(const char *cmd) {
-    return cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'p' && cmd[4] == '\0';
-}
+static int tokenize_line(char *line, char **argv, int max_args) {
+    char *cursor = line;
+    int argc = 0;
 
-static int is_echo(const char *cmd) {
-    return cmd[0] == 'e' && cmd[1] == 'c' && cmd[2] == 'h' && cmd[3] == 'o' && cmd[4] == '\0';
-}
-
-static int is_clear(const char *cmd) {
-    return cmd[0] == 'c' && cmd[1] == 'l' && cmd[2] == 'e' && cmd[3] == 'a' && cmd[4] == 'r' && cmd[5] == '\0';
-}
-
-static int is_exit(const char *cmd) {
-    return cmd[0] == 'e' && cmd[1] == 'x' && cmd[2] == 'i' && cmd[3] == 't' && cmd[4] == '\0';
-}
-
-static void print_help(void) {
-    vga_putc('h');
-    vga_putc('e');
-    vga_putc('l');
-    vga_putc('p');
-    vga_putc(',');
-    vga_putc(' ');
-    vga_putc('e');
-    vga_putc('c');
-    vga_putc('h');
-    vga_putc('o');
-    vga_putc(',');
-    vga_putc(' ');
-    vga_putc('c');
-    vga_putc('l');
-    vga_putc('e');
-    vga_putc('a');
-    vga_putc('r');
-    vga_putc(',');
-    vga_putc(' ');
-    vga_putc('e');
-    vga_putc('x');
-    vga_putc('i');
-    vga_putc('t');
-    vga_putc('\n');
-}
-
-static void print_unknown(void) {
-    vga_putc('u');
-    vga_putc('n');
-    vga_putc('k');
-    vga_putc('n');
-    vga_putc('o');
-    vga_putc('w');
-    vga_putc('n');
-    vga_putc('\n');
-}
-
-static void print_bye(void) {
-    vga_putc('b');
-    vga_putc('y');
-    vga_putc('e');
-    vga_putc('\n');
-}
-
-static int dispatch_command(const char *cmd, const char *arg) {
-    if (is_help(cmd)) {
-        print_help();
-        return 0;
+    while (argc < max_args) {
+        char *token = next_token(&cursor);
+        if (token == 0) {
+            break;
+        }
+        argv[argc++] = token;
     }
-
-    if (is_echo(cmd)) {
-        vga_write(arg);
-        vga_putc('\n');
-        return 0;
-    }
-
-    if (is_clear(cmd)) {
-        clear_screen();
-        return 0;
-    }
-
-    if (is_exit(cmd)) {
-        return 1;
-    }
-
-    print_unknown();
-    return 0;
+    argv[argc] = 0;
+    return argc;
 }
 
 static int read_line(char *buf, int maxlen) {
     int len = 0;
 
     for (;;) {
-        int c;
-
-        __asm__ volatile("cli" : : : "memory");
-        c = kernel_keyboard_read();
-        __asm__ volatile("sti" : : : "memory");
+        int c = sys_poll_key();
 
         if (c == 0) {
-            yield();
+            sys_yield();
             continue;
         }
 
@@ -240,9 +88,8 @@ static int read_line(char *buf, int maxlen) {
         }
 
         if (c == '\n') {
-            shell_irq_disable();
             buf[len] = '\0';
-            vga_putc('\n');
+            console_putc('\n');
             return len;
         }
 
@@ -254,35 +101,37 @@ static int read_line(char *buf, int maxlen) {
 
         if (c >= 32 && c < 127 && len < maxlen - 1) {
             buf[len++] = (char)c;
-            vga_putc((char)c);
+            console_putc((char)c);
         }
     }
 }
 
 void shell_start(void) {
     char line[LINE_MAX];
+    char *argv[SHELL_MAX_ARGS + 1];
 
-    clear_screen();
+    console_init();
+    fs_init();
 
     for (;;) {
-        char *cmd;
-        char *arg;
+        int argc;
 
         prompt_print();
-        shell_irq_enable();
 
         if (read_line(line, LINE_MAX) == 0) {
             continue;
         }
 
-        if (!split_line(line, &cmd, &arg)) {
+        shell_history_add(line);
+        argc = tokenize_line(line, argv, SHELL_MAX_ARGS);
+        if (argc == 0) {
             continue;
         }
 
-        if (dispatch_command(cmd, arg) != 0) {
+        if (busybox_main(argc, argv) != 0) {
             break;
         }
     }
 
-    print_bye();
+    console_write("bye\n");
 }

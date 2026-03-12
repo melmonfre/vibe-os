@@ -124,6 +124,8 @@ static uint32_t sys_gfx_info(uint32_t out_ptr, uint32_t b, uint32_t c,
     (void)b; (void)c; (void)d; (void)e;
     if (out_ptr == 0)
         return (uint32_t)-1;
+    kernel_gfx_clear(0u);
+    kernel_video_flip();
     struct video_mode *out = (struct video_mode *)(uintptr_t)out_ptr;
     struct video_mode *mode = kernel_video_get_mode();
     out->fb_addr = mode->fb_addr;
