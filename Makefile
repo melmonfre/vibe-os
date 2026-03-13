@@ -8,31 +8,84 @@ QEMU := qemu-system-i386
 
 BUILD_DIR := build
 BOOT_DIR := boot
-STAGE2_DIR := stage2
 USERLAND_DIR := userland
 LINKER_DIR := linker
-INCLUDE_DIR := include
 
-STAGE2_SECTORS := 32
-SECTOR_SIZE := 512
+# Kernel sources - kernel only, no stage2
+KERNEL_SRCS := $(shell find kernel -name '*.c')
+KERNEL_OBJS := $(patsubst kernel/%.c,$(BUILD_DIR)/kernel_%.o,$(KERNEL_SRCS))
+
+KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm')
+KERNEL_ASM_OBJS := $(patsubst kernel_asm/%.asm,$(BUILD_DIR)/kernel_asm_%.o,$(KERNEL_ASM_SRCS))
+
+# Userland linked into the kernel image.
+USERLAND_SRCS := \
+	$(USERLAND_DIR)/userland.c \
+	$(USERLAND_DIR)/modules/shell.c \
+	$(USERLAND_DIR)/modules/busybox.c \
+	$(USERLAND_DIR)/modules/console.c \
+	$(USERLAND_DIR)/modules/fs.c \
+	$(USERLAND_DIR)/modules/bmp.c \
+	$(USERLAND_DIR)/modules/utils.c \
+	$(USERLAND_DIR)/modules/syscalls.c \
+	$(USERLAND_DIR)/modules/ui.c \
+	$(USERLAND_DIR)/modules/dirty_rects.c \
+	$(USERLAND_DIR)/modules/ui_clip.c \
+	$(USERLAND_DIR)/modules/ui_cursor.c \
+	$(USERLAND_DIR)/sectorc/sectorc_main.c \
+	$(USERLAND_DIR)/sectorc/sectorc_driver.c \
+	$(USERLAND_DIR)/sectorc/sectorc_port.c \
+	$(USERLAND_DIR)/sectorc/sectorc_runtime.c \
+	$(USERLAND_DIR)/sectorc/sectorc_exec.c \
+	$(USERLAND_DIR)/lua/lua_main.c \
+	$(USERLAND_DIR)/lua/lua_repl.c \
+	$(USERLAND_DIR)/lua/lua_runner.c \
+	$(USERLAND_DIR)/lua/lua_port.c \
+	$(USERLAND_DIR)/lua/lua_runtime.c \
+	$(USERLAND_DIR)/lua/lua_bindings_console.c \
+	$(USERLAND_DIR)/lua/lua_bindings_sys.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lapi.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lauxlib.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lbaselib.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lcode.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lctype.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/ldebug.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/ldump.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/ldo.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lfunc.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lgc.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/llex.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lmem.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lobject.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lopcodes.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lparser.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lstate.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lstring.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/ltable.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/ltm.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lundump.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lvm.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lzio.c \
+	$(USERLAND_DIR)/applications/desktop.c \
+	$(USERLAND_DIR)/applications/terminal.c \
+	$(USERLAND_DIR)/applications/clock.c \
+	$(USERLAND_DIR)/applications/filemanager.c \
+	$(USERLAND_DIR)/applications/editor.c \
+	$(USERLAND_DIR)/applications/taskmgr.c \
+	$(USERLAND_DIR)/applications/calculator.c \
+	$(USERLAND_DIR)/applications/sketchpad.c \
+	$(USERLAND_DIR)/applications/snake.c \
+	$(USERLAND_DIR)/applications/tetris.c
+USERLAND_OBJS := $(patsubst $(USERLAND_DIR)/%.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
 
 BOOT_BIN := $(BUILD_DIR)/boot.bin
-STAGE2_OBJ := $(BUILD_DIR)/stage2.o
-STAGE2_ISR_OBJ := $(BUILD_DIR)/isr.o
-USERLAND_OBJ := $(BUILD_DIR)/userland.o
-USERLAND_ELF := $(BUILD_DIR)/userland.elf
-USERLAND_BIN := $(BUILD_DIR)/userland.bin
-USERLAND_BLOB_OBJ := $(BUILD_DIR)/userland_blob.o
-STAGE2_ELF := $(BUILD_DIR)/stage2.elf
-STAGE2_BIN := $(BUILD_DIR)/stage2.bin
+KERNEL_ELF := $(BUILD_DIR)/kernel.elf
+KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 IMAGE := $(BUILD_DIR)/boot.img
 
-CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -I$(INCLUDE_DIR)
-LDFLAGS_STAGE2 := -m elf_i386 -T $(LINKER_DIR)/stage2.ld -nostdlib
-LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib
-
-.PHONY: all run debug clean check-tools
-REQUIRED_TOOLS := $(AS) $(CC) $(LD) $(OBJCOPY) $(QEMU)
+CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -Iheaders -Iuserland -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src
+LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N
+LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
 
 all: $(IMAGE)
 
@@ -49,59 +102,81 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BOOT_BIN): $(BOOT_DIR)/stage1.asm | $(BUILD_DIR)
-	$(AS) -f bin -DSTAGE2_SECTORS=$(STAGE2_SECTORS) $< -o $@
+	$(AS) -f bin $< -o $@
 	@boot_size=$$(wc -c < $@); \
 	if [ "$$boot_size" -ne 512 ]; then \
 		echo "Erro: boot sector precisa ter 512 bytes (atual: $$boot_size)."; \
 		exit 1; \
 	fi
 
-$(STAGE2_OBJ): $(STAGE2_DIR)/stage2.c $(INCLUDE_DIR)/userland_api.h | $(BUILD_DIR)
+$(BUILD_DIR)/kernel_%.o: kernel/%.c headers/include/userland_api.h | $(BUILD_DIR)
+	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(STAGE2_ISR_OBJ): $(STAGE2_DIR)/isr.asm | $(BUILD_DIR)
+$(BUILD_DIR)/kernel_shell_%.o: userland/modules/%.c headers/include/userland_api.h | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel_asm_%.o: kernel_asm/%.asm | $(BUILD_DIR)
 	$(AS) -f elf32 $< -o $@
 
-$(USERLAND_OBJ): $(USERLAND_DIR)/userland.c $(INCLUDE_DIR)/userland_api.h | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(USERLAND_DIR)/%.c headers/include/userland_api.h | $(BUILD_DIR)
+	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(USERLAND_ELF): $(USERLAND_OBJ) $(LINKER_DIR)/userland.ld
-	$(LD) $(LDFLAGS_USERLAND) $(USERLAND_OBJ) -o $@
+$(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld
+	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) -o $@
 
-$(USERLAND_BIN): $(USERLAND_ELF)
+$(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
 
-$(USERLAND_BLOB_OBJ): $(USERLAND_BIN)
-	cd $(BUILD_DIR) && $(LD) -m elf_i386 -r -b binary userland.bin -o userland_blob.o
-
-$(STAGE2_ELF): $(STAGE2_OBJ) $(STAGE2_ISR_OBJ) $(USERLAND_BLOB_OBJ) $(LINKER_DIR)/stage2.ld
-	$(LD) $(LDFLAGS_STAGE2) $(STAGE2_OBJ) $(STAGE2_ISR_OBJ) $(USERLAND_BLOB_OBJ) -o $@
-
-$(STAGE2_BIN): $(STAGE2_ELF)
-	$(OBJCOPY) -O binary $< $@
-	@stage2_size=$$(wc -c < $@); \
-	limit=$$(( $(STAGE2_SECTORS) * $(SECTOR_SIZE) )); \
-	if [ "$$stage2_size" -gt "$$limit" ]; then \
-		echo "Erro: stage2.bin ($$stage2_size bytes) excede $$limit bytes."; \
-		exit 1; \
-	fi
-
-$(IMAGE): $(BOOT_BIN) $(STAGE2_BIN) | check-tools
-	cp $(BOOT_BIN) $@
-	cat $(STAGE2_BIN) >> $@
-	@target_size=$$(( (1 + $(STAGE2_SECTORS)) * $(SECTOR_SIZE) )); \
-	current_size=$$(wc -c < $@); \
-	if [ "$$current_size" -lt "$$target_size" ]; then \
-		padding=$$(( $$target_size - $$current_size )); \
-		dd if=/dev/zero bs=1 count=$$padding >> $@ 2>/dev/null; \
-	fi
+$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN)
+	dd if=/dev/zero of=$@ bs=1474560 count=1
+	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc
+	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 conv=notrunc
 	@echo "Imagem gerada: $(IMAGE)"
 
 run: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE),if=floppy -boot a
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -drive format=raw,file=$(IMAGE) -boot c; \
+	else \
+		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			echo "Usando qemu-system-x86_64"; \
+			qemu-system-x86_64 -drive format=raw,file=$(IMAGE) -boot c; \
+		else \
+			echo "Erro: QEMU não encontrado no sistema."; \
+			echo "macOS (Homebrew): brew install qemu"; \
+			exit 1; \
+		fi; \
+	fi
+
+run-debug: $(IMAGE)
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
 
 debug: $(IMAGE)
-	$(QEMU) -drive format=raw,file=$(IMAGE),if=floppy -boot a -s -S
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -drive format=raw,file=$(IMAGE) -boot c -s -S; \
+	else \
+		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			echo "Usando qemu-system-x86_64 com debug"; \
+			qemu-system-x86_64 -drive format=raw,file=$(IMAGE) -boot c -s -S; \
+		else \
+			echo "Erro: QEMU não encontrado no sistema."; \
+			echo "macOS (Homebrew): brew install qemu"; \
+			exit 1; \
+		fi; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR)
