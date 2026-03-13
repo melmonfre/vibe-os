@@ -55,10 +55,10 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
                           int max_hover,
                           int close_hover) {
     const struct desktop_theme *theme = ui_theme_get();
+    struct rect body = {tm->window.x + 4, tm->window.y + 18, tm->window.w - 8, tm->window.h - 22};
 
     draw_window_frame(&tm->window, "TASKS", active, min_hover, max_hover, close_hover);
-    sys_rect(tm->window.x + 4, tm->window.y + 18,
-             tm->window.w - 8, tm->window.h - 22, 0);
+    ui_draw_surface(&body, ui_color_panel());
 
     int visible_index = 0;
     for (int i = 0; i < win_count; ++i) {
@@ -68,8 +68,8 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
 
         row = taskmgr_row_rect(tm, visible_index);
         close_button = taskmgr_close_button_rect(tm, visible_index);
-        sys_rect(row.x, row.y, row.w, row.h, 8);
-        sys_rect(close_button.x, close_button.y, close_button.w, close_button.h, 12);
+        ui_draw_inset(&row, ui_color_canvas());
+        ui_draw_button(&close_button, "Finalizar", UI_BUTTON_DANGER, 0);
 
         char line[64];
         int len = 0;
@@ -103,7 +103,6 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
         }
         line[len] = '\0';
         sys_text(row.x + 4, row.y + 4, theme->text, line);
-        sys_text(close_button.x + 5, close_button.y + 3, theme->text, "Finalizar");
         ++visible_index;
     }
 }

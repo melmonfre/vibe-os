@@ -49,7 +49,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
 
     kernel_text_puts("Initializing memory...\n");
     memory_subsystem_init();
-    kernel_mm_init(0x500000u, 0x100000u); /* 1 MiB simple heap */
+    kernel_mm_init(0x500000u, 0x400000u); /* 4 MiB simple heap for large backbuffers */
     kernel_text_puts("Memory OK\n");
 
     kernel_text_puts("Initializing storage...\n");

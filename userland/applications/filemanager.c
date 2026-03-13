@@ -82,12 +82,11 @@ static void draw_listing(struct filemanager_state *fm) {
     struct rect list = filemanager_list_rect(fm);
     const struct desktop_theme *theme = ui_theme_get();
 
-    sys_rect(list.x, list.y, list.w, list.h, 1);
+    ui_draw_inset(&list, ui_color_canvas());
 
     if (fm->cwd != g_fs_root) {
         struct rect parent_row = filemanager_row_rect(fm, row++);
-        sys_rect(parent_row.x, parent_row.y, parent_row.w, parent_row.h, 8);
-        sys_text(parent_row.x + 4, parent_row.y + 4, theme->text, "../");
+        ui_draw_button(&parent_row, "../", UI_BUTTON_NORMAL, 0);
     }
 
     if (child == -1) {
@@ -106,9 +105,9 @@ static void draw_listing(struct filemanager_state *fm) {
         }
 
         if (child == fm->selected_node) {
-            sys_rect(item.x, item.y, item.w, item.h, 9);
+            ui_draw_surface(&item, theme->window);
         } else {
-            sys_rect(item.x, item.y, item.w, item.h, g_fs_nodes[child].is_dir ? 8 : 1);
+            ui_draw_inset(&item, g_fs_nodes[child].is_dir ? ui_color_panel() : ui_color_canvas());
         }
 
         filemanager_row_label(child, line, sizeof(line));
@@ -175,14 +174,13 @@ void filemanager_draw_window(struct filemanager_state *fm, int active,
     struct rect path_bar = filemanager_path_rect(fm);
     struct rect status = filemanager_status_rect(fm);
     const struct desktop_theme *theme = ui_theme_get();
+    struct rect body = {fm->window.x + 4, fm->window.y + 18, fm->window.w - 8, fm->window.h - 22};
 
     draw_window_frame(&fm->window, "FILEMANAGER", active, min_hover, max_hover, close_hover);
-    sys_rect(fm->window.x + 4, fm->window.y + 18,
-             fm->window.w - 8, fm->window.h - 22, 0);
+    ui_draw_surface(&body, ui_color_panel());
 
-    sys_rect(path_bar.x, path_bar.y, path_bar.w, path_bar.h, 8);
-    sys_rect(up_button.x, up_button.y, up_button.w, up_button.h, 7);
-    sys_text(up_button.x + 5, up_button.y + 4, theme->text, "UP");
+    ui_draw_inset(&path_bar, ui_color_canvas());
+    ui_draw_button(&up_button, "UP", UI_BUTTON_PRIMARY, 0);
 
     char path[80];
     fs_build_path(fm->cwd, path, sizeof(path));
@@ -190,12 +188,11 @@ void filemanager_draw_window(struct filemanager_state *fm, int active,
 
     draw_listing(fm);
 
-    sys_rect(status.x, status.y, status.w, status.h, 8);
     if (fm->selected_node >= 0 && g_fs_nodes[fm->selected_node].used) {
         char info[32];
         filemanager_row_label(fm->selected_node, info, sizeof(info));
-        sys_text(status.x + 4, status.y + 2, theme->text, info);
+        ui_draw_status(&status, info);
     } else {
-        sys_text(status.x + 4, status.y + 2, theme->text, "Clique direito para opcoes");
+        ui_draw_status(&status, "Clique direito para opcoes");
     }
 }

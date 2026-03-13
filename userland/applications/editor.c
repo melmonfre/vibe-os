@@ -173,20 +173,22 @@ void editor_draw_window(struct editor_state *ed, int active,
     const struct desktop_theme *theme = ui_theme_get();
     struct rect save = editor_save_button_rect(ed);
     struct rect area = {ed->window.x + 6, ed->window.y + 40, ed->window.w - 12, ed->window.h - 62};
+    struct rect body = {ed->window.x + 4, ed->window.y + 18, ed->window.w - 8, ed->window.h - 22};
+    struct rect path_bar = {ed->window.x + 6, ed->window.y + 22, ed->window.w - 60, 12};
+    struct rect status_bar = {ed->window.x + 6, ed->window.y + ed->window.h - 16, ed->window.w - 12, 10};
     char path[80];
     int x = area.x + 4;
     int y = area.y + 4;
 
     draw_window_frame(&ed->window, "EDITOR", active, min_hover, max_hover, close_hover);
-    sys_rect(ed->window.x + 4, ed->window.y + 18, ed->window.w - 8, ed->window.h - 22, 0);
+    ui_draw_surface(&body, ui_color_panel());
 
     editor_compact_path(ed, path, sizeof(path));
-    sys_rect(ed->window.x + 6, ed->window.y + 22, ed->window.w - 60, 12, 8);
+    ui_draw_inset(&path_bar, ui_color_canvas());
     sys_text(ed->window.x + 10, ed->window.y + 25, theme->text, path);
-    sys_rect(save.x, save.y, save.w, save.h, 7);
-    sys_text(save.x + 5, save.y + 4, theme->text, "Salvar");
+    ui_draw_button(&save, "Salvar", UI_BUTTON_PRIMARY, 0);
 
-    sys_rect(area.x, area.y, area.w, area.h, 1);
+    ui_draw_inset(&area, ui_color_canvas());
     for (int i = 0; i < ed->length; ++i) {
         char ch = ed->buffer[i];
 
@@ -214,6 +216,5 @@ void editor_draw_window(struct editor_state *ed, int active,
         sys_rect(x, y + 7, 6, 1, theme->text);
     }
 
-    sys_rect(ed->window.x + 6, ed->window.y + ed->window.h - 16, ed->window.w - 12, 10, 8);
-    sys_text(ed->window.x + 10, ed->window.y + ed->window.h - 14, theme->text, ed->status);
+    ui_draw_status(&status_bar, ed->status);
 }

@@ -150,16 +150,17 @@ int sketchpad_export_bitmap(struct sketchpad_state *sketch) {
 void sketchpad_draw_window(struct sketchpad_state *sketch, int active,
                            int min_hover, int max_hover, int close_hover) {
     struct rect canvas = sketchpad_canvas_rect(sketch);
+    struct rect canvas_frame = {canvas.x - 2, canvas.y - 2, canvas.w + 4, canvas.h + 4};
     struct rect clear_button = sketchpad_clear_button_rect(sketch);
     struct rect export_button = sketchpad_export_button_rect(sketch);
-    const struct desktop_theme *theme = ui_theme_get();
+    struct rect body = {sketch->window.x + 4, sketch->window.y + 18, sketch->window.w - 8, sketch->window.h - 22};
+    struct rect status = {sketch->window.x + 6, sketch->window.y + sketch->window.h - 16, sketch->window.w - 12, 10};
 
     draw_window_frame(&sketch->window, "SKETCHPAD", active, min_hover, max_hover, close_hover);
-    sys_rect(sketch->window.x + 4, sketch->window.y + 18, sketch->window.w - 8, sketch->window.h - 22, 8);
-    sys_rect(clear_button.x, clear_button.y, clear_button.w, clear_button.h, 7);
-    sys_rect(export_button.x, export_button.y, export_button.w, export_button.h, 7);
-    sys_text(clear_button.x + 5, clear_button.y + 4, theme->text, "Limpa");
-    sys_text(export_button.x + 4, export_button.y + 4, theme->text, "Export");
+    ui_draw_surface(&body, ui_color_panel());
+    ui_draw_button(&clear_button, "Limpar", UI_BUTTON_NORMAL, 0);
+    ui_draw_button(&export_button, "Export", UI_BUTTON_PRIMARY, 0);
+    ui_draw_inset(&canvas_frame, 15);
 
     for (int y = 0; y < SKETCHPAD_CANVAS_H; ++y) {
         for (int x = 0; x < SKETCHPAD_CANVAS_W; ++x) {
@@ -179,7 +180,6 @@ void sketchpad_draw_window(struct sketchpad_state *sketch, int active,
         sys_rect(swatch.x + 1, swatch.y + 1, swatch.w - 2, swatch.h - 2, g_sketch_colors[i]);
     }
 
-    sys_text(sketch->window.x + 8, sketch->window.y + sketch->window.h - 14,
-             theme->text,
-             sketch->last_export_path[0] != '\0' ? sketch->last_export_path : "sem exportacao");
+    ui_draw_status(&status,
+                   sketch->last_export_path[0] != '\0' ? sketch->last_export_path : "sem exportacao");
 }

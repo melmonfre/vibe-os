@@ -15,8 +15,8 @@ static int g_graphics_bga = 0;
 
 #define GRAPHICS_DEFAULT_WIDTH 640u
 #define GRAPHICS_DEFAULT_HEIGHT 480u
-#define GRAPHICS_MAX_WIDTH 800u
-#define GRAPHICS_MAX_HEIGHT 600u
+#define GRAPHICS_MAX_WIDTH 1920u
+#define GRAPHICS_MAX_HEIGHT 1080u
 #define GRAPHICS_BPP 8u
 #define GRAPHICS_BANK_SIZE 65536u
 #define GRAPHICS_MAX_PIXELS ((size_t)GRAPHICS_MAX_WIDTH * (size_t)GRAPHICS_MAX_HEIGHT)
@@ -63,86 +63,12 @@ static int bga_enter_mode(uint16_t width, uint16_t height, uint16_t bpp) {
     return 1;
 }
 
-static const uint8_t g_vga_mode_13_regs[] = {
-    0x63,
-    0x03, 0x01, 0x0F, 0x00, 0x0E,
-    0x5F, 0x4F, 0x50, 0x82, 0x54, 0x80, 0xBF, 0x1F,
-    0x00, 0x41, 0x00, 0x00, 0x00, 0x00, 0x9C, 0x8E,
-    0x8F, 0x28, 0x40, 0x96, 0xB9, 0xA3, 0xFF,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x0F,
-    0xFF,
-    0x41, 0x00, 0x0F, 0x00, 0x00,
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07,
-    0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
-    0x0C, 0x00, 0x0F, 0x08, 0x00
-};
-
-static void vga_write_regs(const uint8_t *regs) {
-    uint8_t values[sizeof(g_vga_mode_13_regs)];
-    uint8_t *seq;
-    uint8_t *crtc;
-    uint8_t *gc;
-    uint8_t *ac;
-
-    for (size_t i = 0; i < sizeof(values); ++i) {
-        values[i] = regs[i];
-    }
-
-    seq = &values[1];
-    crtc = &values[1 + 5];
-    gc = &values[1 + 5 + 25];
-    ac = &values[1 + 5 + 25 + 9];
-
-    /* Disable video output while the timing registers are changing. */
-    outb(0x3C4, 0x01u);
-    outb(0x3C5, (uint8_t)(seq[1] | 0x20u));
-
-    /* Hold the sequencer in synchronous reset while programming the mode. */
-    outb(0x3C4, 0x00u);
-    outb(0x3C5, 0x01u);
-
-    outb(0x3C2, values[0]);
-
-    for (uint8_t i = 0; i < 5; ++i) {
-        outb(0x3C4, i);
-        outb(0x3C5, (i == 1u) ? (uint8_t)(seq[i] | 0x20u) : seq[i]);
-    }
-
-    outb(0x3C4, 0x00u);
-    outb(0x3C5, 0x03u);
-
-    outb(0x3D4, 0x03);
-    outb(0x3D5, (uint8_t)(crtc[0x03] | 0x80u));
-    outb(0x3D4, 0x11);
-    outb(0x3D5, (uint8_t)(crtc[0x11] & (uint8_t)~0x80u));
-
-    for (uint8_t i = 0; i < 25; ++i) {
-        outb(0x3D4, i);
-        outb(0x3D5, crtc[i]);
-    }
-
-    for (uint8_t i = 0; i < 9; ++i) {
-        outb(0x3CE, i);
-        outb(0x3CF, gc[i]);
-    }
-
-    for (uint8_t i = 0; i < 21; ++i) {
-        (void)inb(0x3DA);
-        outb(0x3C0, i);
-        outb(0x3C0, ac[i]);
-    }
-
-    (void)inb(0x3DA);
-    outb(0x3C0, 0x20);
-
-    outb(0x3C4, 0x01u);
-    outb(0x3C5, seq[1]);
-}
-
 static int kernel_video_mode_supported(uint16_t width, uint16_t height) {
-    return (width == 320u && height == 200u) ||
-           (width == 640u && height == 480u) ||
-           (width == 800u && height == 600u);
+    return (width == 640u && height == 480u) ||
+           (width == 800u && height == 600u) ||
+           (width == 1024u && height == 768u) ||
+           (width == 1366u && height == 768u) ||
+           (width == 1920u && height == 1080u);
 }
 
 static int kernel_video_apply_graphics_mode(uint16_t width, uint16_t height) {
@@ -161,16 +87,13 @@ static int kernel_video_apply_graphics_mode(uint16_t width, uint16_t height) {
 
     if (bga_available()) {
         use_bga = bga_enter_mode(width, height, (uint16_t)GRAPHICS_BPP);
-        if (!use_bga && (width != 320u || height != 200u)) {
+        if (!use_bga) {
             return -1;
         }
     }
 
     if (!use_bga) {
-        if (width != 320u || height != 200u) {
-            return -1;
-        }
-        vga_write_regs(g_vga_mode_13_regs);
+        return -1;
     }
 
     g_graphics_bga = use_bga;

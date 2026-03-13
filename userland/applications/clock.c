@@ -48,6 +48,9 @@ int clock_step(struct clock_state *c) {
 void clock_draw_window(struct clock_state *c, int active,
                        int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *theme = ui_theme_get();
+    struct rect body = {c->window.x + 4, c->window.y + 18, c->window.w - 8, c->window.h - 22};
+    struct rect face = {c->window.x + 10, c->window.y + 24, c->window.w - 20, 18};
+    struct rect meter = {c->window.x + 10, c->window.y + 62, c->window.w - 20, 6};
     char time_text[9];
     char seconds_text[3];
     uint32_t total_seconds = c->tick_count / 100u;
@@ -55,20 +58,22 @@ void clock_draw_window(struct clock_state *c, int active,
     int bar_w;
 
     draw_window_frame(&c->window, "RELOGIO", active, min_hover, max_hover, close_hover);
-    sys_rect(c->window.x + 4, c->window.y + 18, c->window.w - 8,
-             c->window.h - 22, 1);
-    sys_rect(c->window.x + 10, c->window.y + 24, c->window.w - 20, 16, 8);
+    ui_draw_surface(&body, ui_color_panel());
+    ui_draw_inset(&face, ui_color_canvas());
 
     clock_format(time_text, c->tick_count);
     append_two_digits(seconds_text, seconds);
     sys_text(c->window.x + 18, c->window.y + 30, theme->text, time_text);
-    sys_text(c->window.x + 10, c->window.y + 50, theme->text, "SEG");
+    sys_text(c->window.x + 10, c->window.y + 50, ui_color_muted(), "SEG");
     sys_text(c->window.x + 42, c->window.y + 50, theme->text, seconds_text);
 
     bar_w = (int)((seconds * (uint32_t)(c->window.w - 24)) / 59u);
     if (bar_w < 0) {
         bar_w = 0;
     }
-    sys_rect(c->window.x + 10, c->window.y + 62, c->window.w - 20, 6, 8);
-    sys_rect(c->window.x + 10, c->window.y + 62, bar_w, 6, 10);
+    ui_draw_inset(&meter, ui_color_canvas());
+    sys_rect(meter.x + 2, meter.y + 2,
+             bar_w > meter.w - 4 ? meter.w - 4 : bar_w,
+             meter.h - 4,
+             theme->menu_button);
 }

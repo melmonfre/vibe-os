@@ -258,12 +258,16 @@ int terminal_execute_command(struct terminal_state *t) {
 void terminal_draw_window(struct terminal_state *t, int active,
                           int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *theme = ui_theme_get();
-    const int text_x = t->window.x + 8;
-    const int text_y = t->window.y + 22;
+    struct rect log = {t->window.x + 6, t->window.y + 22, t->window.w - 12, t->window.h - 40};
+    struct rect input = {t->window.x + 6, t->window.y + t->window.h - 14, t->window.w - 12, 8};
+    const int text_x = log.x + 4;
+    const int text_y = log.y + 4;
 
     draw_window_frame(&t->window, "TERMINAL", active, min_hover, max_hover, close_hover);
-    sys_rect(t->window.x + 4, t->window.y + 18, t->window.w - 8,
-             t->window.h - 22, 0);
+    ui_draw_surface(&(struct rect){t->window.x + 4, t->window.y + 18, t->window.w - 8,
+                    t->window.h - 22}, ui_color_panel());
+    ui_draw_inset(&log, ui_color_canvas());
+    ui_draw_inset(&input, ui_color_canvas());
 
     for (int i = 0; i < t->line_count; ++i) {
         sys_text(text_x, text_y + (i * 8), theme->text, t->lines[i]);
@@ -278,6 +282,6 @@ void terminal_draw_window(struct terminal_state *t, int active,
             input_line[n++] = t->input[i];
         }
         input_line[n] = '\0';
-        sys_text(text_x, t->window.y + t->window.h - 12, theme->text, input_line);
+        sys_text(input.x + 4, input.y + 1, theme->text, input_line);
     }
 }

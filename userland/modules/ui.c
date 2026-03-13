@@ -8,11 +8,11 @@
 #include <userland/modules/include/ui_cursor.h>
 
 /* Global screen resolution vars - initialized at startup */
-uint32_t SCREEN_WIDTH = 320;
-uint32_t SCREEN_HEIGHT = 200;
-uint32_t SCREEN_PITCH = 320;
+uint32_t SCREEN_WIDTH = 640;
+uint32_t SCREEN_HEIGHT = 480;
+uint32_t SCREEN_PITCH = 640;
 struct video_mode g_screen_mode = {0};
-static struct desktop_theme g_theme = {3, 7, 8, 7, 9, 0};
+static struct desktop_theme g_theme = {1, 8, 17, 8, 17, 15};
 static int g_ui_loading_settings = 0;
 static struct {
     int active;
@@ -23,14 +23,26 @@ static struct {
 } g_wallpaper = {0, -1, 0, 0, {{0}}};
 
 #define TASKBAR_HEIGHT 22
-#define START_MENU_WIDTH 158
-#define START_MENU_HEIGHT 176
-#define START_MENU_ITEM_X 28
-#define START_MENU_ITEM_Y 8
-#define START_MENU_ITEM_W 126
+#define START_MENU_WIDTH 176
+#define START_MENU_HEIGHT 204
+#define START_MENU_ITEM_X 10
+#define START_MENU_ITEM_Y 34
+#define START_MENU_ITEM_W 156
 #define START_MENU_ITEM_H 14
 #define START_MENU_ITEM_STEP 16
 #define UI_SETTINGS_PATH "/config/ui.cfg"
+#define UI_CANVAS_COLOR 1u
+#define UI_PANEL_COLOR 8u
+#define UI_MUTED_COLOR 7u
+
+static int ui_text_width(const char *text) {
+    int len = str_len(text);
+
+    if (len <= 0) {
+        return 0;
+    }
+    return (len * 6) - 1;
+}
 
 static int ui_starts_with(const char *text, const char *prefix) {
     while (*prefix != '\0') {
@@ -306,7 +318,7 @@ const char *ui_theme_slot_name(enum theme_slot slot) {
 }
 
 struct rect ui_taskbar_start_button_rect(void) {
-    struct rect r = {4, (int)SCREEN_HEIGHT - TASKBAR_HEIGHT + 3, 56, 16};
+    struct rect r = {4, (int)SCREEN_HEIGHT - TASKBAR_HEIGHT + 3, 62, 16};
     return r;
 }
 
@@ -327,12 +339,94 @@ struct rect ui_start_menu_item_rect(int index) {
     return r;
 }
 
-static void draw_panel(const struct rect *r, uint8_t face, uint8_t light, uint8_t dark) {
-    sys_rect(r->x, r->y, r->w, r->h, face);
-    sys_rect(r->x, r->y, r->w, 1, light);
-    sys_rect(r->x, r->y, 1, r->h, light);
-    sys_rect(r->x, r->y + r->h - 1, r->w, 1, dark);
-    sys_rect(r->x + r->w - 1, r->y, 1, r->h, dark);
+uint8_t ui_color_canvas(void) {
+    return UI_CANVAS_COLOR;
+}
+
+uint8_t ui_color_panel(void) {
+    return UI_PANEL_COLOR;
+}
+
+uint8_t ui_color_muted(void) {
+    return UI_MUTED_COLOR;
+}
+
+void ui_draw_surface(const struct rect *r, uint8_t fill) {
+    if (r == 0 || r->w <= 0 || r->h <= 0) {
+        return;
+    }
+
+    sys_rect(r->x, r->y, r->w, r->h, 0);
+    if (r->w > 2 && r->h > 2) {
+        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, UI_PANEL_COLOR);
+    }
+    if (r->w > 4 && r->h > 4) {
+        sys_rect(r->x + 2, r->y + 2, r->w - 4, r->h - 4, fill);
+    }
+}
+
+void ui_draw_inset(const struct rect *r, uint8_t fill) {
+    if (r == 0 || r->w <= 0 || r->h <= 0) {
+        return;
+    }
+
+    sys_rect(r->x, r->y, r->w, r->h, UI_PANEL_COLOR);
+    if (r->w > 2 && r->h > 2) {
+        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, 0);
+    }
+    if (r->w > 4 && r->h > 4) {
+        sys_rect(r->x + 2, r->y + 2, r->w - 4, r->h - 4, fill);
+    }
+}
+
+void ui_draw_button(const struct rect *r, const char *label,
+                    enum ui_button_style style, int highlighted) {
+    uint8_t fill = UI_PANEL_COLOR;
+    uint8_t border = highlighted ? 15 : 0;
+    int text_x;
+    int text_y;
+
+    if (r == 0 || label == 0) {
+        return;
+    }
+
+    switch (style) {
+    case UI_BUTTON_PRIMARY:
+        fill = g_theme.menu_button;
+        break;
+    case UI_BUTTON_DANGER:
+        fill = 12;
+        break;
+    case UI_BUTTON_ACTIVE:
+        fill = g_theme.window;
+        break;
+    default:
+        fill = UI_PANEL_COLOR;
+        break;
+    }
+
+    sys_rect(r->x, r->y, r->w, r->h, border);
+    if (r->w > 2 && r->h > 2) {
+        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, fill);
+    }
+    if (r->w > 4 && r->h > 4) {
+        sys_rect(r->x + 2, r->y + 2, r->w - 4, r->h - 4, fill);
+    }
+    text_x = r->x + ((r->w - ui_text_width(label)) / 2);
+    if (text_x < r->x + 4) {
+        text_x = r->x + 4;
+    }
+    text_y = r->y + ((r->h - 7) / 2);
+    sys_text(text_x, text_y, g_theme.text, label);
+}
+
+void ui_draw_status(const struct rect *r, const char *text) {
+    if (r == 0 || text == 0) {
+        return;
+    }
+
+    ui_draw_surface(r, UI_PANEL_COLOR);
+    sys_text(r->x + 5, r->y + 3, g_theme.text, text);
 }
 
 static void draw_wallpaper(int desktop_h) {
@@ -375,12 +469,6 @@ static const char *app_caption(enum app_type type) {
     }
 }
 
-static void draw_task_button(const struct rect *r, const char *label, int active) {
-    uint8_t face = active ? g_theme.window : g_theme.menu_button;
-    draw_panel(r, face, 15, 0);
-    sys_text(r->x + 5, r->y + 4, g_theme.text, label);
-}
-
 void draw_window_frame(const struct rect *w, const char *title,
                        int active,
                        int min_hover,
@@ -392,16 +480,14 @@ void draw_window_frame(const struct rect *w, const char *title,
     const struct rect outer = {w->x, w->y, w->w, w->h};
     const struct rect title_bar = {w->x + 2, w->y + 2, w->w - 4, 12};
 
-    draw_panel(&outer, 7, 15, 0);
-    sys_rect(title_bar.x, title_bar.y, title_bar.w, title_bar.h, active ? g_theme.window : 8);
-    sys_text(w->x + 6, w->y + 4, g_theme.text, title);
+    ui_draw_surface(&outer, UI_PANEL_COLOR);
+    sys_rect(title_bar.x, title_bar.y, title_bar.w, title_bar.h, active ? g_theme.window : g_theme.taskbar);
+    sys_rect(title_bar.x, title_bar.y + title_bar.h - 1, title_bar.w, 1, 0);
+    sys_text(w->x + 8, w->y + 4, g_theme.text, title);
 
-    draw_panel(&min, min_hover ? 15 : g_theme.menu_button, 15, 0);
-    draw_panel(&max, max_hover ? 15 : g_theme.menu_button, 15, 0);
-    draw_panel(&close, close_hover ? 12 : g_theme.menu_button, 15, 0);
-    sys_text(min.x + 3, min.y + 2, g_theme.text, "-");
-    sys_text(max.x + 3, max.y + 2, g_theme.text, "0");
-    sys_text(close.x + 3, close.y + 2, g_theme.text, "X");
+    ui_draw_button(&min, "-", UI_BUTTON_NORMAL, min_hover);
+    ui_draw_button(&max, "+", UI_BUTTON_NORMAL, max_hover);
+    ui_draw_button(&close, "X", UI_BUTTON_DANGER, close_hover);
 }
 
 static void draw_start_menu(int taskbar_y,
@@ -419,21 +505,21 @@ static void draw_start_menu(int taskbar_y,
         "Encerrar sessao"
     };
     const struct rect menu_rect = {2, taskbar_y - START_MENU_HEIGHT, START_MENU_WIDTH, START_MENU_HEIGHT};
-    const struct rect blue_strip = {menu_rect.x + 2, menu_rect.y + 2, 22, menu_rect.h - 4};
+    const struct rect header = {menu_rect.x + 8, menu_rect.y + 8, menu_rect.w - 16, 18};
 
-    draw_panel(&menu_rect, g_theme.menu, 15, 0);
-    sys_rect(blue_strip.x, blue_strip.y, blue_strip.w, blue_strip.h, 9);
-    sys_text(blue_strip.x + 4, blue_strip.y + 6, 15, "V");
-    sys_text(blue_strip.x + 4, blue_strip.y + 18, 15, "I");
-    sys_text(blue_strip.x + 4, blue_strip.y + 30, 15,  "B");
-    sys_text(blue_strip.x + 4, blue_strip.y + 42, 15, "E");
+    ui_draw_surface(&menu_rect, g_theme.menu);
+    ui_draw_button(&header, "VIBE DESKTOP", UI_BUTTON_ACTIVE, 0);
 
     for (int i = 0; i < START_MENU_ITEM_COUNT; ++i) {
         struct rect item = ui_start_menu_item_rect(i);
         if (i == START_MENU_LOGOUT) {
-            sys_rect(item.x, item.y - 6, item.w, 1, 8);
+            sys_rect(item.x, item.y - 6, item.w, 1, UI_MUTED_COLOR);
         }
-        draw_task_button(&item, labels[i], menu_item_hover[i]);
+        ui_draw_button(&item,
+                       labels[i],
+                       i == START_MENU_LOGOUT ? UI_BUTTON_DANGER :
+                                                (menu_item_hover[i] ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL),
+                       menu_item_hover[i]);
     }
 }
 
@@ -443,9 +529,9 @@ static void draw_taskbar(const struct window *wins, int win_count, int focused, 
     int x = 66;
 
     sys_rect(0, taskbar_y, (int)SCREEN_WIDTH, 22, g_theme.taskbar);
-    sys_rect(0, taskbar_y, (int)SCREEN_WIDTH, 1, 15);
+    sys_rect(0, taskbar_y, (int)SCREEN_WIDTH, 1, g_theme.window);
     sys_rect(0, taskbar_y + 21, (int)SCREEN_WIDTH, 1, 0);
-    draw_task_button(&start_button, "Iniciar", start_hover);
+    ui_draw_button(&start_button, "Iniciar", UI_BUTTON_PRIMARY, start_hover);
 
     for (int i = 0; i < win_count; ++i) {
         struct rect button;
@@ -461,7 +547,10 @@ static void draw_taskbar(const struct window *wins, int win_count, int focused, 
         if (button.x + button.w > (int)SCREEN_WIDTH - 4) {
             break;
         }
-        draw_task_button(&button, app_caption(wins[i].type), i == focused && !wins[i].minimized);
+        ui_draw_button(&button,
+                       app_caption(wins[i].type),
+                       i == focused && !wins[i].minimized ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                       i == focused && !wins[i].minimized);
         x += button.w + 4;
     }
 }
@@ -477,10 +566,16 @@ void draw_desktop(const struct mouse_state *mouse,
 
     sys_clear(g_theme.background);
     draw_wallpaper(desktop_h);
-    sys_rect(20, 18, 140, 18, g_theme.window);
-    sys_text(28, 24, g_theme.text, "VIBE DESKTOP");
-    sys_rect((int)SCREEN_WIDTH - 108, 24, 72, 72, 11);
-    sys_text((int)SCREEN_WIDTH - 94, 52, g_theme.text, "Meu PC");
+    {
+        struct rect banner = {18, 18, 154, 20};
+        struct rect icon_card = {(int)SCREEN_WIDTH - 110, 20, 84, 86};
+        struct rect icon_plate = {icon_card.x + 16, icon_card.y + 10, 52, 40};
+
+        ui_draw_button(&banner, "VIBE DESKTOP", UI_BUTTON_ACTIVE, 0);
+        ui_draw_surface(&icon_card, UI_PANEL_COLOR);
+        ui_draw_surface(&icon_plate, g_theme.window);
+        sys_text(icon_card.x + 24, icon_card.y + 60, g_theme.text, "Arquivos");
+    }
 
     draw_taskbar(wins, win_count, focused, start_hover);
 

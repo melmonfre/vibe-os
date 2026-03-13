@@ -62,8 +62,18 @@ static int g_clipboard_node = -1;
 static int g_launch_editor_pending = 0;
 static char g_launch_editor_path[80];
 static int g_fm_context_has_wallpaper_action = 0;
-static const uint16_t g_resolution_widths[] = {320u, 640u, 800u};
-static const uint16_t g_resolution_heights[] = {200u, 480u, 600u};
+struct resolution_option {
+    uint16_t width;
+    uint16_t height;
+};
+
+static const struct resolution_option g_resolution_options[] = {
+    {640u, 480u},
+    {800u, 600u},
+    {1024u, 768u},
+    {1366u, 768u},
+    {1920u, 1080u}
+};
 
 static void sync_window_instance_rect(int widx);
 static int alloc_window(enum app_type type);
@@ -497,7 +507,7 @@ static int alloc_window(enum app_type type) {
             case APP_PERSONALIZE:
                 if (g_pers_used) return -1;
                 g_pers_used = 1;
-                g_pers.window = (struct rect){20, 18, 258, 262};
+                g_pers.window = (struct rect){20, 18, 258, 304};
                 g_pers.selected_slot = THEME_SLOT_BACKGROUND;
                 instance = 0;
                 rect = g_pers.window;
@@ -689,9 +699,11 @@ static void draw_personalize_window(struct personalize_state *state,
     int bmp_count = find_bmp_nodes(bmp_nodes, 4);
     int current_wallpaper = ui_wallpaper_source_node();
     uint8_t selected_color = theme->background;
+    struct rect body = {state->window.x + 4, state->window.y + 18, state->window.w - 8, state->window.h - 22};
+    struct rect preview = {state->window.x + 140, state->window.y + 118, 94, 50};
 
     draw_window_frame(&state->window, "Personalizar", active, min_hover, max_hover, close_hover);
-    sys_rect(state->window.x + 4, state->window.y + 18, state->window.w - 8, state->window.h - 22, 7);
+    ui_draw_surface(&body, ui_color_panel());
     sys_text(state->window.x + 10, state->window.y + 20, theme->text, "Escolha uma area:");
 
     if (state->selected_slot == THEME_SLOT_MENU) selected_color = theme->menu;
@@ -710,19 +722,19 @@ static void draw_personalize_window(struct personalize_state *state,
         else if (slot == THEME_SLOT_WINDOW) color = theme->window;
         else if (slot == THEME_SLOT_TEXT) color = theme->text;
 
-        sys_rect(tile.x, tile.y, tile.w, tile.h, slot == (int)state->selected_slot ? 15 : 8);
-        sys_rect(tile.x + 1, tile.y + 1, tile.w - 2, tile.h - 2, 7);
+        ui_draw_surface(&tile, slot == (int)state->selected_slot ? theme->window : ui_color_panel());
         sys_rect(tile.x + 5, tile.y + 5, tile.w - 10, 10, slot == (int)THEME_SLOT_TEXT ? theme->window : color);
         if (slot == (int)THEME_SLOT_TEXT) {
             sys_text(tile.x + 29, tile.y + 6, color, "A");
         } else {
-            sys_rect(tile.x + 8, tile.y + 17, tile.w - 16, 4, slot == (int)state->selected_slot ? 0 : 8);
+            sys_rect(tile.x + 8, tile.y + 17, tile.w - 16, 4,
+                     slot == (int)state->selected_slot ? ui_color_canvas() : ui_color_muted());
         }
         sys_text(tile.x + 3, tile.y + 20, theme->text, ui_theme_slot_name((enum theme_slot)slot));
     }
 
     sys_text(state->window.x + 10, state->window.y + 104, theme->text, "Cores comuns:");
-    sys_rect(state->window.x + 140, state->window.y + 118, 94, 50, 8);
+    ui_draw_inset(&preview, ui_color_canvas());
     sys_rect(state->window.x + 148, state->window.y + 126, 78, 18,
              state->selected_slot == THEME_SLOT_TEXT ? theme->window : selected_color);
     sys_text(state->window.x + 171, state->window.y + 132,
@@ -733,7 +745,7 @@ static void draw_personalize_window(struct personalize_state *state,
         struct rect swatch = personalize_window_palette_rect(&state->window, i);
         int hover = point_in_rect(&swatch, mouse->x, mouse->y);
 
-        sys_rect(swatch.x, swatch.y, swatch.w, swatch.h, hover ? 15 : 8);
+        sys_rect(swatch.x, swatch.y, swatch.w, swatch.h, hover ? 15 : 0);
         sys_rect(swatch.x + 1, swatch.y + 1, swatch.w - 2, swatch.h - 2, g_theme_palette[i]);
     }
 
@@ -745,27 +757,30 @@ static void draw_personalize_window(struct personalize_state *state,
         int selected = current_wallpaper == node;
         const char *label = i < 0 ? "Somente cor" : g_fs_nodes[node].name;
 
-        sys_rect(button.x, button.y, button.w, button.h, selected ? 11 : (hover ? 15 : 8));
-        sys_rect(button.x + 1, button.y + 1, button.w - 2, button.h - 2, 7);
-        sys_text(button.x + 4, button.y + 4, theme->text, label);
+        ui_draw_button(&button,
+                       label,
+                       selected ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                       hover);
     }
     if (bmp_count == 0) {
         sys_text(state->window.x + 12, state->window.y + 244, theme->text, "nenhum .bmp encontrado");
     }
 
     sys_text(state->window.x + 164, state->window.y + 164, theme->text, "Resolucao:");
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < (int)(sizeof(g_resolution_options) / sizeof(g_resolution_options[0])); ++i) {
         struct rect button = personalize_window_resolution_button_rect(&state->window, i);
         char label[16] = "";
         int hover = point_in_rect(&button, mouse->x, mouse->y);
-        int selected = (SCREEN_WIDTH == g_resolution_widths[i] && SCREEN_HEIGHT == g_resolution_heights[i]);
+        int selected = (SCREEN_WIDTH == g_resolution_options[i].width &&
+                        SCREEN_HEIGHT == g_resolution_options[i].height);
 
-        append_uint_limited(label, g_resolution_widths[i], (int)sizeof(label));
+        append_uint_limited(label, g_resolution_options[i].width, (int)sizeof(label));
         str_append(label, "x", (int)sizeof(label));
-        append_uint_limited(label, g_resolution_heights[i], (int)sizeof(label));
-        sys_rect(button.x, button.y, button.w, button.h, selected ? 10 : (hover ? 15 : 8));
-        sys_rect(button.x + 1, button.y + 1, button.w - 2, button.h - 2, 7);
-        sys_text(button.x + 8, button.y + 4, theme->text, label);
+        append_uint_limited(label, g_resolution_options[i].height, (int)sizeof(label));
+        ui_draw_button(&button,
+                       label,
+                       selected ? UI_BUTTON_ACTIVE : UI_BUTTON_PRIMARY,
+                       hover);
     }
 }
 
@@ -1341,10 +1356,11 @@ void desktop_main(void) {
                                     dirty = 1;
                                 }
                             }
-                            for (int i = 0; i < 3; ++i) {
+                            for (int i = 0; i < (int)(sizeof(g_resolution_options) / sizeof(g_resolution_options[0])); ++i) {
                                 struct rect button = personalize_window_resolution_button_rect(&g_windows[hit_window].rect, i);
                                 if (point_in_rect(&button, click_x, click_y)) {
-                                    if (ui_set_resolution(g_resolution_widths[i], g_resolution_heights[i]) == 0) {
+                                    if (ui_set_resolution(g_resolution_options[i].width,
+                                                          g_resolution_options[i].height) == 0) {
                                         for (int w = 0; w < MAX_WINDOWS; ++w) {
                                             if (g_windows[w].active) {
                                                 clamp_window_rect(&g_windows[w].rect);
@@ -1461,8 +1477,6 @@ void desktop_main(void) {
         }
 
         if (dirty) {
-            const struct desktop_theme *theme = ui_theme_get();
-
             draw_desktop(&mouse, menu_open, start_hover,
                          menu_hover, g_windows, MAX_WINDOWS, focused);
 
@@ -1533,13 +1547,15 @@ void desktop_main(void) {
             }
 
             if (context_open) {
-                sys_rect(context_menu.x, context_menu.y, context_menu.w, context_menu.h, 8);
-                sys_rect(context_menu.x + 1, context_menu.y + 1, context_menu.w - 2, context_menu.h - 2, context_personalize_hover ? 15 : 7);
-                sys_text(context_menu.x + 6, context_menu.y + 6, theme->text, "Personalizar...");
+                ui_draw_surface(&context_menu, ui_color_panel());
+                ui_draw_button(&(struct rect){context_menu.x + 2, context_menu.y + 2, context_menu.w - 4, context_menu.h - 4},
+                               "Personalizar...",
+                               UI_BUTTON_NORMAL,
+                               context_personalize_hover);
             }
 
             if (fm_context_open) {
-                sys_rect(fm_context_menu.x, fm_context_menu.y, fm_context_menu.w, fm_context_menu.h, 8);
+                ui_draw_surface(&fm_context_menu, ui_color_panel());
                 for (int action = 0; action < FMENU_COUNT; ++action) {
                     struct rect item = filemanager_context_item_rect(&fm_context_menu, action);
                     int hover = 0;
@@ -1555,8 +1571,7 @@ void desktop_main(void) {
                     else if (action == FMENU_NEW_FILE) hover = fm_new_file_hover;
                     else if (action == FMENU_SET_WALLPAPER) hover = fm_set_wallpaper_hover;
 
-                    sys_rect(item.x, item.y, item.w, item.h, hover ? 15 : 7);
-                    sys_text(item.x + 4, item.y + 3, theme->text, filemanager_menu_label(action));
+                    ui_draw_button(&item, filemanager_menu_label(action), UI_BUTTON_NORMAL, hover);
                 }
             }
 

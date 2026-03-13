@@ -193,20 +193,29 @@ void calculator_press_key(struct calculator_state *calc, char key) {
 void calculator_draw_window(struct calculator_state *calc, int active,
                             int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *theme = ui_theme_get();
+    struct rect body = {calc->window.x + 4, calc->window.y + 18, calc->window.w - 8, calc->window.h - 22};
+    struct rect display = {calc->window.x + 8, calc->window.y + 24, calc->window.w - 16, 16};
 
     draw_window_frame(&calc->window, "CALCULADORA", active, min_hover, max_hover, close_hover);
-    sys_rect(calc->window.x + 4, calc->window.y + 18, calc->window.w - 8, calc->window.h - 22, 0);
+    ui_draw_surface(&body, ui_color_panel());
 
-    sys_rect(calc->window.x + 8, calc->window.y + 24, calc->window.w - 16, 16, 8);
+    ui_draw_inset(&display, ui_color_canvas());
     sys_text(calc->window.x + 12, calc->window.y + 29, theme->text, calc->display);
 
     for (int i = 0; i < CALCULATOR_BUTTON_COUNT; ++i) {
         struct rect button = calculator_button_rect(calc, i);
         char text[2];
+        enum ui_button_style style = UI_BUTTON_NORMAL;
 
-        sys_rect(button.x, button.y, button.w, button.h, 7);
         text[0] = calculator_button_key(i);
         text[1] = '\0';
-        sys_text(button.x + 10, button.y + 6, theme->text, text);
+        if (text[0] == 'C') {
+            style = UI_BUTTON_DANGER;
+        } else if (text[0] == '=' ) {
+            style = UI_BUTTON_ACTIVE;
+        } else if (text[0] == '+' || text[0] == '-' || text[0] == '*' || text[0] == '/') {
+            style = UI_BUTTON_PRIMARY;
+        }
+        ui_draw_button(&button, text, style, 0);
     }
 }
