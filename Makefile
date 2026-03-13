@@ -3,6 +3,7 @@ SHELL := /bin/sh
 AS := nasm
 CC := i686-elf-gcc
 LD := i686-elf-ld
+NM := i686-elf-nm
 OBJCOPY := i686-elf-objcopy
 QEMU := qemu-system-i386
 
@@ -10,6 +11,12 @@ BUILD_DIR := build
 BOOT_DIR := boot
 USERLAND_DIR := userland
 LINKER_DIR := linker
+PYTHON := python3
+
+BOOT_KERNEL_SECTORS := 384
+APPFS_DIRECTORY_LBA := 385
+APPFS_DIRECTORY_SECTORS := 8
+APPFS_APP_AREA_SECTORS := 1536
 
 # Kernel sources - kernel only, no stage2
 KERNEL_SRCS := $(shell find kernel -name '*.c')
@@ -26,6 +33,7 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/modules/console.c \
 	$(USERLAND_DIR)/modules/fs.c \
 	$(USERLAND_DIR)/modules/bmp.c \
+	$(USERLAND_DIR)/modules/lang_loader.c \
 	$(USERLAND_DIR)/modules/utils.c \
 	$(USERLAND_DIR)/modules/syscalls.c \
 	$(USERLAND_DIR)/modules/ui.c \
@@ -81,13 +89,25 @@ USERLAND_OBJS := $(patsubst $(USERLAND_DIR)/%.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS
 BOOT_BIN := $(BUILD_DIR)/boot.bin
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
+USERLAND_MAIN_ELF := $(BUILD_DIR)/userland-main.elf
+USERLAND_MAIN_BIN := $(BUILD_DIR)/userland-main.bin
 IMAGE := $(BUILD_DIR)/boot.img
 
-CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -Iheaders -Iuserland -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src
+CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src
 LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
+LDFLAGS_APP := -m elf_i386 -T $(LINKER_DIR)/app.ld -nostdlib -N
 
-all: $(IMAGE)
+HELLO_APP_BUILD_DIR := $(BUILD_DIR)/lang/hello
+HELLO_APP_OBJS := \
+	$(HELLO_APP_BUILD_DIR)/app_entry.o \
+	$(HELLO_APP_BUILD_DIR)/app_runtime.o \
+	$(HELLO_APP_BUILD_DIR)/hello_main.o
+HELLO_APP_ELF := $(BUILD_DIR)/lang/hello.elf
+HELLO_APP_BIN := $(BUILD_DIR)/lang/hello.app
+LANG_APP_BINS := $(HELLO_APP_BIN)
+
+all: $(IMAGE) $(USERLAND_MAIN_BIN)
 
 check-tools:
 	@for tool in $(REQUIRED_TOOLS); do \
@@ -124,16 +144,49 @@ $(BUILD_DIR)/%.o: $(USERLAND_DIR)/%.c headers/include/userland_api.h | $(BUILD_D
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(HELLO_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"hello\" -DVIBE_APP_BUILD_HEAP_SIZE=32768u -c $< -o $@
+
+$(HELLO_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(HELLO_APP_BUILD_DIR)/hello_main.o: lang/apps/hello/hello_main.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld
 	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) -o $@
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
+	@kernel_sectors=$$((($$(wc -c < $@) + 511) / 512)); \
+	if [ "$$kernel_sectors" -gt "$(BOOT_KERNEL_SECTORS)" ]; then \
+		echo "Erro: kernel.bin excede o limite do bootloader ($$kernel_sectors > $(BOOT_KERNEL_SECTORS) setores)."; \
+		exit 1; \
+	fi
 
-$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN)
+$(USERLAND_MAIN_ELF): $(USERLAND_OBJS) $(LINKER_DIR)/userland.ld
+	$(LD) $(LDFLAGS_USERLAND) $(USERLAND_OBJS) -o $@
+
+$(USERLAND_MAIN_BIN): $(USERLAND_MAIN_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(HELLO_APP_ELF): $(HELLO_APP_OBJS) $(LINKER_DIR)/app.ld
+	mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS_APP) $(HELLO_APP_OBJS) -o $@
+
+$(HELLO_APP_BIN): $(HELLO_APP_ELF)
+	mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS)
 	dd if=/dev/zero of=$@ bs=1474560 count=1
 	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc
 	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 conv=notrunc
+	$(PYTHON) tools/build_appfs.py --image $@ --directory-lba $(APPFS_DIRECTORY_LBA) --directory-sectors $(APPFS_DIRECTORY_SECTORS) --app-area-sectors $(APPFS_APP_AREA_SECTORS) $(LANG_APP_BINS)
 	@echo "Imagem gerada: $(IMAGE)"
 
 run: $(IMAGE)
