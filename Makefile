@@ -105,7 +105,32 @@ HELLO_APP_OBJS := \
 	$(HELLO_APP_BUILD_DIR)/hello_main.o
 HELLO_APP_ELF := $(BUILD_DIR)/lang/hello.elf
 HELLO_APP_BIN := $(BUILD_DIR)/lang/hello.app
-LANG_APP_BINS := $(HELLO_APP_BIN)
+
+JS_APP_BUILD_DIR := $(BUILD_DIR)/lang/js
+JS_APP_OBJS := \
+	$(JS_APP_BUILD_DIR)/app_entry.o \
+	$(JS_APP_BUILD_DIR)/app_runtime.o \
+	$(JS_APP_BUILD_DIR)/js_main.o
+JS_APP_ELF := $(BUILD_DIR)/lang/js.elf
+JS_APP_BIN := $(BUILD_DIR)/lang/js.app
+
+RUBY_APP_BUILD_DIR := $(BUILD_DIR)/lang/ruby
+RUBY_APP_OBJS := \
+	$(RUBY_APP_BUILD_DIR)/app_entry.o \
+	$(RUBY_APP_BUILD_DIR)/app_runtime.o \
+	$(RUBY_APP_BUILD_DIR)/ruby_main.o
+RUBY_APP_ELF := $(BUILD_DIR)/lang/ruby.elf
+RUBY_APP_BIN := $(BUILD_DIR)/lang/ruby.app
+
+PYTHON_APP_BUILD_DIR := $(BUILD_DIR)/lang/python
+PYTHON_APP_OBJS := \
+	$(PYTHON_APP_BUILD_DIR)/app_entry.o \
+	$(PYTHON_APP_BUILD_DIR)/app_runtime.o \
+	$(PYTHON_APP_BUILD_DIR)/python_main.o
+PYTHON_APP_ELF := $(BUILD_DIR)/lang/python.elf
+PYTHON_APP_BIN := $(BUILD_DIR)/lang/python.app
+
+LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN)
 
 all: $(IMAGE) $(USERLAND_MAIN_BIN)
 
@@ -156,6 +181,42 @@ $(HELLO_APP_BUILD_DIR)/hello_main.o: lang/apps/hello/hello_main.c | $(BUILD_DIR)
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(JS_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"js\" -DVIBE_APP_BUILD_HEAP_SIZE=65536u -c $< -o $@
+
+$(JS_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(JS_APP_BUILD_DIR)/js_main.o: lang/apps/js/js_main.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(RUBY_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"ruby\" -DVIBE_APP_BUILD_HEAP_SIZE=65536u -c $< -o $@
+
+$(RUBY_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(RUBY_APP_BUILD_DIR)/ruby_main.o: lang/apps/ruby/ruby_main.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(PYTHON_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"python\" -DVIBE_APP_BUILD_HEAP_SIZE=65536u -c $< -o $@
+
+$(PYTHON_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(PYTHON_APP_BUILD_DIR)/python_main.o: lang/apps/python/python_main.c | $(BUILD_DIR)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld
 	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) -o $@
 
@@ -178,6 +239,33 @@ $(HELLO_APP_ELF): $(HELLO_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(HELLO_APP_OBJS) -o $@
 
 $(HELLO_APP_BIN): $(HELLO_APP_ELF)
+	mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(JS_APP_ELF): $(JS_APP_OBJS) $(LINKER_DIR)/app.ld
+	mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS_APP) $(JS_APP_OBJS) -o $@
+
+$(JS_APP_BIN): $(JS_APP_ELF)
+	mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(RUBY_APP_ELF): $(RUBY_APP_OBJS) $(LINKER_DIR)/app.ld
+	mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS_APP) $(RUBY_APP_OBJS) -o $@
+
+$(RUBY_APP_BIN): $(RUBY_APP_ELF)
+	mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(PYTHON_APP_ELF): $(PYTHON_APP_OBJS) $(LINKER_DIR)/app.ld
+	mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS_APP) $(PYTHON_APP_OBJS) -o $@
+
+$(PYTHON_APP_BIN): $(PYTHON_APP_ELF)
 	mkdir -p $(dir $@)
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
