@@ -4,6 +4,7 @@
 #define VIBE_APP_SYSCALL_YIELD 10
 #define VIBE_APP_SYSCALL_WRITE_DEBUG 11
 #define VIBE_APP_SYSCALL_TEXT_PUTC 12
+#define EOF (-1)
 
 struct heap_block {
     size_t size;
@@ -339,4 +340,348 @@ char *strchr(const char *text, int c) {
         ++text;
     }
     return c == 0 ? (char *)text : 0;
+}
+
+/* ============ STDIO Implementation ============ */
+
+/* FILE structure stubs - using vibe_io */
+typedef struct FILE {
+    int fd;
+    int flags;
+    int error;
+    long pos;
+    unsigned char *buf;
+    int bufsize;
+    int bufpos;
+} FILE;
+
+static FILE _stdin = {0, 0, 0, 0, 0, 0, 0};
+static FILE _stdout = {1, 0, 0, 0, 0, 0, 0};
+static FILE _stderr = {2, 0, 0, 0, 0, 0, 0};
+
+FILE *stdin = &_stdin;
+FILE *stdout = &_stdout;
+FILE *stderr = &_stderr;
+
+/* Helper: write formatted output to file */
+static int vibe_vfprintf_helper(FILE *f, const char *fmt, va_list ap) {
+    int count = 0;
+    
+    if (!f || !fmt) {
+        return -1;
+    }
+    
+    while (*fmt) {
+        if (*fmt == '%') {
+            fmt++;
+            if (*fmt == 'd') {
+                int val = va_arg(ap, int);
+                char buf[32];
+                int len = 0;
+                int neg = 0;
+                
+                if (val < 0) {
+                    neg = 1;
+                    val = -val;
+                }
+                
+                if (val == 0) {
+                    buf[len++] = '0';
+                } else {
+                    int divisor = 1;
+                    while (divisor <= val / 10) divisor *= 10;
+                    while (divisor > 0) {
+                        buf[len++] = '0' + (val / divisor) % 10;
+                        divisor /= 10;
+                    }
+                }
+                
+                if (neg) {
+                    vibe_app_console_putc('-');
+                    count++;
+                }
+                
+                for (int i = 0; i < len; i++) {
+                    vibe_app_console_putc(buf[i]);
+                    count++;
+                }
+            } else if (*fmt == 's') {
+                const char *s = va_arg(ap, const char *);
+                if (s) {
+                    while (*s) {
+                        vibe_app_console_putc(*s++);
+                        count++;
+                    }
+                }
+            } else if (*fmt == 'c') {
+                int c = va_arg(ap, int);
+                vibe_app_console_putc((char)c);
+                count++;
+            } else if (*fmt == 'x' || *fmt == 'X') {
+                unsigned int val = va_arg(ap, unsigned int);
+                const char *hex = (*fmt == 'x') ? "0123456789abcdef" : "0123456789ABCDEF";
+                char buf[16];
+                int len = 0;
+                
+                if (val == 0) {
+                    buf[len++] = '0';
+                } else {
+                    unsigned int temp = val;
+                    while (temp > 0) {
+                        buf[len++] = hex[temp % 16];
+                        temp /= 16;
+                    }
+                    for (int i = 0; i < len / 2; i++) {
+                        char t = buf[i];
+                        buf[i] = buf[len - 1 - i];
+                        buf[len - 1 - i] = t;
+                    }
+                }
+                
+                for (int i = 0; i < len; i++) {
+                    vibe_app_console_putc(buf[i]);
+                    count++;
+                }
+            } else if (*fmt == '%') {
+                vibe_app_console_putc('%');
+                count++;
+            }
+            fmt++;
+        } else if (*fmt == '\\' && *(fmt + 1) == 'n') {
+            vibe_app_console_putc('\n');
+            count++;
+            fmt += 2;
+        } else {
+            vibe_app_console_putc(*fmt);
+            count++;
+            fmt++;
+        }
+    }
+    
+    return count;
+}
+
+int printf(const char *fmt, ...) {
+    va_list ap;
+    int ret;
+    
+    va_start(ap, fmt);
+    ret = vibe_vfprintf_helper(stdout, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+int fprintf(FILE *f, const char *fmt, ...) {
+    va_list ap;
+    int ret;
+    
+    if (!f) {
+        return -1;
+    }
+    
+    va_start(ap, fmt);
+    ret = vibe_vfprintf_helper(f, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+int vprintf(const char *fmt, va_list ap) {
+    return vibe_vfprintf_helper(stdout, fmt, ap);
+}
+
+int vfprintf(FILE *f, const char *fmt, va_list ap) {
+    if (!f) {
+        return -1;
+    }
+    return vibe_vfprintf_helper(f, fmt, ap);
+}
+
+int sprintf(char *str, const char *fmt, ...) {
+    /* Not implemented - too complex for embedded context */
+    (void)str;
+    (void)fmt;
+    return -1;
+}
+
+int snprintf(char *str, size_t size, const char *fmt, ...) {
+    /* Not implemented - too complex for embedded context */
+    (void)str;
+    (void)size;
+    (void)fmt;
+    return -1;
+}
+
+int vsprintf(char *str, const char *fmt, va_list ap) {
+    /* Not implemented */
+    (void)str;
+    (void)fmt;
+    (void)ap;
+    return -1;
+}
+
+int vsnprintf(char *str, size_t size, const char *fmt, va_list ap) {
+    /* Not implemented */
+    (void)str;
+    (void)size;
+    (void)fmt;
+    (void)ap;
+    return -1;
+}
+
+/* File operations - minimal stubs */
+FILE *fopen(const char *filename, const char *mode) {
+    /* Not implemented in this embedded context */
+    (void)filename;
+    (void)mode;
+    return 0;
+}
+
+FILE *fdopen(int fd, const char *mode) {
+    /* Not implemented in this embedded context */
+    (void)fd;
+    (void)mode;
+    return 0;
+}
+
+int fclose(FILE *stream) {
+    /* Not implemented in this embedded context */
+    (void)stream;
+    return -1;
+}
+
+int fflush(FILE *stream) {
+    /* No buffering in this embedded context */
+    (void)stream;
+    return 0;
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    /* Not implemented in this embedded context */
+    (void)ptr;
+    (void)size;
+    (void)nmemb;
+    (void)stream;
+    return 0;
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    /* Not implemented in this embedded context */
+    (void)ptr;
+    (void)size;
+    (void)nmemb;
+    (void)stream;
+    return 0;
+}
+
+int fgetc(FILE *stream) {
+    /* Not implemented in this embedded context */
+    (void)stream;
+    return EOF;
+}
+
+int fputc(int c, FILE *stream) {
+    if (stream == stdout || stream == stderr) {
+        vibe_app_console_putc((char)c);
+        return c;
+    }
+    return EOF;
+}
+
+char *fgets(char *s, int size, FILE *stream) {
+    /* Not implemented in this embedded context */
+    (void)s;
+    (void)size;
+    (void)stream;
+    return 0;
+}
+
+int fputs(const char *s, FILE *stream) {
+    if (!s || !stream) {
+        return EOF;
+    }
+    if (stream == stdout || stream == stderr) {
+        vibe_app_console_write(s);
+        return 0;
+    }
+    return EOF;
+}
+
+int puts(const char *s) {
+    if (!s) {
+        return EOF;
+    }
+    vibe_app_console_write(s);
+    vibe_app_console_putc('\n');
+    return 0;
+}
+
+void clearerr(FILE *stream) {
+    if (stream) {
+        stream->error = 0;
+    }
+}
+
+int feof(FILE *stream) {
+    if (stream) {
+        return (stream->flags & 1) ? 1 : 0;
+    }
+    return 0;
+}
+
+int ferror(FILE *stream) {
+    if (stream) {
+        return stream->error;
+    }
+    return 0;
+}
+
+int fseek(FILE *stream, long offset, int whence) {
+    if (stream) {
+        switch (whence) {
+            case 0:  /* SEEK_SET */
+                stream->pos = offset;
+                break;
+            case 1:  /* SEEK_CUR */
+                stream->pos += offset;
+                break;
+            case 2:  /* SEEK_END */
+                /* Not implemented - would need file size */
+                return -1;
+        }
+        return 0;
+    }
+    return -1;
+}
+
+long ftell(FILE *stream) {
+    if (stream) {
+        return stream->pos;
+    }
+    return -1;
+}
+
+void rewind(FILE *stream) {
+    if (stream) {
+        fseek(stream, 0, 0);  /* SEEK_SET */
+    }
+}
+
+int getchar(void) {
+    return vibe_app_poll_key();
+}
+
+int putchar(int c) {
+    vibe_app_console_putc((char)c);
+    return c;
+}
+
+int getc(FILE *stream) {
+    if (stream == stdin) {
+        return vibe_app_poll_key();
+    }
+    return EOF;
+}
+
+int putc(int c, FILE *stream) {
+    return fputc(c, stream);
 }

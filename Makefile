@@ -1,5 +1,13 @@
 SHELL := /bin/sh
 
+# ARCHITECTURE:
+# - make            : Build kernel (no glibc, uses stubs)
+# - make glibc      : Build glibc library (lang/vendor/glibc -> lib/libglibc.*)
+# - make apps       : Build language runtimes in /bin
+# - make clean      : Clean kernel build
+# - make glibc-clean: Clean glibc
+# - make apps-clean : Clean apps
+
 AS := nasm
 CC := i686-elf-gcc
 LD := i686-elf-ld
@@ -86,6 +94,35 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/applications/tetris.c
 USERLAND_OBJS := $(patsubst $(USERLAND_DIR)/%.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
 
+# QuickJS wrapper - separate app build (see below)
+# QUICKJS_SRCS := lang/apps/js/quickjs_wrapper.c
+# QUICKJS_OBJS := $(patsubst lang/apps/js/%.c,$(BUILD_DIR)/lang_apps_js_%.o,$(QUICKJS_SRCS))
+
+# Add QuickJS to userland objects
+# USERLAND_OBJS += $(QUICKJS_OBJS)
+
+# $(BUILD_DIR)/lang_apps_js_%.o: lang/apps/js/%.c
+# 	$(CC) $(CFLAGS) -c $< -o $@
+
+# mruby wrapper - DISABLED: requires build artifacts (mruby/presym/id.h)
+# MRUBY_SRCS := lang/apps/ruby/mruby_wrapper.c
+# MRUBY_OBJS := $(patsubst lang/apps/ruby/%.c,$(BUILD_DIR)/lang_apps_ruby_%.o,$(MRUBY_SRCS))
+# Add mruby to userland objects
+# USERLAND_OBJS += $(MRUBY_OBJS)
+
+# $(BUILD_DIR)/lang_apps_ruby_%.o: lang/apps/ruby/%.c
+# 	$(CC) $(CFLAGS) -c $< -o $@
+
+# MicroPython wrapper - DISABLED: requires build artifacts (py/*.h modules)
+# MICROPYTHON_SRCS := lang/apps/python/micropython_wrapper.c
+# MICROPYTHON_OBJS := $(patsubst lang/apps/python/%.c,$(BUILD_DIR)/lang_apps_python_%.o,$(MICROPYTHON_SRCS))
+
+# Add MicroPython to userland objects
+# USERLAND_OBJS += $(MICROPYTHON_OBJS)
+
+$(BUILD_DIR)/lang_apps_python_%.o: lang/apps/python/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
 BOOT_BIN := $(BUILD_DIR)/boot.bin
 KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
@@ -93,7 +130,8 @@ USERLAND_MAIN_ELF := $(BUILD_DIR)/userland-main.elf
 USERLAND_MAIN_BIN := $(BUILD_DIR)/userland-main.bin
 IMAGE := $(BUILD_DIR)/boot.img
 
-CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src
+CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
+CFLAGS += -Ilang/glibc/include
 LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
 LDFLAGS_APP := -m elf_i386 -T $(LINKER_DIR)/app.ld -nostdlib -N
@@ -130,9 +168,13 @@ PYTHON_APP_OBJS := \
 PYTHON_APP_ELF := $(BUILD_DIR)/lang/python.elf
 PYTHON_APP_BIN := $(BUILD_DIR)/lang/python.app
 
-LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN)
+LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN)
+# Ruby and Python: Build requires full mruby/micropython vendor builds
+# Use: make app-ruby, make app-python (requires build artifacts)
 
 all: $(IMAGE) $(USERLAND_MAIN_BIN)
+# Note: glibc separate build available via: make -f Build.glibc.mk glibc-build
+# To link glibc instead of stubs, modify KERNEL_ELF dependencies below
 
 check-tools:
 	@for tool in $(REQUIRED_TOOLS); do \
@@ -318,6 +360,68 @@ debug: $(IMAGE)
 			exit 1; \
 		fi; \
 	fi
+
+# ============ GLIBC & APPS BUILD TARGETS ============
+
+# Build glibc library (optional, standalone)
+# Usage: make glibc       (full glibc)
+#        make glibc-core  (core subset only)
+glibc:
+	@echo "Building full glibc..."
+	$(MAKE) -f Build.glibc.mk glibc-build
+
+glibc-core:
+	@echo "Building glibc-core (810 core functions)..."
+	$(MAKE) -f Build.glibc.mk glibc-build
+
+# Build language apps as standalone /bin executables
+# Apps link glibc.a statically (or can load glibc.so dynamically at runtime)
+apps: glibc-core | bin lib
+	@echo "Building language runtime apps to /bin..."
+	@mkdir -p bin lib
+	@echo "$(HELLO_APP_BIN) -> bin/hello"
+	@cp $(HELLO_APP_BIN) bin/hello || echo "WARNING: hello app not found"
+	@if [ -f "$(JS_APP_BIN)" ]; then cp $(JS_APP_BIN) bin/js; else echo "WARNING: js app not found"; fi
+	@if [ -f "$(RUBY_APP_BIN)" ]; then cp $(RUBY_APP_BIN) bin/ruby; else echo "WARNING: ruby app not found"; fi
+	@if [ -f "$(PYTHON_APP_BIN)" ]; then cp $(PYTHON_APP_BIN) bin/python; else echo "WARNING: python app not found"; fi
+	@if [ -f "build/libglibc-full.a" ]; then cp build/libglibc-full.a lib/libglibc.a; else cp build/libglibc-core.a lib/libglibc.a; fi || true
+	@echo "Apps built to /bin"
+
+bin:
+	mkdir -p bin
+
+lib:
+	mkdir -p lib
+
+glibc-clean:
+	@echo "Cleaning glibc build..."
+	$(MAKE) -f Build.glibc.mk glibc-clean
+
+apps-clean:
+	@echo "Cleaning apps..."
+	rm -rf bin/ lib/
+	rm -f $(HELLO_APP_OBJS) $(HELLO_APP_ELF) $(HELLO_APP_BIN)
+	rm -f $(JS_APP_OBJS) $(JS_APP_ELF) $(JS_APP_BIN)
+	rm -f $(RUBY_APP_OBJS) $(RUBY_APP_ELF) $(RUBY_APP_BIN)
+	rm -f $(PYTHON_APP_OBJS) $(PYTHON_APP_ELF) $(PYTHON_APP_BIN)
+
+# Standalone app compilation (requires vendor builds)
+# These compile each app to /bin independently
+app-hello: $(HELLO_APP_BIN) | bin
+	@echo "Copying hello to /bin..."
+	@cp $(HELLO_APP_BIN) bin/hello
+	@echo "✓ /bin/hello ready"
+
+app-js: $(JS_APP_BIN) | bin
+	@echo "Copying js to /bin..."
+	@cp $(JS_APP_BIN) bin/js
+	@echo "✓ /bin/js ready"
+
+app-ruby:
+	@if [ -f "$(RUBY_APP_BIN)" ]; then cp $(RUBY_APP_BIN) bin/ruby; echo "✓ /bin/ruby ready"; else echo "ℹ ruby.app not built. Requires mruby vendor. See BUILD_LANGS.md"; fi
+
+app-python:
+	@if [ -f "$(PYTHON_APP_BIN)" ]; then cp $(PYTHON_APP_BIN) bin/python; echo "✓ /bin/python ready"; else echo "ℹ python.app not built. Requires micropython vendor. See BUILD_LANGS.md"; fi
 
 clean:
 	rm -rf $(BUILD_DIR)
