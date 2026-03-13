@@ -16,7 +16,19 @@ enum syscall_id {
     SYSCALL_YIELD = 10,
     SYSCALL_WRITE_DEBUG = 11,
     SYSCALL_GFX_FLIP = 14,
-    SYSCALL_GFX_LEAVE = 15
+    SYSCALL_GFX_LEAVE = 15,
+    SYSCALL_TEXT_MOVE_CURSOR = 16,
+    SYSCALL_GFX_SET_MODE = 17,
+    SYSCALL_STORAGE_LOAD = 18,
+    SYSCALL_STORAGE_SAVE = 19
+};
+
+enum input_keycode {
+    KEY_ARROW_UP = 0x100,
+    KEY_ARROW_DOWN,
+    KEY_ARROW_LEFT,
+    KEY_ARROW_RIGHT,
+    KEY_DELETE
 };
 
 struct mouse_state {

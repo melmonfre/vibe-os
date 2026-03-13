@@ -4,6 +4,7 @@
 
 #define VIBE_LUA_REPL_LINE_MAX 256
 #define VIBE_LUA_REPL_BUFFER_MAX 1024
+#define VIBE_LUA_REPL_INTERRUPTED (-2)
 
 static void repl_backspace(void) {
     console_putc('\b');
@@ -20,6 +21,12 @@ static int repl_readline(char *buf, int maxlen, const char *prompt) {
 
         if (c == '\r') {
             c = '\n';
+        }
+
+        if (c == 3) {
+            console_write("^C\n");
+            buf[0] = '\0';
+            return VIBE_LUA_REPL_INTERRUPTED;
         }
 
         if (c == 4 && len == 0) {
@@ -140,6 +147,11 @@ int vibe_lua_run_repl(lua_State *L) {
         int base_top = lua_gettop(L);
         int status;
 
+        if (len == VIBE_LUA_REPL_INTERRUPTED) {
+            buffer[0] = '\0';
+            buffered = 0;
+            break;
+        }
         if (len < 0) {
             break;
         }

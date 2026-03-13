@@ -1,9 +1,23 @@
 #include <userland/modules/include/fs.h>
+#include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h> // for str_* functions
+
+#define FS_PERSIST_MAGIC 0x56465331u
+#define FS_PERSIST_VERSION 1u
+
+struct fs_persist_image {
+    uint32_t magic;
+    uint32_t version;
+    int32_t root;
+    int32_t cwd;
+    struct fs_node nodes[FS_MAX_NODES];
+    uint32_t checksum;
+};
 
 struct fs_node g_fs_nodes[FS_MAX_NODES];
 int g_fs_root = -1;
 int g_fs_cwd = -1;
+static int g_fs_sync_suspended = 0;
 
 static void fs_reset_node(int idx) {
     int i;
@@ -13,12 +27,82 @@ static void fs_reset_node(int idx) {
     g_fs_nodes[idx].parent = -1;
     g_fs_nodes[idx].first_child = -1;
     g_fs_nodes[idx].next_sibling = -1;
-    g_fs_nodes[idx].name[0] = '\0';
     g_fs_nodes[idx].size = 0;
+
+    for (i = 0; i <= FS_NAME_MAX; ++i) {
+        g_fs_nodes[idx].name[i] = '\0';
+    }
 
     for (i = 0; i <= FS_FILE_MAX; ++i) {
         g_fs_nodes[idx].data[i] = '\0';
     }
+}
+
+static uint32_t fs_checksum_bytes(const uint8_t *data, int size) {
+    uint32_t hash = 2166136261u;
+
+    for (int i = 0; i < size; ++i) {
+        hash ^= data[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static int fs_validate_loaded_tree(void) {
+    if (g_fs_root < 0 || g_fs_root >= FS_MAX_NODES) {
+        return 0;
+    }
+    if (!g_fs_nodes[g_fs_root].used || !g_fs_nodes[g_fs_root].is_dir) {
+        return 0;
+    }
+    if (g_fs_cwd < 0 || g_fs_cwd >= FS_MAX_NODES || !g_fs_nodes[g_fs_cwd].used) {
+        g_fs_cwd = g_fs_root;
+    }
+    return 1;
+}
+
+static int fs_load_persistent_image(void) {
+    struct fs_persist_image image;
+    uint32_t checksum;
+
+    if (sys_storage_load(&image, (uint32_t)sizeof(image)) != 0) {
+        return -1;
+    }
+    if (image.magic != FS_PERSIST_MAGIC || image.version != FS_PERSIST_VERSION) {
+        return -1;
+    }
+
+    checksum = image.checksum;
+    image.checksum = 0u;
+    if (checksum != fs_checksum_bytes((const uint8_t *)&image, (int)sizeof(image))) {
+        return -1;
+    }
+
+    for (int i = 0; i < FS_MAX_NODES; ++i) {
+        g_fs_nodes[i] = image.nodes[i];
+    }
+    g_fs_root = image.root;
+    g_fs_cwd = image.cwd;
+    return fs_validate_loaded_tree() ? 0 : -1;
+}
+
+static void fs_sync(void) {
+    struct fs_persist_image image = {0};
+
+    if (g_fs_sync_suspended) {
+        return;
+    }
+
+    image.magic = FS_PERSIST_MAGIC;
+    image.version = FS_PERSIST_VERSION;
+    image.root = g_fs_root;
+    image.cwd = g_fs_cwd;
+    for (int i = 0; i < FS_MAX_NODES; ++i) {
+        image.nodes[i] = g_fs_nodes[i];
+    }
+    image.checksum = 0u;
+    image.checksum = fs_checksum_bytes((const uint8_t *)&image, (int)sizeof(image));
+    (void)sys_storage_save(&image, (uint32_t)sizeof(image));
 }
 
 static int fs_alloc_node(void) {
@@ -232,6 +316,7 @@ static int fs_resolve_parent(const char *path, int *parent_out, char *name_out) 
 int fs_create(const char *path, int is_dir) {
     int parent;
     char name[FS_NAME_MAX + 1];
+    int created;
 
     if (fs_resolve_parent(path, &parent, name) != 0) {
         return -1;
@@ -245,7 +330,12 @@ int fs_create(const char *path, int is_dir) {
         return -2;
     }
 
-    return fs_new_node(name, is_dir, parent) >= 0 ? 0 : -3;
+    created = fs_new_node(name, is_dir, parent);
+    if (created < 0) {
+        return -3;
+    }
+    fs_sync();
+    return 0;
 }
 
 int fs_remove(const char *path) {
@@ -263,6 +353,7 @@ int fs_remove(const char *path) {
     parent = g_fs_nodes[idx].parent;
     fs_unlink_child(parent, idx);
     fs_reset_node(idx);
+    fs_sync();
     return 0;
 }
 
@@ -295,6 +386,40 @@ int fs_write_file(const char *path, const char *text, int append) {
     }
     g_fs_nodes[idx].data[i] = '\0';
     g_fs_nodes[idx].size = i;
+    fs_sync();
+    return 0;
+}
+
+int fs_write_bytes(const char *path, const uint8_t *data, int size) {
+    int idx = fs_resolve(path);
+    int i;
+
+    if (size < 0 || size > FS_FILE_MAX) {
+        return -3;
+    }
+
+    if (idx < 0) {
+        if (fs_create(path, 0) != 0) {
+            return -1;
+        }
+        idx = fs_resolve(path);
+        if (idx < 0) {
+            return -1;
+        }
+    }
+
+    if (g_fs_nodes[idx].is_dir) {
+        return -2;
+    }
+
+    for (i = 0; i < size; ++i) {
+        g_fs_nodes[idx].data[i] = (char)data[i];
+    }
+    g_fs_nodes[idx].size = size;
+    if (size <= FS_FILE_MAX) {
+        g_fs_nodes[idx].data[size] = '\0';
+    }
+    fs_sync();
     return 0;
 }
 
@@ -331,8 +456,17 @@ void fs_build_path(int node, char *out, int max_len) {
 void fs_init(void) {
     int i;
 
+    g_fs_sync_suspended = 1;
     for (i = 0; i < FS_MAX_NODES; ++i) {
         fs_reset_node(i);
+    }
+
+    g_fs_root = -1;
+    g_fs_cwd = -1;
+
+    if (fs_load_persistent_image() == 0) {
+        g_fs_sync_suspended = 0;
+        return;
     }
 
     g_fs_root = fs_new_node("", 1, -1);
@@ -346,6 +480,7 @@ void fs_init(void) {
     (void)fs_create("/tmp", 1);
     (void)fs_create("/dev", 1);
     (void)fs_create("/docs", 1);
+    (void)fs_create("/config", 1);
     (void)fs_write_file("/README", "SISTEMA DE ARQUIVOS VFS", 0);
     (void)fs_write_file("/teste.lua",
                         "print(\"hello from lua\")\n"
@@ -357,4 +492,6 @@ void fs_init(void) {
                         "  print(\"hello from sectorc\");\n"
                         "}\n",
                         0);
+    g_fs_sync_suspended = 0;
+    fs_sync();
 }

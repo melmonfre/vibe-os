@@ -11,15 +11,23 @@ enum app_type {
     APP_FILEMANAGER,
     APP_EDITOR,
     APP_TASKMANAGER,
+    APP_CALCULATOR,
+    APP_SKETCHPAD,
+    APP_SNAKE,
+    APP_TETRIS,
     APP_PERSONALIZE,
 };
 
-#define MAX_WINDOWS 8
+#define MAX_WINDOWS 12
 #define MAX_TERMINALS 4
 #define MAX_FILEMANAGERS 2
 #define MAX_CLOCKS 4
 #define MAX_EDITORS 2
 #define MAX_TASKMGRS 1
+#define MAX_CALCULATORS 2
+#define MAX_SKETCHPADS 1
+#define MAX_SNAKES 1
+#define MAX_TETRIS 1
 
 /* generic window descriptor used by desktop_main and task manager */
 struct window {

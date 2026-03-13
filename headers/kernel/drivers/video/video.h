@@ -35,6 +35,7 @@ size_t kernel_video_get_pixel_count(void);
 void kernel_video_clear(uint8_t color);
 void kernel_video_flip(void);
 void kernel_video_leave_graphics(void);
+int kernel_video_set_mode(uint32_t width, uint32_t height);
 
 /* Graphics helpers */
 void kernel_gfx_putpixel(int x, int y, uint8_t color);
@@ -47,5 +48,6 @@ void kernel_text_init(void);
 void kernel_text_putc(char c);
 void kernel_text_puts(const char *s);
 void kernel_text_clear(void);
+void kernel_text_move_cursor(int delta);
 
 #endif /* KERNEL_DRIVERS_VIDEO_H */

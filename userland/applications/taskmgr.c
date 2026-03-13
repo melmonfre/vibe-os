@@ -83,6 +83,10 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
         case APP_FILEMANAGER: name = "FM"; break;
         case APP_EDITOR: name = "EDIT"; break;
         case APP_TASKMANAGER: name = "TM"; break;
+        case APP_CALCULATOR: name = "CALC"; break;
+        case APP_SKETCHPAD: name = "DRAW"; break;
+        case APP_SNAKE: name = "SNAKE"; break;
+        case APP_TETRIS: name = "TETRIS"; break;
         case APP_PERSONALIZE: name = "PERS"; break;
         default: name = "???"; break;
         }

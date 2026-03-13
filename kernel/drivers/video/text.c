@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <kernel/hal/io.h>
 
 /* VGA text mode driver for userland console */
 
@@ -6,9 +7,27 @@
 #define VGA_COLS 80
 #define VGA_ROWS 25
 #define VGA_ATTR_DEFAULT 0x0F  /* white on black */
+#define VGA_CRTC_INDEX 0x3D4
+#define VGA_CRTC_DATA 0x3D5
 
 static int g_text_x = 0;
 static int g_text_y = 0;
+
+static void kernel_text_enable_cursor(uint8_t start, uint8_t end) {
+    outb(VGA_CRTC_INDEX, 0x0A);
+    outb(VGA_CRTC_DATA, start);
+    outb(VGA_CRTC_INDEX, 0x0B);
+    outb(VGA_CRTC_DATA, end);
+}
+
+static void kernel_text_sync_cursor(void) {
+    uint16_t pos = (uint16_t)(g_text_y * VGA_COLS + g_text_x);
+
+    outb(VGA_CRTC_INDEX, 0x0F);
+    outb(VGA_CRTC_DATA, (uint8_t)(pos & 0xFFu));
+    outb(VGA_CRTC_INDEX, 0x0E);
+    outb(VGA_CRTC_DATA, (uint8_t)((pos >> 8) & 0xFFu));
+}
 
 void kernel_text_init(void) {
     /* clear screen */
@@ -18,6 +37,8 @@ void kernel_text_init(void) {
     }
     g_text_x = 0;
     g_text_y = 0;
+    kernel_text_enable_cursor(14u, 15u);
+    kernel_text_sync_cursor();
 }
 
 void kernel_text_putc(char c) {
@@ -53,6 +74,8 @@ void kernel_text_putc(char c) {
         }
         g_text_y = VGA_ROWS - 1;
     }
+
+    kernel_text_sync_cursor();
 }
 
 void kernel_text_puts(const char *s) {
@@ -68,4 +91,15 @@ void kernel_text_clear(void) {
     }
     g_text_x = 0;
     g_text_y = 0;
+    kernel_text_sync_cursor();
+}
+
+void kernel_text_move_cursor(int delta) {
+    g_text_x += delta;
+    if (g_text_x < 0) {
+        g_text_x = 0;
+    } else if (g_text_x >= VGA_COLS) {
+        g_text_x = VGA_COLS - 1;
+    }
+    kernel_text_sync_cursor();
 }

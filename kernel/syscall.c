@@ -1,6 +1,7 @@
 #include <kernel/kernel.h>
 #include <kernel/scheduler.h>
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/drivers/storage/ata.h>
 #include <kernel/drivers/video/video.h>
 #include <kernel/drivers/input/input.h>
 #include <kernel/drivers/timer/timer.h>
@@ -49,6 +50,24 @@ static uint32_t sys_gfx_leave(uint32_t a, uint32_t b, uint32_t c,
     (void)a; (void)b; (void)c; (void)d; (void)e;
     kernel_video_leave_graphics();
     return 0;
+}
+
+static uint32_t sys_gfx_set_mode(uint32_t width, uint32_t height, uint32_t c,
+                                 uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    return (uint32_t)kernel_video_set_mode(width, height);
+}
+
+static uint32_t sys_storage_load(uint32_t ptr, uint32_t size, uint32_t c,
+                                 uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    return (uint32_t)kernel_storage_load((void *)(uintptr_t)ptr, size);
+}
+
+static uint32_t sys_storage_save(uint32_t ptr, uint32_t size, uint32_t c,
+                                 uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    return (uint32_t)kernel_storage_save((const void *)(uintptr_t)ptr, size);
 }
 
 static uint32_t sys_input_mouse(uint32_t state_ptr, uint32_t b, uint32_t c,
@@ -109,6 +128,13 @@ static uint32_t sys_text_clear(uint32_t a, uint32_t b, uint32_t c,
     return 0;
 }
 
+static uint32_t sys_text_move_cursor(uint32_t a, uint32_t b, uint32_t c,
+                                     uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    kernel_text_move_cursor((int32_t)a);
+    return 0;
+}
+
 static uint32_t sys_text_putc(uint32_t a, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
@@ -154,10 +180,14 @@ void syscall_init(void) {
     syscall_table[SYSCALL_GFX_TEXT] = sys_gfx_text;
     syscall_table[SYSCALL_GFX_FLIP] = sys_gfx_flip;
     syscall_table[SYSCALL_GFX_LEAVE] = sys_gfx_leave;
+    syscall_table[SYSCALL_GFX_SET_MODE] = sys_gfx_set_mode;
+    syscall_table[SYSCALL_STORAGE_LOAD] = sys_storage_load;
+    syscall_table[SYSCALL_STORAGE_SAVE] = sys_storage_save;
     syscall_table[SYSCALL_INPUT_MOUSE] = sys_input_mouse;
     syscall_table[SYSCALL_INPUT_KEY] = sys_input_key;
     syscall_table[12] = sys_text_putc;     /* legacy text mode */
     syscall_table[13] = sys_text_clear;    /* legacy text mode */
+    syscall_table[SYSCALL_TEXT_MOVE_CURSOR] = sys_text_move_cursor;
     syscall_table[SYSCALL_SLEEP] = sys_sleep;
     syscall_table[SYSCALL_TIME_TICKS] = sys_time_ticks;
     syscall_table[SYSCALL_GFX_INFO] = sys_gfx_info;

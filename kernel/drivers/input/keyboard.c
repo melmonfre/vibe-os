@@ -1,6 +1,7 @@
 #include <kernel/drivers/input/input.h>
 #include <kernel/hal/io.h>
 #include <kernel/interrupt.h>
+#include <include/userland_api.h>
 
 #define KBD_QUEUE_SIZE 128
 #define PS2_STATUS_PORT 0x64u
@@ -8,10 +9,11 @@
 #define PS2_STATUS_OUTPUT_FULL 0x01u
 #define PS2_STATUS_INPUT_FULL 0x02u
 
-static volatile char g_kernel_kbd_queue[KBD_QUEUE_SIZE];
+static volatile uint16_t g_kernel_kbd_queue[KBD_QUEUE_SIZE];
 static volatile uint8_t g_kernel_kbd_head = 0u;
 static volatile uint8_t g_kernel_kbd_tail = 0u;
 static volatile uint8_t g_kernel_kbd_shift = 0u;
+static volatile uint8_t g_kernel_kbd_ctrl = 0u;
 static volatile uint8_t g_kernel_kbd_extended = 0u;
 static volatile uint8_t g_kernel_kbd_ready = 0u;
 static char g_kernel_kbd_map[128];
@@ -108,12 +110,12 @@ static void kbd_init_maps(void) {
     g_kernel_kbd_map[0x39] = ' '; g_kernel_kbd_shift_map[0x39] = ' ';
 }
 
-static void kbd_push_char(char c) {
+static void kbd_push_key(uint16_t key) {
     const uint8_t next = (uint8_t)((g_kernel_kbd_head + 1u) % KBD_QUEUE_SIZE);
     if (next == g_kernel_kbd_tail) {
         return;
     }
-    g_kernel_kbd_queue[g_kernel_kbd_head] = c;
+    g_kernel_kbd_queue[g_kernel_kbd_head] = key;
     g_kernel_kbd_head = next;
 }
 
@@ -121,7 +123,7 @@ int kernel_keyboard_read(void) {
     int value = 0;
 
     if (g_kernel_kbd_tail != g_kernel_kbd_head) {
-        value = (uint8_t)g_kernel_kbd_queue[g_kernel_kbd_tail];
+        value = (int)g_kernel_kbd_queue[g_kernel_kbd_tail];
         g_kernel_kbd_tail = (uint8_t)((g_kernel_kbd_tail + 1u) % KBD_QUEUE_SIZE);
     }
 
@@ -144,6 +146,19 @@ void kernel_keyboard_irq_handler(void) {
 
     if (g_kernel_kbd_extended) {
         g_kernel_kbd_extended = 0u;
+        if ((scancode & 0x80u) == 0u) {
+            uint16_t key = 0u;
+
+            if (scancode == 0x48u) key = KEY_ARROW_UP;
+            else if (scancode == 0x50u) key = KEY_ARROW_DOWN;
+            else if (scancode == 0x4Bu) key = KEY_ARROW_LEFT;
+            else if (scancode == 0x4Du) key = KEY_ARROW_RIGHT;
+            else if (scancode == 0x53u) key = KEY_DELETE;
+
+            if (key != 0u) {
+                kbd_push_key(key);
+            }
+        }
         kernel_pic_send_eoi(1);
         return;
     }
@@ -154,8 +169,20 @@ void kernel_keyboard_irq_handler(void) {
         return;
     }
 
+    if (scancode == 0x1Du) {
+        g_kernel_kbd_ctrl = 1u;
+        kernel_pic_send_eoi(1);
+        return;
+    }
+
     if (scancode == 0xAAu || scancode == 0xB6u) {
         g_kernel_kbd_shift = 0u;
+        kernel_pic_send_eoi(1);
+        return;
+    }
+
+    if (scancode == 0x9Du) {
+        g_kernel_kbd_ctrl = 0u;
         kernel_pic_send_eoi(1);
         return;
     }
@@ -170,9 +197,19 @@ void kernel_keyboard_irq_handler(void) {
         return;
     }
 
-    const char c = g_kernel_kbd_shift ? g_kernel_kbd_shift_map[scancode] : g_kernel_kbd_map[scancode];
+    char c = g_kernel_kbd_shift ? g_kernel_kbd_shift_map[scancode] : g_kernel_kbd_map[scancode];
     if (c != '\0') {
-        kbd_push_char(c);
+        if (g_kernel_kbd_ctrl) {
+            char lower = c;
+
+            if (lower >= 'A' && lower <= 'Z') {
+                lower = (char)(lower - 'A' + 'a');
+            }
+            if (lower >= 'a' && lower <= 'z') {
+                c = (char)(lower - 'a' + 1);
+            }
+        }
+        kbd_push_key((uint16_t)(uint8_t)c);
     }
 
     kernel_pic_send_eoi(1);
@@ -184,6 +221,7 @@ void kernel_keyboard_init(void) {
     g_kernel_kbd_head = 0u;
     g_kernel_kbd_tail = 0u;
     g_kernel_kbd_shift = 0u;
+    g_kernel_kbd_ctrl = 0u;
     g_kernel_kbd_extended = 0u;
     g_kernel_kbd_ready = 0u;
     kbd_init_maps();

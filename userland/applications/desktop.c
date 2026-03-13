@@ -7,6 +7,10 @@
 #include <userland/applications/include/filemanager.h>
 #include <userland/applications/include/editor.h>
 #include <userland/applications/include/taskmgr.h>
+#include <userland/applications/include/calculator.h>
+#include <userland/applications/include/sketchpad.h>
+#include <userland/applications/include/snake.h>
+#include <userland/applications/include/tetris.h>
 #include <userland/modules/include/utils.h>
 #include <userland/modules/include/fs.h>
 
@@ -21,6 +25,14 @@ static struct editor_state g_editors[MAX_EDITORS];
 static int g_editor_used[MAX_EDITORS];
 static struct taskmgr_state g_tms[MAX_TASKMGRS];
 static int g_tm_used[MAX_TASKMGRS];
+static struct calculator_state g_calcs[MAX_CALCULATORS];
+static int g_calc_used[MAX_CALCULATORS];
+static struct sketchpad_state g_sketches[MAX_SKETCHPADS];
+static int g_sketch_used[MAX_SKETCHPADS];
+static struct snake_state g_snakes[MAX_SNAKES];
+static int g_snake_used[MAX_SNAKES];
+static struct tetris_state g_tetris[MAX_TETRIS];
+static int g_tetris_used[MAX_TETRIS];
 struct personalize_state {
     struct rect window;
     enum theme_slot selected_slot;
@@ -43,14 +55,21 @@ enum {
     FMENU_PASTE,
     FMENU_NEW_DIR,
     FMENU_NEW_FILE,
+    FMENU_SET_WALLPAPER,
     FMENU_COUNT
 };
 static int g_clipboard_node = -1;
 static int g_launch_editor_pending = 0;
 static char g_launch_editor_path[80];
+static int g_fm_context_has_wallpaper_action = 0;
+static const uint16_t g_resolution_widths[] = {320u, 640u, 800u};
+static const uint16_t g_resolution_heights[] = {200u, 480u, 600u};
 
 static void sync_window_instance_rect(int widx);
 static int alloc_window(enum app_type type);
+static int find_window_by_type(enum app_type type);
+static int raise_window_to_front(int widx, int *focused);
+static int open_window_or_focus_existing(enum app_type type, int *focused);
 
 static int fs_child_by_name(int parent, const char *name) {
     int child = g_fs_nodes[parent].first_child;
@@ -179,10 +198,39 @@ static int clone_node_to_directory(int src_node, int dst_parent) {
         return created;
     }
 
-    if (fs_write_file(path, g_fs_nodes[src_node].data, 0) != 0) {
+    if (fs_write_bytes(path, (const uint8_t *)g_fs_nodes[src_node].data, g_fs_nodes[src_node].size) != 0) {
         return -1;
     }
     return fs_resolve(path);
+}
+
+static int node_has_extension(int node, const char *ext) {
+    const char *name;
+    int name_len;
+    int ext_len;
+
+    if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir) {
+        return 0;
+    }
+
+    name = g_fs_nodes[node].name;
+    name_len = str_len(name);
+    ext_len = str_len(ext);
+    if (ext_len <= 0 || name_len <= ext_len) {
+        return 0;
+    }
+    return str_eq_ci(name + name_len - ext_len, ext);
+}
+
+static int find_bmp_nodes(int *out_nodes, int max_nodes) {
+    int count = 0;
+
+    for (int i = 0; i < FS_MAX_NODES && count < max_nodes; ++i) {
+        if (node_has_extension(i, ".bmp")) {
+            out_nodes[count++] = i;
+        }
+    }
+    return count;
 }
 
 static const char *filemanager_menu_label(int action) {
@@ -192,6 +240,7 @@ static const char *filemanager_menu_label(int action) {
     case FMENU_PASTE: return "Colar";
     case FMENU_NEW_DIR: return "Novo diretorio";
     case FMENU_NEW_FILE: return "Novo arquivo";
+    case FMENU_SET_WALLPAPER: return "Definir plano";
     default: return "";
     }
 }
@@ -265,6 +314,50 @@ static int alloc_tm(void) {
     return -1;
 }
 
+static int alloc_calc(void) {
+    for (int i = 0; i < MAX_CALCULATORS; ++i) {
+        if (!g_calc_used[i]) {
+            g_calc_used[i] = 1;
+            calculator_init_state(&g_calcs[i]);
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int alloc_sketch(void) {
+    for (int i = 0; i < MAX_SKETCHPADS; ++i) {
+        if (!g_sketch_used[i]) {
+            g_sketch_used[i] = 1;
+            sketchpad_init_state(&g_sketches[i]);
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int alloc_snake(void) {
+    for (int i = 0; i < MAX_SNAKES; ++i) {
+        if (!g_snake_used[i]) {
+            g_snake_used[i] = 1;
+            snake_init_state(&g_snakes[i]);
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int alloc_tetris(void) {
+    for (int i = 0; i < MAX_TETRIS; ++i) {
+        if (!g_tetris_used[i]) {
+            g_tetris_used[i] = 1;
+            tetris_init_state(&g_tetris[i]);
+            return i;
+        }
+    }
+    return -1;
+}
+
 void desktop_request_open_editor(const char *path) {
     if (path == 0) {
         g_launch_editor_path[0] = '\0';
@@ -291,6 +384,18 @@ static void sync_window_instance_rect(int widx) {
     case APP_TASKMANAGER:
         g_tms[g_windows[widx].instance].window = g_windows[widx].rect;
         break;
+    case APP_CALCULATOR:
+        g_calcs[g_windows[widx].instance].window = g_windows[widx].rect;
+        break;
+    case APP_SKETCHPAD:
+        g_sketches[g_windows[widx].instance].window = g_windows[widx].rect;
+        break;
+    case APP_SNAKE:
+        g_snakes[g_windows[widx].instance].window = g_windows[widx].rect;
+        break;
+    case APP_TETRIS:
+        g_tetris[g_windows[widx].instance].window = g_windows[widx].rect;
+        break;
     case APP_PERSONALIZE:
         g_pers.window = g_windows[widx].rect;
         break;
@@ -300,13 +405,19 @@ static void sync_window_instance_rect(int widx) {
 }
 
 static void clamp_window_rect(struct rect *r) {
-    int max_x = (int)SCREEN_WIDTH - r->w;
-    int max_y = (int)SCREEN_HEIGHT - TASKBAR_HEIGHT - r->h;
+    int max_w = (int)SCREEN_WIDTH;
+    int max_h = (int)SCREEN_HEIGHT - TASKBAR_HEIGHT;
+    int max_x;
+    int max_y;
 
-    if (max_x < 0) max_x = 0;
-    if (max_y < 0) max_y = 0;
     if (r->w < WINDOW_MIN_W) r->w = WINDOW_MIN_W;
     if (r->h < WINDOW_MIN_H) r->h = WINDOW_MIN_H;
+    if (r->w > max_w) r->w = max_w;
+    if (r->h > max_h) r->h = max_h;
+    max_x = (int)SCREEN_WIDTH - r->w;
+    max_y = (int)SCREEN_HEIGHT - TASKBAR_HEIGHT - r->h;
+    if (max_x < 0) max_x = 0;
+    if (max_y < 0) max_y = 0;
     if (r->x < 0) r->x = 0;
     if (r->y < 0) r->y = 0;
     if (r->x > max_x) r->x = max_x;
@@ -325,56 +436,83 @@ static int alloc_window(enum app_type type) {
         if (!g_windows[i].active) {
             int dx = 20 * i;
             int dy = 12 * i;
-
-            g_windows[i].active = 1;
-            g_windows[i].type = type;
-            g_windows[i].start_ticks = sys_ticks();
-            g_windows[i].minimized = 0;
-            g_windows[i].maximized = 0;
+            int instance = 0;
+            struct rect rect = {0, 0, 0, 0};
 
             switch (type) {
             case APP_TERMINAL: {
                 int idx = alloc_term();
                 if (idx < 0) return -1;
-                g_windows[i].instance = idx;
-                g_windows[i].rect = g_terms[idx].window;
+                instance = idx;
+                rect = g_terms[idx].window;
             } break;
             case APP_CLOCK: {
                 int idx = alloc_clock();
                 if (idx < 0) return -1;
-                g_windows[i].instance = idx;
-                g_windows[i].rect = g_clocks[idx].window;
+                instance = idx;
+                rect = g_clocks[idx].window;
             } break;
             case APP_FILEMANAGER: {
                 int idx = alloc_fm();
                 if (idx < 0) return -1;
-                g_windows[i].instance = idx;
-                g_windows[i].rect = g_fms[idx].window;
+                instance = idx;
+                rect = g_fms[idx].window;
             } break;
             case APP_EDITOR: {
                 int idx = alloc_editor();
                 if (idx < 0) return -1;
-                g_windows[i].instance = idx;
-                g_windows[i].rect = g_editors[idx].window;
+                instance = idx;
+                rect = g_editors[idx].window;
             } break;
             case APP_TASKMANAGER: {
                 int idx = alloc_tm();
                 if (idx < 0) return -1;
-                g_windows[i].instance = idx;
-                g_windows[i].rect = g_tms[idx].window;
+                instance = idx;
+                rect = g_tms[idx].window;
+            } break;
+            case APP_CALCULATOR: {
+                int idx = alloc_calc();
+                if (idx < 0) return -1;
+                instance = idx;
+                rect = g_calcs[idx].window;
+            } break;
+            case APP_SKETCHPAD: {
+                int idx = alloc_sketch();
+                if (idx < 0) return -1;
+                instance = idx;
+                rect = g_sketches[idx].window;
+            } break;
+            case APP_SNAKE: {
+                int idx = alloc_snake();
+                if (idx < 0) return -1;
+                instance = idx;
+                rect = g_snakes[idx].window;
+            } break;
+            case APP_TETRIS: {
+                int idx = alloc_tetris();
+                if (idx < 0) return -1;
+                instance = idx;
+                rect = g_tetris[idx].window;
             } break;
             case APP_PERSONALIZE:
                 if (g_pers_used) return -1;
                 g_pers_used = 1;
-                g_pers.window = (struct rect){20, 18, 254, 188};
+                g_pers.window = (struct rect){20, 18, 258, 262};
                 g_pers.selected_slot = THEME_SLOT_BACKGROUND;
-                g_windows[i].instance = 0;
-                g_windows[i].rect = g_pers.window;
+                instance = 0;
+                rect = g_pers.window;
                 break;
             default:
                 return -1;
             }
 
+            g_windows[i].active = 1;
+            g_windows[i].type = type;
+            g_windows[i].instance = instance;
+            g_windows[i].start_ticks = sys_ticks();
+            g_windows[i].minimized = 0;
+            g_windows[i].maximized = 0;
+            g_windows[i].rect = rect;
             g_windows[i].rect.x += dx;
             g_windows[i].rect.y += dy;
             clamp_window_rect(&g_windows[i].rect);
@@ -383,6 +521,26 @@ static int alloc_window(enum app_type type) {
             return i;
         }
     }
+    return -1;
+}
+
+static int open_window_or_focus_existing(enum app_type type, int *focused) {
+    int idx = alloc_window(type);
+
+    if (idx >= 0) {
+        *focused = idx;
+        return idx;
+    }
+
+    idx = find_window_by_type(type);
+    if (idx >= 0) {
+        if (g_windows[idx].minimized) {
+            g_windows[idx].minimized = 0;
+        }
+        *focused = raise_window_to_front(idx, focused);
+        return *focused;
+    }
+
     return -1;
 }
 
@@ -396,6 +554,10 @@ static void free_window(int widx) {
     case APP_FILEMANAGER: g_fm_used[w->instance] = 0; break;
     case APP_EDITOR: g_editor_used[w->instance] = 0; break;
     case APP_TASKMANAGER: g_tm_used[w->instance] = 0; break;
+    case APP_CALCULATOR: g_calc_used[w->instance] = 0; break;
+    case APP_SKETCHPAD: g_sketch_used[w->instance] = 0; break;
+    case APP_SNAKE: g_snake_used[w->instance] = 0; break;
+    case APP_TETRIS: g_tetris_used[w->instance] = 0; break;
     case APP_PERSONALIZE: g_pers_used = 0; break;
     default: break;
     }
@@ -444,11 +606,6 @@ static struct rect window_title_bar(const struct rect *w) {
     return bar;
 }
 
-static struct rect taskbar_start_button_rect(void) {
-    struct rect r = {4, (int)SCREEN_HEIGHT - TASKBAR_HEIGHT + 3, 56, 16};
-    return r;
-}
-
 static struct rect taskbar_button_rect_for_window(int win_index) {
     struct rect r = {0, 0, 0, 0};
     int x = 66;
@@ -492,8 +649,18 @@ static struct rect personalize_window_palette_rect(const struct rect *w, int ind
     return r;
 }
 
+static struct rect personalize_window_wallpaper_button_rect(const struct rect *w, int index) {
+    struct rect r = {w->x + 10, w->y + 178 + (index * 16), 138, 14};
+    return r;
+}
+
+static struct rect personalize_window_resolution_button_rect(const struct rect *w, int index) {
+    struct rect r = {w->x + 164, w->y + 182 + (index * 18), 82, 14};
+    return r;
+}
+
 static struct rect filemanager_context_menu_rect(int x, int y) {
-    struct rect r = {x, y, 108, 74};
+    struct rect r = {x, y, 108, g_fm_context_has_wallpaper_action ? 88 : 74};
     if (r.x + r.w > (int)SCREEN_WIDTH) r.x = (int)SCREEN_WIDTH - r.w;
     if (r.y + r.h > (int)SCREEN_HEIGHT - TASKBAR_HEIGHT) r.y = (int)SCREEN_HEIGHT - TASKBAR_HEIGHT - r.h;
     if (r.x < 0) r.x = 0;
@@ -506,6 +673,11 @@ static struct rect filemanager_context_item_rect(const struct rect *menu, int ac
     return r;
 }
 
+static int start_menu_item_contains(int item, int x, int y) {
+    struct rect r = ui_start_menu_item_rect(item);
+    return point_in_rect(&r, x, y);
+}
+
 static void draw_personalize_window(struct personalize_state *state,
                                     int active,
                                     int min_hover,
@@ -513,6 +685,9 @@ static void draw_personalize_window(struct personalize_state *state,
                                     int close_hover,
                                     const struct mouse_state *mouse) {
     const struct desktop_theme *theme = ui_theme_get();
+    int bmp_nodes[4];
+    int bmp_count = find_bmp_nodes(bmp_nodes, 4);
+    int current_wallpaper = ui_wallpaper_source_node();
     uint8_t selected_color = theme->background;
 
     draw_window_frame(&state->window, "Personalizar", active, min_hover, max_hover, close_hover);
@@ -561,6 +736,37 @@ static void draw_personalize_window(struct personalize_state *state,
         sys_rect(swatch.x, swatch.y, swatch.w, swatch.h, hover ? 15 : 8);
         sys_rect(swatch.x + 1, swatch.y + 1, swatch.w - 2, swatch.h - 2, g_theme_palette[i]);
     }
+
+    sys_text(state->window.x + 10, state->window.y + 164, theme->text, "Wallpaper BMP:");
+    for (int i = -1; i < bmp_count; ++i) {
+        struct rect button = personalize_window_wallpaper_button_rect(&state->window, i + 1);
+        int node = i < 0 ? -1 : bmp_nodes[i];
+        int hover = point_in_rect(&button, mouse->x, mouse->y);
+        int selected = current_wallpaper == node;
+        const char *label = i < 0 ? "Somente cor" : g_fs_nodes[node].name;
+
+        sys_rect(button.x, button.y, button.w, button.h, selected ? 11 : (hover ? 15 : 8));
+        sys_rect(button.x + 1, button.y + 1, button.w - 2, button.h - 2, 7);
+        sys_text(button.x + 4, button.y + 4, theme->text, label);
+    }
+    if (bmp_count == 0) {
+        sys_text(state->window.x + 12, state->window.y + 244, theme->text, "nenhum .bmp encontrado");
+    }
+
+    sys_text(state->window.x + 164, state->window.y + 164, theme->text, "Resolucao:");
+    for (int i = 0; i < 3; ++i) {
+        struct rect button = personalize_window_resolution_button_rect(&state->window, i);
+        char label[16] = "";
+        int hover = point_in_rect(&button, mouse->x, mouse->y);
+        int selected = (SCREEN_WIDTH == g_resolution_widths[i] && SCREEN_HEIGHT == g_resolution_heights[i]);
+
+        append_uint_limited(label, g_resolution_widths[i], (int)sizeof(label));
+        str_append(label, "x", (int)sizeof(label));
+        append_uint_limited(label, g_resolution_heights[i], (int)sizeof(label));
+        sys_rect(button.x, button.y, button.w, button.h, selected ? 10 : (hover ? 15 : 8));
+        sys_rect(button.x + 1, button.y + 1, button.w - 2, button.h - 2, 7);
+        sys_text(button.x + 8, button.y + 4, theme->text, label);
+    }
 }
 
 static void restore_or_toggle_window(int widx, int *focused) {
@@ -595,22 +801,15 @@ static void maximize_window(int widx) {
 void desktop_main(void) {
     struct rect start_button;
     struct rect menu_rect;
-    struct rect terminal_item;
-    struct rect clock_item;
-    struct rect filemgr_item;
-    struct rect editor_item;
-    struct rect taskmgr_item;
-    struct rect logout_item;
     struct rect context_menu;
     struct rect fm_context_menu;
     struct mouse_state mouse;
+    int menu_hover[START_MENU_ITEM_COUNT];
     int menu_open = 0;
     int context_open = 0;
     int fm_context_open = 0;
     int fm_context_window = -1;
     int fm_context_target = FILEMANAGER_HIT_NONE;
-    int prev_left = 0;
-    int prev_right = 0;
     int dirty = 1;
     int focused = -1;
     int dragging = -1;
@@ -623,17 +822,8 @@ void desktop_main(void) {
     int running = 1;
 
     ui_init();
-    start_button = taskbar_start_button_rect();
-    menu_rect.x = 2;
-    menu_rect.y = (int)SCREEN_HEIGHT - TASKBAR_HEIGHT - 134;
-    menu_rect.w = 158;
-    menu_rect.h = 132;
-    terminal_item = (struct rect){menu_rect.x + 28, menu_rect.y + 8, 126, 16};
-    clock_item = (struct rect){menu_rect.x + 28, menu_rect.y + 26, 126, 16};
-    filemgr_item = (struct rect){menu_rect.x + 28, menu_rect.y + 44, 126, 16};
-    editor_item = (struct rect){menu_rect.x + 28, menu_rect.y + 62, 126, 16};
-    taskmgr_item = (struct rect){menu_rect.x + 28, menu_rect.y + 80, 126, 16};
-    logout_item = (struct rect){menu_rect.x + 28, menu_rect.y + 106, 126, 16};
+    start_button = ui_taskbar_start_button_rect();
+    menu_rect = ui_start_menu_rect();
     context_menu = desktop_context_menu_rect(0, 0);
     fm_context_menu = filemanager_context_menu_rect(0, 0);
     mouse.x = (int)SCREEN_WIDTH / 2;
@@ -646,6 +836,10 @@ void desktop_main(void) {
     for (int i = 0; i < MAX_FILEMANAGERS; ++i) g_fm_used[i] = 0;
     for (int i = 0; i < MAX_EDITORS; ++i) g_editor_used[i] = 0;
     for (int i = 0; i < MAX_TASKMGRS; ++i) g_tm_used[i] = 0;
+    for (int i = 0; i < MAX_CALCULATORS; ++i) g_calc_used[i] = 0;
+    for (int i = 0; i < MAX_SKETCHPADS; ++i) g_sketch_used[i] = 0;
+    for (int i = 0; i < MAX_SNAKES; ++i) g_snake_used[i] = 0;
+    for (int i = 0; i < MAX_TETRIS; ++i) g_tetris_used[i] = 0;
     g_clipboard_node = -1;
 
     if (g_launch_editor_pending) {
@@ -664,27 +858,67 @@ void desktop_main(void) {
     while (running) {
         int key;
         uint32_t ticks = sys_ticks();
-        int mouse_event = sys_poll_mouse(&mouse);
+        int mouse_event = 0;
         int left_pressed = (mouse.buttons & 0x01u) != 0;
         int right_pressed = (mouse.buttons & 0x02u) != 0;
-        int start_hover = point_in_rect(&start_button, mouse.x, mouse.y);
-        int terminal_item_hover = menu_open && point_in_rect(&terminal_item, mouse.x, mouse.y);
-        int clock_item_hover = menu_open && point_in_rect(&clock_item, mouse.x, mouse.y);
-        int filemgr_item_hover = menu_open && point_in_rect(&filemgr_item, mouse.x, mouse.y);
-        int editor_item_hover = menu_open && point_in_rect(&editor_item, mouse.x, mouse.y);
-        int taskmgr_item_hover = menu_open && point_in_rect(&taskmgr_item, mouse.x, mouse.y);
-        int logout_item_hover = menu_open && point_in_rect(&logout_item, mouse.x, mouse.y);
+        int left_just_pressed = 0;
+        int right_just_pressed = 0;
+        int start_hover;
+        int left_press_x = mouse.x;
+        int left_press_y = mouse.y;
+        int right_press_x = mouse.x;
+        int right_press_y = mouse.y;
+        struct mouse_state polled_mouse;
+
+        start_button = ui_taskbar_start_button_rect();
+        menu_rect = ui_start_menu_rect();
+
+        for (int i = 0; i < START_MENU_ITEM_COUNT; ++i) {
+            menu_hover[i] = 0;
+        }
+
+        while (sys_poll_mouse(&polled_mouse)) {
+            int new_left;
+            int new_right;
+
+            mouse = polled_mouse;
+            mouse_event = 1;
+            new_left = (mouse.buttons & 0x01u) != 0;
+            new_right = (mouse.buttons & 0x02u) != 0;
+            if (new_left && !left_pressed) {
+                left_just_pressed = 1;
+                left_press_x = mouse.x;
+                left_press_y = mouse.y;
+            }
+            if (new_right && !right_pressed) {
+                right_just_pressed = 1;
+                right_press_x = mouse.x;
+                right_press_y = mouse.y;
+            }
+            left_pressed = new_left;
+            right_pressed = new_right;
+        }
+
+        start_hover = point_in_rect(&start_button, mouse.x, mouse.y);
+        for (int i = 0; i < START_MENU_ITEM_COUNT; ++i) {
+            struct rect item = ui_start_menu_item_rect(i);
+            menu_hover[i] = menu_open && point_in_rect(&item, mouse.x, mouse.y);
+        }
         int context_personalize_hover = context_open && point_in_rect(&context_menu, mouse.x, mouse.y);
         struct rect fm_open_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_OPEN);
         struct rect fm_copy_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_COPY);
         struct rect fm_paste_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_PASTE);
         struct rect fm_new_dir_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_NEW_DIR);
         struct rect fm_new_file_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_NEW_FILE);
+        struct rect fm_set_wallpaper_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_SET_WALLPAPER);
         int fm_open_hover = fm_context_open && point_in_rect(&fm_open_rect, mouse.x, mouse.y);
         int fm_copy_hover = fm_context_open && point_in_rect(&fm_copy_rect, mouse.x, mouse.y);
         int fm_paste_hover = fm_context_open && point_in_rect(&fm_paste_rect, mouse.x, mouse.y);
         int fm_new_dir_hover = fm_context_open && point_in_rect(&fm_new_dir_rect, mouse.x, mouse.y);
         int fm_new_file_hover = fm_context_open && point_in_rect(&fm_new_file_rect, mouse.x, mouse.y);
+        int fm_set_wallpaper_hover = fm_context_open &&
+                                     g_fm_context_has_wallpaper_action &&
+                                     point_in_rect(&fm_set_wallpaper_rect, mouse.x, mouse.y);
 
         if (fm_context_open) {
             if (fm_context_window < 0 ||
@@ -692,6 +926,7 @@ void desktop_main(void) {
                 g_windows[fm_context_window].type != APP_FILEMANAGER) {
                 fm_context_open = 0;
                 fm_context_window = -1;
+                g_fm_context_has_wallpaper_action = 0;
                 dirty = 1;
             }
         }
@@ -702,6 +937,16 @@ void desktop_main(void) {
 
         for (int i = 0; i < MAX_CLOCKS; ++i) {
             if (g_clock_used[i] && clock_step(&g_clocks[i])) {
+                dirty = 1;
+            }
+        }
+        for (int i = 0; i < MAX_SNAKES; ++i) {
+            if (g_snake_used[i] && snake_step(&g_snakes[i], ticks)) {
+                dirty = 1;
+            }
+        }
+        for (int i = 0; i < MAX_TETRIS; ++i) {
+            if (g_tetris_used[i] && tetris_step(&g_tetris[i], ticks)) {
                 dirty = 1;
             }
         }
@@ -728,22 +973,38 @@ void desktop_main(void) {
             resizing = -1;
         }
 
-        if (right_pressed && !prev_right) {
-            int hit_window = topmost_window_at(mouse.x, mouse.y);
+        if (focused >= 0 &&
+            g_windows[focused].active &&
+            !g_windows[focused].minimized &&
+            g_windows[focused].type == APP_SKETCHPAD &&
+            left_pressed &&
+            mouse_event &&
+            dragging < 0 &&
+            resizing < 0) {
+            if (sketchpad_paint_at(&g_sketches[g_windows[focused].instance], mouse.x, mouse.y)) {
+                dirty = 1;
+            }
+        }
+
+        if (right_just_pressed) {
+            int click_x = right_press_x;
+            int click_y = right_press_y;
+            int hit_window = topmost_window_at(click_x, click_y);
 
             if (hit_window >= 0 && g_windows[hit_window].type == APP_FILEMANAGER) {
                 struct filemanager_state *fm = &g_fms[g_windows[hit_window].instance];
                 struct rect list = filemanager_list_rect(fm);
 
-                if (point_in_rect(&list, mouse.x, mouse.y)) {
+                if (point_in_rect(&list, click_x, click_y)) {
                     int new_index = raise_window_to_front(hit_window, &focused);
                     int target;
 
                     focused = new_index;
                     hit_window = new_index;
                     fm = &g_fms[g_windows[hit_window].instance];
-                    target = filemanager_hit_test_entry(fm, mouse.x, mouse.y);
-                    fm_context_menu = filemanager_context_menu_rect(mouse.x, mouse.y);
+                    target = filemanager_hit_test_entry(fm, click_x, click_y);
+                    g_fm_context_has_wallpaper_action = (target >= 0) && node_has_extension(target, ".bmp");
+                    fm_context_menu = filemanager_context_menu_rect(click_x, click_y);
                     fm_context_open = 1;
                     fm_context_window = hit_window;
                     fm_context_target = target;
@@ -757,12 +1018,13 @@ void desktop_main(void) {
                     dirty = 1;
                 } else if (fm_context_open || context_open) {
                     fm_context_open = 0;
+                    g_fm_context_has_wallpaper_action = 0;
                     context_open = 0;
                     dirty = 1;
                 }
             } else if (hit_window < 0 &&
-                       mouse.y < (int)SCREEN_HEIGHT - TASKBAR_HEIGHT) {
-                context_menu = desktop_context_menu_rect(mouse.x, mouse.y);
+                       click_y < (int)SCREEN_HEIGHT - TASKBAR_HEIGHT) {
+                context_menu = desktop_context_menu_rect(click_x, click_y);
                 context_open = 1;
                 fm_context_open = 0;
                 menu_open = 0;
@@ -770,11 +1032,15 @@ void desktop_main(void) {
             } else if (context_open || fm_context_open) {
                 context_open = 0;
                 fm_context_open = 0;
+                g_fm_context_has_wallpaper_action = 0;
                 dirty = 1;
             }
         }
 
-        if (left_pressed && !prev_left) {
+        if (left_just_pressed) {
+            int click_x = left_press_x;
+            int click_y = left_press_y;
+            int start_click_hover = point_in_rect(&start_button, click_x, click_y);
             int hit_window = -1;
             int handled = 0;
 
@@ -782,9 +1048,23 @@ void desktop_main(void) {
                 g_windows[fm_context_window].active &&
                 g_windows[fm_context_window].type == APP_FILEMANAGER) {
                 struct filemanager_state *fm = &g_fms[g_windows[fm_context_window].instance];
+                struct rect fm_open_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_OPEN);
+                struct rect fm_copy_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_COPY);
+                struct rect fm_paste_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_PASTE);
+                struct rect fm_new_dir_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_NEW_DIR);
+                struct rect fm_new_file_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_NEW_FILE);
+                struct rect fm_set_wallpaper_rect = filemanager_context_item_rect(&fm_context_menu, FMENU_SET_WALLPAPER);
+                int fm_open_hover = point_in_rect(&fm_open_rect, click_x, click_y);
+                int fm_copy_hover = point_in_rect(&fm_copy_rect, click_x, click_y);
+                int fm_paste_hover = point_in_rect(&fm_paste_rect, click_x, click_y);
+                int fm_new_dir_hover = point_in_rect(&fm_new_dir_rect, click_x, click_y);
+                int fm_new_file_hover = point_in_rect(&fm_new_file_rect, click_x, click_y);
+                int fm_set_wallpaper_hover = g_fm_context_has_wallpaper_action &&
+                                             point_in_rect(&fm_set_wallpaper_rect, click_x, click_y);
                 int target = fm_context_target;
 
-                if (fm_open_hover || fm_copy_hover || fm_paste_hover || fm_new_dir_hover || fm_new_file_hover) {
+                if (fm_open_hover || fm_copy_hover || fm_paste_hover || fm_new_dir_hover || fm_new_file_hover ||
+                    fm_set_wallpaper_hover) {
                     if (target == FILEMANAGER_HIT_NONE) {
                         target = fm->selected_node;
                     }
@@ -819,78 +1099,78 @@ void desktop_main(void) {
                             fm->selected_node = created;
                             dirty = 1;
                         }
+                    } else if (fm_set_wallpaper_hover && target >= 0) {
+                        if (ui_wallpaper_set_from_node(target) == 0) {
+                            dirty = 1;
+                        }
                     }
 
                     fm_context_open = 0;
                     fm_context_window = -1;
                     fm_context_target = FILEMANAGER_HIT_NONE;
+                    g_fm_context_has_wallpaper_action = 0;
                     dirty = 1;
                     handled = 1;
-                } else if (!point_in_rect(&fm_context_menu, mouse.x, mouse.y)) {
+                } else if (!point_in_rect(&fm_context_menu, click_x, click_y)) {
                     fm_context_open = 0;
                     fm_context_window = -1;
                     fm_context_target = FILEMANAGER_HIT_NONE;
+                    g_fm_context_has_wallpaper_action = 0;
                     dirty = 1;
                 }
             }
 
             if (handled) {
-            } else if (context_open && context_personalize_hover) {
-                int idx = find_window_by_type(APP_PERSONALIZE);
-                if (idx < 0) {
-                    focused = alloc_window(APP_PERSONALIZE);
-                } else {
-                    focused = raise_window_to_front(idx, &focused);
+            } else if (context_open && point_in_rect(&context_menu, click_x, click_y)) {
+                if (open_window_or_focus_existing(APP_PERSONALIZE, &focused) >= 0) {
+                    dirty = 1;
                 }
                 context_open = 0;
                 fm_context_open = 0;
-                dirty = 1;
-            } else if (start_hover) {
+                handled = 1;
+            } else if (start_click_hover) {
                 menu_open = !menu_open;
                 context_open = 0;
                 fm_context_open = 0;
                 dirty = 1;
-            } else if (menu_open && terminal_item_hover) {
-                focused = alloc_window(APP_TERMINAL);
-                menu_open = 0;
-                context_open = 0;
-                fm_context_open = 0;
-                dirty = 1;
-            } else if (menu_open && clock_item_hover) {
-                focused = alloc_window(APP_CLOCK);
-                menu_open = 0;
-                context_open = 0;
-                fm_context_open = 0;
-                dirty = 1;
-            } else if (menu_open && filemgr_item_hover) {
-                focused = alloc_window(APP_FILEMANAGER);
-                menu_open = 0;
-                context_open = 0;
-                fm_context_open = 0;
-                dirty = 1;
-            } else if (menu_open && editor_item_hover) {
-                focused = alloc_window(APP_EDITOR);
-                menu_open = 0;
-                context_open = 0;
-                fm_context_open = 0;
-                dirty = 1;
-            } else if (menu_open && taskmgr_item_hover) {
-                focused = alloc_window(APP_TASKMANAGER);
-                menu_open = 0;
-                context_open = 0;
-                fm_context_open = 0;
-                dirty = 1;
-            } else if (menu_open && logout_item_hover) {
-                running = 0;
             } else {
-                if (context_open && !point_in_rect(&context_menu, mouse.x, mouse.y)) {
+                if (menu_open) {
+                    enum app_type launch_type = APP_NONE;
+
+                    if (start_menu_item_contains(START_MENU_TERMINAL, click_x, click_y)) launch_type = APP_TERMINAL;
+                    else if (start_menu_item_contains(START_MENU_CLOCK, click_x, click_y)) launch_type = APP_CLOCK;
+                    else if (start_menu_item_contains(START_MENU_FILEMANAGER, click_x, click_y)) launch_type = APP_FILEMANAGER;
+                    else if (start_menu_item_contains(START_MENU_EDITOR, click_x, click_y)) launch_type = APP_EDITOR;
+                    else if (start_menu_item_contains(START_MENU_TASKMANAGER, click_x, click_y)) launch_type = APP_TASKMANAGER;
+                    else if (start_menu_item_contains(START_MENU_CALCULATOR, click_x, click_y)) launch_type = APP_CALCULATOR;
+                    else if (start_menu_item_contains(START_MENU_SKETCHPAD, click_x, click_y)) launch_type = APP_SKETCHPAD;
+                    else if (start_menu_item_contains(START_MENU_SNAKE, click_x, click_y)) launch_type = APP_SNAKE;
+                    else if (start_menu_item_contains(START_MENU_TETRIS, click_x, click_y)) launch_type = APP_TETRIS;
+
+                    if (launch_type != APP_NONE) {
+                        if (open_window_or_focus_existing(launch_type, &focused) >= 0) {
+                            dirty = 1;
+                        }
+                        menu_open = 0;
+                        context_open = 0;
+                        fm_context_open = 0;
+                        handled = 1;
+                    } else if (start_menu_item_contains(START_MENU_LOGOUT, click_x, click_y)) {
+                        running = 0;
+                        handled = 1;
+                    }
+                }
+
+                if (!handled) {
+                if (context_open && !point_in_rect(&context_menu, click_x, click_y)) {
                     context_open = 0;
                     dirty = 1;
                 }
-                if (fm_context_open && !point_in_rect(&fm_context_menu, mouse.x, mouse.y)) {
+                if (fm_context_open && !point_in_rect(&fm_context_menu, click_x, click_y)) {
                     fm_context_open = 0;
                     fm_context_window = -1;
                     fm_context_target = FILEMANAGER_HIT_NONE;
+                    g_fm_context_has_wallpaper_action = 0;
                     dirty = 1;
                 }
                 for (int i = 0; i < MAX_WINDOWS; ++i) {
@@ -899,11 +1179,12 @@ void desktop_main(void) {
                         continue;
                     }
                     task_button = taskbar_button_rect_for_window(i);
-                    if (point_in_rect(&task_button, mouse.x, mouse.y)) {
+                    if (point_in_rect(&task_button, click_x, click_y)) {
                         restore_or_toggle_window(i, &focused);
                         menu_open = 0;
                         context_open = 0;
                         fm_context_open = 0;
+                        g_fm_context_has_wallpaper_action = 0;
                         dirty = 1;
                         hit_window = -2;
                         break;
@@ -911,8 +1192,8 @@ void desktop_main(void) {
                 }
 
                 if (hit_window != -2) {
-                    hit_window = topmost_window_at(mouse.x, mouse.y);
-                    if (menu_open && !point_in_rect(&menu_rect, mouse.x, mouse.y)) {
+                    hit_window = topmost_window_at(click_x, click_y);
+                    if (menu_open && !point_in_rect(&menu_rect, click_x, click_y)) {
                         menu_open = 0;
                         dirty = 1;
                     }
@@ -934,28 +1215,28 @@ void desktop_main(void) {
                         title = window_title_bar(&g_windows[hit_window].rect);
                         grip = window_resize_grip(&g_windows[hit_window].rect);
 
-                        if (point_in_rect(&close, mouse.x, mouse.y)) {
+                        if (point_in_rect(&close, click_x, click_y)) {
                             free_window(hit_window);
                             focused = -1;
-                        } else if (point_in_rect(&min, mouse.x, mouse.y)) {
+                        } else if (point_in_rect(&min, click_x, click_y)) {
                             g_windows[hit_window].minimized = 1;
                             focused = -1;
-                        } else if (point_in_rect(&max, mouse.x, mouse.y)) {
+                        } else if (point_in_rect(&max, click_x, click_y)) {
                             maximize_window(hit_window);
-                        } else if (point_in_rect(&grip, mouse.x, mouse.y)) {
+                        } else if (point_in_rect(&grip, click_x, click_y)) {
                             resizing = hit_window;
                             resize_origin = g_windows[hit_window].rect;
-                            resize_anchor_x = mouse.x;
-                            resize_anchor_y = mouse.y;
-                        } else if (point_in_rect(&title, mouse.x, mouse.y)) {
+                            resize_anchor_x = click_x;
+                            resize_anchor_y = click_y;
+                        } else if (point_in_rect(&title, click_x, click_y)) {
                             dragging = hit_window;
-                            drag_offset_x = mouse.x - g_windows[hit_window].rect.x;
-                            drag_offset_y = mouse.y - g_windows[hit_window].rect.y;
+                            drag_offset_x = click_x - g_windows[hit_window].rect.x;
+                            drag_offset_y = click_y - g_windows[hit_window].rect.y;
                         } else if (type == APP_EDITOR) {
                             struct editor_state *ed = &g_editors[g_windows[hit_window].instance];
                             struct rect save = editor_save_button_rect(ed);
 
-                            if (point_in_rect(&save, mouse.x, mouse.y)) {
+                            if (point_in_rect(&save, click_x, click_y)) {
                                 if (editor_save(ed)) {
                                     dirty = 1;
                                 }
@@ -966,12 +1247,12 @@ void desktop_main(void) {
                             struct rect list = filemanager_list_rect(fm);
                             int target = FILEMANAGER_HIT_NONE;
 
-                            if (point_in_rect(&up, mouse.x, mouse.y)) {
+                            if (point_in_rect(&up, click_x, click_y)) {
                                 if (filemanager_open_node(fm, FILEMANAGER_HIT_PARENT)) {
                                     dirty = 1;
                                 }
-                            } else if (point_in_rect(&list, mouse.x, mouse.y)) {
-                                target = filemanager_hit_test_entry(fm, mouse.x, mouse.y);
+                            } else if (point_in_rect(&list, click_x, click_y)) {
+                                target = filemanager_hit_test_entry(fm, click_x, click_y);
                                 if (target == FILEMANAGER_HIT_PARENT) {
                                     if (filemanager_open_node(fm, target)) {
                                         dirty = 1;
@@ -994,8 +1275,8 @@ void desktop_main(void) {
                             int close_target = taskmgr_hit_test_close(&g_tms[g_windows[hit_window].instance],
                                                                       g_windows,
                                                                       MAX_WINDOWS,
-                                                                      mouse.x,
-                                                                      mouse.y);
+                                                                      click_x,
+                                                                      click_y);
                             if (close_target >= 0) {
                                 free_window(close_target);
                                 if (close_target == hit_window) {
@@ -1003,29 +1284,97 @@ void desktop_main(void) {
                                 }
                                 dirty = 1;
                             }
+                        } else if (type == APP_CALCULATOR) {
+                            int button = calculator_hit_test(&g_calcs[g_windows[hit_window].instance],
+                                                             click_x,
+                                                             click_y);
+                            if (button >= 0) {
+                                calculator_press_key(&g_calcs[g_windows[hit_window].instance],
+                                                     calculator_button_key(button));
+                                dirty = 1;
+                            }
+                        } else if (type == APP_SKETCHPAD) {
+                            struct sketchpad_state *sketch = &g_sketches[g_windows[hit_window].instance];
+                            struct rect clear_button = sketchpad_clear_button_rect(sketch);
+                            struct rect export_button = sketchpad_export_button_rect(sketch);
+                            int color_index = sketchpad_hit_color(sketch, click_x, click_y);
+
+                            if (point_in_rect(&clear_button, click_x, click_y)) {
+                                sketchpad_clear(sketch);
+                                dirty = 1;
+                            } else if (point_in_rect(&export_button, click_x, click_y)) {
+                                if (sketchpad_export_bitmap(sketch)) {
+                                    dirty = 1;
+                                }
+                            } else if (color_index >= 0) {
+                                sketch->current_color = (uint8_t)color_index;
+                                dirty = 1;
+                            } else if (sketchpad_paint_at(sketch, click_x, click_y)) {
+                                dirty = 1;
+                            }
                         } else if (type == APP_PERSONALIZE) {
+                            int bmp_nodes[4];
+                            int bmp_count = find_bmp_nodes(bmp_nodes, 4);
+
                             for (int slot = 0; slot < THEME_SLOT_COUNT; ++slot) {
                                 struct rect tile = personalize_window_slot_rect(&g_windows[hit_window].rect, slot);
-                                if (point_in_rect(&tile, mouse.x, mouse.y)) {
+                                if (point_in_rect(&tile, click_x, click_y)) {
                                     g_pers.selected_slot = (enum theme_slot)slot;
                                     dirty = 1;
                                 }
                             }
                             for (int c = 0; c < (int)(sizeof(g_theme_palette) / sizeof(g_theme_palette[0])); ++c) {
                                 struct rect swatch = personalize_window_palette_rect(&g_windows[hit_window].rect, c);
-                                if (point_in_rect(&swatch, mouse.x, mouse.y)) {
+                                if (point_in_rect(&swatch, click_x, click_y)) {
                                     ui_theme_set_slot(g_pers.selected_slot, g_theme_palette[c]);
                                     dirty = 1;
+                                }
+                            }
+                            for (int i = -1; i < bmp_count; ++i) {
+                                struct rect button = personalize_window_wallpaper_button_rect(&g_windows[hit_window].rect, i + 1);
+                                if (point_in_rect(&button, click_x, click_y)) {
+                                    if (i < 0) {
+                                        ui_wallpaper_clear();
+                                    } else {
+                                        (void)ui_wallpaper_set_from_node(bmp_nodes[i]);
+                                    }
+                                    dirty = 1;
+                                }
+                            }
+                            for (int i = 0; i < 3; ++i) {
+                                struct rect button = personalize_window_resolution_button_rect(&g_windows[hit_window].rect, i);
+                                if (point_in_rect(&button, click_x, click_y)) {
+                                    if (ui_set_resolution(g_resolution_widths[i], g_resolution_heights[i]) == 0) {
+                                        for (int w = 0; w < MAX_WINDOWS; ++w) {
+                                            if (g_windows[w].active) {
+                                                clamp_window_rect(&g_windows[w].rect);
+                                                sync_window_instance_rect(w);
+                                            }
+                                        }
+                                        start_button = ui_taskbar_start_button_rect();
+                                        menu_rect = ui_start_menu_rect();
+                                        context_menu = desktop_context_menu_rect(context_menu.x, context_menu.y);
+                                        fm_context_menu = filemanager_context_menu_rect(fm_context_menu.x, fm_context_menu.y);
+                                        mouse.x = (int)SCREEN_WIDTH / 2;
+                                        mouse.y = (int)SCREEN_HEIGHT / 2;
+                                        mouse.buttons = 0;
+                                        dragging = -1;
+                                        resizing = -1;
+                                        menu_open = 0;
+                                        context_open = 0;
+                                        fm_context_open = 0;
+                                        g_fm_context_has_wallpaper_action = 0;
+                                        dirty = 1;
+                                    }
                                 }
                             }
                         }
                         dirty = 1;
                     }
                 }
+                }
             }
         }
-        prev_left = left_pressed;
-        prev_right = right_pressed;
 
         while ((key = sys_poll_key()) != 0) {
             if (focused < 0 ||
@@ -1076,6 +1425,38 @@ void desktop_main(void) {
                     editor_insert_char(ed, (char)key);
                     dirty = 1;
                 }
+            } else if (g_windows[focused].type == APP_CALCULATOR) {
+                struct calculator_state *calc = &g_calcs[g_windows[focused].instance];
+
+                if (key == '\b' || key == 127) {
+                    calculator_backspace(calc);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == '\n') {
+                    calculator_press_key(calc, '=');
+                    dirty = 1;
+                    continue;
+                }
+                if ((key >= '0' && key <= '9') ||
+                    key == '+' || key == '-' || key == '*' || key == '/' ||
+                    key == '=' || key == 'c' || key == 'C') {
+                    calculator_press_key(calc, (char)key);
+                    dirty = 1;
+                }
+            } else if (g_windows[focused].type == APP_SKETCHPAD) {
+                if (key == 'c' || key == 'C') {
+                    sketchpad_clear(&g_sketches[g_windows[focused].instance]);
+                    dirty = 1;
+                }
+            } else if (g_windows[focused].type == APP_SNAKE) {
+                if (snake_handle_key(&g_snakes[g_windows[focused].instance], key)) {
+                    dirty = 1;
+                }
+            } else if (g_windows[focused].type == APP_TETRIS) {
+                if (tetris_handle_key(&g_tetris[g_windows[focused].instance], key)) {
+                    dirty = 1;
+                }
             }
         }
 
@@ -1083,9 +1464,7 @@ void desktop_main(void) {
             const struct desktop_theme *theme = ui_theme_get();
 
             draw_desktop(&mouse, menu_open, start_hover,
-                         terminal_item_hover, clock_item_hover,
-                         filemgr_item_hover, editor_item_hover, taskmgr_item_hover,
-                         logout_item_hover, g_windows, MAX_WINDOWS, focused);
+                         menu_hover, g_windows, MAX_WINDOWS, focused);
 
             for (int i = 0; i < MAX_WINDOWS; ++i) {
                 int close_hover;
@@ -1129,6 +1508,22 @@ void desktop_main(void) {
                     taskmgr_draw_window(&g_tms[g_windows[i].instance], g_windows, MAX_WINDOWS, ticks,
                                         active, min_hover, max_hover, close_hover);
                     break;
+                case APP_CALCULATOR:
+                    calculator_draw_window(&g_calcs[g_windows[i].instance], active,
+                                           min_hover, max_hover, close_hover);
+                    break;
+                case APP_SKETCHPAD:
+                    sketchpad_draw_window(&g_sketches[g_windows[i].instance], active,
+                                          min_hover, max_hover, close_hover);
+                    break;
+                case APP_SNAKE:
+                    snake_draw_window(&g_snakes[g_windows[i].instance], active,
+                                      min_hover, max_hover, close_hover);
+                    break;
+                case APP_TETRIS:
+                    tetris_draw_window(&g_tetris[g_windows[i].instance], active,
+                                       min_hover, max_hover, close_hover);
+                    break;
                 case APP_PERSONALIZE:
                     draw_personalize_window(&g_pers, active, min_hover, max_hover, close_hover, &mouse);
                     break;
@@ -1149,11 +1544,16 @@ void desktop_main(void) {
                     struct rect item = filemanager_context_item_rect(&fm_context_menu, action);
                     int hover = 0;
 
+                    if (action == FMENU_SET_WALLPAPER && !g_fm_context_has_wallpaper_action) {
+                        continue;
+                    }
+
                     if (action == FMENU_OPEN) hover = fm_open_hover;
                     else if (action == FMENU_COPY) hover = fm_copy_hover;
                     else if (action == FMENU_PASTE) hover = fm_paste_hover;
                     else if (action == FMENU_NEW_DIR) hover = fm_new_dir_hover;
                     else if (action == FMENU_NEW_FILE) hover = fm_new_file_hover;
+                    else if (action == FMENU_SET_WALLPAPER) hover = fm_set_wallpaper_hover;
 
                     sys_rect(item.x, item.y, item.w, item.h, hover ? 15 : 7);
                     sys_text(item.x + 4, item.y + 3, theme->text, filemanager_menu_label(action));

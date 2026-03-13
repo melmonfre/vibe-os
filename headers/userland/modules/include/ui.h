@@ -31,10 +31,32 @@ struct desktop_theme {
     uint8_t text;
 };
 
+enum start_menu_item {
+    START_MENU_TERMINAL = 0,
+    START_MENU_CLOCK,
+    START_MENU_FILEMANAGER,
+    START_MENU_EDITOR,
+    START_MENU_TASKMANAGER,
+    START_MENU_CALCULATOR,
+    START_MENU_SKETCHPAD,
+    START_MENU_SNAKE,
+    START_MENU_TETRIS,
+    START_MENU_LOGOUT,
+    START_MENU_ITEM_COUNT
+};
+
 void ui_init(void);
+void ui_refresh_metrics(void);
+int ui_set_resolution(uint32_t width, uint32_t height);
 const struct desktop_theme *ui_theme_get(void);
 void ui_theme_set_slot(enum theme_slot slot, uint8_t color);
 const char *ui_theme_slot_name(enum theme_slot slot);
+void ui_wallpaper_clear(void);
+int ui_wallpaper_set_from_node(int node);
+int ui_wallpaper_source_node(void);
+struct rect ui_taskbar_start_button_rect(void);
+struct rect ui_start_menu_rect(void);
+struct rect ui_start_menu_item_rect(int index);
 
 void draw_window_frame(const struct rect *w, const char *title,
                        int active,
@@ -49,12 +71,7 @@ void draw_window_frame(const struct rect *w, const char *title,
 void draw_desktop(const struct mouse_state *mouse,
                   int menu_open,
                   int start_hover,
-                  int terminal_item_hover,
-                  int clock_item_hover,
-                  int filemgr_item_hover,
-                  int editor_item_hover,
-                  int taskmgr_item_hover,
-                  int logout_item_hover,
+                  const int *menu_item_hover,
                   const struct window *wins,
                   int win_count,
                   int focused);

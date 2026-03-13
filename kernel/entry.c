@@ -9,6 +9,7 @@
 #include <kernel/cpu/cpu.h>
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/video/video.h>
+#include <kernel/drivers/storage/ata.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/drivers/input/input.h>
 #include <kernel/userland.h>
@@ -50,6 +51,10 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     memory_subsystem_init();
     kernel_mm_init(0x500000u, 0x100000u); /* 1 MiB simple heap */
     kernel_text_puts("Memory OK\n");
+
+    kernel_text_puts("Initializing storage...\n");
+    kernel_storage_init();
+    kernel_text_puts(kernel_storage_ready() ? "Storage OK\n" : "Storage unavailable\n");
 
     kernel_text_puts("Initializing scheduler/driver manager...\n");
     scheduler_init();

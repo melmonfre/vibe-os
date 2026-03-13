@@ -4,7 +4,7 @@
 #include <userland/modules/include/fs.h>
 #include <userland/modules/include/syscalls.h>
 
-#define VIBE_LUA_HEAP_SIZE 262144
+#define VIBE_LUA_HEAP_SIZE 65536
 
 struct heap_block {
     size_t size;

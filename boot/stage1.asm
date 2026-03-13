@@ -4,9 +4,9 @@ ORG 0x7C00
 %define KERNEL_SEG 0x1000
 %define KERNEL_OFF 0x0000
 ; Number of 512-byte sectors to read for the kernel image.
-; Kernel is ~21 KiB now; give headroom.
-; Kernel has grown past 24 KiB; load 96 sectors (48 KiB) to be safe.
-%define KERNEL_SECTORS 96
+; The current kernel.bin is ~170 KiB (~332 sectors) after embedding
+; userland, Lua, SectorC and the desktop apps. Load 384 sectors for headroom.
+%define KERNEL_SECTORS 384
 
 %define CODE_SEG 0x08
 %define DATA_SEG 0x10
@@ -54,41 +54,24 @@ load_kernel:
 
     pusha
 
-    mov ax,KERNEL_SEG
-    mov es,ax
-    xor bx,bx
-
-    mov dh,0          ; head
-    mov ch,0          ; track
-    mov cl,2          ; sector (starts at 2, sector 1 is boot)
-
-    mov dl,[boot_drive]
-
-    mov si,KERNEL_SECTORS
+    mov word [disk_address_packet.sectors],1
+    mov word [disk_address_packet.offset],0
+    mov word [disk_address_packet.segment],KERNEL_SEG
+    mov dword [disk_address_packet.lba_low],1
+    mov dword [disk_address_packet.lba_high],0
+    mov cx,KERNEL_SECTORS
 
 .next:
-
-    mov ah,0x02
-    mov al,1
+    mov si,disk_address_packet
+    mov dl,[boot_drive]
+    mov ah,0x42
     int 0x13
     jc .fail
 
-    add bx,512
-    inc cl                   ; next sector
-
-    ; advance CHS: if sector > 18, wrap and advance head/track
-    cmp cl,19
-    jl .dec_counter
-    mov cl,1                 ; wrap sector
-    inc dh                   ; next head
-    cmp dh,2
-    jl .dec_counter
-    mov dh,0
-    inc ch                   ; next track
-
-.dec_counter:
-    dec si
-    jnz .next
+    add word [disk_address_packet.segment],0x20
+    inc dword [disk_address_packet.lba_low]
+    adc dword [disk_address_packet.lba_high],0
+    loop .next
 
     popa
     clc
@@ -166,6 +149,20 @@ dd gdt_start
 ; -----------------------------
 
 boot_drive db 0
+
+disk_address_packet:
+    db 16
+    db 0
+.sectors:
+    dw 1
+.offset:
+    dw 0
+.segment:
+    dw KERNEL_SEG
+.lba_low:
+    dd 1
+.lba_high:
+    dd 0
 
 msg_boot db "bootloader start",13,10,0
 msg_loaded db "kernel loaded",13,10,0

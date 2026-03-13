@@ -14,8 +14,12 @@ __attribute__((noreturn)) void userland_run(void) {
     kernel_text_puts("UL jump...\n");
     kernel_debug_puts("userland_run: jump\n");
 
-    /* set up a userland stack safely above everything we loaded. */
-    uint32_t stack_top = 0x90000;
+    /*
+     * Userland is linked directly inside the kernel image now, so its .bss
+     * lives inside the kernel address space. Keep the userland stack far above
+     * the embedded image and below the kernel bump heap at 0x500000.
+     */
+    uint32_t stack_top = 0x480000;
     stack_top = (stack_top + 0xF) & ~0xFu; /* align 16 */
 
     __asm__ volatile("cli\n\t"

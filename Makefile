@@ -25,6 +25,7 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/modules/busybox.c \
 	$(USERLAND_DIR)/modules/console.c \
 	$(USERLAND_DIR)/modules/fs.c \
+	$(USERLAND_DIR)/modules/bmp.c \
 	$(USERLAND_DIR)/modules/utils.c \
 	$(USERLAND_DIR)/modules/syscalls.c \
 	$(USERLAND_DIR)/modules/ui.c \
@@ -70,7 +71,11 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/applications/clock.c \
 	$(USERLAND_DIR)/applications/filemanager.c \
 	$(USERLAND_DIR)/applications/editor.c \
-	$(USERLAND_DIR)/applications/taskmgr.c
+	$(USERLAND_DIR)/applications/taskmgr.c \
+	$(USERLAND_DIR)/applications/calculator.c \
+	$(USERLAND_DIR)/applications/sketchpad.c \
+	$(USERLAND_DIR)/applications/snake.c \
+	$(USERLAND_DIR)/applications/tetris.c
 USERLAND_OBJS := $(patsubst $(USERLAND_DIR)/%.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
 
 BOOT_BIN := $(BUILD_DIR)/boot.bin
@@ -133,12 +138,12 @@ $(IMAGE): $(BOOT_BIN) $(KERNEL_BIN)
 
 run: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -drive format=raw,file=$(IMAGE),if=floppy -boot a; \
+		$(QEMU) -drive format=raw,file=$(IMAGE) -boot c; \
 	else \
 		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			echo "Usando qemu-system-x86_64"; \
-			qemu-system-x86_64 -drive format=raw,file=$(IMAGE),if=floppy -boot a; \
+			qemu-system-x86_64 -drive format=raw,file=$(IMAGE) -boot c; \
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \
@@ -148,10 +153,10 @@ run: $(IMAGE)
 
 run-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -drive format=raw,file=$(IMAGE),if=floppy -boot a -serial stdio; \
+		$(QEMU) -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -drive format=raw,file=$(IMAGE),if=floppy -boot a -serial stdio; \
+			qemu-system-x86_64 -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -160,12 +165,12 @@ run-debug: $(IMAGE)
 
 debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -drive format=raw,file=$(IMAGE),if=floppy -boot a -s -S; \
+		$(QEMU) -drive format=raw,file=$(IMAGE) -boot c -s -S; \
 	else \
 		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			echo "Usando qemu-system-x86_64 com debug"; \
-			qemu-system-x86_64 -drive format=raw,file=$(IMAGE),if=floppy -boot a -s -S; \
+			qemu-system-x86_64 -drive format=raw,file=$(IMAGE) -boot c -s -S; \
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \

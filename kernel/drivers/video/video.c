@@ -1,5 +1,6 @@
 #include <kernel/drivers/video/video.h>
 #include <kernel/drivers/input/input.h>
+#include <kernel/memory/heap.h>
 #include <kernel/hal/io.h>
 #include <stddef.h>
 
@@ -8,14 +9,17 @@ static struct video_mode g_mode;
 static volatile uint8_t *g_fb = NULL;
 static uint8_t *g_backbuf = NULL;
 static size_t g_buf_size = 0;
-static uint8_t g_graphics_backbuf[640 * 480];
+static uint8_t *g_graphics_backbuf = NULL;
 static int g_graphics_enabled = 0;
 static int g_graphics_bga = 0;
 
-#define GRAPHICS_WIDTH 640u
-#define GRAPHICS_HEIGHT 480u
+#define GRAPHICS_DEFAULT_WIDTH 640u
+#define GRAPHICS_DEFAULT_HEIGHT 480u
+#define GRAPHICS_MAX_WIDTH 800u
+#define GRAPHICS_MAX_HEIGHT 600u
 #define GRAPHICS_BPP 8u
 #define GRAPHICS_BANK_SIZE 65536u
+#define GRAPHICS_MAX_PIXELS ((size_t)GRAPHICS_MAX_WIDTH * (size_t)GRAPHICS_MAX_HEIGHT)
 
 #define BGA_INDEX_PORT 0x01CEu
 #define BGA_DATA_PORT 0x01CFu
@@ -29,16 +33,6 @@ static int g_graphics_bga = 0;
 #define BGA_ID5 0xB0C5u
 #define BGA_DISABLED 0x0000u
 #define BGA_ENABLED 0x0001u
-
-static inline void outw(uint16_t port, uint16_t value) {
-    __asm__ volatile("outw %0, %1" : : "a"(value), "Nd"(port));
-}
-
-static inline uint16_t inw(uint16_t port) {
-    uint16_t value;
-    __asm__ volatile("inw %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
 
 static void bga_write(uint16_t index, uint16_t value) {
     outw(BGA_INDEX_PORT, index);
@@ -145,27 +139,45 @@ static void vga_write_regs(const uint8_t *regs) {
     outb(0x3C5, seq[1]);
 }
 
-static void kernel_video_enter_graphics(void) {
-    if (g_graphics_enabled) {
-        return;
+static int kernel_video_mode_supported(uint16_t width, uint16_t height) {
+    return (width == 320u && height == 200u) ||
+           (width == 640u && height == 480u) ||
+           (width == 800u && height == 600u);
+}
+
+static int kernel_video_apply_graphics_mode(uint16_t width, uint16_t height) {
+    int use_bga = 0;
+
+    if (!kernel_video_mode_supported(width, height)) {
+        return -1;
     }
 
-    g_graphics_bga = bga_enter_mode((uint16_t)GRAPHICS_WIDTH,
-                                    (uint16_t)GRAPHICS_HEIGHT,
-                                    (uint16_t)GRAPHICS_BPP);
-    if (!g_graphics_bga) {
+    if (g_graphics_backbuf == NULL) {
+        g_graphics_backbuf = (uint8_t *)kernel_malloc(GRAPHICS_MAX_PIXELS);
+        if (g_graphics_backbuf == NULL) {
+            return -1;
+        }
+    }
+
+    if (bga_available()) {
+        use_bga = bga_enter_mode(width, height, (uint16_t)GRAPHICS_BPP);
+        if (!use_bga && (width != 320u || height != 200u)) {
+            return -1;
+        }
+    }
+
+    if (!use_bga) {
+        if (width != 320u || height != 200u) {
+            return -1;
+        }
         vga_write_regs(g_vga_mode_13_regs);
-        g_mode.width = 320u;
-        g_mode.height = 200u;
-        g_mode.pitch = 320u;
-        g_mode.bpp = 8u;
-    } else {
-        g_mode.width = GRAPHICS_WIDTH;
-        g_mode.height = GRAPHICS_HEIGHT;
-        g_mode.pitch = GRAPHICS_WIDTH;
-        g_mode.bpp = GRAPHICS_BPP;
     }
 
+    g_graphics_bga = use_bga;
+    g_mode.width = width;
+    g_mode.height = height;
+    g_mode.pitch = width;
+    g_mode.bpp = GRAPHICS_BPP;
     g_mode.fb_addr = 0xA0000u;
     g_fb = (volatile uint8_t *)(uintptr_t)g_mode.fb_addr;
     g_backbuf = g_graphics_backbuf;
@@ -178,6 +190,15 @@ static void kernel_video_enter_graphics(void) {
 
     kernel_mouse_sync_to_video();
     kernel_video_flip();
+    return 0;
+}
+
+static void kernel_video_enter_graphics(void) {
+    if (g_graphics_enabled) {
+        return;
+    }
+    (void)kernel_video_apply_graphics_mode((uint16_t)GRAPHICS_DEFAULT_WIDTH,
+                                           (uint16_t)GRAPHICS_DEFAULT_HEIGHT);
 }
 
 /* prototypes for driver implementations */
@@ -273,6 +294,10 @@ void kernel_video_leave_graphics(void) {
     g_backbuf = NULL;
     g_buf_size = 0u;
     kernel_text_init();
+}
+
+int kernel_video_set_mode(uint32_t width, uint32_t height) {
+    return kernel_video_apply_graphics_mode((uint16_t)width, (uint16_t)height);
 }
 
 /* graphics helper internal font & routines copied from stage2 */

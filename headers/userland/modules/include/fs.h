@@ -5,7 +5,7 @@
 
 #define FS_MAX_NODES 64
 #define FS_NAME_MAX 15
-#define FS_FILE_MAX 1024
+#define FS_FILE_MAX 4096
 #define FS_MAX_SEGMENTS 8
 
 struct fs_node {
@@ -27,6 +27,7 @@ void fs_init(void);
 int fs_create(const char *path, int is_dir);
 int fs_remove(const char *path);
 int fs_write_file(const char *path, const char *text, int append);
+int fs_write_bytes(const char *path, const uint8_t *data, int size);
 void fs_build_path(int node, char *out, int max_len);
 int fs_resolve(const char *path);
 

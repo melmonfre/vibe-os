@@ -44,3 +44,12 @@ int console_getchar(void) {
     } while (c == 0);
     return c;
 }
+
+void console_move_cursor(int delta) {
+    int ret = 0;
+    __asm__ volatile("int $0x80"
+                     : "=a"(ret)
+                     : "a"(SYSCALL_TEXT_MOVE_CURSOR), "b"(delta), "c"(0), "d"(0), "S"(0), "D"(0)
+                     : "memory", "cc");
+    (void)ret;
+}
