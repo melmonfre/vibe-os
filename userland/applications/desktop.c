@@ -36,9 +36,32 @@ static int g_tetris_used[MAX_TETRIS];
 struct personalize_state {
     struct rect window;
     enum theme_slot selected_slot;
+    int color_picker_open;
+    int color_picker_start_x;
+    int color_picker_start_y;
 };
 static struct personalize_state g_pers;
 static int g_pers_used = 0;
+
+/* 256-color palette */
+static const uint8_t g_color_palette_256[] = {
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+    32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+    64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+    80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
+    96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111,
+    112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
+    128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
+    144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
+    160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175,
+    176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
+    192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207,
+    208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223,
+    224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
+    240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255
+};
 
 #define TASKBAR_HEIGHT 22
 #define WINDOW_MIN_W 96
@@ -1016,24 +1039,37 @@ static struct rect desktop_context_menu_rect(int x, int y) {
 static struct rect personalize_window_slot_rect(const struct rect *w, int slot) {
     int col = slot % 2;
     int row = slot / 2;
-    struct rect r = {w->x + 18 + (col * 94), w->y + 50 + (row * 34), 84, 28};
+    struct rect r = {w->x + 26 + (col * 100), w->y + 58 + (row * 38), 88, 32};
     return r;
 }
 
 static struct rect personalize_window_palette_rect(const struct rect *w, int index) {
-    int col = index % 5;
-    int row = index / 5;
-    struct rect r = {w->x + 18 + (col * 24), w->y + 204 + (row * 18), 20, 16};
+    int col = index % 6;
+    int row = index / 6;
+    struct rect r = {w->x + 20 + (col * 32), w->y + 38 + (row * 20), 28, 18};
     return r;
 }
 
 static struct rect personalize_window_wallpaper_button_rect(const struct rect *w, int index) {
-    struct rect r = {w->x + 228, w->y + 128 + (index * 18), 180, 16};
+    struct rect r = {w->x + 242, w->y + 132 + (index * 14), 160, 12};
     return r;
 }
 
 static struct rect personalize_window_resolution_button_rect(const struct rect *w, int index) {
-    struct rect r = {w->x + 228, w->y + 244 + (index * 18), 180, 16};
+    struct rect r = {w->x + 242, w->y + 216 + (index * 14), 160, 12};
+    return r;
+}
+
+static struct rect personalize_color_picker_rect(void) {
+    /* 16x16 grid of colors, 12px each, centered-ish */
+    struct rect r = {(int)SCREEN_WIDTH / 2 - 98, (int)SCREEN_HEIGHT / 2 - 100, 200, 220};
+    return r;
+}
+
+static struct rect personalize_color_swatch_rect(const struct rect *picker, int idx) {
+    int col = idx % 16;
+    int row = idx / 16;
+    struct rect r = {picker->x + 4 + (col * 12), picker->y + 24 + (row * 12), 10, 10};
     return r;
 }
 
@@ -1068,20 +1104,20 @@ static void draw_personalize_window(struct personalize_state *state,
     int current_wallpaper = ui_wallpaper_source_node();
     uint8_t selected_color = theme->background;
     struct rect body = {state->window.x + 6, state->window.y + 20, state->window.w - 12, state->window.h - 26};
-    struct rect theme_panel = {body.x + 8, body.y + 8, 202, 132};
-    struct rect preview_panel = {body.x + 220, body.y + 8, body.w - 228, 78};
-    struct rect wallpaper_panel = {body.x + 220, body.y + 94, body.w - 228, 126};
-    struct rect palette_panel = {body.x + 8, body.y + 148, 202, body.h - 156};
-    struct rect preview = {preview_panel.x + 16, preview_panel.y + 22, preview_panel.w - 32, 40};
-    struct rect preview_chip = {preview.x + 10, preview.y + 10, 56, 18};
-    struct rect preview_strip = {preview.x + 10, preview.y + 31, preview.w - 20, 4};
-    struct rect resolution_panel = {body.x + 220, body.y + 222, body.w - 228, body.h - 230};
+    struct rect theme_panel = {body.x + 8, body.y + 8, 216, 190};
+    struct rect preview_panel = {body.x + 232, body.y + 8, body.w - 240, 62};
+    struct rect wallpaper_panel = {body.x + 232, body.y + 78, body.w - 240, 74};
+    struct rect resolution_panel = {body.x + 232, body.y + 160, body.w - 240, 100};
+    struct rect palette_panel = {body.x + 8, body.y + body.h - 98, 216, 88};
+    struct rect preview = {preview_panel.x + 12, preview_panel.y + 20, preview_panel.w - 24, 34};
+    struct rect preview_chip = {preview.x + 8, preview.y + 8, 48, 16};
+    struct rect preview_strip = {preview.x + 8, preview.y + 26, preview.w - 16, 3};
 
     draw_window_frame(&state->window, "Personalizar", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, ui_color_panel());
     ui_draw_surface(&theme_panel, ui_color_canvas());
     ui_draw_surface(&preview_panel, ui_color_canvas());
-    ui_draw_surface(&wallpaper_panel, ui_color_canvas());
+    sys_rect(wallpaper_panel.x, wallpaper_panel.y, wallpaper_panel.w, wallpaper_panel.h, 1);  /* Blue */
     ui_draw_surface(&palette_panel, ui_color_canvas());
     ui_draw_surface(&resolution_panel, ui_color_canvas());
 
@@ -1093,8 +1129,10 @@ static void draw_personalize_window(struct personalize_state *state,
 
     if (state->selected_slot == THEME_SLOT_MENU) selected_color = theme->menu;
     else if (state->selected_slot == THEME_SLOT_MENU_BUTTON) selected_color = theme->menu_button;
+    else if (state->selected_slot == THEME_SLOT_MENU_BUTTON_INACTIVE) selected_color = theme->menu_button_inactive;
     else if (state->selected_slot == THEME_SLOT_TASKBAR) selected_color = theme->taskbar;
     else if (state->selected_slot == THEME_SLOT_WINDOW) selected_color = theme->window;
+    else if (state->selected_slot == THEME_SLOT_WINDOW_BG) selected_color = theme->window_bg;
     else if (state->selected_slot == THEME_SLOT_TEXT) selected_color = theme->text;
 
     for (int slot = 0; slot < THEME_SLOT_COUNT; ++slot) {
@@ -1103,8 +1141,10 @@ static void draw_personalize_window(struct personalize_state *state,
 
         if (slot == THEME_SLOT_MENU) color = theme->menu;
         else if (slot == THEME_SLOT_MENU_BUTTON) color = theme->menu_button;
+        else if (slot == THEME_SLOT_MENU_BUTTON_INACTIVE) color = theme->menu_button_inactive;
         else if (slot == THEME_SLOT_TASKBAR) color = theme->taskbar;
         else if (slot == THEME_SLOT_WINDOW) color = theme->window;
+        else if (slot == THEME_SLOT_WINDOW_BG) color = theme->window_bg;
         else if (slot == THEME_SLOT_TEXT) color = theme->text;
 
         ui_draw_surface(&tile, slot == (int)state->selected_slot ? theme->window : ui_color_panel());
@@ -1127,15 +1167,34 @@ static void draw_personalize_window(struct personalize_state *state,
              "Aa");
     sys_text(preview.x + 78, preview.y + 28, theme->text, ui_theme_slot_name(state->selected_slot));
     sys_text(preview_panel.x + 16, preview_panel.y + 68, theme->text, "Ajuste rapido do desktop");
+    
+    /* Draw palette grid inside palette_panel */
+    int palette_cols = 6;
+    int swatch_w = 14;
+    int swatch_h = 12;
+    int palette_start_y = palette_panel.y + 24;
+    
     for (int i = 0; i < (int)(sizeof(g_theme_palette) / sizeof(g_theme_palette[0])); ++i) {
-        struct rect swatch = personalize_window_palette_rect(&state->window, i);
+        int col = i % palette_cols;
+        int row = i / palette_cols;
+        int swatch_x = palette_panel.x + 12 + (col * 22);
+        int swatch_y = palette_start_y + (row * 18);
+        
+        struct rect swatch = {swatch_x, swatch_y, swatch_w, swatch_h};
         int hover = point_in_rect(&swatch, mouse->x, mouse->y);
-
+        
         sys_rect(swatch.x, swatch.y, swatch.w, swatch.h, hover ? 15 : 0);
         sys_rect(swatch.x + 1, swatch.y + 1, swatch.w - 2, swatch.h - 2, g_theme_palette[i]);
     }
-    sys_text(palette_panel.x + 8, palette_panel.y + palette_panel.h - 18, theme->text,
+    sys_text(palette_panel.x + 8, palette_panel.y + palette_panel.h - 16, theme->text,
              "Clique em uma cor para aplicar");
+
+    /* Draw "Mais cores" button */
+    struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 62, palette_panel.w - 16, 14};
+    int mais_cores_hover = point_in_rect(&mais_cores_btn, mouse->x, mouse->y);
+    ui_draw_button(&mais_cores_btn, "Mais cores (256)", 
+                   state->color_picker_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                   mais_cores_hover);
 
     for (int i = -1; i < bmp_count; ++i) {
         struct rect button = personalize_window_wallpaper_button_rect(&state->window, i + 1);
@@ -1150,7 +1209,7 @@ static void draw_personalize_window(struct personalize_state *state,
                        hover);
     }
     if (bmp_count == 0) {
-        sys_text(wallpaper_panel.x + 8, wallpaper_panel.y + 104, theme->text, "nenhum .bmp encontrado");
+        sys_text(wallpaper_panel.x + 8, wallpaper_panel.y + wallpaper_panel.h - 16, theme->text, "nenhum .bmp encontrado");
     }
 
     for (int i = 0; i < (int)(sizeof(g_resolution_options) / sizeof(g_resolution_options[0])); ++i) {
@@ -1170,6 +1229,28 @@ static void draw_personalize_window(struct personalize_state *state,
     }
     sys_text(resolution_panel.x + 8, resolution_panel.y + resolution_panel.h - 18, theme->text,
              "Aplicacao imediata");
+
+    /* Draw 256-color picker popup */
+    if (state->color_picker_open) {
+        struct rect picker = personalize_color_picker_rect();
+        
+        /* Draw semi-transparent background */
+        ui_draw_surface(&picker, ui_color_muted());
+        
+        /* Draw title */
+        sys_text(picker.x + 8, picker.y + 6, theme->text, "Selecione cor (0-255)");
+        
+        /* Draw 256 color swatches in 16x16 grid */
+        for (int i = 0; i < 256; ++i) {
+            struct rect swatch = personalize_color_swatch_rect(&picker, i);
+            int hover = point_in_rect(&swatch, mouse->x, mouse->y);
+            
+            if (hover) {
+                sys_rect(swatch.x - 1, swatch.y - 1, swatch.w + 2, swatch.h + 2, theme->text);
+            }
+            sys_rect(swatch.x, swatch.y, swatch.w, swatch.h, g_color_palette_256[i]);
+        }
+    }
 }
 
 static void restore_or_toggle_window(int widx, int *focused) {
@@ -1871,18 +1952,48 @@ void desktop_main(void) {
                             int bmp_nodes[4];
                             int bmp_count = find_bmp_nodes(bmp_nodes, 4);
 
-                            for (int slot = 0; slot < THEME_SLOT_COUNT; ++slot) {
-                                struct rect tile = personalize_window_slot_rect(&g_windows[hit_window].rect, slot);
-                                if (point_in_rect(&tile, click_x, click_y)) {
-                                    g_pers.selected_slot = (enum theme_slot)slot;
+                            /* Handle color picker popup */
+                            if (g_pers.color_picker_open) {
+                                struct rect picker = personalize_color_picker_rect();
+                                for (int i = 0; i < 256; ++i) {
+                                    struct rect swatch = personalize_color_swatch_rect(&picker, i);
+                                    if (point_in_rect(&swatch, click_x, click_y)) {
+                                        ui_theme_set_slot(g_pers.selected_slot, g_color_palette_256[i]);
+                                        g_pers.color_picker_open = 0;
+                                        dirty = 1;
+                                        break;
+                                    }
+                                }
+                                /* Click outside closes popup */
+                                if (!point_in_rect(&picker, click_x, click_y)) {
+                                    g_pers.color_picker_open = 0;
+                                }
+                            } else {
+                                /* "Mais cores" button */
+                                struct rect body = {g_windows[hit_window].rect.x + 6, 
+                                                   g_windows[hit_window].rect.y + 20, 
+                                                   g_windows[hit_window].rect.w - 12, 
+                                                   g_windows[hit_window].rect.h - 26};
+                                struct rect palette_panel = {body.x + 8, body.y + 206, 216, body.h - 214};
+                                struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 22, palette_panel.w - 16, 14};
+                                if (point_in_rect(&mais_cores_btn, click_x, click_y)) {
+                                    g_pers.color_picker_open = 1;
                                     dirty = 1;
                                 }
-                            }
-                            for (int c = 0; c < (int)(sizeof(g_theme_palette) / sizeof(g_theme_palette[0])); ++c) {
-                                struct rect swatch = personalize_window_palette_rect(&g_windows[hit_window].rect, c);
-                                if (point_in_rect(&swatch, click_x, click_y)) {
-                                    ui_theme_set_slot(g_pers.selected_slot, g_theme_palette[c]);
-                                    dirty = 1;
+
+                                for (int slot = 0; slot < THEME_SLOT_COUNT; ++slot) {
+                                    struct rect tile = personalize_window_slot_rect(&g_windows[hit_window].rect, slot);
+                                    if (point_in_rect(&tile, click_x, click_y)) {
+                                        g_pers.selected_slot = (enum theme_slot)slot;
+                                        dirty = 1;
+                                    }
+                                }
+                                for (int c = 0; c < (int)(sizeof(g_theme_palette) / sizeof(g_theme_palette[0])); ++c) {
+                                    struct rect swatch = personalize_window_palette_rect(&g_windows[hit_window].rect, c);
+                                    if (point_in_rect(&swatch, click_x, click_y)) {
+                                        ui_theme_set_slot(g_pers.selected_slot, g_theme_palette[c]);
+                                        dirty = 1;
+                                    }
                                 }
                             }
                             for (int i = -1; i < bmp_count; ++i) {

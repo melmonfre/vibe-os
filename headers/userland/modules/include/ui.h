@@ -16,8 +16,10 @@ enum theme_slot {
     THEME_SLOT_BACKGROUND = 0,
     THEME_SLOT_MENU,
     THEME_SLOT_MENU_BUTTON,
+    THEME_SLOT_MENU_BUTTON_INACTIVE,
     THEME_SLOT_TASKBAR,
     THEME_SLOT_WINDOW,
+    THEME_SLOT_WINDOW_BG,
     THEME_SLOT_TEXT,
     THEME_SLOT_COUNT
 };
@@ -26,8 +28,10 @@ struct desktop_theme {
     uint8_t background;
     uint8_t menu;
     uint8_t menu_button;
+    uint8_t menu_button_inactive;
     uint8_t taskbar;
     uint8_t window;
+    uint8_t window_bg;
     uint8_t text;
 };
 
@@ -58,6 +62,16 @@ int ui_set_resolution(uint32_t width, uint32_t height);
 const struct desktop_theme *ui_theme_get(void);
 void ui_theme_set_slot(enum theme_slot slot, uint8_t color);
 const char *ui_theme_slot_name(enum theme_slot slot);
+
+/* Theme management */
+void ui_theme_save_named(const char *name);
+void ui_theme_load_named(const char *name);
+void ui_theme_export(const char *export_path);
+void ui_theme_import(const char *import_path);
+void ui_theme_create_classic(void);
+void ui_theme_create_luna(void);
+void ui_theme_create_luna_dark(void);
+
 void ui_wallpaper_clear(void);
 int ui_wallpaper_set_from_node(int node);
 int ui_wallpaper_source_node(void);

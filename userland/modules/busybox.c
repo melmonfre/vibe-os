@@ -1,6 +1,7 @@
 #include <userland/modules/include/busybox.h>
 #include <userland/modules/include/console.h>
 #include <userland/modules/include/fs.h>
+#include <userland/modules/include/lang_loader.h>
 #include <userland/sectorc/include/sectorc.h>
 #include <userland/lua/include/lua_main.h>
 #include <userland/modules/include/shell.h> /* for history print */
@@ -20,7 +21,7 @@ static int strcmp(const char *a, const char *b) {
 
 static int cmd_help(int argc, char **argv) {
     (void)argc; (void)argv;
-    const char *list = "commands: pwd ls cd mkdir touch rm cat echo clear uname help exit startx history edit lua sectorc cc\n";
+    const char *list = "commands: pwd ls cd mkdir touch rm cat echo clear uname help exit startx history edit lua sectorc cc hello js ruby python\n";
     console_write(list);
     return 0;
 }
@@ -211,6 +212,12 @@ int busybox_main(int argc, char **argv) {
     for (int i = 0; i < count; ++i) {
         if (strcmp(argv[0], g_commands[i].name) == 0) {
             return g_commands[i].handler(argc, argv);
+        }
+    }
+    {
+        int rc = lang_try_run(argc, argv);
+        if (rc >= 0) {
+            return rc;
         }
     }
     console_write("unknown command\n");

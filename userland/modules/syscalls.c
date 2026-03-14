@@ -49,6 +49,15 @@ int sys_storage_save(const void *src, uint32_t size) {
     return syscall5(SYSCALL_STORAGE_SAVE, (int)(uintptr_t)src, (int)size, 0, 0, 0);
 }
 
+int sys_storage_read_sectors(uint32_t lba, void *dst, uint32_t sector_count) {
+    return syscall5(SYSCALL_STORAGE_READ_SECTORS,
+                    (int)lba,
+                    (int)(uintptr_t)dst,
+                    (int)sector_count,
+                    0,
+                    0);
+}
+
 void sys_sleep(void) {
     (void)syscall5(SYSCALL_SLEEP, 0, 0, 0, 0, 0);
 }

@@ -58,7 +58,7 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
     struct rect body = {tm->window.x + 4, tm->window.y + 18, tm->window.w - 8, tm->window.h - 22};
 
     draw_window_frame(&tm->window, "TASKS", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&body, ui_color_panel());
+    ui_draw_surface(&body, theme->window_bg);
 
     int visible_index = 0;
     for (int i = 0; i < win_count; ++i) {

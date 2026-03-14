@@ -20,7 +20,17 @@ enum syscall_id {
     SYSCALL_TEXT_MOVE_CURSOR = 16,
     SYSCALL_GFX_SET_MODE = 17,
     SYSCALL_STORAGE_LOAD = 18,
-    SYSCALL_STORAGE_SAVE = 19
+    SYSCALL_STORAGE_SAVE = 19,
+    SYSCALL_STORAGE_READ_SECTORS = 20,
+
+    /* Filesystem syscalls */
+    SYSCALL_OPEN = 21,
+    SYSCALL_READ = 22,
+    SYSCALL_WRITE = 23,
+    SYSCALL_CLOSE = 24,
+    SYSCALL_LSEEK = 25,
+    SYSCALL_STAT = 26,
+    SYSCALL_FSTAT = 27
 };
 
 enum input_keycode {

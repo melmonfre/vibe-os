@@ -70,6 +70,12 @@ static uint32_t sys_storage_save(uint32_t ptr, uint32_t size, uint32_t c,
     return (uint32_t)kernel_storage_save((const void *)(uintptr_t)ptr, size);
 }
 
+static uint32_t sys_storage_read_sectors(uint32_t lba, uint32_t ptr, uint32_t sector_count,
+                                         uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    return (uint32_t)kernel_storage_read_sectors(lba, (void *)(uintptr_t)ptr, sector_count);
+}
+
 static uint32_t sys_input_mouse(uint32_t state_ptr, uint32_t b, uint32_t c,
                                 uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
@@ -183,6 +189,7 @@ void syscall_init(void) {
     syscall_table[SYSCALL_GFX_SET_MODE] = sys_gfx_set_mode;
     syscall_table[SYSCALL_STORAGE_LOAD] = sys_storage_load;
     syscall_table[SYSCALL_STORAGE_SAVE] = sys_storage_save;
+    syscall_table[SYSCALL_STORAGE_READ_SECTORS] = sys_storage_read_sectors;
     syscall_table[SYSCALL_INPUT_MOUSE] = sys_input_mouse;
     syscall_table[SYSCALL_INPUT_KEY] = sys_input_key;
     syscall_table[12] = sys_text_putc;     /* legacy text mode */
