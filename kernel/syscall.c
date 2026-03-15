@@ -8,6 +8,8 @@
 #include <kernel/process.h>
 #include <stdint.h>
 #include <include/userland_api.h> /* syscall IDs */
+#include <string.h>
+#include <kernel/drivers/input/input.h>
 
 /* syscall table and helpers for the new kernel-side mechanism.  The
    legacy stage2 dispatch is still compiled into the image; eventually we
