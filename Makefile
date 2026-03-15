@@ -229,6 +229,7 @@ $(BOOT_BIN): $(BOOT_DIR)/stage1.asm | $(BUILD_DIR)
 	fi
 
 $(BUILD_DIR)/%.o: %.c headers/include/userland_api.h | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kernel_asm_%.o: kernel_asm/%.asm | $(BUILD_DIR)
