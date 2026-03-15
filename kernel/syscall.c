@@ -178,6 +178,31 @@ static uint32_t sys_gfx_info(uint32_t out_ptr, uint32_t b, uint32_t c,
     return 0;
 }
 
+static uint32_t sys_keyboard_set_layout(uint32_t name_ptr, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    const char* name = (const char*)(uintptr_t)name_ptr;
+    return (uint32_t)kernel_keyboard_set_layout(name);
+}
+
+static uint32_t sys_keyboard_get_layout(uint32_t buffer_ptr, uint32_t size, uint32_t c, uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    char* buffer = (char*)(uintptr_t)buffer_ptr;
+    const char* name = kernel_keyboard_get_layout();
+    uint32_t len = strlen(name);
+    if (size > len) {
+        strcpy(buffer, name);
+        return len;
+    }
+    return 0;
+}
+
+static uint32_t sys_keyboard_get_available_layouts(uint32_t buffer_ptr, uint32_t size, uint32_t c, uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    char* buffer = (char*)(uintptr_t)buffer_ptr;
+    kernel_keyboard_get_available_layouts(buffer, size);
+    return 0;
+}
+
 void syscall_init(void) {
     /* register new kernel syscalls; numbers are defined in
        include/userland_api.h */
@@ -201,6 +226,9 @@ void syscall_init(void) {
     syscall_table[SYSCALL_GETPID] = sys_getpid;
     syscall_table[SYSCALL_YIELD] = sys_yield;
     syscall_table[SYSCALL_WRITE_DEBUG] = sys_write_debug;
+    syscall_table[SYSCALL_KEYBOARD_SET_LAYOUT] = sys_keyboard_set_layout;
+    syscall_table[SYSCALL_KEYBOARD_GET_LAYOUT] = sys_keyboard_get_layout;
+    syscall_table[SYSCALL_KEYBOARD_GET_AVAILABLE_LAYOUTS] = sys_keyboard_get_available_layouts;
 }
 
 /* dispatch routine called by ISR */

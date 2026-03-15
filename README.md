@@ -1,14 +1,16 @@
-# VIBE OS - Sistema Operacional Vibe Coded 
+# VIBE OS - Sistema Operacional Vibe Coded
 
 ## AVISO
-Não leve esse repositório a sério, foi uma demonstração de como criar código low-level com IA de modo a mostrar as falhas e problemas existentes. O código quebrou no final quando foi solicitada a criação de um sistema de arquivos simples, portanto isso aqui vale para melhorias e avaliação da qualidade de código!!! 
+Não leve esse repositório a sério, foi uma demonstração de como criar código low-level com IA de modo a mostrar as falhas e problemas existentes. O código quebrou no final quando foi solicitada a criação de um sistema de arquivos simples, portanto isso aqui vale para melhorias e avaliação da qualidade de código!!!
 
 ## Descrição
 
 Projeto mínimo de bootloader x86 em dois estágios com arquitetura modular:
 
 - **Stage 1 (`boot/stage1.asm`)**: boot sector BIOS (512 bytes), carrega o stage 2 da mídia e entra em protected mode (32-bit).
-- **Stage 2 (`stage2/`)**: kernel em C com framebuffer VGA, IDT/PIC, IRQ0 (timer), IRQ1 (teclado), IRQ12 (mouse) e ABI de syscall (`int 0x80`).
+- Suporte a múltiplas linguagens (C, Lua)
+- Sistema de compatibilidade Unix/BSD (em desenvolvimento)
+- Arquitetura modular
 - **Kernel (`kernel/`)**: subsistema de kernel modularizado com:
   - Driver manager e drivers específicos (video, input, timer, interrupt)
   - Executivo (ELF loader)
@@ -77,7 +79,9 @@ A estrutura de diretórios reflete a arquitetura modular com headers centralizad
 │   ├── stage2.ld
 │   └── userland.ld
 ├── Makefile
-└── README.md
+├── README.md
+├── compat/                     # Código de compatibilidade UNIX/BSD
+└── lang/                       # Runtimes de linguagem (Lua)
 ```
 
 ### Organização de Headers
@@ -176,6 +180,12 @@ Isso gera:
 - `build/userland.bin` (binário da userland)
 - `build/stage2.bin` (kernel + blob da userland embutido)
 - `build/boot.img` (imagem final bootável)
+
+Os seguintes comandos `make` estão disponíveis:
+- `make` - Compila o sistema
+- `make full` - Recompila tudo e gera nova imagem
+- `make img` - Gera imagem de disco bootável
+- `make imb` - Gera imagem bootável para pendrive / hardware real
 
 ## Executar no QEMU
 
@@ -312,3 +322,120 @@ make clean
 - Mouse não se move na interface
   - Confirme que a janela do QEMU está com foco/captura.
   - Teste com: `make run` e clique uma vez na tela antes de mover o mouse.
+
+## Linguagens Suportadas
+
+O sistema agora suporta:
+
+C
+- compilador C mínimo integrado
+
+Lua
+- runtime Lua integrado
+- REPL via comando `lua`
+- execução de scripts via `lua arquivo.lua`
+
+Arquitetura futura de linguagens:
+
+/lang
+onde runtimes externos podem ser adicionados.
+
+## Compatibilidade UNIX / BSD
+
+Foi iniciado um sistema de compatibilidade em:
+
+compat/
+
+Baseado no código-fonte do OpenBSD src.
+
+Esse diretório contém:
+
+- código-fonte importado
+- inventário de componentes
+- base para port de utilitários reais
+
+Objetivo:
+permitir portar aplicações reais como:
+
+echo
+cat
+wc
+head
+tail
+grep
+sed
+less
+nano
+
+Esse sistema ainda está em desenvolvimento.
+
+## Layouts de Teclado
+
+Foi implementado suporte a troca de layout de teclado em runtime.
+
+Comando:
+
+loadkeys
+
+Exemplos:
+
+loadkeys -help
+loadkeys us
+loadkeys pt-br
+
+Layouts incluídos:
+
+- us
+- pt-br (ABNT2 com Ç)
+- us-intl
+- es
+- fr
+- de
+
+## Como compilar
+
+Explicar claramente:
+
+dependências
+toolchain usada (ex: i686-elf)
+
+exemplo:
+
+make full
+
+## Como rodar
+
+Explicar como rodar no QEMU.
+
+Exemplo esperado:
+
+qemu-system-i386 -drive format=raw,file=build/boot.img
+
+## Estrutura do Projeto
+
+Documentar diretórios importantes:
+
+boot/
+kernel/
+kernel_asm/
+userland/
+userland/modules/
+userland/applications/
+compat/
+lang/
+headers/
+build/
+
+Explicar rapidamente o papel de cada um.
+
+## ROADMAP
+
+Adicionar ou atualizar uma seção com objetivos futuros:
+
+- melhorar resolução gráfica
+- melhorar suporte a mouse
+- expandir compatibilidade POSIX
+- portar utilitários BSD/GNU
+- melhorar VFS
+- adicionar mais runtimes de linguagem
+- melhorar terminal

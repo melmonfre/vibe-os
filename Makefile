@@ -28,6 +28,8 @@ APPFS_APP_AREA_SECTORS := 1536
 
 # Kernel sources - kernel only, no stage2
 KERNEL_SRCS := $(shell find kernel -name '*.c')
+KERNEL_SRCS += $(shell find kernel/drivers/input/keymaps -name '*.c')
+KERNEL_SRCS += kernel/string.c
 KERNEL_OBJS := $(patsubst kernel/%.c,$(BUILD_DIR)/kernel_%.o,$(KERNEL_SRCS))
 
 KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm')
@@ -130,7 +132,7 @@ USERLAND_MAIN_ELF := $(BUILD_DIR)/userland-main.elf
 USERLAND_MAIN_BIN := $(BUILD_DIR)/userland-main.bin
 IMAGE := $(BUILD_DIR)/boot.img
 
-CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
+CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython -Icompat/include
 CFLAGS += -Ilang/glibc/include
 LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
@@ -174,8 +176,9 @@ WC_APP_BIN := $(BUILD_DIR)/ported/wc.app
 HEAD_APP_BIN := $(BUILD_DIR)/ported/head.app
 TAIL_APP_BIN := $(BUILD_DIR)/ported/tail.app
 GREP_APP_BIN := $(BUILD_DIR)/ported/grep.app
+LOADKEYS_APP_BIN := $(BUILD_DIR)/ported/loadkeys.app
 
-LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(HEAD_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN)
+LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(HEAD_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN)
 
 # Include compatibility layer build rules
 include Build.compat.mk
@@ -322,8 +325,8 @@ $(PYTHON_APP_BIN): $(PYTHON_APP_ELF)
 
 # Ported GNU apps (echo, cat, wc, head, tail, grep, etc)
 # Built via Build.ported.mk
-$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(HEAD_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN): $(COMPAT_LIB)
-	@make -f Build.ported.mk ported-echo ported-cat ported-wc ported-head ported-tail ported-grep 2>&1 | grep -v "^make\|Leaving\|Entering"
+$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(HEAD_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN): $(COMPAT_LIB)
+	@make -f Build.ported.mk ported-echo ported-cat ported-wc ported-head ported-tail ported-grep ported-loadkeys 2>&1 | grep -v "^make\|Leaving\|Entering"
 
 $(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS)
 	dd if=/dev/zero of=$@ bs=1474560 count=1
@@ -438,3 +441,12 @@ app-python:
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+full: clean all
+
+img: all
+
+imb: $(IMAGE)
+	@echo "Copiando imagem para build/vibe-os-usb.img"
+	@cp $(IMAGE) build/vibe-os-usb.img
+	@echo "Imagem para hardware real pronta: build/vibe-os-usb.img"

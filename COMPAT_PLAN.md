@@ -1,280 +1,351 @@
-# VibeOS Compatibility & GNU Porting Plan
+Você está trabalhando no sistema operacional VibeOS.
 
-## Date: March 13, 2026
+O repositório já contém uma árvore de compatibilidade baseada no código-fonte do OpenBSD dentro do diretório:
 
-### CURRENT STATE AUDIT
+compat/
 
-#### Existing FAKE/STUB Commands (in busybox.c)
-```
-cmd_echo()     - 7 lines: just loops args and prints
-cmd_cat()      - 10 lines: reads from VFS, prints with data ptr directly
-cmd_clear()    - exists
-cmd_uname()    - exists  
-cmd_help()     - exists
-pwd, ls, cd, mkdir, touch, rm, exit - filesystem navigation
-```
+Essa árvore contém diretórios importados de:
 
-#### Existing App Infrastructure
-- Apps are .app binaries in AppFS (LBA 385-392 directory, 393+ data)
-- Shell dispatcher: busybox_main() → lang_try_run() fallback
-- App runtime: lang/sdk/app_runtime.c with vibe_app_* functions
-- Syscalls: 20+ syscalls for graphics, input, storage, time
+OpenBSD src
 
-#### Existing libc/POSIX Stubs
-- vibe_libc.h (generic)
-- vibe_stdio.h (minimal FILE, printf family)
-- vibe_stdlib.h (malloc, exit, atoi, etc)
-- vibe_string.h (strlen, strcmp, strcpy, etc)
-- BUT: These are in lang/include/ - designed for QuickJS at first
+exemplo:
 
-#### VFS Status
-- kernel/fs/vfs.c delegates to ramfs_*
-- open() / read() / write() / close() syscalls exist
-- App can call vibe_app_read_file() through app_runtime.c
+compat/
+  bin/
+  sbin/
+  usr.bin/
+  usr.sbin/
+  lib/
+  libexec/
+  gnu/
+  share/
+  sys/
+  include/
+  etc/
 
-#### Build System
-- Makefile handles app compilation to .app format
-- apps linked with app_entry.c + app_runtime.c + language_main.c
-- patch_app_header.py sets correct entry points
-- build_appfs.py embeds apps into boot.img
+IMPORTANTE:
 
----
+Esse código já foi importado.
+Sua tarefa NÃO é clonar novamente o repositório.
 
-## PHASE 1: INFRASTRUCTURE & COMPATIBILITY LAYER
+Sua tarefa é IMPLEMENTAR a integração dessa árvore com o sistema atual.
 
-### 1.1 Directory Structure
+Mas isso deve ser feito de forma incremental e segura.
 
-```
-compat/                    (NEW)
-├── libc/
-│   ├── compat.h          (main header)
-│   ├── alloc.c           (malloc/free enhanced)
-│   ├── string.c
-│   ├── stdio.c
-│   └── stdlib.c
-├── posix/
-│   ├── posix.h
-│   ├── io.c              (open/read/write/close wrappers)
-│   ├── fcntl.h           (minimal flags)
-│   └── types.h           (pid_t, mode_t, etc)
-├── unistd/
-│   ├── unistd.h
-│   ├── exit.c
-│   ├── getenv.c
-│   └── misc.c
-└── sys/
-    ├── stat.h
-    ├── types.h
-    └── wait.h
+--------------------------------------------------------------------
 
-applications/
-├── native/               (hello, lua, sectorc, etc - already exist)
-└── ported/               (NEW)
-    ├── include/          (common headers for ported apps)
-    ├── echo/
-    ├── cat/
-    ├── wc/
-    ├── head/
-    ├── tail/
-    ├── grep/
-    ├── sed/
-    ├── less/
-    └── nano/
+OBJETIVO PRINCIPAL
 
-build/apps/               (where ported apps go)
-├── echo.app              (✓)
-├── cat.app               (✓)
-├── wc.app                (✓)
-├── head.app              (✓)
-├── tail.app              (✓)
-├── grep.app              (✓)
-├── sed.app
-├── less.app
-└── nano.app
-```
+Transformar a árvore compat/ em uma base funcional para portar utilitários BSD reais.
 
-### 1.2 Key Functions to Implement
+Esses utilitários devem:
 
-**MEMORY:**
-- malloc, free, realloc, calloc (enhanced with better coalescing)
-- memalign, posix_memalign
+• compilar usando a toolchain atual
+• usar a camada compat do sistema
+• ser instalados no VFS durante o boot
+• ser executáveis diretamente pela shell
 
-**STRING:**
-- strlen, strcmp, strncmp, strcpy, strncpy, strcat, strncat (✓)
-- strchr, strrchr, strstr, strtok, strdup (✓)
-- memcpy, memmove, memset, memcmp (✓)
+Mas sem quebrar:
 
-**STDIO (Critical for text apps):**
-- printf, snprintf, vsnprintf (formatting)
-- puts, putchar, getchar
-- fopen, fclose, fread, fwrite (FILE* operations)
-- fprintf, fscanf (FILE operations)
-- stdin, stdout, stderr redirection
+• boot
+• kernel
+• shell
+• desktop
+• sistema de build
 
-**STDLIB:**
-- atoi, atol, strtol, strtoll, strtoul (✓)
-- abs, labs, llabs
-- exit, abort, atexit
-- rand, srand
-- qsort, bsearch
+--------------------------------------------------------------------
 
-**POSIX I/O (Essential for file-based apps):**
-- open, close, read, write
-- lseek, stat, fstat, isatty
-- dup, dup2
+REGRA CRÍTICA
 
-**PROCESS:**
-- exit(code)
-- getpid()
-- getenv(name) - stub/fake if needed
+É PROIBIDO tentar compilar toda a árvore compat de uma vez.
 
-**UTILITY:**
-- assert
-- errno handling
+Isso quebraria o sistema.
 
----
+Você deve implementar suporte incremental.
 
-## PHASE 2: PORT ECHO & CAT (✓ DONE)
+--------------------------------------------------------------------
 
-### 2.1 Source Fetching
-```
-coreutils-9.1 tar from gnu.org
-- extract echo sources
-- extract cat sources
-- minimal POSIX layer required
-```
+FASE 1 — INDEXAR A ÁRVORE compat
 
-### 2.2 Build Flow
-```
-1. gcc (host) to verify compile
-2. i686-elf-gcc to cross-compile
-3. Create app_entry + app_runtime + echo_main.c 
-4. Link to .app binary
-5. embed in boot.img
-6. test in QEMU
-```
+Primeiro:
 
-### 2.3 Integration
-```
-shell dispatcher:
-  if (cmd == "echo") → try external app first
-  elif (cmd == "cat") → try external app first
-  else (fallback to fake if external not found)
-```
+1. percorrer todo o diretório compat/
+2. identificar cada subdiretório
+3. classificar:
 
----
+Tipo:
+- utilitário userland
+- biblioteca
+- kernel code
+- documentação
+- share
+- scripts
 
-## PHASE 3: PORT WC, HEAD, TAIL, GREP (✓ DONE)
+Criar um inventário em:
 
-Similar pattern to echo/cat.
+compat/metadata/compat_inventory.txt
 
----
+Cada entrada deve conter:
 
-## PHASE 4: PORT SED, LESS
+diretório
+tipo
+dependências prováveis
+viabilidade de port
 
-More complex; require better terminal/regex support.
+--------------------------------------------------------------------
 
----
+FASE 2 — CLASSIFICAR POR NÍVEL DE DIFICULDADE
 
-## PHASE 5: PORT NANO
+Classificar utilitários em níveis:
 
-Last priority; needs robust terminal & input handling.
+Tier 1 (muito fáceis)
+echo
+cat
+wc
+true
+printf
 
----
+Tier 2 (fáceis)
+head
+tail
+grep
+cut
+tr
 
-## VALIDATION CHECKLIST
+Tier 3 (médios)
+sed
+sort
+find
+uniq
 
-For each phase:
+Tier 4 (complexos)
+less
+vi
+nano-like
+awk
 
-```
-Boot:       ✓ System still boots
-Shell:      ✓ Shell still works  
-Desktop:    ✓ startx still works
-Runtimes:   ✓ Lua/external langs work
-Kernel:     ✓ kernel.bin size OK
-Userland:   ✓ userland main not bloated
-App:        ✓ App runs in QEMU
-Command:    ✓ Shell can call it
-Replacement:✓ Fake replaced when ready
-```
+Tier 5 (não suportados ainda)
+coisas que dependem de:
+fork
+exec
+signals
+tty complexo
+mmap
 
----
+--------------------------------------------------------------------
 
-## Current Measurements (Baseline)
+FASE 3 — CRIAR CAMADA COMPAT BSD
 
-Kernel size:
-```
-$ ls -lh build/kernel.bin
-```
+Implementar uma camada de compatibilidade que permita compilar utilitários BSD.
 
-Userland size:
-```
-$ ls -lh build/kernel.bin  (includes userland)
-```
+Criar diretórios se necessário:
 
-Shell commands that are FAKE:
-- echo: 7 lines
-- cat: 10 lines
-- clear: uses sys_clear()
-- pwd/ls/cd/mkdir/touch/rm: filesystem ops
+compat_runtime/
+compat/libc/
+compat/bsd/
+compat/posix/
+compat/term/
 
----
+Implementar funções mínimas necessárias:
 
-## GNU Coreutils Porting Notes
+MEMORY
+malloc
+free
+realloc
+calloc
 
-### echo
-- Simple: outputs arguments separated by spaces
-- GNU flags: -n (no newline), -e (interpret escapes), -E (no escapes)
-- Minimal compat needed: argv loop, putchar
+STRING
+strlen
+strcmp
+strncmp
+strchr
+strcpy
+memcpy
+memset
+memmove
+memcmp
 
-### cat
-- Read file(s), output to stdout
-- GNU flags: -n (line numbers), -v (visible), -A (all), etc
-- Need: open/read/write, FILE operations, line buffering
+STDIO
+printf
+snprintf
+vsnprintf
+puts
+putchar
+getchar
 
-### wc
-- Count lines, words, bytes
-- GNU flags: -l, -w, -c, -m
-- Need: regex? No - just character/word/line counting
+POSIX I/O
+open
+read
+write
+close
+lseek
+stat
+fstat
+isatty
 
-### head/tail
-- Output first/last N lines
-- Need: line buffering, seek
+PROCESS
+exit
+abort
 
-### grep
-- Pattern matching (regex required!)
-- Need: POSIX regex library (gnulib?)
+UTIL
+atoi
+strtol
+qsort
 
-### sed
-- Stream editor (complex!)
-- Need: Full regex + state machine
+errno
 
-### less
-- Pager (requires fullscreen terminal)
-- Need: Cursor control, page buffering
+TERMINAL
+funções básicas de terminal texto
 
-### nano
-- Editor (requires fullscreen + editing)
-- Need: Full terminal control
+Essa camada deve usar:
 
----
+• VFS do sistema
+• console atual
+• driver de teclado atual
 
-## Risk Assessment
+--------------------------------------------------------------------
 
-### SAFE (Low risk)
-- echo, cat, wc (simple text processing)
-- head, tail (line-based)
+FASE 4 — BUILD DE UTILITÁRIOS
 
-### MEDIUM (Some terminal dependency)
-- grep (regex needed for pattern matching)
-- sed (complex state machine)
+Criar um sistema de build para utilitários compat.
 
-### HIGH (Terminal-dependent)
-- less, nano (need robust terminal)
+Exemplo:
 
-### MITIGATION
-- Build in order
-- Test each in QEMU before moving to next
-- Fallback to fake if external app crashes
-- Keep fake implementations as safety net
+build/compat/bin/echo.app
+build/compat/bin/cat.app
+build/compat/bin/wc.app
 
+Esses apps NÃO podem ser linkados dentro do kernel.
+
+Eles devem ser executáveis separados.
+
+--------------------------------------------------------------------
+
+FASE 5 — INSTALAÇÃO NO VFS
+
+Durante o boot do sistema:
+
+utilitários compat que foram compilados com sucesso devem ser instalados no VFS.
+
+Exemplo de caminhos:
+
+/bin
+/usr/bin
+/compat/bin
+
+Escolher um layout consistente.
+
+A shell deve conseguir encontrar esses executáveis automaticamente.
+
+--------------------------------------------------------------------
+
+FASE 6 — INTEGRAÇÃO COM SHELL
+
+A shell deve:
+
+1. procurar comandos internos
+2. procurar executáveis no VFS
+3. executar utilitários compat automaticamente
+
+Exemplo esperado:
+
+echo hello
+cat arquivo.txt
+wc arquivo.txt
+grep foo arquivo.txt
+
+Sem hardcode para cada utilitário.
+
+--------------------------------------------------------------------
+
+FASE 7 — PORT INCREMENTAL
+
+Implementar utilitários nessa ordem:
+
+1
+echo
+cat
+wc
+printf
+
+2
+head
+tail
+grep
+cut
+tr
+
+3
+sed
+sort
+uniq
+find
+
+4
+less
+
+Não tentar portar editores complexos antes de estabilizar o terminal.
+
+--------------------------------------------------------------------
+
+DIRETÓRIOS QUE NÃO DEVEM SER INTEGRADOS AO SISTEMA
+
+compat/sys/
+
+O código dentro de compat/sys deve permanecer apenas como referência.
+
+Ele NÃO deve ser integrado ao kernel do VibeOS.
+
+--------------------------------------------------------------------
+
+VALIDAÇÃO OBRIGATÓRIA
+
+Após cada fase verificar:
+
+BOOT
+sistema ainda inicia
+
+SHELL
+shell continua funcional
+
+DESKTOP
+startx continua funcionando
+
+TAMANHO
+kernel.bin não aumentou por causa de compat
+
+EXECUÇÃO
+
+testar:
+
+echo hello
+cat arquivo.txt
+wc arquivo.txt
+head arquivo.txt
+tail arquivo.txt
+grep palavra arquivo.txt
+
+--------------------------------------------------------------------
+
+PROVA DE FUNCIONAMENTO
+
+A resposta final deve mostrar:
+
+estrutura compat final
+camada compat implementada
+utilitários compilados
+onde são instalados no VFS
+prova de execução na shell
+prova de que boot e interface continuam intactos
+
+--------------------------------------------------------------------
+
+IMPORTANTE
+
+Não tentar portar tudo.
+
+Port incremental e seguro.
+
+Objetivo:
+
+transformar compat/ em base real para utilitários BSD no VibeOS.

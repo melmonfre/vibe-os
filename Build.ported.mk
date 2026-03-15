@@ -246,6 +246,43 @@ $(GREP_APP): $(GREP_ELF)
 
 ported-grep: $(GREP_APP)
 
+# === LOADKEYS APP ===
+
+LOADKEYS_SRCS := applications/ported/loadkeys/loadkeys.c
+LOADKEYS_OBJS := build/ported/loadkeys.o \
+	build/app_entry_loadkeys.o \
+	build/app_runtime_loadkeys.o
+
+LOADKEYS_ELF := build/ported/loadkeys.elf
+LOADKEYS_APP := build/ported/loadkeys.app
+
+build/app_entry_loadkeys.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"loadkeys\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_loadkeys.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/loadkeys.o: $(LOADKEYS_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(LOADKEYS_ELF): $(LOADKEYS_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(LOADKEYS_OBJS) $(COMPAT_LIB) -o $@
+
+$(LOADKEYS_APP): $(LOADKEYS_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Loadkeys app: $@"
+
+ported-loadkeys: $(LOADKEYS_APP)
+
 # === SED APP ===
 
 SED_SRCS := $(wildcard applications/ported/sed/*.c)
@@ -308,6 +345,9 @@ ported-grep-clean:
 ported-sed-clean:
 	rm -f $(SED_OBJS) $(SED_ELF) $(SED_APP)
 
-ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-head-clean ported-tail-clean ported-grep-clean ported-sed-clean
+ported-loadkeys-clean:
+	rm -f $(LOADKEYS_OBJS) $(LOADKEYS_ELF) $(LOADKEYS_APP)
 
-.PHONY: ported-echo ported-cat ported-wc ported-head ported-tail ported-grep ported-sed ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-head-clean ported-tail-clean ported-grep-clean ported-sed-clean
+ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-head-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean
+
+.PHONY: ported-echo ported-cat ported-wc ported-head ported-tail ported-grep ported-sed ported-loadkeys ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-head-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean

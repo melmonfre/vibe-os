@@ -66,12 +66,7 @@ static const uint8_t g_color_palette_256[] = {
 #define TASKBAR_HEIGHT 22
 #define WINDOW_MIN_W 96
 #define WINDOW_MIN_H 60
-static const uint8_t g_theme_palette[] = {
-    15, 7, 8, 0, 16,
-    12, 4, 14, 6, 17,
-    10, 2, 11, 3, 18,
-    9, 1, 13, 5, 19
-};
+
 enum {
     FMENU_OPEN = 0,
     FMENU_COPY,
@@ -1043,12 +1038,7 @@ static struct rect personalize_window_slot_rect(const struct rect *w, int slot) 
     return r;
 }
 
-static struct rect personalize_window_palette_rect(const struct rect *w, int index) {
-    int col = index % 6;
-    int row = index / 6;
-    struct rect r = {w->x + 20 + (col * 32), w->y + 38 + (row * 20), 28, 18};
-    return r;
-}
+
 
 static struct rect personalize_window_wallpaper_button_rect(const struct rect *w, int index) {
     struct rect r = {w->x + 242, w->y + 132 + (index * 14), 160, 12};
@@ -1056,7 +1046,7 @@ static struct rect personalize_window_wallpaper_button_rect(const struct rect *w
 }
 
 static struct rect personalize_window_resolution_button_rect(const struct rect *w, int index) {
-    struct rect r = {w->x + 242, w->y + 216 + (index * 14), 160, 12};
+    struct rect r = {w->x + 242, w->y + 216 + (index * 16), 160, 12};
     return r;
 }
 
@@ -1117,7 +1107,7 @@ static void draw_personalize_window(struct personalize_state *state,
     ui_draw_surface(&body, ui_color_panel());
     ui_draw_surface(&theme_panel, ui_color_canvas());
     ui_draw_surface(&preview_panel, ui_color_canvas());
-    sys_rect(wallpaper_panel.x, wallpaper_panel.y, wallpaper_panel.w, wallpaper_panel.h, 1);  /* Blue */
+    ui_draw_surface(&wallpaper_panel, ui_color_canvas());
     ui_draw_surface(&palette_panel, ui_color_canvas());
     ui_draw_surface(&resolution_panel, ui_color_canvas());
 
@@ -1168,31 +1158,10 @@ static void draw_personalize_window(struct personalize_state *state,
     sys_text(preview.x + 78, preview.y + 28, theme->text, ui_theme_slot_name(state->selected_slot));
     sys_text(preview_panel.x + 16, preview_panel.y + 68, theme->text, "Ajuste rapido do desktop");
     
-    /* Draw palette grid inside palette_panel */
-    int palette_cols = 6;
-    int swatch_w = 14;
-    int swatch_h = 12;
-    int palette_start_y = palette_panel.y + 24;
-    
-    for (int i = 0; i < (int)(sizeof(g_theme_palette) / sizeof(g_theme_palette[0])); ++i) {
-        int col = i % palette_cols;
-        int row = i / palette_cols;
-        int swatch_x = palette_panel.x + 12 + (col * 22);
-        int swatch_y = palette_start_y + (row * 18);
-        
-        struct rect swatch = {swatch_x, swatch_y, swatch_w, swatch_h};
-        int hover = point_in_rect(&swatch, mouse->x, mouse->y);
-        
-        sys_rect(swatch.x, swatch.y, swatch.w, swatch.h, hover ? 15 : 0);
-        sys_rect(swatch.x + 1, swatch.y + 1, swatch.w - 2, swatch.h - 2, g_theme_palette[i]);
-    }
-    sys_text(palette_panel.x + 8, palette_panel.y + palette_panel.h - 16, theme->text,
-             "Clique em uma cor para aplicar");
-
-    /* Draw "Mais cores" button */
-    struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 62, palette_panel.w - 16, 14};
+    /* Draw "Seletor de cores" button */
+    struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 30, palette_panel.w - 16, 14};
     int mais_cores_hover = point_in_rect(&mais_cores_btn, mouse->x, mouse->y);
-    ui_draw_button(&mais_cores_btn, "Mais cores (256)", 
+    ui_draw_button(&mais_cores_btn, "Seletor de cores",
                    state->color_picker_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                    mais_cores_hover);
 
@@ -1969,13 +1938,12 @@ void desktop_main(void) {
                                     g_pers.color_picker_open = 0;
                                 }
                             } else {
-                                /* "Mais cores" button */
-                                struct rect body = {g_windows[hit_window].rect.x + 6, 
-                                                   g_windows[hit_window].rect.y + 20, 
-                                                   g_windows[hit_window].rect.w - 12, 
+                                struct rect body = {g_windows[hit_window].rect.x + 6,
+                                                   g_windows[hit_window].rect.y + 20,
+                                                   g_windows[hit_window].rect.w - 12,
                                                    g_windows[hit_window].rect.h - 26};
-                                struct rect palette_panel = {body.x + 8, body.y + 206, 216, body.h - 214};
-                                struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 22, palette_panel.w - 16, 14};
+                                struct rect palette_panel = {body.x + 8, body.y + body.h - 98, 216, 88};
+                                struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 30, palette_panel.w - 16, 14};
                                 if (point_in_rect(&mais_cores_btn, click_x, click_y)) {
                                     g_pers.color_picker_open = 1;
                                     dirty = 1;
@@ -1988,13 +1956,7 @@ void desktop_main(void) {
                                         dirty = 1;
                                     }
                                 }
-                                for (int c = 0; c < (int)(sizeof(g_theme_palette) / sizeof(g_theme_palette[0])); ++c) {
-                                    struct rect swatch = personalize_window_palette_rect(&g_windows[hit_window].rect, c);
-                                    if (point_in_rect(&swatch, click_x, click_y)) {
-                                        ui_theme_set_slot(g_pers.selected_slot, g_theme_palette[c]);
-                                        dirty = 1;
-                                    }
-                                }
+
                             }
                             for (int i = -1; i < bmp_count; ++i) {
                                 struct rect button = personalize_window_wallpaper_button_rect(&g_windows[hit_window].rect, i + 1);
