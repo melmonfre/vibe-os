@@ -28,9 +28,10 @@ APPFS_APP_AREA_SECTORS := 1536
 
 # Kernel sources - kernel only, no stage2
 KERNEL_SRCS := $(shell find kernel -name '*.c')
-KERNEL_SRCS += $(shell find kernel/drivers/input/keymaps -name '*.c')
 KERNEL_SRCS += kernel/string.c
-KERNEL_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(KERNEL_SRCS))
+KEYMAP_SRCS := $(shell find kernel/drivers/input/keymaps -name '*.c')
+KERNEL_OBJS := $(patsubst kernel/%.c,$(BUILD_DIR)/kernel_%.o,$(KERNEL_SRCS))
+KEYMAP_OBJS := $(patsubst kernel/drivers/input/keymaps/%.c,$(BUILD_DIR)/kernel/drivers/input/keymaps/%.o,$(KEYMAP_SRCS))
 
 KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm')
 KERNEL_ASM_OBJS := $(patsubst kernel_asm/%.asm,$(BUILD_DIR)/kernel_asm_%.o,$(KERNEL_ASM_SRCS))
@@ -58,7 +59,6 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/lua/lua_main.c \
 	$(USERLAND_DIR)/lua/lua_repl.c \
 	$(USERLAND_DIR)/lua/lua_runner.c \
-	$(USERLAND_DIR)/lua/lua_port.c \
 	$(USERLAND_DIR)/lua/lua_runtime.c \
 	$(USERLAND_DIR)/lua/lua_bindings_console.c \
 	$(USERLAND_DIR)/lua/lua_bindings_sys.c \
@@ -94,25 +94,7 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/applications/sketchpad.c \
 	$(USERLAND_DIR)/applications/snake.c \
 	$(USERLAND_DIR)/applications/tetris.c
-USERLAND_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
-
-DIRS := \
-	$(sort $(dir $(KERNEL_OBJS)) \
-	$(dir $(KERNEL_ASM_OBJS)) \
-	$(dir $(USERLAND_OBJS)) \
-	$(HELLO_APP_BUILD_DIR) \
-	$(JS_APP_BUILD_DIR) \
-	$(RUBY_APP_BUILD_DIR) \
-	$(PYTHON_APP_BUILD_DIR) \
-	$(BUILD_DIR)/ported/echo \
-	$(BUILD_DIR)/ported/cat \
-	$(BUILD_DIR)/ported/wc \
-	$(BUILD_DIR)/ported/head \
-	$(BUILD_DIR)/ported/tail \
-	$(BUILD_DIR)/ported/grep \
-	$(BUILD_DIR)/ported/sed \
-	$(BUILD_DIR)/ported/loadkeys)
-
+USERLAND_OBJS := $(patsubst $(USERLAND_DIR)/%.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
 
 # QuickJS wrapper - separate app build (see below)
 # QUICKJS_SRCS := lang/apps/js/quickjs_wrapper.c
@@ -201,12 +183,9 @@ LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN
 # Include compatibility layer build rules
 include Build.compat.mk
 
-all: dirs $(IMAGE) $(USERLAND_MAIN_BIN)
+all: $(IMAGE) $(USERLAND_MAIN_BIN)
 # Note: glibc separate build available via: make -f Build.glibc.mk glibc-build
 # To link glibc instead of stubs, modify KERNEL_ELF dependencies below
-
-dirs:
-	@mkdir -p $(DIRS)
 
 check-tools:
 	@for tool in $(REQUIRED_TOOLS); do \
@@ -228,13 +207,9 @@ $(BOOT_BIN): $(BOOT_DIR)/stage1.asm | $(BUILD_DIR)
 		exit 1; \
 	fi
 
-$(BUILD_DIR)/%.o: %.c headers/include/userland_api.h | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/kernel_asm_%.o: kernel_asm/%.asm | $(BUILD_DIR)
-	$(AS) -f elf32 $< -o $@
-
 
 $(HELLO_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"hello\" -DVIBE_APP_BUILD_HEAP_SIZE=32768u -c $< -o $@
@@ -272,8 +247,8 @@ $(PYTHON_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
 $(PYTHON_APP_BUILD_DIR)/python_main.o: lang/apps/python/python_main.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld
-	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) -o $@
+$(KERNEL_ELF): $(KERNEL_OBJS) $(KEYMAP_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld
+	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KEYMAP_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) -o $@
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
