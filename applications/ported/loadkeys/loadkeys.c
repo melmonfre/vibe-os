@@ -7,12 +7,7 @@
 #define SYSCALL_KEYBOARD_GET_LAYOUT 22
 #define SYSCALL_KEYBOARD_GET_AVAILABLE_LAYOUTS 23
 
-// This is a mock implementation of the syscalls for now.
-// The real implementation will be in the kernel.
-static inline int syscall(int num __attribute__((unused)), ...) {
-    // This is just a placeholder.
-    return 0;
-}
+
 
 void print_help() {
     char available_layouts[256];

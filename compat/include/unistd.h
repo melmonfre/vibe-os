@@ -3,6 +3,8 @@
 
 #include <compat_defs.h>
 
+int syscall(int num, ...);
+
 int isatty(int fd);
 pid_t getpid(void);
 

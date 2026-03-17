@@ -1,4 +1,5 @@
 #include <lang/include/vibe_app_runtime.h>
+#include <stdarg.h>
 
 #define VIBE_APP_SYSCALL_INPUT_KEY 5
 #define VIBE_APP_SYSCALL_YIELD 10
@@ -23,6 +24,18 @@ static int vibe_app_syscall5(int num, int a, int b, int c, int d, int e) {
                      : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
                      : "memory", "cc");
     return ret;
+}
+
+int syscall(int num, ...) {
+    va_list ap;
+    va_start(ap, num);
+    int a = va_arg(ap, int);
+    int b = va_arg(ap, int);
+    int c = va_arg(ap, int);
+    int d = va_arg(ap, int);
+    int e = va_arg(ap, int);
+    va_end(ap);
+    return vibe_app_syscall5(num, a, b, c, d, e);
 }
 
 static void heap_init(void *base, size_t size) {
