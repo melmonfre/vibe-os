@@ -357,6 +357,7 @@ IMAGE := $(BUILD_DIR)/boot.img
 
 CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
 CFLAGS += -Ilang/glibc/include
+CFLAGS += -MMD -MP
 LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N --allow-multiple-definition
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
 LDFLAGS_APP := -m elf_i386 -T $(LINKER_DIR)/app.ld -nostdlib -N
@@ -406,6 +407,7 @@ RMDIR_APP_BIN := $(BUILD_DIR)/ported/rmdir.app
 TRUE_APP_BIN := $(BUILD_DIR)/ported/true.app
 FALSE_APP_BIN := $(BUILD_DIR)/ported/false.app
 PRINTF_APP_BIN := $(BUILD_DIR)/ported/printf.app
+PORTED_APPS_STAMP := $(BUILD_DIR)/.ported_apps.stamp
 
 LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN)
 
@@ -546,11 +548,15 @@ $(PYTHON_APP_BIN): $(PYTHON_APP_ELF)
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
 
 # Ported GNU apps (echo, cat, wc, head, tail, grep, etc)
-# Built via Build.ported.mk
-$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(COMPAT_LIB)
-	@$(MAKE) -f Build.ported.mk \
+# Build once via stamp to avoid parallel duplicate sub-make executions.
+$(PORTED_APPS_STAMP): $(COMPAT_LIB)
+	@mkdir -p $(dir $@)
+	$(MAKE) -j1 -f Build.ported.mk \
 		CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NM="$(NM)" AR="$(AR)" RANLIB="$(RANLIB)" \
-		ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-loadkeys ported-true ported-false ported-printf 2>&1 | grep -v "^make\|Leaving\|Entering"
+		ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-loadkeys ported-true ported-false ported-printf
+	@touch $@
+
+$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
 
 $(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS)
 	dd if=/dev/zero of=$@ bs=1474560 count=1
@@ -674,3 +680,5 @@ imb: $(IMAGE)
 	@echo "Copiando imagem para build/vibe-os-usb.img"
 	@cp $(IMAGE) build/vibe-os-usb.img
 	@echo "Imagem para hardware real pronta: build/vibe-os-usb.img"
+
+-include $(shell test -d $(BUILD_DIR) && find $(BUILD_DIR) -name '*.d' -print)

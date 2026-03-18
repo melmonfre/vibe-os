@@ -150,6 +150,9 @@ static int alloc_window(enum app_type type);
 static int find_window_by_type(enum app_type type);
 static int raise_window_to_front(int widx, int *focused);
 static int open_window_or_focus_existing(enum app_type type, int *focused);
+static void append_uint_limited(char *buf, unsigned value, int max_len);
+static void debug_window_event(const char *tag, int widx, enum app_type type, int instance);
+static void clamp_mouse_state(struct mouse_state *mouse);
 
 static int app_type_valid(enum app_type type) {
     return type > APP_NONE && type <= APP_PERSONALIZE;
@@ -206,6 +209,7 @@ static int sanitize_windows(int *focused) {
         }
         if (!app_type_valid(g_windows[i].type) ||
             !window_instance_valid(g_windows[i].type, g_windows[i].instance)) {
+            debug_window_event(" sanitize-invalid", i, g_windows[i].type, g_windows[i].instance);
             g_windows[i].active = 0;
             if (*focused == i) {
                 *focused = -1;
@@ -289,6 +293,7 @@ static int sanitize_windows(int *focused) {
         }
 
         if (duplicate) {
+            debug_window_event(" sanitize-dup", i, g_windows[i].type, g_windows[i].instance);
             g_windows[i].active = 0;
             if (*focused == i) {
                 *focused = -1;
@@ -328,6 +333,37 @@ static int has_active_window_instance(enum app_type type, int instance) {
         }
     }
     return 0;
+}
+
+static void debug_append_int(char *buf, int value, int max_len) {
+    if (value < 0) {
+        str_append(buf, "-", max_len);
+        value = -value;
+    }
+    append_uint_limited(buf, (unsigned)value, max_len);
+}
+
+static void debug_window_event(const char *tag, int widx, enum app_type type, int instance) {
+    char msg[96];
+
+    msg[0] = '\0';
+    str_append(msg, "desktop:", (int)sizeof(msg));
+    str_append(msg, tag, (int)sizeof(msg));
+    str_append(msg, " w=", (int)sizeof(msg));
+    debug_append_int(msg, widx, (int)sizeof(msg));
+    str_append(msg, " t=", (int)sizeof(msg));
+    debug_append_int(msg, (int)type, (int)sizeof(msg));
+    str_append(msg, " i=", (int)sizeof(msg));
+    debug_append_int(msg, instance, (int)sizeof(msg));
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
+}
+
+static void clamp_mouse_state(struct mouse_state *mouse) {
+    if (mouse->x < 0) mouse->x = 0;
+    if (mouse->y < 0) mouse->y = 0;
+    if (mouse->x >= (int)SCREEN_WIDTH) mouse->x = (int)SCREEN_WIDTH - 1;
+    if (mouse->y >= (int)SCREEN_HEIGHT) mouse->y = (int)SCREEN_HEIGHT - 1;
 }
 
 static int fs_child_by_name(int parent, const char *name) {
@@ -1127,6 +1163,7 @@ static struct rect maximized_rect(void) {
 
 static int alloc_window(enum app_type type) {
     if (!app_type_valid(type)) {
+        debug_window_event(" alloc-bad-type", -1, type, -1);
         return -1;
     }
 
@@ -1258,9 +1295,11 @@ static int alloc_window(enum app_type type) {
             clamp_window_rect(&g_windows[i].rect);
             g_windows[i].restore_rect = g_windows[i].rect;
             sync_window_instance_rect(i);
+            debug_window_event(" alloc-ok", i, type, instance);
             return i;
         }
     }
+    debug_window_event(" alloc-no-slot", -1, type, -1);
     return -1;
 }
 
@@ -1269,6 +1308,7 @@ static int open_window_or_focus_existing(enum app_type type, int *focused) {
 
     if (idx >= 0) {
         *focused = idx;
+        debug_window_event(" open-new", idx, g_windows[idx].type, g_windows[idx].instance);
         return idx;
     }
 
@@ -1278,9 +1318,11 @@ static int open_window_or_focus_existing(enum app_type type, int *focused) {
             g_windows[idx].minimized = 0;
         }
         *focused = raise_window_to_front(idx, focused);
+        debug_window_event(" open-focus", *focused, g_windows[*focused].type, g_windows[*focused].instance);
         return *focused;
     }
 
+    debug_window_event(" open-fail", -1, type, -1);
     return -1;
 }
 
@@ -1288,6 +1330,7 @@ static void free_window(int widx) {
     struct window *w = &g_windows[widx];
 
     if (!w->active) return;
+    debug_window_event(" free", widx, w->type, w->instance);
     switch (w->type) {
     case APP_TERMINAL: g_term_used[w->instance] = 0; break;
     case APP_CLOCK: g_clock_used[w->instance] = 0; break;
@@ -1808,6 +1851,7 @@ void desktop_main(void) {
             int new_right;
 
             mouse = polled_mouse;
+            clamp_mouse_state(&mouse);
             mouse_event = 1;
             new_left = (mouse.buttons & 0x01u) != 0;
             new_right = (mouse.buttons & 0x02u) != 0;

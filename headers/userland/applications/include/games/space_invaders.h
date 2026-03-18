@@ -7,6 +7,9 @@
 #define SI_ROWS 4
 #define SI_COLS 8
 #define SI_MAX_BULLETS 4
+#define SI_BARRIER_COUNT 3
+#define SI_BARRIER_ROWS 2
+#define SI_BARRIER_COLS 4
 
 struct space_invaders_state {
     struct rect window;
@@ -23,6 +26,16 @@ struct space_invaders_state {
     int score;
     int game_over;
     int win;
+    int lives;
+    int player_bullet_active;
+    int player_bullet_x;
+    int player_bullet_y;
+    int player_shot_cooldown;
+    int next_player_shot_tick;
+    int enemy_shot_cooldown;
+    int next_enemy_shot_tick;
+    int invader_step_ticks;
+    int barrier_hp[SI_BARRIER_COUNT][SI_BARRIER_ROWS][SI_BARRIER_COLS];
 };
 
 void space_invaders_init_state(struct space_invaders_state *state);

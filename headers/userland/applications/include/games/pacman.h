@@ -6,7 +6,7 @@
 
 #define PACMAN_GRID_W 19
 #define PACMAN_GRID_H 13
-#define PACMAN_GHOSTS 2
+#define PACMAN_GHOSTS 4
 
 struct pacman_state {
     struct rect window;
@@ -25,8 +25,12 @@ struct pacman_state {
     uint32_t seed;
     uint32_t tick_count;
     uint32_t next_tick;
+    uint32_t last_ticks;
+    uint32_t frightened_until;
     int score;
     int pellets_left;
+    int lives;
+    int ghost_combo;
     int game_over;
     int win;
 };

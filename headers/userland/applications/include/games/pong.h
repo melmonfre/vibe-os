@@ -12,8 +12,16 @@ struct pong_state {
     int ball_y;
     int ball_dx;
     int ball_dy;
+    int ball_fx;
+    int ball_fy;
+    int ball_vx;
+    int ball_vy;
+    int ball_speed;
+    int ai_aim_bias;
+    int winner;
     uint32_t tick_count;
     uint32_t next_tick;
+    uint32_t last_ticks;
     int score_player;
     int score_ai;
 };

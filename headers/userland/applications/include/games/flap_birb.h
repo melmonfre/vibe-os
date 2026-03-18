@@ -14,6 +14,9 @@ struct flap_birb_state {
     int pipes_x[FLAP_MAX_PIPES];
     int pipes_gap_y[FLAP_MAX_PIPES];
     int pipes_active[FLAP_MAX_PIPES];
+    int pipes_scored[FLAP_MAX_PIPES];
+    int scroll_speed;
+    int gap_size;
     uint32_t tick_count;
     uint32_t next_tick;
     int score;
