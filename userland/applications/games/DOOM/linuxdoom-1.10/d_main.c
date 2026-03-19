@@ -609,9 +609,14 @@ void IdentifyVersion (void)
     sprintf(doom2fwad, "%s/doom2f.wad", doomwaddir);
 
     home = getenv("HOME");
-    if (!home)
-      I_Error("Please set $HOME to your home directory");
-    sprintf(basedefault, "%s/.doomrc", home);
+    if (!home || !home[0])
+    {
+      strcpy(basedefault, "doom.cfg");
+    }
+    else
+    {
+      sprintf(basedefault, "%s/.doomrc", home);
+    }
 #endif
 
     if (M_CheckParm ("-shdev"))

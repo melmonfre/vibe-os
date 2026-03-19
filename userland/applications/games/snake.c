@@ -2,8 +2,21 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/syscalls.h>
 
-static const struct rect DEFAULT_SNAKE_WINDOW = {112, 20, 192, 154};
+static const struct rect DEFAULT_SNAKE_WINDOW = {40, 20, 400, 300};
 static const int SNAKE_STEP_TICKS = 12;
+
+static void snake_draw_cell(int x, int y, int cell, uint8_t base, uint8_t hi, uint8_t lo) {
+    int inner = cell - 3;
+
+    if (inner < 2) {
+        inner = 2;
+    }
+    sys_rect(x, y, cell - 1, cell - 1, lo);
+    sys_rect(x + 1, y + 1, cell - 3, cell - 3, base);
+    sys_rect(x + 1, y + 1, cell - 3, 1, hi);
+    sys_rect(x + 1, y + 1, 1, cell - 3, hi);
+    sys_rect(x + 2, y + 2, inner, inner, base);
+}
 
 static uint32_t snake_next_random(struct snake_state *snake) {
     snake->seed = (snake->seed * 1103515245u) + 12345u;
@@ -183,34 +196,72 @@ int snake_step(struct snake_state *snake, uint32_t ticks) {
 
 void snake_draw_window(struct snake_state *snake, int active,
                        int min_hover, int max_hover, int close_hover) {
-    struct rect board = {snake->window.x + 8, snake->window.y + 24, 160, 112};
+    int cell = (snake->window.h - 72) / SNAKE_GRID_H;
+    int max_cell_w = (snake->window.w - 24) / SNAKE_GRID_W;
+    int hud_y;
+    struct rect board;
     const struct desktop_theme *theme = ui_theme_get();
     char score[24];
+
+    if (max_cell_w < cell) {
+        cell = max_cell_w;
+    }
+    if (cell < 8) {
+        cell = 8;
+    }
+    board.w = SNAKE_GRID_W * cell;
+    board.h = SNAKE_GRID_H * cell;
+    board.x = snake->window.x + ((snake->window.w - board.w) / 2);
+    board.y = snake->window.y + 28;
+    hud_y = board.y + board.h + 10;
 
     draw_window_frame(&snake->window, "SNAKE", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&(struct rect){snake->window.x + 4, snake->window.y + 18,
                                    snake->window.w - 8, snake->window.h - 22},
                     ui_color_canvas());
     ui_draw_inset(&board, ui_color_canvas());
+    sys_rect(board.x + 1, board.y + 1, board.w - 2, board.h - 2, theme->background);
 
     for (int y = 0; y < SNAKE_GRID_H; ++y) {
         for (int x = 0; x < SNAKE_GRID_W; ++x) {
-            sys_rect(board.x + (x * 8), board.y + (y * 8), 7, 7, ui_color_canvas());
+            uint8_t tile = ((x + y) & 1) ? theme->background : ui_color_canvas();
+            sys_rect(board.x + (x * cell), board.y + (y * cell), cell - 1, cell - 1, tile);
         }
     }
 
-    sys_rect(board.x + (snake->food_x * 8), board.y + (snake->food_y * 8), 7, 7, theme->menu_button_inactive);
+    {
+        int fx = board.x + (snake->food_x * cell);
+        int fy = board.y + (snake->food_y * cell);
+        int bite = cell / 3;
+
+        snake_draw_cell(fx, fy, cell, theme->menu_button_inactive, theme->text, theme->window);
+        sys_rect(fx + (cell / 2), fy + 2, 2, bite, theme->window);
+        sys_rect(fx + (cell / 2) + 2, fy + 1, bite, 2, theme->text);
+    }
     for (int i = snake->length - 1; i >= 0; --i) {
-        uint8_t color = (i == 0) ? theme->menu_button : theme->window;
-        sys_rect(board.x + (snake->body_x[i] * 8), board.y + (snake->body_y[i] * 8), 7, 7, color);
+        int sx = board.x + (snake->body_x[i] * cell);
+        int sy = board.y + (snake->body_y[i] * cell);
+        int eye_y = sy + (cell / 3);
+        uint8_t base = (i == 0) ? theme->menu_button : theme->window;
+        uint8_t hi = (i == 0) ? theme->text : theme->menu_button;
+        uint8_t lo = theme->menu_button_inactive;
+
+        snake_draw_cell(sx, sy, cell, base, hi, lo);
+        if (i == 0) {
+            int eye_x1 = sx + (cell / 3);
+            int eye_x2 = sx + cell - (cell / 3) - 2;
+            sys_rect(eye_x1, eye_y, 2, 2, theme->text);
+            sys_rect(eye_x2, eye_y, 2, 2, theme->text);
+        }
     }
 
     str_copy_limited(score, "Score ", (int)sizeof(score));
     snake_append_int(score, snake->score, (int)sizeof(score));
-    sys_text(snake->window.x + 8, snake->window.y + 140, theme->text, score);
+    sys_text(board.x, hud_y, theme->text, score);
     if (snake->game_over) {
-        sys_text(snake->window.x + 78, snake->window.y + 140, theme->text, "R reinicia");
+        sys_text(board.x + 90, hud_y, theme->text, "R reinicia");
     } else {
-        sys_text(snake->window.x + 78, snake->window.y + 140, theme->text, "Setas movem");
+        sys_text(board.x + 90, hud_y, theme->text, "Setas movem");
     }
+    sys_text(board.x + 210, hud_y, theme->text, "Coma e cresca");
 }

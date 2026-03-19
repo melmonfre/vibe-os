@@ -19,7 +19,9 @@ struct flap_birb_state {
     int gap_size;
     uint32_t tick_count;
     uint32_t next_tick;
+    uint32_t seed;
     int score;
+    int best_score;
     int game_over;
 };
 

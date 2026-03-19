@@ -605,6 +605,7 @@ void fs_init(void) {
     (void)fs_create("/home/user", 1);
     (void)fs_create("/tmp", 1);
     (void)fs_create("/dev", 1);
+    (void)fs_create("/doom", 1);
     (void)fs_create("/docs", 1);
     (void)fs_create("/config", 1);
     (void)fs_write_file("/README", "SISTEMA DE ARQUIVOS VFS", 0);

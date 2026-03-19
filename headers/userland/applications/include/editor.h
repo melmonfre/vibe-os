@@ -9,11 +9,13 @@ struct editor_state {
     int file_node;
     int length;
     int cursor;
+    int nano_mode;
     char buffer[FS_FILE_MAX + 1];
     char status[40];
 };
 
 void editor_init_state(struct editor_state *ed);
+void editor_set_nano_mode(struct editor_state *ed, int enabled);
 int editor_load_node(struct editor_state *ed, int node);
 int editor_save(struct editor_state *ed);
 int editor_save_named(struct editor_state *ed, const char *filename);

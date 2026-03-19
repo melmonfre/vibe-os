@@ -12,7 +12,8 @@ static const char *g_external_commands[] = {
     "hello",
     "js",
     "ruby",
-    "python"
+    "python",
+    "loadkeys"
 };
 
 static struct vibe_app_context g_app_ctx;

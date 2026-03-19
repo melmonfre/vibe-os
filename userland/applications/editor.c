@@ -2,7 +2,7 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/syscalls.h>
 
-static const struct rect DEFAULT_EDITOR_WINDOW = {52, 28, 298, 182};
+static const struct rect DEFAULT_EDITOR_WINDOW = {52, 28, 400, 300};
 
 static void editor_set_status(struct editor_state *ed, const char *msg) {
     str_copy_limited(ed->status, msg, (int)sizeof(ed->status));
@@ -116,8 +116,14 @@ void editor_init_state(struct editor_state *ed) {
     ed->file_node = -1;
     ed->length = 0;
     ed->cursor = 0;
+    ed->nano_mode = 0;
     ed->buffer[0] = '\0';
     editor_set_status(ed, "Documento novo");
+}
+
+void editor_set_nano_mode(struct editor_state *ed, int enabled) {
+    ed->nano_mode = enabled ? 1 : 0;
+    editor_set_status(ed, ed->nano_mode ? "^O Escreve  ^X Sair" : "Documento novo");
 }
 
 int editor_load_node(struct editor_state *ed, int node) {
@@ -205,23 +211,31 @@ void editor_draw_window(struct editor_state *ed, int active,
                         int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *theme = ui_theme_get();
     struct rect save = editor_save_button_rect(ed);
-    struct rect toolbar = {ed->window.x + 6, ed->window.y + 22, ed->window.w - 12, 22};
-    struct rect area = {ed->window.x + 6, ed->window.y + 50, ed->window.w - 12, ed->window.h - 72};
+    struct rect toolbar = {ed->window.x + 10, ed->window.y + 24, ed->window.w - 20, 28};
+    struct rect meta = {ed->window.x + 10, ed->window.y + 58, ed->window.w - 20, 18};
+    struct rect area = {ed->window.x + 10, ed->window.y + 82, ed->window.w - 20, ed->window.h - 118};
     struct rect body = {ed->window.x + 4, ed->window.y + 18, ed->window.w - 8, ed->window.h - 22};
-    struct rect path_bar = {toolbar.x + 4, toolbar.y + 5, toolbar.w - 62, 12};
-    struct rect status_bar = {ed->window.x + 6, ed->window.y + ed->window.h - 18, ed->window.w - 12, 12};
+    struct rect path_bar = {toolbar.x + 6, toolbar.y + 7, toolbar.w - 70, 14};
+    struct rect status_bar = {ed->window.x + 10, ed->window.y + ed->window.h - 28, ed->window.w - 20, 14};
     char path[80];
     int x = area.x + 4;
     int y = area.y + 4;
+    const char *title = ed->nano_mode ? "NANO" : "EDITOR";
+    const char *meta_left = ed->nano_mode ? "Buffer simples" : "Texto puro";
+    const char *meta_right = ed->nano_mode ? "^O gravar  ^X sair" : "Ctrl visual clean";
+    const char *save_label = ed->nano_mode ? "Write" : "Salvar";
 
-    draw_window_frame(&ed->window, "EDITOR", active, min_hover, max_hover, close_hover);
+    draw_window_frame(&ed->window, title, active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, theme->window_bg);
-    ui_draw_surface(&toolbar, theme->window_bg);
+    ui_draw_surface(&toolbar, ui_color_panel());
+    ui_draw_surface(&meta, ui_color_panel());
 
     editor_compact_path(ed, path, sizeof(path));
     ui_draw_inset(&path_bar, ui_color_canvas());
-    sys_text(path_bar.x + 4, path_bar.y + 3, theme->text, path);
-    ui_draw_button(&save, "Salvar", UI_BUTTON_PRIMARY, 0);
+    sys_text(path_bar.x + 4, path_bar.y + 4, theme->text, path);
+    ui_draw_button(&save, save_label, UI_BUTTON_PRIMARY, 0);
+    sys_text(meta.x + 6, meta.y + 5, ui_color_muted(), meta_left);
+    sys_text(meta.x + meta.w - 120, meta.y + 5, ui_color_muted(), meta_right);
 
     ui_draw_inset(&area, ui_color_canvas());
     for (int i = 0; i < ed->length; ++i) {

@@ -2,22 +2,22 @@
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/ui.h>
 
-static const struct rect DEFAULT_WINDOW = {90, 20, 210, 170};
-static const int PONG_BOARD_W = 152;
-static const int PONG_BOARD_H = 104;
-static const int PONG_BALL_SIZE = 4;
-static const int PONG_PADDLE_W = 22;
-static const int PONG_PADDLE_H = 3;
-static const int PONG_PLAYER_Y = 95;
-static const int PONG_AI_Y = 5;
-static const int PONG_PADDLE_MAX_X = 112;
+static const struct rect DEFAULT_WINDOW = {40, 20, 400, 300};
+static const int PONG_BOARD_W = 208;
+static const int PONG_BOARD_H = 148;
+static const int PONG_BALL_SIZE = 5;
+static const int PONG_PADDLE_W = 34;
+static const int PONG_PADDLE_H = 5;
+static const int PONG_PLAYER_Y = 137;
+static const int PONG_AI_Y = 6;
+static const int PONG_PADDLE_MAX_X = PONG_BOARD_W - PONG_PADDLE_W;
 static const int PONG_BALL_MAX_X = PONG_BOARD_W - PONG_BALL_SIZE;
 static const int PONG_BALL_MAX_Y = PONG_BOARD_H - PONG_BALL_SIZE;
 static const uint32_t PONG_STEP_TICKS = 3u;
 static const int PONG_TARGET_SCORE = 7;
 static const int PONG_FIX = 256;
 static const int PONG_BASE_SPEED = 2 * PONG_FIX;
-static const int PONG_MAX_SPEED = 4 * PONG_FIX + (PONG_FIX / 2);
+static const int PONG_MAX_SPEED = 5 * PONG_FIX;
 static const int PONG_SPEED_UP = PONG_FIX / 10;
 
 static int pong_iabs(int v) { return (v < 0) ? -v : v; }
@@ -59,14 +59,14 @@ static void pong_append_int(char *dst, int value, int max_len) {
 static void pong_reset_round(struct pong_state *s, int serve_to_player) {
     int dir = serve_to_player ? 1 : -1;
 
-    s->player_x = 54;
-    s->ai_x = 54;
-    s->ball_x = 74;
-    s->ball_y = 50;
+    s->player_x = (PONG_BOARD_W - PONG_PADDLE_W) / 2;
+    s->ai_x = (PONG_BOARD_W - PONG_PADDLE_W) / 2;
+    s->ball_x = (PONG_BOARD_W - PONG_BALL_SIZE) / 2;
+    s->ball_y = (PONG_BOARD_H - PONG_BALL_SIZE) / 2;
     s->ball_fx = s->ball_x * PONG_FIX;
     s->ball_fy = s->ball_y * PONG_FIX;
     s->ball_speed = PONG_BASE_SPEED;
-    s->ball_vx = ((int)(s->tick_count % 5u) - 2) * (PONG_FIX / 4);
+    s->ball_vx = ((int)(s->tick_count % 7u) - 3) * (PONG_FIX / 4);
     s->ball_vy = dir * (PONG_BASE_SPEED - (PONG_FIX / 6));
     s->ball_dx = s->ball_vx / PONG_FIX;
     s->ball_dy = s->ball_vy / PONG_FIX;
@@ -101,7 +101,7 @@ static void pong_after_hit(struct pong_state *s, int paddle_x, int ball_goes_dow
     contact = (contact * 100) / max_contact;
     contact = pong_clamp(contact, -100, 100);
 
-    vx = (contact * s->ball_speed) / 130;
+    vx = (contact * s->ball_speed) / 115;
     vy = s->ball_speed - (pong_iabs(vx) / 2);
     if (vy < (PONG_FIX / 2)) {
         vy = PONG_FIX / 2;
@@ -114,22 +114,22 @@ static void pong_after_hit(struct pong_state *s, int paddle_x, int ball_goes_dow
 }
 
 static void pong_step_ai(struct pong_state *s) {
-    int target_x = 54;
-    int ai_speed = 2;
+    int target_x = (PONG_BOARD_W - PONG_PADDLE_W) / 2;
+    int ai_speed = 3;
     int center_x;
 
     if ((s->tick_count % 26u) == 0u) {
         s->ai_aim_bias = (((int)((s->tick_count / 26u) % 7u)) - 3) * 2;
     }
 
-    if (s->ball_vy < 0 && s->ball_y < 80) {
+    if (s->ball_vy < 0 && s->ball_y < 108) {
         target_x = s->ball_x - (PONG_PADDLE_W / 2) + s->ai_aim_bias;
     }
     target_x = pong_clamp(target_x, 0, PONG_PADDLE_MAX_X);
     center_x = s->ai_x + (PONG_PADDLE_W / 2);
 
     if ((s->tick_count & 1u) != 0u) {
-        ai_speed = 1;
+        ai_speed = 2;
     }
     if (center_x < target_x - 3) {
         s->ai_x += ai_speed;
@@ -146,11 +146,11 @@ void pong_init_state(struct pong_state *s) {
 
 int pong_handle_key(struct pong_state *s, int key) {
     if (key == KEY_ARROW_LEFT) {
-        s->player_x = pong_clamp(s->player_x - 5, 0, PONG_PADDLE_MAX_X);
+        s->player_x = pong_clamp(s->player_x - 7, 0, PONG_PADDLE_MAX_X);
         return 1;
     }
     if (key == KEY_ARROW_RIGHT) {
-        s->player_x = pong_clamp(s->player_x + 5, 0, PONG_PADDLE_MAX_X);
+        s->player_x = pong_clamp(s->player_x + 7, 0, PONG_PADDLE_MAX_X);
         return 1;
     }
     if (key == 'r' || key == 'R' || key == ' ' || key == '\n' || key == '\r') {
@@ -241,20 +241,32 @@ int pong_step(struct pong_state *s, uint32_t ticks) {
     return changed;
 }
 
+static void pong_draw_paddle(int x, int y, uint8_t color) {
+    sys_rect(x + 4, y, PONG_PADDLE_W - 8, 1, color);
+    sys_rect(x + 2, y + 1, PONG_PADDLE_W - 4, 2, color);
+    sys_rect(x, y + 3, PONG_PADDLE_W, 2, color);
+}
+
 void pong_draw_window(struct pong_state *s, int active, int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *t = ui_theme_get();
-    struct rect board = {s->window.x + 8, s->window.y + 24, 152, 104};
+    struct rect board = {s->window.x + 18, s->window.y + 48, PONG_BOARD_W, PONG_BOARD_H};
     char score_line[28];
     const char *status = 0;
+    int hud_x = board.x + board.w + 18;
 
     draw_window_frame(&s->window, "PONG", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&(struct rect){s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22}, ui_color_canvas());
     ui_draw_inset(&board, ui_color_canvas());
 
-    sys_rect(board.x + s->ai_x, board.y + PONG_AI_Y, PONG_PADDLE_W, PONG_PADDLE_H, t->menu_button);
-    sys_rect(board.x + s->player_x, board.y + PONG_PLAYER_Y, PONG_PADDLE_W, PONG_PADDLE_H, t->menu_button);
+    for (int y = 6; y < PONG_BOARD_H - 6; y += 10) {
+        sys_rect(board.x + (PONG_BOARD_W / 2) - 1, board.y + y, 2, 5, t->menu_button_inactive);
+    }
+
+    pong_draw_paddle(board.x + s->ai_x, board.y + PONG_AI_Y, t->menu_button);
+    pong_draw_paddle(board.x + s->player_x, board.y + PONG_PLAYER_Y, t->window);
     if (s->winner == 0) {
         sys_rect(board.x + s->ball_x, board.y + s->ball_y, PONG_BALL_SIZE, PONG_BALL_SIZE, t->text);
+        sys_rect(board.x + s->ball_x + 1, board.y + s->ball_y + 1, PONG_BALL_SIZE - 2, PONG_BALL_SIZE - 2, t->window);
     }
 
     score_line[0] = '\0';
@@ -262,10 +274,12 @@ void pong_draw_window(struct pong_state *s, int active, int min_hover, int max_h
     pong_append_int(score_line, s->score_player, (int)sizeof(score_line));
     str_append(score_line, " x ", (int)sizeof(score_line));
     pong_append_int(score_line, s->score_ai, (int)sizeof(score_line));
-    sys_text(s->window.x + 166, s->window.y + 30, t->text, score_line);
-    sys_text(s->window.x + 166, s->window.y + 46, t->text, "Ate 7 pontos");
-    sys_text(s->window.x + 166, s->window.y + 62, t->text, "<- -> move");
-    sys_text(s->window.x + 166, s->window.y + 78, t->text, "R/Space/Enter");
+    sys_text(hud_x, s->window.y + 52, t->text, score_line);
+    sys_text(hud_x, s->window.y + 68, t->text, "Ate 7 pontos");
+    sys_text(hud_x, s->window.y + 88, t->text, "<- -> move");
+    sys_text(hud_x, s->window.y + 104, t->text, "R reinicia");
+    sys_text(hud_x, s->window.y + 124, t->text, "Ralis");
+    sys_text(hud_x, s->window.y + 140, t->text, "mais rapidos");
 
     if (s->winner == 1) {
         status = "Voce venceu";
@@ -273,6 +287,6 @@ void pong_draw_window(struct pong_state *s, int active, int min_hover, int max_h
         status = "IA venceu";
     }
     if (status != 0) {
-        sys_text(s->window.x + 166, s->window.y + 96, t->text, status);
+        sys_text(hud_x, s->window.y + 168, t->text, status);
     }
 }

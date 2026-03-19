@@ -2,32 +2,79 @@
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/ui.h>
 
-static const struct rect DEFAULT_WINDOW = {82, 20, 220, 170};
-static const int SI_BOARD_W = 152;
-static const int SI_BOARD_H = 104;
-static const int SI_INVADER_W = 9;
-static const int SI_INVADER_H = 6;
-static const int SI_INVADER_SPACING_X = 18;
-static const int SI_INVADER_SPACING_Y = 10;
-static const int SI_PLAYER_W = 18;
-static const int SI_PLAYER_H = 6;
-static const int SI_PLAYER_Y = 96;
-static const int SI_PLAYER_MOVE_STEP = 4;
+static const struct rect DEFAULT_WINDOW = {40, 20, 400, 300};
+static const int SI_BOARD_W = 288;
+static const int SI_BOARD_H = 214;
+static const int SI_INVADER_W = 14;
+static const int SI_INVADER_H = 10;
+static const int SI_INVADER_SPACING_X = 24;
+static const int SI_INVADER_SPACING_Y = 18;
+static const int SI_PLAYER_W = 24;
+static const int SI_PLAYER_H = 10;
+static const int SI_PLAYER_Y = 192;
+static const int SI_PLAYER_MOVE_STEP = 6;
 static const int SI_PLAYER_SHOT_COOLDOWN_TICKS = 14;
-static const int SI_ENEMY_SHOT_COOLDOWN_TICKS = 20;
+static const int SI_ENEMY_SHOT_COOLDOWN_TICKS = 18;
 static const int SI_ENEMY_BULLET_SPEED = 3;
-static const int SI_PLAYER_BULLET_SPEED = 5;
-static const int SI_BASE_STEP_TICKS = 14;
-static const int SI_MIN_STEP_TICKS = 4;
+static const int SI_PLAYER_BULLET_SPEED = 6;
+static const int SI_BASE_STEP_TICKS = 16;
+static const int SI_MIN_STEP_TICKS = 5;
 static const int SI_STEP_ACCEL_PER_4_KILLS = 1;
-static const int SI_INVADER_DROP_STEP = 6;
-static const int SI_BARRIER_W = 16;
-static const int SI_BARRIER_H = 8;
-static const int SI_BARRIER_Y = 78;
-static const int SI_BARRIER_CELL_W = 4;
-static const int SI_BARRIER_CELL_H = 4;
+static const int SI_INVADER_DROP_STEP = 10;
+static const int SI_BARRIER_W = 24;
+static const int SI_BARRIER_H = 15;
+static const int SI_BARRIER_Y = 156;
+static const int SI_BARRIER_CELL_W = 5;
+static const int SI_BARRIER_CELL_H = 5;
 static const int SI_BARRIER_CELL_HP = 2;
 static const int SI_START_LIVES = 3;
+
+static void space_invaders_draw_invader_sprite(int x, int y, int row, int phase, uint8_t color) {
+    int eye_y = y + 2;
+
+    sys_rect(x + 3, y + 1, 8, 2, color);
+    sys_rect(x + 2, y + 3, 10, 3, color);
+    if (row < 2) {
+        sys_rect(x + 3, y + 6, 2, 2, color);
+        sys_rect(x + 9, y + 6, 2, 2, color);
+        if (phase) {
+            sys_rect(x + 1, y + 8, 2, 2, color);
+            sys_rect(x + 11, y + 8, 2, 2, color);
+        } else {
+            sys_rect(x + 3, y + 8, 2, 2, color);
+            sys_rect(x + 9, y + 8, 2, 2, color);
+        }
+    } else if (row < 4) {
+        sys_rect(x + 2, y + 6, 2, 2, color);
+        sys_rect(x + 10, y + 6, 2, 2, color);
+        if (phase) {
+            sys_rect(x + 1, y + 8, 2, 2, color);
+            sys_rect(x + 11, y + 8, 2, 2, color);
+        } else {
+            sys_rect(x + 4, y + 8, 2, 2, color);
+            sys_rect(x + 8, y + 8, 2, 2, color);
+        }
+    } else {
+        sys_rect(x + 2, y + 6, 10, 1, color);
+        if (phase) {
+            sys_rect(x + 1, y + 8, 2, 2, color);
+            sys_rect(x + 11, y + 8, 2, 2, color);
+        } else {
+            sys_rect(x + 4, y + 8, 2, 2, color);
+            sys_rect(x + 8, y + 8, 2, 2, color);
+        }
+    }
+
+    sys_rect(x + 4, eye_y + 1, 1, 1, ui_color_canvas());
+    sys_rect(x + 9, eye_y + 1, 1, 1, ui_color_canvas());
+}
+
+static void space_invaders_draw_player_sprite(int x, int y, uint8_t color) {
+    sys_rect(x + 10, y, 4, 2, color);
+    sys_rect(x + 7, y + 2, 10, 2, color);
+    sys_rect(x + 3, y + 4, 18, 3, color);
+    sys_rect(x, y + 7, 24, 3, color);
+}
 
 static void space_invaders_append_int(char *buf, int value, int max_len) {
     char tmp[12];
@@ -119,7 +166,7 @@ static int space_invaders_invader_bottom(const struct space_invaders_state *s) {
 static int space_invaders_barrier_x(int idx) {
     int gap = 18;
 
-    return 10 + (idx * (SI_BARRIER_W + gap));
+    return 12 + (idx * (SI_BARRIER_W + gap));
 }
 
 static int space_invaders_hit_barrier(struct space_invaders_state *s, int px, int py) {
@@ -210,7 +257,7 @@ static void reset(struct space_invaders_state *s) {
             }
         }
     }
-    s->invader_origin_x = 4;
+    s->invader_origin_x = 10;
     s->invader_origin_y = 8;
     s->invader_dir = 1;
     s->player_x = (SI_BOARD_W - SI_PLAYER_W) / 2;
@@ -223,6 +270,7 @@ static void reset(struct space_invaders_state *s) {
     s->next_enemy_shot_tick = 0;
     s->invader_step_ticks = SI_BASE_STEP_TICKS;
     s->lives = SI_START_LIVES;
+    s->level = 1;
     s->score = 0;
     s->game_over = 0;
     s->win = 0;
@@ -231,6 +279,25 @@ static void reset(struct space_invaders_state *s) {
 }
 
 void space_invaders_init_state(struct space_invaders_state *s) { s->window = DEFAULT_WINDOW; reset(s); }
+
+static void space_invaders_next_wave(struct space_invaders_state *s) {
+    int preserved_score = s->score;
+    int preserved_lives = s->lives;
+    int next_level = s->level + 1;
+
+    reset(s);
+    s->score = preserved_score;
+    s->lives = preserved_lives;
+    s->level = next_level;
+    s->enemy_shot_cooldown = SI_ENEMY_SHOT_COOLDOWN_TICKS - (next_level > 5 ? 5 : next_level);
+    if (s->enemy_shot_cooldown < 8) {
+        s->enemy_shot_cooldown = 8;
+    }
+    s->invader_step_ticks = SI_BASE_STEP_TICKS - (next_level > 6 ? 6 : next_level);
+    if (s->invader_step_ticks < SI_MIN_STEP_TICKS) {
+        s->invader_step_ticks = SI_MIN_STEP_TICKS;
+    }
+}
 
 int space_invaders_handle_key(struct space_invaders_state *s, int key) {
     if (s->game_over || s->win) {
@@ -308,7 +375,7 @@ int space_invaders_step(struct space_invaders_state *s, uint32_t ticks) {
                         s->player_bullet_y >= iy && s->player_bullet_y <= iy + SI_INVADER_H) {
                         s->alive[y][x] = 0;
                         s->player_bullet_active = 0;
-                        s->score += 10;
+                        s->score += (y == 0) ? 30 : (y < 3 ? 20 : 10);
                         break;
                     }
                 }
@@ -330,6 +397,7 @@ int space_invaders_step(struct space_invaders_state *s, uint32_t ticks) {
             continue;
         }
         if (s->bullet_y[i] >= SI_PLAYER_Y &&
+            s->bullet_y[i] <= SI_PLAYER_Y + SI_PLAYER_H &&
             s->bullet_x[i] >= s->player_x &&
             s->bullet_x[i] <= s->player_x + SI_PLAYER_W) {
             s->bullet_active[i] = 0;
@@ -360,7 +428,7 @@ int space_invaders_step(struct space_invaders_state *s, uint32_t ticks) {
             s->invader_dir = -s->invader_dir;
             s->invader_origin_y += SI_INVADER_DROP_STEP;
         } else {
-            s->invader_origin_x += s->invader_dir * 3;
+            s->invader_origin_x += s->invader_dir * 4;
         }
         s->next_tick = s->tick_count + (uint32_t)s->invader_step_ticks;
     }
@@ -372,7 +440,7 @@ int space_invaders_step(struct space_invaders_state *s, uint32_t ticks) {
 
     alive_now = space_invaders_total_alive(s);
     if (alive_now == 0) {
-        s->win = 1;
+        space_invaders_next_wave(s);
         return 1;
     }
     bottom = space_invaders_invader_bottom(s);
@@ -386,13 +454,32 @@ int space_invaders_step(struct space_invaders_state *s, uint32_t ticks) {
 
 void space_invaders_draw_window(struct space_invaders_state *s, int active, int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *t = ui_theme_get();
-    struct rect board = {s->window.x + 8, s->window.y + 24, SI_BOARD_W, SI_BOARD_H};
+    struct rect body = {s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22};
+    struct rect topbar = {s->window.x + 8, s->window.y + 22, s->window.w - 16, 18};
+    struct rect board = {s->window.x + 10, s->window.y + 44, SI_BOARD_W, SI_BOARD_H};
+    struct rect hud = {board.x + board.w + 8, board.y, s->window.w - (board.w + 22), board.h};
     char score_text[24];
     char lives_text[24];
+    char level_text[24];
+    struct rect stat1 = {hud.x + 4, hud.y + 10, hud.w - 8, 22};
+    struct rect stat2 = {hud.x + 4, hud.y + 36, hud.w - 8, 22};
+    struct rect stat3 = {hud.x + 4, hud.y + 62, hud.w - 8, 22};
+    struct rect help = {hud.x + 4, hud.y + 96, hud.w - 8, 44};
+    struct rect status = {hud.x + 4, hud.y + 148, hud.w - 8, 34};
+    int phase = (int)((s->tick_count / 12u) & 1u);
 
     draw_window_frame(&s->window, "ALIENS", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&(struct rect){s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22}, ui_color_canvas());
+    ui_draw_surface(&body, ui_color_canvas());
+    ui_draw_surface(&topbar, ui_color_panel());
     ui_draw_inset(&board, ui_color_canvas());
+    ui_draw_inset(&hud, ui_color_canvas());
+    ui_draw_inset(&stat1, ui_color_canvas());
+    ui_draw_inset(&stat2, ui_color_canvas());
+    ui_draw_inset(&stat3, ui_color_canvas());
+    ui_draw_inset(&help, ui_color_canvas());
+    ui_draw_inset(&status, ui_color_canvas());
+    sys_text(topbar.x + 6, topbar.y + 5, ui_color_muted(), "Arcade assault");
+    sys_rect(board.x + 1, board.y + 1, board.w - 2, board.h - 2, t->background);
 
     for (int b = 0; b < SI_BARRIER_COUNT; ++b) {
         int bx = space_invaders_barrier_x(b);
@@ -418,11 +505,11 @@ void space_invaders_draw_window(struct space_invaders_state *s, int active, int 
             if (!s->alive[y][x]) {
                 continue;
             }
-            sys_rect(board.x + s->invader_origin_x + (x * SI_INVADER_SPACING_X),
-                     board.y + s->invader_origin_y + (y * SI_INVADER_SPACING_Y),
-                     SI_INVADER_W,
-                     SI_INVADER_H,
-                     t->menu_button);
+            space_invaders_draw_invader_sprite(board.x + s->invader_origin_x + (x * SI_INVADER_SPACING_X),
+                                               board.y + s->invader_origin_y + (y * SI_INVADER_SPACING_Y),
+                                               y,
+                                               phase,
+                                               t->menu_button);
         }
     }
 
@@ -437,22 +524,25 @@ void space_invaders_draw_window(struct space_invaders_state *s, int active, int 
     }
 
     if (!s->game_over) {
-        sys_rect(board.x + s->player_x, board.y + SI_PLAYER_Y, SI_PLAYER_W, SI_PLAYER_H, t->window);
+        space_invaders_draw_player_sprite(board.x + s->player_x, board.y + SI_PLAYER_Y, t->window);
     }
 
     str_copy_limited(score_text, "Score ", (int)sizeof(score_text));
     space_invaders_append_int(score_text, s->score, (int)sizeof(score_text));
     str_copy_limited(lives_text, "Vidas ", (int)sizeof(lives_text));
     space_invaders_append_int(lives_text, s->lives, (int)sizeof(lives_text));
-    sys_text(s->window.x + 166, s->window.y + 30, t->text, score_text);
-    sys_text(s->window.x + 166, s->window.y + 46, t->text, lives_text);
-    sys_text(s->window.x + 166, s->window.y + 62, t->text, "<- -> move");
-    sys_text(s->window.x + 166, s->window.y + 78, t->text, "Space atira");
+    str_copy_limited(level_text, "Nivel ", (int)sizeof(level_text));
+    space_invaders_append_int(level_text, s->level, (int)sizeof(level_text));
+    sys_text(stat1.x + 5, stat1.y + 7, t->text, score_text);
+    sys_text(stat2.x + 5, stat2.y + 7, t->text, lives_text);
+    sys_text(stat3.x + 5, stat3.y + 7, t->text, level_text);
+    sys_text(help.x + 5, help.y + 7, t->text, "<- -> move");
+    sys_text(help.x + 5, help.y + 21, t->text, "Space atira");
     if (s->game_over) {
-        sys_text(s->window.x + 166, s->window.y + 94, t->text, "Game over");
-        sys_text(s->window.x + 166, s->window.y + 108, t->text, "R/Space/Enter");
-    } else if (s->win) {
-        sys_text(s->window.x + 166, s->window.y + 94, t->text, "Voce venceu");
-        sys_text(s->window.x + 166, s->window.y + 108, t->text, "R/Space/Enter");
+        sys_text(status.x + 5, status.y + 8, t->text, "Game over");
+        sys_text(status.x + 5, status.y + 20, t->text, "R reinicia");
+    } else if (s->level > 1) {
+        sys_text(status.x + 5, status.y + 8, t->text, "Horda");
+        sys_text(status.x + 5, status.y + 20, t->text, "mais rapida");
     }
 }

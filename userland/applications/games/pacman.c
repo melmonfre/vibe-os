@@ -2,11 +2,14 @@
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/ui.h>
 
-static const struct rect DEFAULT_WINDOW = {82, 20, 220, 170};
-static const int PACMAN_STEP_TICKS = 8;
+static const struct rect DEFAULT_WINDOW = {40, 20, 400, 300};
+static const int PACMAN_STEP_TICKS = 7;
 static const int PACMAN_TUNNEL_ROW = 6;
 static const int PACMAN_PELLET_SCORE = 10;
 static const int PACMAN_POWER_SCORE = 50;
+static const int PACMAN_TILE_SIZE = 14;
+static const int PACMAN_BOARD_PAD = 8;
+static const int PACMAN_GHOST_RELEASE_STEP = 28;
 
 static const char *g_maze[PACMAN_GRID_H] = {
     "###################",
@@ -27,6 +30,8 @@ static const char *g_maze[PACMAN_GRID_H] = {
 static const int g_ghost_spawn_x[PACMAN_GHOSTS] = {8, 10, 8, 10};
 static const int g_ghost_spawn_y[PACMAN_GHOSTS] = {5, 5, 7, 7};
 static const uint8_t g_ghost_colors[PACMAN_GHOSTS] = {12u, 9u, 10u, 13u};
+static const int g_ghost_corner_x[PACMAN_GHOSTS] = {17, 1, 17, 1};
+static const int g_ghost_corner_y[PACMAN_GHOSTS] = {1, 1, 11, 11};
 
 static uint32_t pacman_next_random(struct pacman_state *s) {
     s->seed = (s->seed * 1664525u) + 1013904223u;
@@ -35,6 +40,14 @@ static uint32_t pacman_next_random(struct pacman_state *s) {
 
 static int pacman_abs(int value) {
     return value < 0 ? -value : value;
+}
+
+static int pacman_center_x(int tile_x) {
+    return tile_x * PACMAN_TILE_SIZE;
+}
+
+static int pacman_center_y(int tile_y) {
+    return tile_y * PACMAN_TILE_SIZE;
 }
 
 static int pacman_tile_open(const struct pacman_state *s, int x, int y) {
@@ -96,7 +109,14 @@ static void pacman_reset_actors(struct pacman_state *s) {
     }
 
     s->frightened_until = 0u;
+    s->scatter_until = s->tick_count + 140u;
+    s->round_start_tick = s->tick_count;
     s->ghost_combo = 1;
+
+    for (int i = 0; i < PACMAN_GHOSTS; ++i) {
+        s->ghost_release_tick[i] = s->tick_count + (uint32_t)(i * PACMAN_GHOST_RELEASE_STEP);
+    }
+    s->ghost_release_tick[0] = s->tick_count;
 }
 
 static void pacman_reset_board(struct pacman_state *s) {
@@ -132,6 +152,7 @@ static void pacman_reset_match(struct pacman_state *s) {
     s->next_tick = 0u;
     s->score = 0;
     s->lives = 3;
+    s->level = 1;
     s->game_over = 0;
     s->win = 0;
     if (s->seed == 0u) {
@@ -197,6 +218,17 @@ static void pacman_eat_pellet(struct pacman_state *s) {
     }
 }
 
+static void pacman_advance_level(struct pacman_state *s) {
+    s->level += 1;
+    if (s->level > 9) {
+        s->level = 9;
+    }
+    pacman_reset_board(s);
+    pacman_reset_actors(s);
+    s->win = 0;
+    s->next_tick = s->tick_count + 28u;
+}
+
 static void pacman_handle_player_death(struct pacman_state *s) {
     s->lives -= 1;
     if (s->lives <= 0) {
@@ -219,6 +251,7 @@ static void pacman_collide_ghost(struct pacman_state *s, int index) {
         s->ghost_y[index] = g_ghost_spawn_y[index];
         s->ghost_dir_x[index] = (index & 1) ? -1 : 1;
         s->ghost_dir_y[index] = 0;
+        s->ghost_release_tick[index] = s->tick_count + 18u;
     } else {
         pacman_handle_player_death(s);
     }
@@ -247,8 +280,12 @@ static int pacman_choose_ghost_dir(struct pacman_state *s, int index) {
     int frightened = s->tick_count < s->frightened_until;
     int target_x = s->player_x;
     int target_y = s->player_y;
+    int scatter = (!frightened) && (((s->tick_count - s->round_start_tick) % 220u) < 54u);
 
-    if (index == 1) {
+    if (scatter) {
+        target_x = g_ghost_corner_x[index];
+        target_y = g_ghost_corner_y[index];
+    } else if (index == 1) {
         target_x += (s->dir_x * 2);
         target_y += (s->dir_y * 2);
     } else if (index == 2) {
@@ -278,9 +315,9 @@ static int pacman_choose_ghost_dir(struct pacman_state *s, int index) {
 
         score = pacman_abs(nx - target_x) + pacman_abs(ny - target_y);
         if (frightened) {
-            score = 200 - score;
+            score = 300 - score;
         }
-        score += (int)(pacman_next_random(s) & 3u);
+        score += (int)(pacman_next_random(s) & 1u);
 
         if (score < best_score) {
             best_score = score;
@@ -312,6 +349,16 @@ static void pacman_step_ghosts(struct pacman_state *s) {
     for (int i = 0; i < PACMAN_GHOSTS; ++i) {
         int nx = s->ghost_x[i];
         int ny = s->ghost_y[i];
+        int slow_frightened;
+
+        if (s->tick_count < s->ghost_release_tick[i]) {
+            continue;
+        }
+
+        slow_frightened = (s->tick_count < s->frightened_until) && (((s->tick_count + (uint32_t)i) & 1u) == 0u);
+        if (slow_frightened) {
+            continue;
+        }
 
         (void)pacman_choose_ghost_dir(s, i);
         if (pacman_try_step(s,
@@ -334,7 +381,7 @@ void pacman_init_state(struct pacman_state *s) {
 }
 
 int pacman_handle_key(struct pacman_state *s, int key) {
-    if (s->game_over || s->win) {
+    if (s->game_over) {
         if (key == 'r' || key == 'R' || key == ' ' || key == '\n') {
             pacman_reset_match(s);
             return 1;
@@ -371,11 +418,16 @@ int pacman_step(struct pacman_state *s, uint32_t ticks) {
 
     (void)ticks;
 
-    if (s->game_over || s->win) {
+    if (s->game_over) {
         return 0;
     }
 
     s->tick_count += 1u;
+    if (s->win) {
+        pacman_advance_level(s);
+        return 1;
+    }
+
     if (s->next_tick == 0u) {
         s->next_tick = s->tick_count + PACMAN_STEP_TICKS;
         return 1;
@@ -421,72 +473,163 @@ int pacman_step(struct pacman_state *s, uint32_t ticks) {
     return 1;
 }
 
+static void pacman_draw_actor(int x, int y, int size, uint8_t color) {
+    sys_rect(x + 2, y + 1, size - 4, size - 2, color);
+    sys_rect(x + 1, y + 2, size - 2, size - 4, color);
+}
+
+static void pacman_draw_backdrop(const struct rect *board, const struct desktop_theme *t) {
+    for (int i = 0; i < 4; ++i) {
+        int px = board->x + 10 + (i * 62);
+        int py = board->y + 12 + ((i & 1) ? 8 : 0);
+        sys_rect(px, py + 18, 20, 18, t->menu_button_inactive);
+        sys_rect(px + 4, py + 8, 12, 8, t->window);
+        sys_rect(px + 6, py + 22, 8, 2, t->window_bg);
+    }
+    sys_rect(board->x + 8, board->y + 18, board->w - 16, 1, t->taskbar);
+}
+
+static void pacman_draw_player_sprite(const struct rect *board, struct pacman_state *s, const struct desktop_theme *t) {
+    int px = board->x + pacman_center_x(s->player_x);
+    int py = board->y + pacman_center_y(s->player_y);
+    int mouth_phase = (int)((s->tick_count / 4u) & 1u);
+
+    pacman_draw_actor(px, py, PACMAN_TILE_SIZE - 1, t->menu_button);
+    sys_rect(px + 5, py + 3, 1, 1, t->text);
+
+    if (mouth_phase) {
+        if (s->dir_x > 0) {
+            sys_rect(px + 7, py + 3, 4, 2, ui_color_canvas());
+            sys_rect(px + 7, py + 8, 4, 2, ui_color_canvas());
+        } else if (s->dir_x < 0) {
+            sys_rect(px + 1, py + 3, 4, 2, ui_color_canvas());
+            sys_rect(px + 1, py + 8, 4, 2, ui_color_canvas());
+        } else if (s->dir_y < 0) {
+            sys_rect(px + 3, py + 1, 2, 4, ui_color_canvas());
+            sys_rect(px + 8, py + 1, 2, 4, ui_color_canvas());
+        } else {
+            sys_rect(px + 3, py + 7, 2, 4, ui_color_canvas());
+            sys_rect(px + 8, py + 7, 2, 4, ui_color_canvas());
+        }
+    }
+}
+
+static void pacman_draw_ghost_sprite(const struct rect *board, struct pacman_state *s, int index, const struct desktop_theme *t) {
+    int px = board->x + pacman_center_x(s->ghost_x[index]);
+    int py = board->y + pacman_center_y(s->ghost_y[index]);
+    uint8_t color = g_ghost_colors[index];
+
+    if (s->tick_count < s->frightened_until) {
+        color = (((s->frightened_until - s->tick_count) < 24u) && ((s->tick_count & 4u) != 0u))
+                    ? t->text
+                    : t->menu_button_inactive;
+    }
+
+    sys_rect(px + 2, py + 1, 6, 2, color);
+    sys_rect(px + 1, py + 3, 8, 4, color);
+    sys_rect(px + 2, py + 7, 2, 2, color);
+    sys_rect(px + 5, py + 7, 2, 2, color);
+    sys_rect(px + 8, py + 7, 1, 2, color);
+
+    sys_rect(px + 3, py + 3, 1, 1, t->text);
+    sys_rect(px + 6, py + 3, 1, 1, t->text);
+    sys_rect(px + 3, py + 4, 1, 1, t->window_bg);
+    sys_rect(px + 6, py + 4, 1, 1, t->window_bg);
+}
+
 void pacman_draw_window(struct pacman_state *s, int active, int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *t = ui_theme_get();
-    struct rect board = {s->window.x + 8, s->window.y + 24, 152, 104};
-    char line[40];
+    struct rect body = {s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22};
+    struct rect topbar = {s->window.x + 8, s->window.y + 22, s->window.w - 16, 18};
+    struct rect board = {
+        s->window.x + PACMAN_BOARD_PAD + 8,
+        s->window.y + 44,
+        PACMAN_GRID_W * PACMAN_TILE_SIZE,
+        PACMAN_GRID_H * PACMAN_TILE_SIZE
+    };
+    struct rect hud = {board.x + board.w + 8, board.y, s->window.w - (board.w + 24), board.h};
+    struct rect stat1 = {hud.x + 6, hud.y + 12, hud.w - 12, 28};
+    struct rect stat2 = {hud.x + 6, hud.y + 46, hud.w - 12, 28};
+    struct rect stat3 = {hud.x + 6, hud.y + 80, hud.w - 12, 28};
+    struct rect help = {hud.x + 6, hud.y + 118, hud.w - 12, 54};
+    struct rect status = {hud.x + 6, hud.y + 180, hud.w - 12, 34};
+    char line[48];
 
     draw_window_frame(&s->window, "PACPAC", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&(struct rect){s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22}, ui_color_canvas());
+    ui_draw_surface(&body, ui_color_canvas());
+    ui_draw_surface(&topbar, ui_color_panel());
     ui_draw_inset(&board, ui_color_canvas());
+    ui_draw_inset(&hud, ui_color_canvas());
+    ui_draw_inset(&stat1, ui_color_canvas());
+    ui_draw_inset(&stat2, ui_color_canvas());
+    ui_draw_inset(&stat3, ui_color_canvas());
+    ui_draw_inset(&help, ui_color_canvas());
+    ui_draw_inset(&status, ui_color_canvas());
+
+    sys_text(topbar.x + 6, topbar.y + 5, ui_color_muted(), "Maze chase");
+    sys_rect(board.x + 1, board.y + 1, board.w - 2, board.h - 2, t->background);
+    pacman_draw_backdrop(&board, t);
 
     for (int y = 0; y < PACMAN_GRID_H; ++y) {
         for (int x = 0; x < PACMAN_GRID_W; ++x) {
-            int tx = board.x + (x * 8);
-            int ty = board.y + (y * 8);
+            int tx = board.x + (x * PACMAN_TILE_SIZE);
+            int ty = board.y + (y * PACMAN_TILE_SIZE);
+            int center = PACMAN_TILE_SIZE / 2;
 
-            sys_rect(tx, ty, 7, 7, ui_color_canvas());
             if (s->walls[y][x]) {
-                sys_rect(tx, ty, 7, 7, t->window);
+                sys_rect(tx + 1, ty + 1, PACMAN_TILE_SIZE - 2, PACMAN_TILE_SIZE - 2, t->window);
+                sys_rect(tx + 3, ty + 3, PACMAN_TILE_SIZE - 6, PACMAN_TILE_SIZE - 6, t->background);
+                sys_rect(tx + 4, ty + 4, PACMAN_TILE_SIZE - 8, 1, t->menu_button_inactive);
+                sys_rect(tx + 4, ty + PACMAN_TILE_SIZE - 5, PACMAN_TILE_SIZE - 8, 1, t->menu_button_inactive);
                 continue;
             }
 
             if (s->pellets[y][x] == 1u) {
-                sys_rect(tx + 3, ty + 3, 1, 1, t->text);
+                sys_rect(tx + center - 1, ty + center - 1, 3, 3, t->text);
             } else if (s->pellets[y][x] == 2u) {
-                int blink = ((int)(s->tick_count & 15u) < 8) ? 3 : 2;
-                sys_rect(tx + 4 - (blink / 2), ty + 4 - (blink / 2), blink, blink, t->text);
+                int blink = ((int)(s->tick_count & 15u) < 8) ? 6 : 4;
+                sys_rect(tx + center - (blink / 2), ty + center - (blink / 2), blink, blink, t->text);
             }
         }
     }
 
-    sys_rect(board.x + (s->player_x * 8) + 1,
-             board.y + (s->player_y * 8) + 1,
-             6,
-             6,
-             t->menu_button);
+    pacman_draw_player_sprite(&board, s, t);
 
     for (int i = 0; i < PACMAN_GHOSTS; ++i) {
-        uint8_t color = (s->tick_count < s->frightened_until) ? t->menu_button_inactive : g_ghost_colors[i];
-        sys_rect(board.x + (s->ghost_x[i] * 8) + 1,
-                 board.y + (s->ghost_y[i] * 8) + 1,
-                 6,
-                 6,
-                 color);
+        pacman_draw_ghost_sprite(&board, s, i, t);
     }
 
     line[0] = '\0';
     str_copy_limited(line, "Score ", (int)sizeof(line));
     pacman_append_int(line, s->score, (int)sizeof(line));
-    sys_text(s->window.x + 166, s->window.y + 30, t->text, line);
+    sys_text(stat1.x + 6, stat1.y + 7, t->text, line);
 
     line[0] = '\0';
     str_copy_limited(line, "Vidas ", (int)sizeof(line));
     pacman_append_int(line, s->lives, (int)sizeof(line));
-    sys_text(s->window.x + 166, s->window.y + 46, t->text, line);
+    sys_text(stat2.x + 6, stat2.y + 7, t->text, line);
+
+    line[0] = '\0';
+    str_copy_limited(line, "Nivel ", (int)sizeof(line));
+    pacman_append_int(line, s->level, (int)sizeof(line));
+    sys_text(stat3.x + 6, stat3.y + 7, t->text, line);
 
     if (s->game_over) {
-        sys_text(s->window.x + 166, s->window.y + 62, t->text, "GAME OVER");
-        sys_text(s->window.x + 166, s->window.y + 76, t->text, "R reinicia");
+        sys_text(status.x + 6, status.y + 8, t->text, "GAME OVER");
+        sys_text(status.x + 6, status.y + 20, t->text, "R reinicia");
     } else if (s->win) {
-        sys_text(s->window.x + 166, s->window.y + 62, t->text, "VOCE VENCEU");
-        sys_text(s->window.x + 166, s->window.y + 76, t->text, "R reinicia");
+        sys_text(status.x + 6, status.y + 8, t->text, "LIMPOU");
+        sys_text(status.x + 6, status.y + 20, t->text, "PROXIMO");
     } else {
-        sys_text(s->window.x + 166, s->window.y + 62, t->text, "Setas movem");
+        sys_text(help.x + 6, help.y + 6, t->text, "Setas movem");
         if (s->tick_count < s->frightened_until) {
-            sys_text(s->window.x + 166, s->window.y + 76, t->text, "Power ativo");
+            sys_text(status.x + 6, status.y + 8, t->text, "Fantasmas");
+            sys_text(status.x + 6, status.y + 20, t->text, "assustados");
         } else {
-            sys_text(s->window.x + 166, s->window.y + 76, t->text, "Coma tudo");
+            sys_text(help.x + 6, help.y + 20, t->text, "Coma tudo");
+            sys_text(help.x + 6, help.y + 32, t->text, "do labirinto");
+            sys_text(status.x + 6, status.y + 8, t->text, "Evite os");
+            sys_text(status.x + 6, status.y + 20, t->text, "fantasmas");
         }
     }
 }

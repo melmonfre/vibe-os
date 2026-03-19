@@ -4,9 +4,9 @@
 #include <stdint.h>
 #include <userland/modules/include/utils.h>
 
-#define DK_MAX_BARRELS 6
-#define DK_PLATFORM_COUNT 5
-#define DK_LADDER_COUNT 4
+#define DK_MAX_BARRELS 10
+#define DK_PLATFORM_COUNT 6
+#define DK_LADDER_COUNT 5
 
 struct donkey_kong_state {
     struct rect window;

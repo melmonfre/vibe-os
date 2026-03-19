@@ -125,6 +125,12 @@ BOOT_KERNEL_SECTORS := 1024
 APPFS_DIRECTORY_LBA := 1025
 APPFS_DIRECTORY_SECTORS := 8
 APPFS_APP_AREA_SECTORS := 1536
+PERSIST_SECTOR_COUNT := 640
+IMAGE_ASSET_START_LBA := 3209
+IMAGE_TOTAL_SECTORS := 65536
+DOOM_WAD_SRC := userland/applications/games/DOOM/DOOM.WAD
+DOOM_WAD_IMAGE_LBA := $(IMAGE_ASSET_START_LBA)
+IMAGE_ASSET_MANIFEST := $(BUILD_DIR)/image-assets.manifest
 
 # Kernel sources - kernel only, no stage2
 KERNEL_SRCS := $(shell find kernel -name '*.c')
@@ -556,11 +562,24 @@ $(PORTED_APPS_STAMP): $(COMPAT_LIB)
 
 $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
 
-$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS)
-	dd if=/dev/zero of=$@ bs=1474560 count=1
+$(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC)
+	dd if=/dev/zero of=$@ bs=512 count=$(IMAGE_TOTAL_SECTORS)
 	dd if=$(BOOT_BIN) of=$@ bs=512 count=1 conv=notrunc
 	dd if=$(KERNEL_BIN) of=$@ bs=512 seek=1 conv=notrunc
 	$(PYTHON) tools/build_appfs.py --image $@ --directory-lba $(APPFS_DIRECTORY_LBA) --directory-sectors $(APPFS_DIRECTORY_SECTORS) --app-area-sectors $(APPFS_APP_AREA_SECTORS) $(LANG_APP_BINS)
+	@mkdir -p $(BUILD_DIR)
+	@echo "# bundled assets" > $(IMAGE_ASSET_MANIFEST)
+	@if [ -f "$(DOOM_WAD_SRC)" ]; then \
+		size=$$(wc -c < "$(DOOM_WAD_SRC)" | tr -d '[:space:]'); \
+		sectors=$$(((size + 511) / 512)); \
+		end_lba=$$(( $(DOOM_WAD_IMAGE_LBA) + sectors )); \
+		if [ "$$end_lba" -gt "$(IMAGE_TOTAL_SECTORS)" ]; then \
+			echo "Erro: DOOM.WAD excede a imagem final ($$end_lba > $(IMAGE_TOTAL_SECTORS) setores)."; \
+			exit 1; \
+		fi; \
+		dd if="$(DOOM_WAD_SRC)" of="$@" bs=512 seek=$(DOOM_WAD_IMAGE_LBA) conv=notrunc; \
+		printf "DOOM.WAD lba=%s sectors=%s bytes=%s\n" "$(DOOM_WAD_IMAGE_LBA)" "$$sectors" "$$size" >> $(IMAGE_ASSET_MANIFEST); \
+	fi
 	@echo "Imagem gerada: $(IMAGE)"
 
 run: $(IMAGE)
