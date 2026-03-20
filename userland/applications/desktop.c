@@ -1876,6 +1876,7 @@ void desktop_main(void) {
 
     while (running) {
         int key;
+        fs_tick();
         uint32_t ticks = sys_ticks();
         int mouse_event = 0;
         int left_pressed = (mouse.buttons & 0x01u) != 0;

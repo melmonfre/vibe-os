@@ -29,6 +29,8 @@ extern int g_fs_root;
 extern int g_fs_cwd;
 
 void fs_init(void);
+void fs_tick(void);
+void fs_flush(void);
 int fs_create(const char *path, int is_dir);
 int fs_remove(const char *path);
 int fs_rename_node(int node, const char *new_name);

@@ -28,7 +28,6 @@ start:
 
     mov [boot_drive],dl
     mov word [VESA_INFO_ADDR + 0], 0
-    call setup_vesa
 
     call load_kernel
     jc disk_error
@@ -53,33 +52,85 @@ start:
 load_kernel:
 
     pusha
+    call disk_reset
+    call load_kernel_chs
 
-    mov word [disk_address_packet.sectors],1
-    mov word [disk_address_packet.offset],0
-    mov word [disk_address_packet.segment],KERNEL_SEG
-    mov dword [disk_address_packet.lba_low],1
-    mov dword [disk_address_packet.lba_high],0
-    mov cx,KERNEL_SECTORS
+    popa
+    ret
 
-.next:
-    mov si,disk_address_packet
+disk_reset:
+
     mov dl,[boot_drive]
-    mov ah,0x42
+    xor ah,ah
+    int 0x13
+    ret
+
+load_kernel_chs:
+
+    mov dl,[boot_drive]
+    mov ah,0x08
     int 0x13
     jc .fail
 
-    add word [disk_address_packet.segment],0x20
-    inc dword [disk_address_packet.lba_low]
-    adc dword [disk_address_packet.lba_high],0
-    loop .next
+    xor ax,ax
+    mov al,cl
+    and ax,0x003F
+    jz .fail
+    mov [chs_sectors_per_track],ax
 
-    popa
+    xor ax,ax
+    mov al,dh
+    inc ax
+    jz .fail
+    mov [chs_heads_count],ax
+
+    mov ax,KERNEL_SEG
+    mov es,ax
+    mov dword [chs_lba],1
+    mov word [chs_remaining],KERNEL_SECTORS
+
+.next:
+    mov eax,[chs_lba]
+    xor edx,edx
+    xor ecx,ecx
+    mov cx,[chs_sectors_per_track]
+    div ecx
+    inc dl
+    mov [chs_sector],dl
+
+    xor edx,edx
+    xor ecx,ecx
+    mov cx,[chs_heads_count]
+    div ecx
+    cmp eax,1023
+    ja .fail
+
+    mov [chs_head],dl
+    mov ch,al
+    mov cl,[chs_sector]
+    mov bl,ah
+    and bl,0x03
+    shl bl,6
+    or cl,bl
+    mov dh,[chs_head]
+    mov dl,[boot_drive]
+    mov ah,0x02
+    mov al,0x01
+    xor bx,bx
+    int 0x13
+    jc .fail
+
+    mov ax,es
+    add ax,0x20
+    mov es,ax
+    inc dword [chs_lba]
+    dec word [chs_remaining]
+    jnz .next
+
     clc
     ret
 
 .fail:
-
-    popa
     stc
     ret
 
@@ -145,49 +196,6 @@ detect_memory:
     ret
 
 ; -----------------------------
-; VESA boot graphics
-; -----------------------------
-
-setup_vesa:
-
-    mov word [VESA_INFO_ADDR + 0], 0
-
-    mov ax,0x4F02
-    mov bx,0x4101
-    int 0x10
-    cmp ax,0x004F
-    jne .done
-
-    xor ax,ax
-    mov es,ax
-    mov di,VESA_MODEINFO_ADDR
-    mov ax,0x4F01
-    mov cx,0x0101
-    int 0x10
-    cmp ax,0x004F
-    jne .done
-
-    mov ax,[VESA_MODEINFO_ADDR + 0]
-    test ax,0x0081
-    jz .done
-
-    mov ax,0x0101
-    mov [VESA_INFO_ADDR + 0],ax
-    mov eax,[VESA_MODEINFO_ADDR + 40]
-    mov [VESA_INFO_ADDR + 2],eax
-    mov ax,[VESA_MODEINFO_ADDR + 16]
-    mov [VESA_INFO_ADDR + 6],ax
-    mov ax,[VESA_MODEINFO_ADDR + 18]
-    mov [VESA_INFO_ADDR + 8],ax
-    mov ax,[VESA_MODEINFO_ADDR + 20]
-    mov [VESA_INFO_ADDR + 10],ax
-    mov al,[VESA_MODEINFO_ADDR + 25]
-    mov [VESA_INFO_ADDR + 12],al
-
-.done:
-    ret
-
-; -----------------------------
 ; A20
 ; -----------------------------
 
@@ -196,26 +204,6 @@ enable_a20:
     in al,0x92
     or al,2
     out 0x92,al
-    ret
-
-; -----------------------------
-; print
-; -----------------------------
-
-print:
-
-.next:
-    lodsb
-    test al,al
-    jz .done
-
-    mov ah,0x0E
-    mov bx,0x0007
-    int 0x10
-
-    jmp .next
-
-.done:
     ret
 
 ; -----------------------------
@@ -250,20 +238,12 @@ dd gdt_start
 ; -----------------------------
 
 boot_drive db 0
-
-disk_address_packet:
-    db 16
-    db 0
-.sectors:
-    dw 1
-.offset:
-    dw 0
-.segment:
-    dw KERNEL_SEG
-.lba_low:
-    dd 1
-.lba_high:
-    dd 0
+chs_sectors_per_track dw 0
+chs_heads_count dw 0
+chs_lba dd 0
+chs_remaining dw 0
+chs_head db 0
+chs_sector db 0
 
 ; -----------------------------
 ; protected mode

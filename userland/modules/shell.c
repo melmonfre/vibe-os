@@ -141,6 +141,7 @@ static int read_line(char *buf, int maxlen, const char *prompt) {
         int c = sys_poll_key();
 
         if (c == 0) {
+            fs_tick();
             sys_yield();
             continue;
         }
@@ -270,13 +271,16 @@ void shell_start(void) {
         shell_history_add(line);
         argc = tokenize_line(line, argv, SHELL_MAX_ARGS);
         if (argc == 0) {
+            fs_tick();
             continue;
         }
 
         if (busybox_main(argc, argv) != 0) {
+            fs_flush();
             break;
         }
     }
 
+    fs_flush();
     console_write("bye\n");
 }

@@ -23,6 +23,10 @@ int g_fs_root = -1;
 int g_fs_cwd = -1;
 static int g_fs_sync_suspended = 0;
 static uint32_t g_fs_total_sectors_cache = 0u;
+static int g_fs_dirty = 0;
+static uint32_t g_fs_last_sync_tick = 0u;
+
+#define FS_SYNC_PERIOD_TICKS 1000u
 
 static void fs_ensure_doom_wad_registered(void);
 static void fs_ensure_craft_textures_registered(void);
@@ -407,11 +411,11 @@ static int fs_load_persistent_image(void) {
     return fs_validate_loaded_tree() ? 0 : -1;
 }
 
-static void fs_sync(void) {
+static int fs_sync_now(void) {
     struct fs_persist_image image = {0};
 
     if (g_fs_sync_suspended) {
-        return;
+        return 0;
     }
 
     image.magic = FS_PERSIST_MAGIC;
@@ -423,7 +427,36 @@ static void fs_sync(void) {
     }
     image.checksum = 0u;
     image.checksum = fs_checksum_bytes((const uint8_t *)&image, (int)sizeof(image));
-    (void)sys_storage_save(&image, (uint32_t)sizeof(image));
+    if (sys_storage_save(&image, (uint32_t)sizeof(image)) != 0) {
+        return -1;
+    }
+    g_fs_dirty = 0;
+    g_fs_last_sync_tick = sys_ticks();
+    return 0;
+}
+
+static void fs_mark_dirty(void) {
+    g_fs_dirty = 1;
+}
+
+void fs_flush(void) {
+    if (!g_fs_dirty) {
+        return;
+    }
+    (void)fs_sync_now();
+}
+
+void fs_tick(void) {
+    uint32_t now;
+
+    if (g_fs_sync_suspended || !g_fs_dirty) {
+        return;
+    }
+    now = sys_ticks();
+    if ((uint32_t)(now - g_fs_last_sync_tick) < FS_SYNC_PERIOD_TICKS) {
+        return;
+    }
+    (void)fs_sync_now();
 }
 
 static int fs_alloc_node(void) {
@@ -730,7 +763,7 @@ int fs_create(const char *path, int is_dir) {
     if (created < 0) {
         return -3;
     }
-    fs_sync();
+    fs_mark_dirty();
     return 0;
 }
 
@@ -749,7 +782,7 @@ int fs_remove(const char *path) {
     parent = g_fs_nodes[idx].parent;
     fs_unlink_child(parent, idx);
     fs_reset_node(idx);
-    fs_sync();
+    fs_mark_dirty();
     return 0;
 }
 
@@ -771,7 +804,7 @@ int fs_rename_node(int node, const char *new_name) {
     }
 
     str_copy_limited(g_fs_nodes[node].name, new_name, FS_NAME_MAX + 1);
-    fs_sync();
+    fs_mark_dirty();
     return 0;
 }
 
@@ -807,7 +840,7 @@ int fs_write_file(const char *path, const char *text, int append) {
     }
     g_fs_nodes[idx].data[i] = '\0';
     g_fs_nodes[idx].size = i;
-    fs_sync();
+    fs_mark_dirty();
     return 0;
 }
 
@@ -843,7 +876,7 @@ int fs_write_bytes(const char *path, const uint8_t *data, int size) {
         if (size <= FS_FILE_MAX) {
             g_fs_nodes[idx].data[size] = '\0';
         }
-        fs_sync();
+        fs_mark_dirty();
         return 0;
     }
 
@@ -861,7 +894,7 @@ int fs_write_bytes(const char *path, const uint8_t *data, int size) {
     g_fs_nodes[idx].image_lba = start_lba;
     g_fs_nodes[idx].image_sector_count = sector_count;
     g_fs_nodes[idx].data[0] = '\0';
-    fs_sync();
+    fs_mark_dirty();
     return 0;
 }
 
@@ -891,7 +924,7 @@ int fs_register_image_file(const char *path, uint32_t lba, uint32_t sector_count
     g_fs_nodes[idx].image_lba = lba;
     g_fs_nodes[idx].image_sector_count = sector_count;
     g_fs_nodes[idx].data[0] = '\0';
-    fs_sync();
+    fs_mark_dirty();
     return 0;
 }
 
@@ -939,7 +972,7 @@ int fs_copy_node_to_path(int src_node, const char *dst_path) {
         g_fs_nodes[dst_node].data[0] = '\0';
     }
 
-    fs_sync();
+    fs_mark_dirty();
     return 0;
 }
 
@@ -1067,7 +1100,8 @@ void fs_init(void) {
         fs_ensure_doom_wad_registered();
         fs_ensure_craft_textures_registered();
         g_fs_sync_suspended = 0;
-        fs_sync();
+        g_fs_dirty = 1;
+        (void)fs_sync_now();
         return;
     }
 
@@ -1106,5 +1140,6 @@ void fs_init(void) {
     fs_ensure_doom_wad_registered();
     fs_ensure_craft_textures_registered();
     g_fs_sync_suspended = 0;
-    fs_sync();
+    g_fs_dirty = 1;
+    (void)fs_sync_now();
 }

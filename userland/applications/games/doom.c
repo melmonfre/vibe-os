@@ -50,13 +50,7 @@ void doom_init_state(struct doom_state *s) {
     s->window = DEFAULT_WINDOW;
     s->running = 0;
     s->last_code = 0;
-    if (doom_iwad_available()) {
-        str_copy_limited(s->status, "Pressione Enter para iniciar", (int)sizeof(s->status));
-    } else if (!doom_storage_available()) {
-        str_copy_limited(s->status, "Sem driver para a midia de boot no runtime", (int)sizeof(s->status));
-    } else {
-        str_copy_limited(s->status, "Tentara iniciar pelo FS ou pelo WAD embutido", (int)sizeof(s->status));
-    }
+    str_copy_limited(s->status, "Pressione Enter para iniciar", (int)sizeof(s->status));
 }
 
 int doom_step(struct doom_state *s, uint32_t ticks) {
@@ -75,7 +69,10 @@ int doom_handle_key(struct doom_state *s, int key) {
     }
 
     if (key == '\n' || key == ' ') {
-        if (!doom_iwad_available() && !doom_storage_available()) {
+        int has_iwad = doom_iwad_available();
+        int has_storage = doom_storage_available();
+
+        if (!has_iwad && !has_storage) {
             str_copy_limited(s->status, "DOOM precisa de acesso a midia; USB ainda nao tem driver", (int)sizeof(s->status));
             s->last_code = -1;
             return 1;
@@ -109,13 +106,8 @@ void doom_draw_window(struct doom_state *s, int active,
     sys_text(body.x + 8, body.y + 22, t->text, "Engine original + camada I_* para VibeOS");
     sys_text(body.x + 8, body.y + 36, t->text, "Teclado/mouse, render e loop reais");
     sys_text(body.x + 8, body.y + 56, t->text, s->status);
-    if (doom_storage_available()) {
-        sys_text(body.x + 8, body.y + 76, t->text, "Procura: doom.wad no FS ou DOOM.WAD embutido");
-        sys_text(body.x + 8, body.y + 90, t->text, "O WAD grande agora pode ser lido direto da imagem");
-    } else {
-        sys_text(body.x + 8, body.y + 76, t->text, "Boot por USB sem driver de storage em runtime");
-        sys_text(body.x + 8, body.y + 90, t->text, "Em hardware real isso impede abrir o WAD grande");
-    }
+    sys_text(body.x + 8, body.y + 76, t->text, "Checagem do WAD agora so acontece no Enter");
+    sys_text(body.x + 8, body.y + 90, t->text, "Assim a janela nao toca storage/logo no boot");
 
     ui_draw_button(&cta, "Enter/Click: iniciar DOOM", UI_BUTTON_PRIMARY, 0);
 }

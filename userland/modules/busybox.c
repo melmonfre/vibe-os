@@ -236,6 +236,7 @@ static int cmd_exit(int argc, char **argv) {
 static int cmd_shutdown(int argc, char **argv) {
     (void)argc; (void)argv;
     console_write("Shutting down...\n");
+    fs_flush();
     sys_shutdown();
     return 1;
 }

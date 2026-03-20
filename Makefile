@@ -501,6 +501,17 @@ $(BOOT_BIN): $(BOOT_DIR)/stage1.asm | $(BUILD_DIR)
 		exit 1; \
 	fi
 
+# Prevent GNU make from applying its built-in "link a single .o into an
+# executable with the same basename" rule to build/userland/userland.
+$(BUILD_DIR)/userland/userland:
+	@true
+$(BUILD_DIR)/userland/applications/games/doom:
+	@true
+$(BUILD_DIR)/userland/applications/games/craft:
+	@true
+$(BUILD_DIR)/userland/applications/games/DOOM:
+	@true
+
 $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -834,4 +845,4 @@ imb: $(IMAGE)
 	@cp $(IMAGE) build/vibe-os-usb.img
 	@echo "Imagem para hardware real pronta: build/vibe-os-usb.img"
 
--include $(shell test -d $(BUILD_DIR) && find $(BUILD_DIR) -name '*.d' -print)
+-include $(shell test -d $(BUILD_DIR) && find $(BUILD_DIR) -name '*.d' ! -name '* *' -print)
