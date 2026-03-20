@@ -23,6 +23,7 @@ int vibe_app_entry(const struct vibe_app_context *ctx, int argc, char **argv) {
 
     vibe_app_runtime_init(ctx);
     rc = vibe_app_main(argc, argv);
+    vibe_app_run_atexit();
     return rc;
 }
 

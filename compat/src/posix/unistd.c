@@ -8,14 +8,10 @@
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
-#define COMPAT_O_RDONLY 0
-#define COMPAT_O_ACCMODE 0x0003
 
 struct compat_fd_entry {
     int used;
-    const char *data;
-    int size;
-    int pos;
+    int host_fd;
 };
 
 static struct compat_fd_entry g_compat_fds[COMPAT_MAX_FDS];
@@ -33,21 +29,10 @@ static int compat_alloc_fd(void) {
 
 int open(const char *path, int oflag, ...) {
     int fd;
-    const char *data = 0;
-    int size = 0;
+    int host_fd;
 
     if (path == 0) {
         errno = EINVAL;
-        return -1;
-    }
-
-    if ((oflag & COMPAT_O_ACCMODE) != COMPAT_O_RDONLY) {
-        errno = EACCES;
-        return -1;
-    }
-
-    if (vibe_app_read_file(path, &data, &size) != 0 || data == 0 || size < 0) {
-        errno = ENOENT;
         return -1;
     }
 
@@ -57,17 +42,19 @@ int open(const char *path, int oflag, ...) {
         return -1;
     }
 
+    host_fd = vibe_app_open(path, oflag);
+    if (host_fd < 0) {
+        errno = ENOENT;
+        return -1;
+    }
+
     g_compat_fds[fd].used = 1;
-    g_compat_fds[fd].data = data;
-    g_compat_fds[fd].size = size;
-    g_compat_fds[fd].pos = 0;
+    g_compat_fds[fd].host_fd = host_fd;
     return fd;
 }
 
 ssize_t read(int fd, void *buf, size_t count) {
-    struct compat_fd_entry *entry;
-    size_t i;
-    size_t available;
+    int rc;
 
     if (buf == 0) {
         errno = EINVAL;
@@ -92,22 +79,12 @@ ssize_t read(int fd, void *buf, size_t count) {
         errno = EBADF;
         return -1;
     }
-
-    entry = &g_compat_fds[fd];
-    if (entry->pos >= entry->size) {
-        return 0;
+    rc = vibe_app_read(g_compat_fds[fd].host_fd, buf, (int)count);
+    if (rc < 0) {
+        errno = EBADF;
+        return -1;
     }
-
-    available = (size_t)(entry->size - entry->pos);
-    if (count > available) {
-        count = available;
-    }
-
-    for (i = 0; i < count; ++i) {
-        ((char *)buf)[i] = entry->data[entry->pos + (int)i];
-    }
-    entry->pos += (int)count;
-    return (ssize_t)count;
+    return (ssize_t)rc;
 }
 
 ssize_t write(int fd, const void *buf, size_t count) {
@@ -126,11 +103,24 @@ ssize_t write(int fd, const void *buf, size_t count) {
         return (ssize_t)count;
     }
 
-    errno = EBADF;
-    return -1;
+    if (fd < 0 || fd >= COMPAT_MAX_FDS || !g_compat_fds[fd].used) {
+        errno = EBADF;
+        return -1;
+    }
+
+    {
+        int rc = vibe_app_write(g_compat_fds[fd].host_fd, buf, (int)count);
+        if (rc < 0) {
+            errno = EBADF;
+            return -1;
+        }
+        return (ssize_t)rc;
+    }
 }
 
 int close(int fd) {
+    int i;
+
     if (fd < 0 || fd >= COMPAT_MAX_FDS) {
         errno = EBADF;
         return -1;
@@ -143,10 +133,19 @@ int close(int fd) {
         return -1;
     }
 
+    for (i = 3; i < COMPAT_MAX_FDS; ++i) {
+        if (i != fd &&
+            g_compat_fds[i].used &&
+            g_compat_fds[i].host_fd == g_compat_fds[fd].host_fd) {
+            g_compat_fds[fd].used = 0;
+            g_compat_fds[fd].host_fd = -1;
+            return 0;
+        }
+    }
+
+    (void)vibe_app_close(g_compat_fds[fd].host_fd);
     g_compat_fds[fd].used = 0;
-    g_compat_fds[fd].data = 0;
-    g_compat_fds[fd].size = 0;
-    g_compat_fds[fd].pos = 0;
+    g_compat_fds[fd].host_fd = -1;
     return 0;
 }
 
@@ -193,35 +192,18 @@ int dup2(int fd, int newfd) {
 }
 
 off_t lseek(int fd, off_t offset, int whence) {
-    int base;
-    int next;
-    struct compat_fd_entry *entry;
+    int rc;
 
     if (fd < 0 || fd >= COMPAT_MAX_FDS || !g_compat_fds[fd].used) {
         errno = EBADF;
         return -1;
     }
-
-    entry = &g_compat_fds[fd];
-    if (whence == SEEK_SET) {
-        base = 0;
-    } else if (whence == SEEK_CUR) {
-        base = entry->pos;
-    } else if (whence == SEEK_END) {
-        base = entry->size;
-    } else {
+    rc = vibe_app_lseek(g_compat_fds[fd].host_fd, (int)offset, whence);
+    if (rc < 0) {
         errno = EINVAL;
         return -1;
     }
-
-    next = base + (int)offset;
-    if (next < 0 || next > entry->size) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    entry->pos = next;
-    return (off_t)entry->pos;
+    return (off_t)rc;
 }
 
 int isatty(int fd) {
@@ -233,28 +215,29 @@ int isatty(int fd) {
 }
 
 int stat(const char *path, struct stat *buf) {
-    const char *data = 0;
-    int size = 0;
+    struct vibe_app_stat vibe_stat;
 
     if (path == 0 || buf == 0) {
         errno = EINVAL;
         return -1;
     }
-    if (vibe_app_read_file(path, &data, &size) != 0) {
+    if (vibe_app_stat(path, &vibe_stat) != 0) {
         errno = ENOENT;
         return -1;
     }
 
     memset(buf, 0, sizeof(*buf));
-    buf->st_size = (off_t)size;
-    buf->st_mode = 0100644;
+    buf->st_size = (off_t)vibe_stat.size;
+    buf->st_mode = vibe_stat.is_dir ? 0040755 : 0100644;
     buf->st_nlink = 1;
     buf->st_blksize = 512u;
-    buf->st_blocks = (uint32_t)((size + 511) / 512);
+    buf->st_blocks = (uint32_t)((vibe_stat.size + 511) / 512);
     return 0;
 }
 
 int fstat(int fd, struct stat *buf) {
+    struct vibe_app_stat vibe_stat;
+
     if (buf == 0) {
         errno = EINVAL;
         return -1;
@@ -269,13 +252,17 @@ int fstat(int fd, struct stat *buf) {
         errno = EBADF;
         return -1;
     }
+    if (vibe_app_fstat(g_compat_fds[fd].host_fd, &vibe_stat) != 0) {
+        errno = EBADF;
+        return -1;
+    }
 
     memset(buf, 0, sizeof(*buf));
-    buf->st_size = (off_t)g_compat_fds[fd].size;
+    buf->st_size = (off_t)vibe_stat.size;
     buf->st_mode = 0100644;
     buf->st_nlink = 1;
     buf->st_blksize = 512u;
-    buf->st_blocks = (uint32_t)((g_compat_fds[fd].size + 511) / 512);
+    buf->st_blocks = (uint32_t)((vibe_stat.size + 511) / 512);
     return 0;
 }
 
@@ -299,8 +286,7 @@ pid_t getppid(void) {
 }
 
 char *getenv(const char *name) {
-    (void)name;
-    return 0;
+    return (char *)vibe_app_getenv(name);
 }
 
 char *getcwd(char *buf, size_t size) {

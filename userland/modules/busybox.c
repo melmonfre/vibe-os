@@ -97,7 +97,7 @@ static int should_prefer_external(const char *cmd) {
 
 static int cmd_help(int argc, char **argv) {
     (void)argc; (void)argv;
-    const char *list = "commands: pwd ls cd mkdir touch rm cat echo clear uname help exit shutdown startx history edit nano lua sectorc cc hello js ruby python\n";
+    const char *list = "commands: pwd ls cd mkdir touch rm cat echo clear uname help exit shutdown startx history edit nano lua sectorc cc hello js ruby python java javac\n";
     console_write(list);
     return 0;
 }

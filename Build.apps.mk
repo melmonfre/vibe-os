@@ -7,7 +7,7 @@ BIN_DIR := bin
 LIB_DIR := lib
 
 # Target apps to build
-APPS := js ruby python hello
+APPS := js ruby python hello java javac
 
 # Glibc library (to be created)
 GLIBC_SO := $(LIB_DIR)/libglibc.so

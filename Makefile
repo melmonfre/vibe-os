@@ -433,6 +433,22 @@ PYTHON_APP_OBJS := \
 PYTHON_APP_ELF := $(BUILD_DIR)/lang/python.elf
 PYTHON_APP_BIN := $(BUILD_DIR)/lang/python.app
 
+JAVA_APP_BUILD_DIR := $(BUILD_DIR)/lang/java
+JAVA_APP_OBJS := \
+	$(JAVA_APP_BUILD_DIR)/app_entry.o \
+	$(JAVA_APP_BUILD_DIR)/app_runtime.o \
+	$(JAVA_APP_BUILD_DIR)/java_main.o
+JAVA_APP_ELF := $(BUILD_DIR)/lang/java.elf
+JAVA_APP_BIN := $(BUILD_DIR)/lang/java.app
+
+JAVAC_APP_BUILD_DIR := $(BUILD_DIR)/lang/javac
+JAVAC_APP_OBJS := \
+	$(JAVAC_APP_BUILD_DIR)/app_entry.o \
+	$(JAVAC_APP_BUILD_DIR)/app_runtime.o \
+	$(JAVAC_APP_BUILD_DIR)/javac_main.o
+JAVAC_APP_ELF := $(BUILD_DIR)/lang/javac.elf
+JAVAC_APP_BIN := $(BUILD_DIR)/lang/javac.app
+
 ECHO_APP_BIN := $(BUILD_DIR)/ported/echo.app
 CAT_APP_BIN := $(BUILD_DIR)/ported/cat.app
 WC_APP_BIN := $(BUILD_DIR)/ported/wc.app
@@ -448,7 +464,7 @@ FALSE_APP_BIN := $(BUILD_DIR)/ported/false.app
 PRINTF_APP_BIN := $(BUILD_DIR)/ported/printf.app
 PORTED_APPS_STAMP := $(BUILD_DIR)/.ported_apps.stamp
 
-LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN)
+LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(JAVA_APP_BIN) $(JAVAC_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN)
 
 # Include compatibility layer build rules
 include Build.compat.mk
@@ -546,6 +562,30 @@ $(PYTHON_APP_BUILD_DIR)/python_main.o: lang/apps/python/python_main.c | $(BUILD_
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(JAVA_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"java\" -DVIBE_APP_BUILD_HEAP_SIZE=262144u -c $< -o $@
+
+$(JAVA_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(JAVA_APP_BUILD_DIR)/java_main.o: lang/apps/java/java_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(JAVAC_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"javac\" -DVIBE_APP_BUILD_HEAP_SIZE=262144u -c $< -o $@
+
+$(JAVAC_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(JAVAC_APP_BUILD_DIR)/javac_main.o: lang/apps/javac/javac_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(LINKER_DIR)/kernel.ld $(COMPAT_LIB)
 	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(USERLAND_OBJS) $(COMPAT_LIB) -o $@
 
@@ -588,6 +628,20 @@ $(PYTHON_APP_ELF): $(PYTHON_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(PYTHON_APP_OBJS) -o $@
 
 $(PYTHON_APP_BIN): $(PYTHON_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(JAVA_APP_ELF): $(JAVA_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(JAVA_APP_OBJS) -o $@
+
+$(JAVA_APP_BIN): $(JAVA_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(JAVAC_APP_ELF): $(JAVAC_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(JAVAC_APP_OBJS) -o $@
+
+$(JAVAC_APP_BIN): $(JAVAC_APP_ELF)
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
 
@@ -714,6 +768,8 @@ apps: glibc-core | bin lib
 	@if [ -f "$(JS_APP_BIN)" ]; then cp $(JS_APP_BIN) bin/js; else echo "WARNING: js app not found"; fi
 	@if [ -f "$(RUBY_APP_BIN)" ]; then cp $(RUBY_APP_BIN) bin/ruby; else echo "WARNING: ruby app not found"; fi
 	@if [ -f "$(PYTHON_APP_BIN)" ]; then cp $(PYTHON_APP_BIN) bin/python; else echo "WARNING: python app not found"; fi
+	@if [ -f "$(JAVA_APP_BIN)" ]; then cp $(JAVA_APP_BIN) bin/java; else echo "WARNING: java app not found"; fi
+	@if [ -f "$(JAVAC_APP_BIN)" ]; then cp $(JAVAC_APP_BIN) bin/javac; else echo "WARNING: javac app not found"; fi
 	@if [ -f "build/libglibc-full.a" ]; then cp build/libglibc-full.a lib/libglibc.a; else cp build/libglibc-core.a lib/libglibc.a; fi || true
 	@echo "Apps built to /bin"
 
@@ -734,6 +790,8 @@ apps-clean:
 	rm -f $(JS_APP_OBJS) $(JS_APP_ELF) $(JS_APP_BIN)
 	rm -f $(RUBY_APP_OBJS) $(RUBY_APP_ELF) $(RUBY_APP_BIN)
 	rm -f $(PYTHON_APP_OBJS) $(PYTHON_APP_ELF) $(PYTHON_APP_BIN)
+	rm -f $(JAVA_APP_OBJS) $(JAVA_APP_ELF) $(JAVA_APP_BIN)
+	rm -f $(JAVAC_APP_OBJS) $(JAVAC_APP_ELF) $(JAVAC_APP_BIN)
 
 # Standalone app compilation (requires vendor builds)
 # These compile each app to /bin independently
@@ -753,12 +811,23 @@ app-ruby:
 app-python:
 	@if [ -f "$(PYTHON_APP_BIN)" ]; then cp $(PYTHON_APP_BIN) bin/python; echo "✓ /bin/python ready"; else echo "ℹ python.app not built. Requires micropython vendor. See BUILD_LANGS.md"; fi
 
+app-java: $(JAVA_APP_BIN) | bin
+	@echo "Copying java to /bin..."
+	@cp $(JAVA_APP_BIN) bin/java
+	@echo "✓ /bin/java ready"
+
+app-javac: $(JAVAC_APP_BIN) | bin
+	@echo "Copying javac to /bin..."
+	@cp $(JAVAC_APP_BIN) bin/javac
+	@echo "✓ /bin/javac ready"
+
 clean:
 	rm -rf $(BUILD_DIR)
 
 full: clean all
 
-img: all
+img: $(IMAGE)
+	@echo "Imagem pronta: $(IMAGE)"
 
 imb: $(IMAGE)
 	@echo "Copiando imagem para build/vibe-os-usb.img"

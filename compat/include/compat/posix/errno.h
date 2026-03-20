@@ -40,5 +40,6 @@ extern int errno;
 #define EMLINK     31
 #define EPIPE      32
 #define ENOTEMPTY  39
+#define ETIMEDOUT  60
 
 #endif /* COMPAT_ERRNO_H */

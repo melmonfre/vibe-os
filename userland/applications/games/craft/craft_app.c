@@ -43,6 +43,10 @@ static void craft_debug_int(const char *prefix, int value) {
     sys_write_debug(msg);
 }
 
+static int craft_storage_available(void) {
+    return sys_storage_total_sectors() > 0u;
+}
+
 void craft_init_state(struct craft_state *state) {
     state->window = DEFAULT_CRAFT_WINDOW;
     state->running = 0;
@@ -52,7 +56,11 @@ void craft_init_state(struct craft_state *state) {
     state->mouse_x = 0;
     state->mouse_y = 0;
     state->mouse_buttons = 0u;
-    str_copy_limited(state->status, "Inicializando renderer do Craft", (int)sizeof(state->status));
+    if (craft_storage_available()) {
+        str_copy_limited(state->status, "Inicializando renderer do Craft", (int)sizeof(state->status));
+    } else {
+        str_copy_limited(state->status, "Sem driver para a midia de boot no runtime", (int)sizeof(state->status));
+    }
 }
 
 void craft_update_input(struct craft_state *state, int focused,
@@ -83,6 +91,12 @@ int craft_step(struct craft_state *state, uint32_t ticks) {
 
     if (client.w < 64 || client.h < 64) {
         str_copy_limited(state->status, "Aumente a janela do Craft", (int)sizeof(state->status));
+        return 1;
+    }
+
+    if (!state->started && !craft_storage_available()) {
+        state->last_code = -2;
+        str_copy_limited(state->status, "Craft desabilitado: falta driver da midia de boot", (int)sizeof(state->status));
         return 1;
     }
 

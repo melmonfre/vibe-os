@@ -10,6 +10,10 @@ int doom_port_iwad_available(void);
 
 static const struct rect DEFAULT_WINDOW = {40, 20, 400, 300};
 
+static int doom_storage_available(void) {
+    return sys_storage_total_sectors() > 0u;
+}
+
 static int doom_iwad_available(void) {
     static const char *candidates[] = {
         "doom1.wad",
@@ -48,6 +52,8 @@ void doom_init_state(struct doom_state *s) {
     s->last_code = 0;
     if (doom_iwad_available()) {
         str_copy_limited(s->status, "Pressione Enter para iniciar", (int)sizeof(s->status));
+    } else if (!doom_storage_available()) {
+        str_copy_limited(s->status, "Sem driver para a midia de boot no runtime", (int)sizeof(s->status));
     } else {
         str_copy_limited(s->status, "Tentara iniciar pelo FS ou pelo WAD embutido", (int)sizeof(s->status));
     }
@@ -69,6 +75,11 @@ int doom_handle_key(struct doom_state *s, int key) {
     }
 
     if (key == '\n' || key == ' ') {
+        if (!doom_iwad_available() && !doom_storage_available()) {
+            str_copy_limited(s->status, "DOOM precisa de acesso a midia; USB ainda nao tem driver", (int)sizeof(s->status));
+            s->last_code = -1;
+            return 1;
+        }
         s->running = 1;
         str_copy_limited(s->status, "Executando DOOM...", (int)sizeof(s->status));
         s->last_code = doom_port_run_full();
@@ -98,8 +109,13 @@ void doom_draw_window(struct doom_state *s, int active,
     sys_text(body.x + 8, body.y + 22, t->text, "Engine original + camada I_* para VibeOS");
     sys_text(body.x + 8, body.y + 36, t->text, "Teclado/mouse, render e loop reais");
     sys_text(body.x + 8, body.y + 56, t->text, s->status);
-    sys_text(body.x + 8, body.y + 76, t->text, "Procura: doom.wad no FS ou DOOM.WAD embutido");
-    sys_text(body.x + 8, body.y + 90, t->text, "O WAD grande agora pode ser lido direto da imagem");
+    if (doom_storage_available()) {
+        sys_text(body.x + 8, body.y + 76, t->text, "Procura: doom.wad no FS ou DOOM.WAD embutido");
+        sys_text(body.x + 8, body.y + 90, t->text, "O WAD grande agora pode ser lido direto da imagem");
+    } else {
+        sys_text(body.x + 8, body.y + 76, t->text, "Boot por USB sem driver de storage em runtime");
+        sys_text(body.x + 8, body.y + 90, t->text, "Em hardware real isso impede abrir o WAD grande");
+    }
 
     ui_draw_button(&cta, "Enter/Click: iniciar DOOM", UI_BUTTON_PRIMARY, 0);
 }

@@ -646,6 +646,11 @@ S_ChangeMusic
     musicinfo_t*	music;
     char		namebuf[9];
 
+    if (snd_MusicVolume <= 0)
+    {
+        return;
+    }
+
     if ( (musicnum <= mus_None)
 	 || (musicnum >= NUMMUSIC) )
     {
@@ -655,6 +660,9 @@ S_ChangeMusic
 	music = &S_music[musicnum];
 
     if (mus_playing == music)
+	return;
+
+    if (!music->name || !music->name[0])
 	return;
 
     // shutdown old music
@@ -865,5 +873,4 @@ S_getChannel
 
     return cnum;
 }
-
 

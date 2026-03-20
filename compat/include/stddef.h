@@ -9,6 +9,7 @@
 
 typedef int ptrdiff_t;
 typedef unsigned int size_t;
+#define _SIZE_T_DEFINED_
 typedef int wchar_t;
 typedef unsigned int wint_t;
 typedef int mbstate_t;
