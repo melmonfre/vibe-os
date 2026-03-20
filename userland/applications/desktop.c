@@ -2836,6 +2836,12 @@ void desktop_main(void) {
                     dirty = 1;
                 }
             } else if (g_windows[focused].type == APP_CRAFT) {
+                if (key == 27) {
+                    free_window(focused);
+                    focused = -1;
+                    dirty = 1;
+                    continue;
+                }
                 if (craft_handle_key(&g_craft[g_windows[focused].instance], key)) {
                     dirty = 1;
                 }

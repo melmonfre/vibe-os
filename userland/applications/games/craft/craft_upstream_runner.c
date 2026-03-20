@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h>
 
 int doom_printf(const char *fmt, ...);
@@ -21,6 +22,11 @@ void craft_glfw_reset_embedded(void);
 void craft_gl_blit_to(int x, int y);
 
 static unsigned int g_craft_runner_rng_state = 1u;
+
+static void craft_debug_stage(const char *message) {
+    sys_write_debug(message);
+    sys_write_debug("\n");
+}
 
 static void *craft_runner_calloc(size_t count, size_t size) {
     size_t total = count * size;
@@ -141,6 +147,7 @@ static int craft_upstream_bootstrap(void) {
         return 0;
     }
 
+    craft_debug_stage("craft: bootstrap begin");
     curl_global_init(CURL_GLOBAL_DEFAULT);
     craft_runner_srand(time(NULL));
     craft_runner_rand();
@@ -148,11 +155,13 @@ static int craft_upstream_bootstrap(void) {
     if (!glfwInit()) {
         return -1;
     }
+    craft_debug_stage("craft: after glfwInit");
     create_window();
     if (!g->window) {
         glfwTerminate();
         return -1;
     }
+    craft_debug_stage("craft: after create_window");
 
     glfwMakeContextCurrent(g->window);
     glfwSwapInterval(VSYNC);
@@ -166,6 +175,7 @@ static int craft_upstream_bootstrap(void) {
         glfwTerminate();
         return -1;
     }
+    craft_debug_stage("craft: after glewInit");
 
     glEnable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
@@ -201,6 +211,7 @@ static int craft_upstream_bootstrap(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     load_png_texture("textures/sign.png");
+    craft_debug_stage("craft: after textures");
 
     program = load_program(
         "shaders/block_vertex.glsl", "shaders/block_fragment.glsl");
@@ -241,22 +252,26 @@ static int craft_upstream_bootstrap(void) {
     g_sky_attrib.matrix = glGetUniformLocation(program, "matrix");
     g_sky_attrib.sampler = glGetUniformLocation(program, "sampler");
     g_sky_attrib.timer = glGetUniformLocation(program, "timer");
+    craft_debug_stage("craft: after shaders");
 
     g->mode = MODE_OFFLINE;
     doom_snprintf(g->db_path, MAX_PATH_LENGTH, "%s", DB_PATH);
-    g->create_radius = CREATE_CHUNK_RADIUS;
-    g->render_radius = RENDER_CHUNK_RADIUS;
-    g->delete_radius = DELETE_CHUNK_RADIUS;
-    g->sign_radius = RENDER_SIGN_RADIUS;
+    g->create_radius = 1;
+    g->render_radius = 1;
+    g->delete_radius = 3;
+    g->sign_radius = 1;
 
+    craft_debug_stage("craft: before workers");
     for (int i = 0; i < WORKERS; ++i) {
         Worker *worker = g->workers + i;
         worker->index = i;
         worker->state = WORKER_IDLE;
         mtx_init(&worker->mtx, mtx_plain);
         cnd_init(&worker->cnd);
+        worker->cnd.owner = worker;
         thrd_create(&worker->thrd, worker_run, worker);
     }
+    craft_debug_stage("craft: after workers");
 
     g_runtime.bootstrapped = 1;
     return 0;
@@ -266,11 +281,13 @@ static int craft_upstream_begin_session(void) {
     Player *me;
     State *s;
     int loaded;
+    int spawn_y;
 
     if (g_runtime.session_active) {
         return 0;
     }
 
+    craft_debug_stage("craft: begin session");
     if (g->mode == MODE_OFFLINE || USE_CACHE) {
         db_enable();
         if (db_init(g->db_path)) {
@@ -302,14 +319,44 @@ static int craft_upstream_begin_session(void) {
     me->buffer = 0;
     g->player_count = 1;
 
+    s->x = 0.0f;
+    s->y = 0.0f;
+    s->z = 0.0f;
+    s->rx = 0.0f;
+    s->ry = 0.0f;
     loaded = db_load_state(&s->x, &s->y, &s->z, &s->rx, &s->ry);
+    craft_debug_stage("craft: after db load");
+    if (loaded) {
+        if (s->x < -256.0f || s->x > 256.0f || s->z < -256.0f || s->z > 256.0f) {
+            s->x = 0.0f;
+            s->z = 0.0f;
+        }
+        if (s->rx < -6.28319f || s->rx > 6.28319f) {
+            s->rx = 0.0f;
+        }
+        if (s->ry < -1.4f || s->ry > 1.4f) {
+            s->ry = 0.0f;
+        }
+    }
     force_chunks(me);
+    spawn_y = highest_block(s->x, s->z) + 3;
     if (!loaded) {
-        s->y = highest_block(s->x, s->z) + 2;
+        s->x = 0.0f;
+        s->z = 0.0f;
+        s->rx = 0.0f;
+        s->ry = -0.25f;
+        s->y = (float)spawn_y;
+    } else {
+        if (s->y < 1.0f || s->y > 255.0f || player_intersects_block(2, s->x, s->y, s->z,
+                (int)roundf(s->x), (int)roundf(s->y), (int)roundf(s->z))) {
+            s->y = (float)spawn_y;
+            s->ry = -0.25f;
+        }
     }
 
     g_runtime.previous = glfwGetTime();
     g_runtime.session_active = 1;
+    craft_debug_stage("craft: session ready");
     return 0;
 }
 
@@ -361,6 +408,7 @@ int craft_upstream_frame(void) {
     if (!g_runtime.session_active && craft_upstream_begin_session() != 0) {
         return -1;
     }
+    craft_debug_stage("craft: frame begin");
 
     me = g->players;
     s = &g->players->state;
@@ -368,6 +416,7 @@ int craft_upstream_frame(void) {
     g->scale = get_scale_factor();
     glfwGetFramebufferSize(g->window, &g->width, &g->height);
     glViewport(0, 0, g->width, g->height);
+    craft_debug_stage("craft: frame viewport");
 
     if (g->time_changed) {
         g->time_changed = 0;
@@ -404,6 +453,7 @@ int craft_upstream_frame(void) {
             client_position(s->x, s->y, s->z, s->rx, s->ry);
         }
     }
+    craft_debug_stage("craft: frame simulation");
 
     g->observe1 = g->observe1 % g->player_count;
     g->observe2 = g->observe2 % g->player_count;
@@ -414,12 +464,15 @@ int craft_upstream_frame(void) {
         interpolate_player(g->players + i);
     }
     player = g->players + g->observe1;
+    craft_debug_stage("craft: frame buffers");
 
     glClear(GL_COLOR_BUFFER_BIT);
     glClear(GL_DEPTH_BUFFER_BIT);
     render_sky(&g_sky_attrib, player, g_runtime.sky_buffer);
     glClear(GL_DEPTH_BUFFER_BIT);
+    craft_debug_stage("craft: frame sky");
     face_count = render_chunks(&g_block_attrib, player);
+    craft_debug_stage("craft: frame chunks");
     render_signs(&g_text_attrib, player);
     render_sign(&g_text_attrib, player);
     render_players(&g_block_attrib, player);
@@ -434,6 +487,7 @@ int craft_upstream_frame(void) {
     if (SHOW_ITEM) {
         render_item(&g_block_attrib);
     }
+    craft_debug_stage("craft: frame world done");
 
     ts = 12 * g->scale;
     tx = ts / 2;
@@ -517,7 +571,9 @@ int craft_upstream_frame(void) {
     }
 
     glfwSwapBuffers(g->window);
+    craft_debug_stage("craft: frame swap");
     glfwPollEvents();
+    craft_debug_stage("craft: frame poll");
     if (glfwWindowShouldClose(g->window)) {
         craft_upstream_end_session();
         return 0;

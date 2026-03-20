@@ -2,6 +2,7 @@
 #include <userland/modules/include/syscalls.h>
 
 void craft_gl_init_window(int width, int height);
+void craft_gl_get_framebuffer_size(int *width, int *height);
 void craft_gl_present(void);
 void craft_gl_shutdown_window(void);
 
@@ -46,7 +47,7 @@ static int g_window_focused = 0;
 static int g_pending_keys[128];
 static int g_pending_key_count = 0;
 
-#define CRAFT_GLFW_KEY_HOLD_TICKS 4
+#define CRAFT_GLFW_KEY_HOLD_TICKS 6
 
 static void craft_glfw_push_mapped_key(int mapped, int raw) {
     if (mapped >= 0 && mapped < (int)(sizeof(g_window.key_states) / sizeof(g_window.key_states[0]))) {
@@ -137,7 +138,10 @@ void glfwSetCharCallback(GLFWwindow *window, GLFWcharfun cbfun) { (void)window; 
 void glfwSetMouseButtonCallback(GLFWwindow *window, GLFWmousebuttonfun cbfun) { (void)window; g_mouse_button_cb = cbfun; }
 void glfwSetScrollCallback(GLFWwindow *window, GLFWscrollfun cbfun) { (void)window; g_scroll_cb = cbfun; }
 void glfwGetWindowSize(GLFWwindow *window, int *width, int *height) { if (width) *width = window ? window->width : 640; if (height) *height = window ? window->height : 480; }
-void glfwGetFramebufferSize(GLFWwindow *window, int *width, int *height) { glfwGetWindowSize(window, width, height); }
+void glfwGetFramebufferSize(GLFWwindow *window, int *width, int *height) {
+    (void)window;
+    craft_gl_get_framebuffer_size(width, height);
+}
 void glfwGetCursorPos(GLFWwindow *window, double *xpos, double *ypos) { if (xpos) *xpos = window ? window->cursor_x : 0.0; if (ypos) *ypos = window ? window->cursor_y : 0.0; }
 int glfwGetKey(GLFWwindow *window, int key) {
     if (!window) {

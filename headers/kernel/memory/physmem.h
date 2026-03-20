@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define PHYSMEM_DYNAMIC_CAP_BYTES (3096u * 1024u * 1024u)
+#define PHYSMEM_DYNAMIC_CAP_BYTES (3ull * 1024ull * 1024ull * 1024ull)
 
 void physmem_init(void);
 uintptr_t physmem_usable_base(void);

@@ -15,7 +15,10 @@
 typedef int (*thrd_start_t)(void *);
 typedef struct { int active; } thrd_t;
 typedef struct { int locked; } mtx_t;
-typedef struct { int signaled; } cnd_t;
+typedef struct {
+    int signaled;
+    void *owner;
+} cnd_t;
 
 int thrd_create(thrd_t *thr, thrd_start_t func, void *arg);
 int thrd_join(thrd_t thr, int *res);

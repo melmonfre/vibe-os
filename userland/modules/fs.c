@@ -25,7 +25,13 @@ static int g_fs_sync_suspended = 0;
 static uint32_t g_fs_total_sectors_cache = 0u;
 
 static void fs_ensure_doom_wad_registered(void);
+static void fs_ensure_craft_textures_registered(void);
 static uint32_t fs_storage_total_sectors(void);
+
+#define CRAFT_TEXTURE_IMAGE_LBA 30000u
+#define CRAFT_FONT_IMAGE_LBA 30128u
+#define CRAFT_SKY_IMAGE_LBA 30256u
+#define CRAFT_SIGN_IMAGE_LBA 30416u
 
 static void fs_reset_node(int idx) {
     int i;
@@ -64,6 +70,13 @@ static uint32_t fs_read_u32_le(const uint8_t *src) {
          | ((uint32_t)src[1] << 8)
          | ((uint32_t)src[2] << 16)
          | ((uint32_t)src[3] << 24);
+}
+
+static uint32_t fs_read_u32_be(const uint8_t *src) {
+    return ((uint32_t)src[0] << 24)
+         | ((uint32_t)src[1] << 16)
+         | ((uint32_t)src[2] << 8)
+         | (uint32_t)src[3];
 }
 
 static int fs_read_image_bytes(uint32_t lba, uint32_t offset, void *dst, uint32_t size) {
@@ -262,6 +275,46 @@ static int fs_detect_doom_wad(uint32_t lba, uint32_t *sector_count_out, int *siz
     *size_out = (int)max_end;
     *sector_count_out = (max_end + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
     return 0;
+}
+
+static int fs_detect_png_file(uint32_t lba, uint32_t *sector_count_out, int *size_out) {
+    uint8_t signature[8];
+    uint8_t chunk_header[8];
+    uint32_t offset = 8u;
+    uint32_t total_size = 8u;
+    static const uint8_t png_signature[8] = {137u, 80u, 78u, 71u, 13u, 10u, 26u, 10u};
+
+    if (!sector_count_out || !size_out) {
+        return -1;
+    }
+    if (fs_read_image_bytes(lba, 0u, signature, (uint32_t)sizeof(signature)) != 0) {
+        return -1;
+    }
+    if (memcmp(signature, png_signature, sizeof(png_signature)) != 0) {
+        return -1;
+    }
+
+    for (int i = 0; i < 1024; ++i) {
+        uint32_t chunk_length;
+        uint32_t chunk_size;
+
+        if (fs_read_image_bytes(lba, offset, chunk_header, (uint32_t)sizeof(chunk_header)) != 0) {
+            return -1;
+        }
+        chunk_length = fs_read_u32_be(chunk_header + 0);
+        chunk_size = 12u + chunk_length;
+        if (chunk_size < 12u) {
+            return -1;
+        }
+        total_size += chunk_size;
+        if (memcmp(chunk_header + 4, "IEND", 4u) == 0) {
+            *size_out = (int)total_size;
+            *sector_count_out = (total_size + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
+            return 0;
+        }
+        offset += chunk_size;
+    }
+    return -1;
 }
 
 static int fs_validate_loaded_tree(void) {
@@ -907,6 +960,30 @@ static void fs_ensure_doom_wad_registered(void) {
     }
 }
 
+static void fs_register_png_asset(const char *path, uint32_t lba) {
+    uint32_t sectors = 0u;
+    int size = 0;
+
+    if (fs_detect_png_file(lba, &sectors, &size) == 0) {
+        (void)fs_register_image_file(path, lba, sectors, size);
+    }
+}
+
+static void fs_ensure_craft_textures_registered(void) {
+    if (g_fs_root < 0) {
+        return;
+    }
+
+    if (fs_resolve("/textures") < 0) {
+        (void)fs_create("/textures", 1);
+    }
+
+    fs_register_png_asset("/textures/texture.png", CRAFT_TEXTURE_IMAGE_LBA);
+    fs_register_png_asset("/textures/font.png", CRAFT_FONT_IMAGE_LBA);
+    fs_register_png_asset("/textures/sky.png", CRAFT_SKY_IMAGE_LBA);
+    fs_register_png_asset("/textures/sign.png", CRAFT_SIGN_IMAGE_LBA);
+}
+
 void fs_build_path(int node, char *out, int max_len) {
     int stack[FS_MAX_NODES];
     int top = 0;
@@ -984,6 +1061,7 @@ void fs_init(void) {
 
     if (fs_load_persistent_image() == 0) {
         fs_ensure_doom_wad_registered();
+        fs_ensure_craft_textures_registered();
         g_fs_sync_suspended = 0;
         fs_sync();
         return;
@@ -1004,6 +1082,7 @@ void fs_init(void) {
     (void)fs_create("/tmp", 1);
     (void)fs_create("/dev", 1);
     (void)fs_create("/DOOM", 1);
+    (void)fs_create("/textures", 1);
     (void)fs_create("/docs", 1);
     (void)fs_create("/config", 1);
     (void)fs_write_file("/README", "SISTEMA DE ARQUIVOS VFS", 0);
@@ -1021,6 +1100,7 @@ void fs_init(void) {
         (void)fs_write_file(compat_exec_stubs[i], "", 0);
     }
     fs_ensure_doom_wad_registered();
+    fs_ensure_craft_textures_registered();
     g_fs_sync_suspended = 0;
     fs_sync();
 }

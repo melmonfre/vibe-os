@@ -14,6 +14,35 @@ static struct rect craft_client_rect(const struct craft_state *state) {
     };
 }
 
+static void craft_debug_int(const char *prefix, int value) {
+    char msg[64];
+    int pos = 0;
+    unsigned int magnitude;
+    char digits[16];
+    int digit_count = 0;
+
+    while (prefix && prefix[pos] && pos < (int)sizeof(msg) - 1) {
+        msg[pos] = prefix[pos];
+        pos += 1;
+    }
+    if (value < 0 && pos < (int)sizeof(msg) - 1) {
+        msg[pos++] = '-';
+        magnitude = (unsigned int)(-value);
+    } else {
+        magnitude = (unsigned int)value;
+    }
+    do {
+        digits[digit_count++] = (char)('0' + (magnitude % 10u));
+        magnitude /= 10u;
+    } while (magnitude > 0u && digit_count < (int)sizeof(digits));
+    while (digit_count > 0 && pos < (int)sizeof(msg) - 2) {
+        msg[pos++] = digits[--digit_count];
+    }
+    msg[pos++] = '\n';
+    msg[pos] = '\0';
+    sys_write_debug(msg);
+}
+
 void craft_init_state(struct craft_state *state) {
     state->window = DEFAULT_CRAFT_WINDOW;
     state->running = 0;
@@ -58,7 +87,9 @@ int craft_step(struct craft_state *state, uint32_t ticks) {
     }
 
     if (!state->started) {
+        sys_write_debug("craft: start\n");
         state->last_code = craft_upstream_start(client.w, client.h);
+        craft_debug_int("craft: start rc=", state->last_code);
         state->started = (state->last_code == 0);
         state->running = state->started;
         if (!state->started) {
@@ -71,6 +102,13 @@ int craft_step(struct craft_state *state, uint32_t ticks) {
     craft_upstream_resize(client.w, client.h);
     craft_upstream_set_mouse(local_x, local_y, state->mouse_buttons, state->focused, inside);
     state->last_code = craft_upstream_frame();
+    {
+        static int logged_first_frame = 0;
+        if (!logged_first_frame) {
+            craft_debug_int("craft: first frame rc=", state->last_code);
+            logged_first_frame = 1;
+        }
+    }
     if (state->last_code <= 0) {
         state->running = 0;
         if (state->last_code < 0) {

@@ -959,6 +959,16 @@ void compute_chunk(WorkerItem *item) {
     char *opaque = (char *)calloc(XZ_SIZE * XZ_SIZE * Y_SIZE, sizeof(char));
     char *light = (char *)calloc(XZ_SIZE * XZ_SIZE * Y_SIZE, sizeof(char));
     char *highest = (char *)calloc(XZ_SIZE * XZ_SIZE, sizeof(char));
+    if (!opaque || !light || !highest) {
+        free(opaque);
+        free(light);
+        free(highest);
+        item->miny = 0;
+        item->maxy = 0;
+        item->faces = 0;
+        item->data = 0;
+        return;
+    }
 
     int ox = item->p * CHUNK_SIZE - CHUNK_SIZE - 1;
     int oy = -1;
@@ -1138,7 +1148,12 @@ void generate_chunk(Chunk *chunk, WorkerItem *item) {
     chunk->maxy = item->maxy;
     chunk->faces = item->faces;
     del_buffer(chunk->buffer);
-    chunk->buffer = gen_faces(10, item->faces, item->data);
+    if (item->faces > 0 && item->data) {
+        chunk->buffer = gen_faces(10, item->faces, item->data);
+    } else {
+        free(item->data);
+        chunk->buffer = 0;
+    }
     gen_sign_buffer(chunk);
 }
 
@@ -1309,6 +1324,7 @@ void force_chunks(Player *player) {
     int p = chunked(s->x);
     int q = chunked(s->z);
     int r = 1;
+    sys_write_debug("craft: force_chunks\n");
     for (int dp = -r; dp <= r; dp++) {
         for (int dq = -r; dq <= r; dq++) {
             int a = p + dp;
@@ -1418,6 +1434,9 @@ void ensure_chunks_worker(Player *player, Worker *worker) {
 void ensure_chunks(Player *player) {
     check_workers();
     force_chunks(player);
+    if (g->create_radius <= 0) {
+        return;
+    }
     for (int i = 0; i < WORKERS; i++) {
         Worker *worker = g->workers + i;
         mtx_lock(&worker->mtx);
@@ -1609,7 +1628,9 @@ void builder_block(int x, int y, int z, int w) {
 int render_chunks(Attrib *attrib, Player *player) {
     int result = 0;
     State *s = &player->state;
+    sys_write_debug("craft: render_chunks enter\n");
     ensure_chunks(player);
+    sys_write_debug("craft: render_chunks ensured\n");
     int p = chunked(s->x);
     int q = chunked(s->z);
     float light = get_daylight();
@@ -1638,9 +1659,13 @@ int render_chunks(Attrib *attrib, Player *player) {
         {
             continue;
         }
+        if (chunk->faces <= 0 || chunk->buffer == 0) {
+            continue;
+        }
         draw_chunk(attrib, chunk);
         result += chunk->faces;
     }
+    sys_write_debug("craft: render_chunks done\n");
     return result;
 }
 
