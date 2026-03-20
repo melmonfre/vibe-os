@@ -27,9 +27,13 @@ struct pacman_state {
     uint32_t next_tick;
     uint32_t last_ticks;
     uint32_t frightened_until;
+    uint32_t scatter_until;
+    uint32_t round_start_tick;
+    uint32_t ghost_release_tick[PACMAN_GHOSTS];
     int score;
     int pellets_left;
     int lives;
+    int level;
     int ghost_combo;
     int game_over;
     int win;

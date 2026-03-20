@@ -18,6 +18,7 @@ int sys_storage_read_sectors(uint32_t lba, void *dst, uint32_t sector_count);
 void sys_sleep(void);
 uint32_t sys_ticks(void);
 int sys_gfx_info(struct video_mode *mode);
+int sys_gfx_caps(struct video_capabilities *caps);
 int sys_getpid(void);
 void sys_yield(void);
 void sys_write_debug(const char *msg);

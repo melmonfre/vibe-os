@@ -2,7 +2,7 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/syscalls.h>
 
-static const struct rect DEFAULT_CALCULATOR_WINDOW = {88, 30, 140, 142};
+static const struct rect DEFAULT_CALCULATOR_WINDOW = {88, 30, 400, 300};
 static const char g_calc_labels[CALCULATOR_BUTTON_COUNT] = {
     '7', '8', '9', '/',
     '4', '5', '6', '*',
@@ -108,11 +108,16 @@ void calculator_init_state(struct calculator_state *calc) {
 struct rect calculator_button_rect(const struct calculator_state *calc, int index) {
     int col = index % 4;
     int row = index / 4;
+    int grid_x = calc->window.x + 16;
+    int grid_y = calc->window.y + 92;
+    int grid_w = calc->window.w - 32;
+    int button_w = (grid_w - 18) / 4;
+    int button_h = 34;
     struct rect r = {
-        calc->window.x + 8 + (col * 31),
-        calc->window.y + 46 + (row * 22),
-        27,
-        18
+        grid_x + (col * (button_w + 6)),
+        grid_y + (row * (button_h + 8)),
+        button_w,
+        button_h
     };
     return r;
 }
@@ -194,13 +199,16 @@ void calculator_draw_window(struct calculator_state *calc, int active,
                             int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *theme = ui_theme_get();
     struct rect body = {calc->window.x + 4, calc->window.y + 18, calc->window.w - 8, calc->window.h - 22};
-    struct rect display = {calc->window.x + 8, calc->window.y + 24, calc->window.w - 16, 16};
+    struct rect hero = {calc->window.x + 12, calc->window.y + 24, calc->window.w - 24, 26};
+    struct rect display = {calc->window.x + 16, calc->window.y + 58, calc->window.w - 32, 26};
 
     draw_window_frame(&calc->window, "CALCULADORA", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, theme->window_bg);
+    ui_draw_surface(&hero, ui_color_panel());
 
     ui_draw_inset(&display, ui_color_canvas());
-    sys_text(calc->window.x + 12, calc->window.y + 29, theme->text, calc->display);
+    sys_text(hero.x + 6, hero.y + 5, ui_color_muted(), "Operacoes basicas");
+    sys_text(display.x + 6, display.y + 9, theme->text, calc->display);
 
     for (int i = 0; i < CALCULATOR_BUTTON_COUNT; ++i) {
         struct rect button = calculator_button_rect(calc, i);

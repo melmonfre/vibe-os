@@ -6,6 +6,8 @@ ORG 0x7C00
 %define BOOTINFO_ADDR 0x8000
 %define BOOTINFO_MAGIC 0x56424D49
 %define E820_BUF 0x8020
+%define VESA_INFO_ADDR 0x0500
+%define VESA_MODEINFO_ADDR 0x9000
 %define MIN_USABLE_ADDR 0x00100000
 ; Number of 512-byte sectors to read for the kernel image.
 ; DOOM full port significantly increases kernel.bin size, so keep a wide margin.
@@ -25,18 +27,11 @@ start:
     ; keep interrupts disabled until IDT is set by the kernel
 
     mov [boot_drive],dl
-
-    mov ax,0x0003
-    int 0x10
-
-    mov si,msg_boot
-    call print
+    mov word [VESA_INFO_ADDR + 0], 0
+    call setup_vesa
 
     call load_kernel
     jc disk_error
-
-    mov si,msg_loaded
-    call print
 
     call detect_memory
 
@@ -150,6 +145,49 @@ detect_memory:
     ret
 
 ; -----------------------------
+; VESA boot graphics
+; -----------------------------
+
+setup_vesa:
+
+    mov word [VESA_INFO_ADDR + 0], 0
+
+    mov ax,0x4F02
+    mov bx,0x4101
+    int 0x10
+    cmp ax,0x004F
+    jne .done
+
+    xor ax,ax
+    mov es,ax
+    mov di,VESA_MODEINFO_ADDR
+    mov ax,0x4F01
+    mov cx,0x0101
+    int 0x10
+    cmp ax,0x004F
+    jne .done
+
+    mov ax,[VESA_MODEINFO_ADDR + 0]
+    test ax,0x0081
+    jz .done
+
+    mov ax,0x0101
+    mov [VESA_INFO_ADDR + 0],ax
+    mov eax,[VESA_MODEINFO_ADDR + 40]
+    mov [VESA_INFO_ADDR + 2],eax
+    mov ax,[VESA_MODEINFO_ADDR + 16]
+    mov [VESA_INFO_ADDR + 6],ax
+    mov ax,[VESA_MODEINFO_ADDR + 18]
+    mov [VESA_INFO_ADDR + 8],ax
+    mov ax,[VESA_MODEINFO_ADDR + 20]
+    mov [VESA_INFO_ADDR + 10],ax
+    mov al,[VESA_MODEINFO_ADDR + 25]
+    mov [VESA_INFO_ADDR + 12],al
+
+.done:
+    ret
+
+; -----------------------------
 ; A20
 ; -----------------------------
 
@@ -185,9 +223,6 @@ print:
 ; -----------------------------
 
 disk_error:
-
-    mov si,msg_error
-    call print
 
 .halt:
     hlt
@@ -229,10 +264,6 @@ disk_address_packet:
     dd 1
 .lba_high:
     dd 0
-
-msg_boot db "bootloader start",13,10,0
-msg_loaded db "kernel loaded",13,10,0
-msg_error db "disk error",13,10,0
 
 ; -----------------------------
 ; protected mode

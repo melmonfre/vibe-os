@@ -21,6 +21,9 @@ void kernel_keyboard_get_available_layouts(char* buffer, int size);
 /* Keyboard IRQ handler (called from assembly) */
 void kernel_keyboard_irq_handler(void);
 
+/* Reset transient PS/2 keyboard state before entering graphics mode. */
+void kernel_keyboard_prepare_for_graphics(void);
+
 /* Mouse driver initialization */
 void kernel_mouse_init(void);
 
@@ -35,5 +38,8 @@ void kernel_mouse_sync_to_video(void);
 
 /* Mouse IRQ handler (called from assembly) */
 void kernel_mouse_irq_handler(void);
+
+/* Reset transient PS/2 mouse state before entering graphics mode. */
+void kernel_mouse_prepare_for_graphics(void);
 
 #endif /* KERNEL_INPUT_H */

@@ -1,4 +1,5 @@
 #include <kernel/drivers/video/video.h>
+#include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/input/input.h>
 #include <kernel/memory/heap.h>
 #include <kernel/hal/io.h>
@@ -10,16 +11,22 @@ static volatile uint8_t *g_fb = NULL;
 static uint8_t *g_backbuf = NULL;
 static size_t g_buf_size = 0;
 static uint8_t *g_graphics_backbuf = NULL;
+static size_t g_graphics_backbuf_capacity = 0u;
 static int g_graphics_enabled = 0;
 static int g_graphics_bga = 0;
+static int g_graphics_boot_lfb = 0;
+static int g_video_initialized = 0;
+static uint8_t g_early_graphics_backbuf[640u * 480u];
 
 #define GRAPHICS_DEFAULT_WIDTH 640u
 #define GRAPHICS_DEFAULT_HEIGHT 480u
 #define GRAPHICS_MAX_WIDTH 1920u
 #define GRAPHICS_MAX_HEIGHT 1080u
 #define GRAPHICS_BPP 8u
+#define GRAPHICS_MIN_FB_ADDR 0x00100000u
 #define GRAPHICS_BANK_SIZE 65536u
-#define GRAPHICS_MAX_PIXELS ((size_t)GRAPHICS_MAX_WIDTH * (size_t)GRAPHICS_MAX_HEIGHT)
+#define GRAPHICS_MAX_PITCH 2048u
+#define GRAPHICS_MAX_BYTES ((size_t)GRAPHICS_MAX_PITCH * (size_t)GRAPHICS_MAX_HEIGHT)
 
 #define BGA_INDEX_PORT 0x01CEu
 #define BGA_DATA_PORT 0x01CFu
@@ -33,6 +40,10 @@ static int g_graphics_bga = 0;
 #define BGA_ID5 0xB0C5u
 #define BGA_DISABLED 0x0000u
 #define BGA_ENABLED 0x0001u
+
+/* prototypes for driver implementations */
+int vesa_init(struct video_mode *mode);
+int vga_init(struct video_mode *mode);
 
 static void bga_write(uint16_t index, uint16_t value) {
     outw(BGA_INDEX_PORT, index);
@@ -71,40 +82,194 @@ static int kernel_video_mode_supported(uint16_t width, uint16_t height) {
            (width == 1920u && height == 1080u);
 }
 
+static uint32_t kernel_video_mode_bit(uint16_t width, uint16_t height) {
+    if (width == 640u && height == 480u) {
+        return VIDEO_RES_640X480;
+    }
+    if (width == 800u && height == 600u) {
+        return VIDEO_RES_800X600;
+    }
+    if (width == 1024u && height == 768u) {
+        return VIDEO_RES_1024X768;
+    }
+    if (width == 1360u && height == 720u) {
+        return VIDEO_RES_1360X720;
+    }
+    if (width == 1920u && height == 1080u) {
+        return VIDEO_RES_1920X1080;
+    }
+    return 0u;
+}
+
+static uint32_t kernel_video_supported_mode_mask(void) {
+    if (g_graphics_bga) {
+        return VIDEO_RES_640X480 |
+               VIDEO_RES_800X600 |
+               VIDEO_RES_1024X768 |
+               VIDEO_RES_1360X720 |
+               VIDEO_RES_1920X1080;
+    }
+    if (g_graphics_boot_lfb) {
+        return kernel_video_mode_bit((uint16_t)g_mode.width, (uint16_t)g_mode.height);
+    }
+    return 0u;
+}
+
+static size_t kernel_video_mode_buffer_size(const struct video_mode *mode) {
+    if (mode == NULL || mode->pitch == 0u || mode->height == 0u) {
+        return 0u;
+    }
+    return (size_t)mode->pitch * (size_t)mode->height;
+}
+
+static int kernel_video_mode_usable(const struct video_mode *mode) {
+    size_t required_size;
+    uint32_t fb_end;
+
+    if (mode == NULL) {
+        return 0;
+    }
+    if (mode->fb_addr < GRAPHICS_MIN_FB_ADDR ||
+        mode->width == 0u ||
+        mode->height == 0u ||
+        mode->width > GRAPHICS_MAX_WIDTH ||
+        mode->height > GRAPHICS_MAX_HEIGHT ||
+        mode->pitch < mode->width ||
+        mode->pitch > GRAPHICS_MAX_PITCH ||
+        mode->bpp != GRAPHICS_BPP) {
+        return 0;
+    }
+
+    required_size = kernel_video_mode_buffer_size(mode);
+    if (required_size == 0u || required_size > GRAPHICS_MAX_BYTES) {
+        return 0;
+    }
+
+    fb_end = mode->fb_addr + (uint32_t)required_size;
+    if (fb_end < mode->fb_addr) {
+        return 0;
+    }
+    return 1;
+}
+
+static int kernel_video_reserve_backbuffer(size_t required_size) {
+    if (required_size == 0u || required_size > GRAPHICS_MAX_BYTES) {
+        return 0;
+    }
+    if (g_graphics_backbuf_capacity >= required_size && g_graphics_backbuf != NULL) {
+        return 1;
+    }
+
+    g_graphics_backbuf = (uint8_t *)kernel_malloc(required_size);
+    if (g_graphics_backbuf == NULL) {
+        return 0;
+    }
+
+    g_graphics_backbuf_capacity = required_size;
+    return 1;
+}
+
+static int kernel_video_try_boot_lfb(struct video_mode *mode, uint16_t width, uint16_t height) {
+    struct video_mode boot_mode;
+
+    if (mode == NULL) {
+        return 0;
+    }
+    if (vesa_init(&boot_mode) != 0) {
+        return 0;
+    }
+    if (!kernel_video_mode_usable(&boot_mode) ||
+        boot_mode.width != width ||
+        boot_mode.height != height) {
+        return 0;
+    }
+
+    *mode = boot_mode;
+    return 1;
+}
+
+static int kernel_video_try_init_boot_lfb(void) {
+    struct video_mode boot_mode;
+    size_t required_size;
+
+    if (vesa_init(&boot_mode) != 0) {
+        return 0;
+    }
+    if (!kernel_video_mode_usable(&boot_mode)) {
+        return 0;
+    }
+
+    required_size = kernel_video_mode_buffer_size(&boot_mode);
+    if (required_size == 0u || required_size > sizeof(g_early_graphics_backbuf)) {
+        return 0;
+    }
+
+    g_graphics_backbuf = g_early_graphics_backbuf;
+    g_graphics_backbuf_capacity = sizeof(g_early_graphics_backbuf);
+    g_mode = boot_mode;
+    g_fb = (volatile uint8_t *)(uintptr_t)g_mode.fb_addr;
+    g_backbuf = g_graphics_backbuf;
+    g_buf_size = required_size;
+    g_graphics_enabled = 1;
+    g_graphics_bga = 0;
+    g_graphics_boot_lfb = 1;
+
+    for (size_t i = 0; i < g_buf_size; ++i) {
+        g_backbuf[i] = 0u;
+    }
+    kernel_video_flip();
+    kernel_debug_printf("video: boot LFB active fb=%x size=%d\n",
+                        (unsigned int)g_mode.fb_addr,
+                        (int)g_buf_size);
+    return 1;
+}
+
 static int kernel_video_apply_graphics_mode(uint16_t width, uint16_t height) {
     int use_bga = 0;
+    struct video_mode selected_mode;
+    size_t required_size;
 
     if (!kernel_video_mode_supported(width, height)) {
         return -1;
     }
 
-    if (g_graphics_backbuf == NULL) {
-        g_graphics_backbuf = (uint8_t *)kernel_malloc(GRAPHICS_MAX_PIXELS);
-        if (g_graphics_backbuf == NULL) {
-            return -1;
-        }
-    }
+    kernel_debug_printf("video: mode request %dx%d\n", (int)width, (int)height);
+    kernel_keyboard_prepare_for_graphics();
+    kernel_mouse_prepare_for_graphics();
 
     if (bga_available()) {
         use_bga = bga_enter_mode(width, height, (uint16_t)GRAPHICS_BPP);
         if (!use_bga) {
+            kernel_debug_puts("video: BGA mode switch failed\n");
             return -1;
         }
+        selected_mode.width = width;
+        selected_mode.height = height;
+        selected_mode.pitch = width;
+        selected_mode.bpp = GRAPHICS_BPP;
+        selected_mode.fb_addr = 0xA0000u;
+        kernel_debug_puts("video: BGA mode switch complete\n");
+    } else if (kernel_video_try_boot_lfb(&selected_mode, width, height)) {
+        kernel_debug_printf("video: using boot LFB fb=%x pitch=%d\n",
+                            (unsigned int)selected_mode.fb_addr,
+                            (int)selected_mode.pitch);
+    } else {
+        kernel_debug_puts("video: no compatible BGA or boot LFB mode\n");
+        return -1;
     }
 
-    if (!use_bga) {
+    required_size = kernel_video_mode_buffer_size(&selected_mode);
+    if (!kernel_video_reserve_backbuffer(required_size)) {
+        kernel_debug_printf("video: backbuffer alloc failed for %d bytes\n", (int)required_size);
         return -1;
     }
 
     g_graphics_bga = use_bga;
-    g_mode.width = width;
-    g_mode.height = height;
-    g_mode.pitch = width;
-    g_mode.bpp = GRAPHICS_BPP;
-    g_mode.fb_addr = 0xA0000u;
+    g_graphics_boot_lfb = !use_bga;
+    g_mode = selected_mode;
     g_fb = (volatile uint8_t *)(uintptr_t)g_mode.fb_addr;
     g_backbuf = g_graphics_backbuf;
-    g_buf_size = (size_t)g_mode.pitch * (size_t)g_mode.height;
+    g_buf_size = required_size;
     g_graphics_enabled = 1;
 
     for (size_t i = 0; i < g_buf_size; ++i) {
@@ -113,6 +278,9 @@ static int kernel_video_apply_graphics_mode(uint16_t width, uint16_t height) {
 
     kernel_mouse_sync_to_video();
     kernel_video_flip();
+    kernel_debug_printf("video: graphics active fb=%x size=%d\n",
+                        (unsigned int)g_mode.fb_addr,
+                        (int)g_buf_size);
     return 0;
 }
 
@@ -124,11 +292,16 @@ static void kernel_video_enter_graphics(void) {
                                            (uint16_t)GRAPHICS_DEFAULT_HEIGHT);
 }
 
-/* prototypes for driver implementations */
-int vesa_init(struct video_mode *mode);
-int vga_init(struct video_mode *mode);
-
 void kernel_video_init(void) {
+    if (g_video_initialized) {
+        return;
+    }
+
+    if (kernel_video_try_init_boot_lfb()) {
+        g_video_initialized = 1;
+        return;
+    }
+
     /* stay in BIOS text mode until a graphical syscall is used */
     g_mode.fb_addr = 0xB8000;
     g_mode.width = 80;
@@ -138,6 +311,7 @@ void kernel_video_init(void) {
     g_fb = (volatile uint8_t *)g_mode.fb_addr;
     g_backbuf = NULL;
     g_buf_size = 0;
+    g_video_initialized = 1;
 }
 
 struct video_mode *kernel_video_get_mode(void) {
@@ -201,6 +375,13 @@ void kernel_video_flip(void) {
 }
 
 void kernel_video_leave_graphics(void) {
+    if (g_graphics_boot_lfb) {
+        kernel_video_clear(0u);
+        kernel_video_flip();
+        kernel_text_init();
+        return;
+    }
+
     if (g_graphics_bga) {
         bga_write(BGA_INDEX_ENABLE, BGA_DISABLED);
         bga_write(BGA_INDEX_BANK, 0u);
@@ -208,6 +389,7 @@ void kernel_video_leave_graphics(void) {
 
     g_graphics_enabled = 0;
     g_graphics_bga = 0;
+    g_graphics_boot_lfb = 0;
     g_mode.fb_addr = 0xB8000u;
     g_mode.width = 80u;
     g_mode.height = 25u;
@@ -220,7 +402,40 @@ void kernel_video_leave_graphics(void) {
 }
 
 int kernel_video_set_mode(uint32_t width, uint32_t height) {
+    if (g_graphics_boot_lfb &&
+        (width != g_mode.width || height != g_mode.height)) {
+        return -1;
+    }
     return kernel_video_apply_graphics_mode((uint16_t)width, (uint16_t)height);
+}
+
+void kernel_video_get_capabilities(struct video_capabilities *caps) {
+    if (caps == NULL) {
+        return;
+    }
+
+    caps->flags = 0u;
+    caps->supported_modes = 0u;
+    caps->active_width = g_mode.width;
+    caps->active_height = g_mode.height;
+    caps->active_bpp = g_mode.bpp;
+
+    if (g_graphics_bga) {
+        caps->flags |= VIDEO_CAPS_BGA | VIDEO_CAPS_CAN_SET_MODE;
+        caps->supported_modes = kernel_video_supported_mode_mask();
+    } else if (g_graphics_boot_lfb) {
+        caps->flags |= VIDEO_CAPS_BOOT_LFB;
+        caps->supported_modes = kernel_video_supported_mode_mask();
+    } else if (bga_available()) {
+        caps->flags |= VIDEO_CAPS_BGA | VIDEO_CAPS_CAN_SET_MODE;
+        caps->supported_modes = VIDEO_RES_640X480 |
+                                VIDEO_RES_800X600 |
+                                VIDEO_RES_1024X768 |
+                                VIDEO_RES_1360X720 |
+                                VIDEO_RES_1920X1080;
+    } else {
+        caps->flags |= VIDEO_CAPS_TEXT_ONLY;
+    }
 }
 
 /* graphics helper internal font & routines copied from stage2 */

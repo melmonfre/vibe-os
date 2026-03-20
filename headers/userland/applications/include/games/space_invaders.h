@@ -4,12 +4,12 @@
 #include <stdint.h>
 #include <userland/modules/include/utils.h>
 
-#define SI_ROWS 4
-#define SI_COLS 8
+#define SI_ROWS 5
+#define SI_COLS 10
 #define SI_MAX_BULLETS 4
-#define SI_BARRIER_COUNT 3
-#define SI_BARRIER_ROWS 2
-#define SI_BARRIER_COLS 4
+#define SI_BARRIER_COUNT 4
+#define SI_BARRIER_ROWS 3
+#define SI_BARRIER_COLS 5
 
 struct space_invaders_state {
     struct rect window;
@@ -24,6 +24,7 @@ struct space_invaders_state {
     uint32_t tick_count;
     uint32_t next_tick;
     int score;
+    int level;
     int game_over;
     int win;
     int lives;

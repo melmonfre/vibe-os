@@ -85,8 +85,8 @@ static const uint8_t g_color_palette_256[] = {
 };
 
 #define TASKBAR_HEIGHT 22
-#define WINDOW_MIN_W 96
-#define WINDOW_MIN_H 60
+#define WINDOW_MIN_W 400
+#define WINDOW_MIN_H 300
 
 enum {
     FMENU_OPEN = 0,
@@ -130,6 +130,7 @@ struct file_dialog_state {
 };
 static int g_clipboard_node = -1;
 static int g_launch_editor_pending = 0;
+static int g_launch_editor_nano = 0;
 static char g_launch_editor_path[80];
 static int g_fm_context_has_wallpaper_action = 0;
 struct resolution_option {
@@ -1073,6 +1074,17 @@ void desktop_request_open_editor(const char *path) {
     } else {
         str_copy_limited(g_launch_editor_path, path, (int)sizeof(g_launch_editor_path));
     }
+    g_launch_editor_nano = 0;
+    g_launch_editor_pending = 1;
+}
+
+void desktop_request_open_nano(const char *path) {
+    if (path == 0) {
+        g_launch_editor_path[0] = '\0';
+    } else {
+        str_copy_limited(g_launch_editor_path, path, (int)sizeof(g_launch_editor_path));
+    }
+    g_launch_editor_nano = 1;
     g_launch_editor_pending = 1;
 }
 
@@ -1495,7 +1507,7 @@ static void draw_start_menu_with_tab(enum start_menu_tab active_tab,
         "Calculadora",
         "Sketchpad",
         "Personalizar",
-        "Terminal +"
+        "Nano"
     };
     static const char *games_labels[START_MENU_ITEM_COUNT - 1] = {
         "Snake",
@@ -1562,7 +1574,7 @@ static const enum app_type g_start_apps[START_MENU_ITEM_COUNT - 1] = {
     APP_CALCULATOR,
     APP_SKETCHPAD,
     APP_PERSONALIZE,
-    APP_TERMINAL
+    APP_EDITOR
 };
 
 static const enum app_type g_start_games[START_MENU_ITEM_COUNT - 1] = {
@@ -1808,6 +1820,9 @@ void desktop_main(void) {
 
     if (g_launch_editor_pending) {
         int idx = open_editor_window_for_node(-1, &focused);
+        if (idx >= 0) {
+            editor_set_nano_mode(&g_editors[g_windows[idx].instance], g_launch_editor_nano);
+        }
         if (idx >= 0 && g_launch_editor_path[0] != '\0') {
             int node = fs_resolve(g_launch_editor_path);
             if (node >= 0 && !g_fs_nodes[node].is_dir) {
@@ -1815,6 +1830,7 @@ void desktop_main(void) {
             }
         }
         g_launch_editor_pending = 0;
+        g_launch_editor_nano = 0;
         g_launch_editor_path[0] = '\0';
         dirty = 1;
     }
@@ -2308,6 +2324,15 @@ void desktop_main(void) {
                             for (int i = 0; i < START_MENU_ITEM_COUNT - 1; ++i) {
                                 if (!start_menu_item_contains(i, click_x, click_y)) {
                                     continue;
+                                }
+                                if (start_menu_tab == START_MENU_TAB_APPS && i == START_MENU_ITEM_8) {
+                                    int nano_window = open_window_or_focus_existing(APP_EDITOR, &focused);
+                                    if (nano_window >= 0) {
+                                        editor_set_nano_mode(&g_editors[g_windows[nano_window].instance], 1);
+                                        dirty = 1;
+                                    }
+                                    launch_type = APP_NONE;
+                                    break;
                                 }
                                 launch_type = start_menu_tab == START_MENU_TAB_APPS ? g_start_apps[i] : g_start_games[i];
                                 break;

@@ -180,6 +180,20 @@ static uint32_t sys_gfx_info(uint32_t out_ptr, uint32_t b, uint32_t c,
     return 0;
 }
 
+static uint32_t sys_gfx_caps(uint32_t out_ptr, uint32_t b, uint32_t c,
+                             uint32_t d, uint32_t e) {
+    struct video_capabilities *out;
+
+    (void)b; (void)c; (void)d; (void)e;
+    if (out_ptr == 0) {
+        return (uint32_t)-1;
+    }
+
+    out = (struct video_capabilities *)(uintptr_t)out_ptr;
+    kernel_video_get_capabilities(out);
+    return 0;
+}
+
 static uint32_t sys_keyboard_set_layout(uint32_t name_ptr, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
     const char* name = (const char*)(uintptr_t)name_ptr;
@@ -225,6 +239,7 @@ void syscall_init(void) {
     syscall_table[SYSCALL_SLEEP] = sys_sleep;
     syscall_table[SYSCALL_TIME_TICKS] = sys_time_ticks;
     syscall_table[SYSCALL_GFX_INFO] = sys_gfx_info;
+    syscall_table[SYSCALL_GFX_CAPS] = sys_gfx_caps;
     syscall_table[SYSCALL_GETPID] = sys_getpid;
     syscall_table[SYSCALL_YIELD] = sys_yield;
     syscall_table[SYSCALL_WRITE_DEBUG] = sys_write_debug;

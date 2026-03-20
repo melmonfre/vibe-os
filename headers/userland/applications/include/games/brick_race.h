@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <userland/modules/include/utils.h>
 
-#define BRICK_RACE_OBS 8
+#define BRICK_RACE_OBS 10
 
 struct brick_race_state {
     struct rect window;

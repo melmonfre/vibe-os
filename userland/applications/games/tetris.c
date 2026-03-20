@@ -2,7 +2,7 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/syscalls.h>
 
-static const struct rect DEFAULT_TETRIS_WINDOW = {124, 10, 186, 182};
+static const struct rect DEFAULT_TETRIS_WINDOW = {40, 20, 400, 300};
 static const int TETRIS_STEP_TICKS = 28;
 static const uint8_t g_tetris_colors[7] = {11, 14, 10, 12, 9, 5, 6};
 static const uint8_t g_tetris_shapes[7][4][4][4] = {
@@ -49,6 +49,19 @@ static const uint8_t g_tetris_shapes[7][4][4][4] = {
         {{1,1,0,0},{0,1,0,0},{0,1,0,0},{0,0,0,0}}
     }
 };
+
+static void tetris_draw_block(int x, int y, int cell, uint8_t color, const struct desktop_theme *theme) {
+    int inner = cell - 4;
+
+    if (inner < 2) {
+        inner = 2;
+    }
+    sys_rect(x, y, cell - 1, cell - 1, theme->menu_button_inactive);
+    sys_rect(x + 1, y + 1, cell - 3, cell - 3, color);
+    sys_rect(x + 1, y + 1, cell - 3, 1, theme->text);
+    sys_rect(x + 1, y + 1, 1, cell - 3, theme->text);
+    sys_rect(x + 2, y + 2, inner, inner, color);
+}
 
 static uint32_t tetris_next_random(struct tetris_state *tetris) {
     tetris->seed = (tetris->seed * 1664525u) + 1013904223u;
@@ -262,23 +275,65 @@ int tetris_step(struct tetris_state *tetris, uint32_t ticks) {
 
 void tetris_draw_window(struct tetris_state *tetris, int active,
                         int min_hover, int max_hover, int close_hover) {
-    struct rect board = {tetris->window.x + 8, tetris->window.y + 24, 80, 128};
+    int cell_w = (tetris->window.w - 120) / TETRIS_COLS;
+    int cell_h = (tetris->window.h - 70) / TETRIS_ROWS;
+    int cell = cell_w < cell_h ? cell_w : cell_h;
+    struct rect board;
+    struct rect body;
+    struct rect topbar;
+    struct rect hud_panel;
+    struct rect stat1;
+    struct rect help;
+    struct rect preview;
+    int hud_x;
     const struct desktop_theme *theme = ui_theme_get();
     char score[24];
+    int preview_cell;
+
+    if (cell > 12) {
+        cell = 12;
+    }
+    if (cell < 8) {
+        cell = 8;
+    }
+    board.w = TETRIS_COLS * cell;
+    board.h = TETRIS_ROWS * cell;
+    body = (struct rect){tetris->window.x + 4, tetris->window.y + 18, tetris->window.w - 8, tetris->window.h - 22};
+    topbar = (struct rect){tetris->window.x + 8, tetris->window.y + 22, tetris->window.w - 16, 18};
+    board.x = tetris->window.x + 14;
+    board.y = tetris->window.y + 46 + ((tetris->window.h - 58 - board.h) / 2);
+    hud_x = board.x + board.w + 12;
+    hud_panel = (struct rect){hud_x - 4, board.y, tetris->window.x + tetris->window.w - hud_x - 10, board.h};
+    stat1 = (struct rect){hud_panel.x + 6, hud_panel.y + 10, hud_panel.w - 12, 26};
+    help = (struct rect){hud_panel.x + 6, hud_panel.y + 44, hud_panel.w - 12, 54};
+    preview = (struct rect){hud_panel.x + 6, hud_panel.y + 106, hud_panel.w - 12, 64};
+    preview_cell = (preview.w - 20) / 4;
+    if (preview_cell > 10) {
+        preview_cell = 10;
+    }
+    if (preview_cell < 6) {
+        preview_cell = 6;
+    }
 
     draw_window_frame(&tetris->window, "TETRAX", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&(struct rect){tetris->window.x + 4, tetris->window.y + 18,
-                                   tetris->window.w - 8, tetris->window.h - 22},
-                    ui_color_canvas());
+    ui_draw_surface(&body, ui_color_canvas());
+    ui_draw_surface(&topbar, ui_color_panel());
     ui_draw_inset(&board, ui_color_canvas());
+    ui_draw_inset(&hud_panel, ui_color_canvas());
+    ui_draw_inset(&stat1, ui_color_canvas());
+    ui_draw_inset(&help, ui_color_canvas());
+    ui_draw_inset(&preview, ui_color_canvas());
+    sys_text(topbar.x + 6, topbar.y + 5, ui_color_muted(), "Stack clean");
+    sys_rect(board.x + 1, board.y + 1, board.w - 2, board.h - 2, theme->background);
 
     for (int y = 0; y < TETRIS_ROWS; ++y) {
         for (int x = 0; x < TETRIS_COLS; ++x) {
-            uint8_t color = ui_color_canvas();
+            uint8_t color = ((x + y) & 1) ? theme->background : ui_color_canvas();
+            sys_rect(board.x + (x * cell), board.y + (y * cell), cell - 1, cell - 1, color);
             if (tetris->board[y][x] != 0u) {
                 color = g_tetris_colors[tetris->board[y][x] - 1u];
+                tetris_draw_block(board.x + (x * cell), board.y + (y * cell), cell, color, theme);
             }
-            sys_rect(board.x + (x * 8), board.y + (y * 8), 7, 7, color);
         }
     }
 
@@ -288,21 +343,37 @@ void tetris_draw_window(struct tetris_state *tetris, int active,
                 if (!g_tetris_shapes[tetris->piece_type][tetris->rotation][y][x]) {
                     continue;
                 }
-                sys_rect(board.x + ((tetris->piece_x + x) * 8),
-                         board.y + ((tetris->piece_y + y) * 8),
-                         7, 7,
-                         g_tetris_colors[tetris->piece_type]);
+                tetris_draw_block(board.x + ((tetris->piece_x + x) * cell),
+                                  board.y + ((tetris->piece_y + y) * cell),
+                                  cell,
+                                  g_tetris_colors[tetris->piece_type],
+                                  theme);
             }
         }
     }
 
     str_copy_limited(score, "Score ", (int)sizeof(score));
     tetris_append_int(score, tetris->score, (int)sizeof(score));
-    sys_text(tetris->window.x + 96, tetris->window.y + 30, theme->text, score);
-    sys_text(tetris->window.x + 96, tetris->window.y + 50, theme->text, "Setas");
+    sys_text(stat1.x + 6, stat1.y + 8, theme->text, score);
+    sys_text(help.x + 6, help.y + 8, theme->text, "Setas move/gira");
     if (tetris->game_over) {
-        sys_text(tetris->window.x + 96, tetris->window.y + 70, theme->text, "R reinicia");
+        sys_text(help.x + 6, help.y + 22, theme->text, "R reinicia");
     } else {
-        sys_text(tetris->window.x + 96, tetris->window.y + 70, theme->text, "Space drop");
+        sys_text(help.x + 6, help.y + 22, theme->text, "Space drop");
+    }
+    sys_text(help.x + 6, help.y + 36, theme->text, "Empilhe linhas");
+    sys_text(preview.x + 6, preview.y + 8, ui_color_muted(), "Peca");
+
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            if (!g_tetris_shapes[tetris->piece_type][tetris->rotation][y][x]) {
+                continue;
+            }
+            tetris_draw_block(preview.x + 10 + (x * preview_cell),
+                              preview.y + 24 + (y * preview_cell),
+                              preview_cell,
+                              g_tetris_colors[tetris->piece_type],
+                              theme);
+        }
     }
 }

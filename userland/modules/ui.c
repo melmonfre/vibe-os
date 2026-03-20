@@ -31,10 +31,6 @@ static struct {
 #define START_MENU_ITEM_H 20
 #define START_MENU_ITEM_STEP 26
 #define UI_SETTINGS_PATH "/config/ui.cfg"
-#define UI_CANVAS_COLOR 1u
-#define UI_PANEL_COLOR 8u
-#define UI_MUTED_COLOR 7u
-
 static int ui_text_width(const char *text) {
     int len = str_len(text);
 
@@ -510,15 +506,15 @@ struct rect ui_start_menu_item_rect(int index) {
 }
 
 uint8_t ui_color_canvas(void) {
-    return g_theme.window_bg;  /* Use theme window background */
+    return g_theme.window_bg;
 }
 
 uint8_t ui_color_panel(void) {
-    return g_theme.menu;  /* Use theme menu color */
+    return g_theme.menu;
 }
 
 uint8_t ui_color_muted(void) {
-    return UI_MUTED_COLOR;
+    return g_theme.menu_button_inactive;
 }
 
 void ui_draw_surface(const struct rect *r, uint8_t fill) {
@@ -526,9 +522,9 @@ void ui_draw_surface(const struct rect *r, uint8_t fill) {
         return;
     }
 
-    sys_rect(r->x, r->y, r->w, r->h, 0);
+    sys_rect(r->x, r->y, r->w, r->h, g_theme.window);
     if (r->w > 2 && r->h > 2) {
-        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, UI_PANEL_COLOR);
+        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, g_theme.taskbar);
     }
     if (r->w > 4 && r->h > 4) {
         sys_rect(r->x + 2, r->y + 2, r->w - 4, r->h - 4, fill);
@@ -540,9 +536,9 @@ void ui_draw_inset(const struct rect *r, uint8_t fill) {
         return;
     }
 
-    sys_rect(r->x, r->y, r->w, r->h, UI_PANEL_COLOR);
+    sys_rect(r->x, r->y, r->w, r->h, g_theme.taskbar);
     if (r->w > 2 && r->h > 2) {
-        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, 0);
+        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, g_theme.window);
     }
     if (r->w > 4 && r->h > 4) {
         sys_rect(r->x + 2, r->y + 2, r->w - 4, r->h - 4, fill);
@@ -551,8 +547,8 @@ void ui_draw_inset(const struct rect *r, uint8_t fill) {
 
 void ui_draw_button(const struct rect *r, const char *label,
                     enum ui_button_style style, int highlighted) {
-    uint8_t fill = UI_PANEL_COLOR;
-    uint8_t border = highlighted ? 15 : 0;
+    uint8_t fill = g_theme.menu;
+    uint8_t border = highlighted ? g_theme.window : g_theme.taskbar;
     int text_x;
     int text_y;
 
@@ -598,7 +594,7 @@ void ui_draw_status(const struct rect *r, const char *text) {
         return;
     }
 
-    ui_draw_surface(r, UI_PANEL_COLOR);
+    ui_draw_surface(r, ui_color_panel());
     sys_text(r->x + 5, r->y + 3, g_theme.text, text);
 }
 
@@ -722,7 +718,7 @@ void draw_desktop(const struct mouse_state *mouse,
         struct rect icon_plate = {icon_card.x + 16, icon_card.y + 10, 52, 40};
 
         ui_draw_button(&banner, "VIBE DESKTOP", UI_BUTTON_ACTIVE, 0);
-        ui_draw_surface(&icon_card, UI_PANEL_COLOR);
+        ui_draw_surface(&icon_card, ui_color_panel());
         ui_draw_surface(&icon_plate, g_theme.window);
         sys_text(icon_card.x + 24, icon_card.y + 60, g_theme.text, "Arquivos");
     }

@@ -5,7 +5,7 @@
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h>
 
-static const struct rect DEFAULT_SKETCHPAD_WINDOW = {22, 18, 320, 280};
+static const struct rect DEFAULT_SKETCHPAD_WINDOW = {22, 18, 400, 400};
 /* RPG 8-bit palette - 32 colors */
 static const uint8_t g_sketch_colors[SKETCHPAD_COLOR_COUNT] = {
     /* Row 0: Darks & Grays */
@@ -232,22 +232,25 @@ void sketchpad_draw_window(struct sketchpad_state *sketch, int active,
     struct rect body = {sketch->window.x + 4, sketch->window.y + 18, sketch->window.w - 8, sketch->window.h - 22};
     const struct desktop_theme *theme = ui_theme_get();
     int scale = canvas.w / SKETCHPAD_CANVAS_W;
+    struct rect top_strip = {sketch->window.x + 8, sketch->window.y + 22, sketch->window.w - 16, 18};
 
     draw_window_frame(&sketch->window, "SKETCHPAD", active, min_hover, max_hover, close_hover);
     
     /* Fill window body with theme background color */
     ui_draw_surface(&body, theme->window_bg);
+    ui_draw_surface(&top_strip, ui_color_panel());
     
     /* Draw right panel background (for tools and brushes) */
     struct rect right_panel = {sketch->window.x + sketch->window.w - 82, sketch->window.y + 24, 78, sketch->window.h - 50};
-    ui_draw_surface(&right_panel, theme->window_bg);
+    ui_draw_surface(&right_panel, ui_color_panel());
     
     /* Draw buttons and labels */
     ui_draw_button(&clear_button, "Limpar", UI_BUTTON_NORMAL, 0);
     ui_draw_button(&export_button, "Export", UI_BUTTON_PRIMARY, 0);
     ui_draw_inset(&canvas_frame, 15);
     
-    sys_text(sketch->window.x + 10, sketch->window.y + 24, theme->text, "Acoes");
+    sys_text(top_strip.x + 6, top_strip.y + 5, ui_color_muted(), "Pixel art board");
+    sys_text(sketch->window.x + 10, sketch->window.y + 46, theme->text, "Acoes");
     sys_text(sketch->window.x + 10, sketch->window.y + 62, theme->text, "Pinceis");
 
     /* Draw canvas with dynamic scale */

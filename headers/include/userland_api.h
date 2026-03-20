@@ -26,6 +26,7 @@ enum syscall_id {
     SYSCALL_KEYBOARD_SET_LAYOUT = 21,
     SYSCALL_KEYBOARD_GET_LAYOUT = 22,
     SYSCALL_KEYBOARD_GET_AVAILABLE_LAYOUTS = 23,
+    SYSCALL_GFX_CAPS = 24,
 
     /* Filesystem syscalls */
     SYSCALL_OPEN = 31,
@@ -51,8 +52,6 @@ struct mouse_state {
     uint8_t buttons;
 };
 
-#ifndef VIBE_VIDEO_MODE_DEFINED
-#define VIBE_VIDEO_MODE_DEFINED
 struct video_mode {
     uint32_t fb_addr;
     uint32_t width;
@@ -60,7 +59,29 @@ struct video_mode {
     uint32_t pitch;
     uint8_t bpp;
 };
-#endif
+
+enum video_capability_flags {
+    VIDEO_CAPS_TEXT_ONLY = 1u << 0,
+    VIDEO_CAPS_BOOT_LFB = 1u << 1,
+    VIDEO_CAPS_BGA = 1u << 2,
+    VIDEO_CAPS_CAN_SET_MODE = 1u << 3
+};
+
+enum video_resolution_bits {
+    VIDEO_RES_640X480 = 1u << 0,
+    VIDEO_RES_800X600 = 1u << 1,
+    VIDEO_RES_1024X768 = 1u << 2,
+    VIDEO_RES_1360X720 = 1u << 3,
+    VIDEO_RES_1920X1080 = 1u << 4
+};
+
+struct video_capabilities {
+    uint32_t flags;
+    uint32_t supported_modes;
+    uint32_t active_width;
+    uint32_t active_height;
+    uint32_t active_bpp;
+};
 
 typedef void (*userland_entry_t)(void);
 

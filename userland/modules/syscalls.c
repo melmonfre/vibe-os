@@ -69,6 +69,10 @@ int sys_gfx_info(struct video_mode *mode) {
     return syscall5(SYSCALL_GFX_INFO, (int)(uintptr_t)mode, 0, 0, 0, 0);
 }
 
+int sys_gfx_caps(struct video_capabilities *caps) {
+    return syscall5(SYSCALL_GFX_CAPS, (int)(uintptr_t)caps, 0, 0, 0, 0);
+}
+
 int sys_getpid(void) {
     return syscall5(SYSCALL_GETPID, 0, 0, 0, 0, 0);
 }

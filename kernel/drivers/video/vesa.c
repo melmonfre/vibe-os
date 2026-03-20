@@ -10,7 +10,7 @@ int vesa_init(struct video_mode *mode) {
     #pragma GCC diagnostic push
     #pragma GCC diagnostic ignored "-Warray-bounds"
     uint16_t vesa_mode = (((uint16_t)vesa_bytes[1]) << 8) | vesa_bytes[0];
-    if (vesa_mode != 0x0101) {
+    if (vesa_mode == 0u) {
         return -1;
     }
 
@@ -24,5 +24,8 @@ int vesa_init(struct video_mode *mode) {
     mode->height  = (((uint16_t)vesa_bytes[11]) << 8) | vesa_bytes[10];
     mode->bpp     = vesa_bytes[12];
     #pragma GCC diagnostic pop
+    if (mode->fb_addr == 0u || mode->width == 0u || mode->height == 0u || mode->pitch < mode->width) {
+        return -1;
+    }
     return 0;
 }

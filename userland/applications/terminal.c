@@ -5,7 +5,7 @@
 #include <userland/modules/include/busybox.h>
 
 /* default geometry used when a new terminal is spawned */
-static const struct rect DEFAULT_TERMINAL_WINDOW = {10, 24, 196, 150};
+static const struct rect DEFAULT_TERMINAL_WINDOW = {10, 24, 400, 300};
 
 /* Global state for output capture during command execution */
 static struct terminal_state *g_term_capture_ctx = 0;
@@ -160,8 +160,10 @@ int terminal_execute_command(struct terminal_state *t) {
 void terminal_draw_window(struct terminal_state *t, int active,
                           int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *theme = ui_theme_get();
-    struct rect log = {t->window.x + 6, t->window.y + 22, t->window.w - 12, t->window.h - 40};
-    struct rect input = {t->window.x + 6, t->window.y + t->window.h - 14, t->window.w - 12, 8};
+    struct rect body = {t->window.x + 4, t->window.y + 18, t->window.w - 8, t->window.h - 22};
+    struct rect hero = {t->window.x + 10, t->window.y + 24, t->window.w - 20, 26};
+    struct rect log = {t->window.x + 10, t->window.y + 58, t->window.w - 20, t->window.h - 100};
+    struct rect input = {t->window.x + 10, t->window.y + t->window.h - 34, t->window.w - 20, 18};
     int text_x = log.x + 4;
     int text_y = log.y + 4;
     int max_display_lines = (log.h - 8) / 8;
@@ -172,10 +174,13 @@ void terminal_draw_window(struct terminal_state *t, int active,
     if (max_display_cols < 20) max_display_cols = 20;
 
     draw_window_frame(&t->window, "TERMINAL", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&(struct rect){t->window.x + 4, t->window.y + 18, t->window.w - 8,
-                    t->window.h - 22}, theme->window_bg);
+    ui_draw_surface(&body, theme->window_bg);
+    ui_draw_surface(&hero, ui_color_panel());
     ui_draw_inset(&log, theme->window_bg);
     ui_draw_inset(&input, theme->window_bg);
+
+    sys_text(hero.x + 6, hero.y + 5, theme->text, "Shell integrada");
+    sys_text(hero.x + hero.w - 116, hero.y + 5, ui_color_muted(), "busybox + apps");
 
     /* Render lines - simple wrapping */
     for (i = 0; i < t->line_count && i < max_display_lines; ++i) {
@@ -212,6 +217,6 @@ void terminal_draw_window(struct terminal_state *t, int active,
             input_line[n++] = t->input[i];
         }
         input_line[n] = '\0';
-        sys_text(input.x + 4, input.y + 1, theme->text, input_line);
+        sys_text(input.x + 4, input.y + 5, theme->text, input_line);
     }
 }

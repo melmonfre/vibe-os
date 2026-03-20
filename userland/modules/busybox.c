@@ -96,7 +96,7 @@ static int should_prefer_external(const char *cmd) {
 
 static int cmd_help(int argc, char **argv) {
     (void)argc; (void)argv;
-    const char *list = "commands: pwd ls cd mkdir touch rm cat echo clear uname help exit startx history edit lua sectorc cc hello js ruby python\n";
+    const char *list = "commands: pwd ls cd mkdir touch rm cat echo clear uname help exit startx history edit nano lua sectorc cc hello js ruby python\n";
     console_write(list);
     return 0;
 }
@@ -247,6 +247,16 @@ static int cmd_edit(int argc, char **argv) {
     return 0;
 }
 
+static int cmd_nano(int argc, char **argv) {
+    if (argc > 1) {
+        desktop_request_open_nano(argv[1]);
+    } else {
+        desktop_request_open_nano("");
+    }
+    desktop_main();
+    return 0;
+}
+
 static int cmd_lua(int argc, char **argv) {
     return vibe_lua_main(argc, argv);
 }
@@ -277,6 +287,7 @@ static const struct command g_commands[] = {
     {"startx", cmd_startx},
     {"history", cmd_history},
     {"edit", cmd_edit},
+    {"nano", cmd_nano},
     {"lua", cmd_lua},
     {"sectorc", cmd_sectorc},
     {"cc", cmd_sectorc},

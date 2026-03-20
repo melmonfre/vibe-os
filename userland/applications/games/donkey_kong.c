@@ -2,29 +2,90 @@
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/ui.h>
 
-static const struct rect DEFAULT_WINDOW = {88, 20, 214, 170};
-static const int DK_BOARD_W = 152;
-static const int DK_BOARD_H = 104;
-static const int DK_PLAYER_W = 10;
-static const int DK_PLAYER_H = 8;
-static const int DK_BARREL_W = 8;
-static const int DK_BARREL_H = 6;
+static const struct rect DEFAULT_WINDOW = {40, 20, 400, 300};
+static const int DK_BOARD_W = 280;
+static const int DK_BOARD_H = 224;
+static const int DK_PLAYER_W = 16;
+static const int DK_PLAYER_H = 14;
+static const int DK_BARREL_W = 12;
+static const int DK_BARREL_H = 10;
 static const int DK_FRAME_TICKS = 16;
 static const int DK_GRAVITY_PER_FRAME = 1;
-static const int DK_JUMP_VY = -7;
-static const int DK_PLAYER_SPEED = 2;
-static const int DK_CLIMB_SPEED = 2;
-static const int DK_BARREL_SPEED = 2;
+static const int DK_JUMP_VY = -8;
+static const int DK_PLAYER_SPEED = 4;
+static const int DK_CLIMB_SPEED = 4;
+static const int DK_BARREL_SPEED = 4;
 static const int DK_BARREL_CLIMB_SPEED = 2;
-static const int DK_BARREL_SPAWN_TICKS = 140;
+static const int DK_BARREL_SPAWN_TICKS = 105;
 static const int DK_INVULN_TICKS_AFTER_HIT = 100;
 static const int DK_SURVIVAL_SCORE_TICKS = 35;
+static const int g_platform_x1[DK_PLATFORM_COUNT] = {8, 18, 10, 22, 12, 22};
+static const int g_platform_x2[DK_PLATFORM_COUNT] = {272, 260, 270, 258, 264, 238};
+static const int g_platform_y1[DK_PLATFORM_COUNT] = {212, 176, 140, 104, 68, 34};
+static const int g_platform_y2[DK_PLATFORM_COUNT] = {204, 184, 132, 112, 60, 42};
+static const int g_ladder_x[DK_LADDER_COUNT] = {42, 92, 144, 194, 242};
 
-static const int g_platform_x1[DK_PLATFORM_COUNT] = {2, 6, 2, 6, 2};
-static const int g_platform_x2[DK_PLATFORM_COUNT] = {148, 146, 148, 146, 144};
-static const int g_platform_y1[DK_PLATFORM_COUNT] = {96, 78, 60, 42, 24};
-static const int g_platform_y2[DK_PLATFORM_COUNT] = {90, 84, 54, 48, 18};
-static const int g_ladder_x[DK_LADDER_COUNT] = {24, 60, 96, 126};
+static void donkey_kong_draw_player_sprite(int x, int y, const struct desktop_theme *t) {
+    sys_rect(x + 5, y, 6, 2, t->menu_button);
+    sys_rect(x + 4, y + 2, 8, 2, t->text);
+    sys_rect(x + 3, y + 4, 10, 5, t->window);
+    sys_rect(x + 2, y + 9, 4, 5, t->menu_button);
+    sys_rect(x + 10, y + 9, 4, 5, t->menu_button);
+    sys_rect(x + 5, y + 5, 2, 1, t->window_bg);
+}
+
+static void donkey_kong_draw_barrel_sprite(int x, int y, const struct desktop_theme *t) {
+    sys_rect(x + 1, y + 3, 10, 5, t->menu_button);
+    sys_rect(x + 2, y + 1, 8, 2, t->menu_button_inactive);
+    sys_rect(x + 2, y + 8, 8, 1, t->menu_button_inactive);
+    sys_rect(x + 3, y + 4, 1, 1, t->text);
+    sys_rect(x + 8, y + 4, 1, 1, t->text);
+    sys_rect(x + 4, y + 6, 4, 1, t->window_bg);
+}
+
+static void donkey_kong_draw_kong_sprite(int x, int y, const struct desktop_theme *t) {
+    sys_rect(x + 8, y, 18, 7, t->menu_button);
+    sys_rect(x + 4, y + 7, 28, 15, t->menu_button_inactive);
+    sys_rect(x + 2, y + 10, 6, 4, t->text);
+    sys_rect(x + 28, y + 10, 6, 4, t->text);
+    sys_rect(x, y + 22, 10, 9, t->menu_button);
+    sys_rect(x + 26, y + 22, 10, 9, t->menu_button);
+    sys_rect(x + 12, y + 20, 12, 5, t->window);
+}
+
+static void donkey_kong_draw_goal_sprite(int x, int y, const struct desktop_theme *t) {
+    sys_rect(x + 2, y, 11, 2, t->text);
+    sys_rect(x + 1, y + 2, 13, 6, t->window);
+    sys_rect(x + 4, y + 8, 6, 6, t->menu_button);
+}
+
+static void donkey_kong_draw_girder_span(int x0, int y0, int x1, int y1, const struct rect *board, const struct desktop_theme *t) {
+    int dx = x1 - x0;
+    if (dx <= 0) {
+        return;
+    }
+    for (int x = x0; x <= x1; ++x) {
+        int y = y0 + (((y1 - y0) * (x - x0)) / dx);
+        sys_rect(board->x + x, board->y + y, 1, 5, t->window);
+        sys_rect(board->x + x, board->y + y + 5, 1, 1, t->menu_button_inactive);
+        if (((x - x0) % 16) < 6) {
+            sys_rect(board->x + x, board->y + y + 2, 4, 1, t->menu_button);
+        }
+    }
+}
+
+static void donkey_kong_draw_backdrop(const struct rect *board, const struct desktop_theme *t) {
+    for (int col = 0; col < 5; ++col) {
+        int bx = board->x + 16 + (col * 50);
+        int bw = 20 + ((col % 2) * 4);
+        int bh = 26 + ((col % 3) * 10);
+        int by = board->y + 14 + (12 - (col % 3) * 2);
+        sys_rect(bx, by + 10, bw, bh, t->menu_button_inactive);
+        sys_rect(bx + 4, by + 4, bw - 8, 6, t->window);
+        sys_rect(bx + 6, by + 18, bw - 12, 2, t->window_bg);
+    }
+    sys_rect(board->x + 12, board->y + 18, board->w - 24, 1, t->taskbar);
+}
 
 static uint32_t donkey_kong_next_random(struct donkey_kong_state *s) {
     s->seed = (s->seed * 1664525u) + 1013904223u;
@@ -94,7 +155,7 @@ static int donkey_kong_ladder_under_player(const struct donkey_kong_state *s) {
         if (feet_y < top - 2 || feet_y > bottom + 2) {
             continue;
         }
-        if (center_x >= g_ladder_x[i] - 3 && center_x <= g_ladder_x[i] + 3) {
+        if (center_x >= g_ladder_x[i] - 4 && center_x <= g_ladder_x[i] + 4) {
             return i;
         }
     }
@@ -122,7 +183,7 @@ static int donkey_kong_barrel_ladder_available(int barrel_platform, int ladder_i
 }
 
 static void donkey_kong_respawn_player(struct donkey_kong_state *s) {
-    s->player_x = 8;
+    s->player_x = 10;
     s->player_y = donkey_kong_platform_y(0, s->player_x + (DK_PLAYER_W / 2)) - DK_PLAYER_H;
     s->player_vy = 0;
     s->jumping = 0;
@@ -213,7 +274,7 @@ static void donkey_kong_spawn_barrel(struct donkey_kong_state *s) {
         s->barrel_platform[i] = DK_PLATFORM_COUNT - 1;
         s->barrel_dir[i] = 1;
         s->barrel_on_ladder[i] = 0;
-        s->barrel_x[i] = g_platform_x1[DK_PLATFORM_COUNT - 1] + 2;
+        s->barrel_x[i] = g_platform_x1[DK_PLATFORM_COUNT - 1] + 4;
         s->barrel_y[i] = donkey_kong_platform_y(DK_PLATFORM_COUNT - 1, s->barrel_x[i]) - DK_BARREL_H;
         return;
     }
@@ -336,7 +397,7 @@ static void donkey_kong_step_barrels(struct donkey_kong_state *s) {
                     if (!donkey_kong_barrel_ladder_available(p, l)) {
                         continue;
                     }
-                    if (center >= g_ladder_x[l] - 2 && center <= g_ladder_x[l] + 2) {
+                    if (center >= g_ladder_x[l] - 3 && center <= g_ladder_x[l] + 3) {
                         if ((donkey_kong_next_random(s) % 100u) < 28u) {
                             s->barrel_on_ladder[i] = 1;
                             s->barrel_ladder_target[i] = donkey_kong_platform_y(p - 1, g_ladder_x[l]) - DK_BARREL_H;
@@ -381,7 +442,7 @@ static void donkey_kong_step_barrels(struct donkey_kong_state *s) {
 }
 
 static int donkey_kong_check_win(struct donkey_kong_state *s) {
-    int rescue_x = 130;
+    int rescue_x = 222;
     int rescue_y = donkey_kong_platform_y(DK_PLATFORM_COUNT - 1, rescue_x) - DK_PLAYER_H - 2;
     int px = s->player_x + (DK_PLAYER_W / 2);
 
@@ -451,32 +512,46 @@ int donkey_kong_step(struct donkey_kong_state *s, uint32_t ticks) {
 void donkey_kong_draw_window(struct donkey_kong_state *s, int active,
                              int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *t = ui_theme_get();
-    struct rect board = {s->window.x + 8, s->window.y + 24, DK_BOARD_W, DK_BOARD_H};
+    struct rect body = {s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22};
+    struct rect topbar = {s->window.x + 8, s->window.y + 22, s->window.w - 16, 18};
+    struct rect board = {s->window.x + 8, s->window.y + 44, DK_BOARD_W, DK_BOARD_H};
+    struct rect hud = {board.x + board.w + 8, board.y, s->window.w - (board.w + 24), board.h};
     char score_text[24];
     char lives_text[24];
+    struct rect stat1 = {hud.x + 6, hud.y + 12, hud.w - 12, 28};
+    struct rect stat2 = {hud.x + 6, hud.y + 46, hud.w - 12, 28};
+    struct rect stat3 = {hud.x + 6, hud.y + 80, hud.w - 12, 28};
+    struct rect help = {hud.x + 6, hud.y + 118, hud.w - 12, 56};
+    struct rect status = {hud.x + 6, hud.y + 182, hud.w - 12, 30};
 
     draw_window_frame(&s->window, "MONKEY DONG", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&(struct rect){s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22}, ui_color_canvas());
+    ui_draw_surface(&body, ui_color_canvas());
+    ui_draw_surface(&topbar, ui_color_panel());
     ui_draw_inset(&board, ui_color_canvas());
+    ui_draw_inset(&hud, ui_color_canvas());
+    ui_draw_inset(&stat1, ui_color_canvas());
+    ui_draw_inset(&stat2, ui_color_canvas());
+    ui_draw_inset(&stat3, ui_color_canvas());
+    ui_draw_inset(&help, ui_color_canvas());
+    ui_draw_inset(&status, ui_color_canvas());
+
+    sys_text(topbar.x + 6, topbar.y + 5, ui_color_muted(), "Arcade climb");
+
+    sys_rect(board.x + 1, board.y + 1, board.w - 2, board.h - 2, t->background);
+    donkey_kong_draw_backdrop(&board, t);
 
     for (int p = 0; p < DK_PLATFORM_COUNT; ++p) {
         int y_left = donkey_kong_platform_y(p, g_platform_x1[p]);
         int y_right = donkey_kong_platform_y(p, g_platform_x2[p]);
-        int dx = g_platform_x2[p] - g_platform_x1[p];
-        for (int x = g_platform_x1[p]; x <= g_platform_x2[p]; ++x) {
-            int y = y_left;
-            if (dx > 0) {
-                y = y_left + (((y_right - y_left) * (x - g_platform_x1[p])) / dx);
-            }
-            sys_rect(board.x + x, board.y + y, 1, 2, t->window);
-        }
+        donkey_kong_draw_girder_span(g_platform_x1[p], y_left, g_platform_x2[p], y_right, &board, t);
     }
     for (int l = 0; l < DK_LADDER_COUNT; ++l) {
-        int top = donkey_kong_platform_y(DK_PLATFORM_COUNT - 1, g_ladder_x[l]);
-        int bottom = donkey_kong_platform_y(0, g_ladder_x[l]);
+        int top = donkey_kong_platform_y(DK_PLATFORM_COUNT - 1, g_ladder_x[l]) + 2;
+        int bottom = donkey_kong_platform_y(0, g_ladder_x[l]) - 2;
         for (int y = top; y <= bottom; y += 4) {
             sys_rect(board.x + g_ladder_x[l], board.y + y, 1, 3, t->menu_button_inactive);
-            sys_rect(board.x + g_ladder_x[l] + 3, board.y + y, 1, 3, t->menu_button_inactive);
+            sys_rect(board.x + g_ladder_x[l] + 5, board.y + y, 1, 3, t->menu_button_inactive);
+            sys_rect(board.x + g_ladder_x[l] + 1, board.y + y + 1, 4, 1, t->text);
         }
     }
 
@@ -484,32 +559,41 @@ void donkey_kong_draw_window(struct donkey_kong_state *s, int active,
         if (!s->barrel_active[i]) {
             continue;
         }
-        sys_rect(board.x + s->barrel_x[i], board.y + s->barrel_y[i], DK_BARREL_W, DK_BARREL_H, t->menu_button);
+        donkey_kong_draw_barrel_sprite(board.x + s->barrel_x[i], board.y + s->barrel_y[i], t);
     }
 
     if (!(s->invuln_ticks > 0u && ((s->tick_count / 8u) % 2u) == 0u)) {
-        sys_rect(board.x + s->player_x, board.y + s->player_y, DK_PLAYER_W, DK_PLAYER_H, t->text);
+        donkey_kong_draw_player_sprite(board.x + s->player_x, board.y + s->player_y, t);
     }
-    sys_rect(board.x + 126, board.y + donkey_kong_platform_y(DK_PLATFORM_COUNT - 1, 130) - 10, 12, 8, t->menu_button_inactive);
+    donkey_kong_draw_kong_sprite(board.x + 12,
+                                 board.y + donkey_kong_platform_y(DK_PLATFORM_COUNT - 1, 24) - 34,
+                                 t);
+    donkey_kong_draw_goal_sprite(board.x + 218,
+                                 board.y + donkey_kong_platform_y(DK_PLATFORM_COUNT - 1, 222) - 16,
+                                 t);
 
     str_copy_limited(score_text, "Score ", (int)sizeof(score_text));
     donkey_kong_append_int(score_text, s->score, (int)sizeof(score_text));
     str_copy_limited(lives_text, "Vidas ", (int)sizeof(lives_text));
     donkey_kong_append_int(lives_text, s->lives, (int)sizeof(lives_text));
 
-    sys_text(s->window.x + 166, s->window.y + 30, t->text, score_text);
-    sys_text(s->window.x + 166, s->window.y + 46, t->text, lives_text);
-    sys_text(s->window.x + 166, s->window.y + 62, t->text, "Evitados");
+    sys_text(stat1.x + 6, stat1.y + 6, t->text, score_text);
+    sys_text(stat2.x + 6, stat2.y + 6, t->text, lives_text);
+    sys_text(stat3.x + 6, stat3.y + 6, t->text, "Evitados");
     str_copy_limited(score_text, "", (int)sizeof(score_text));
     donkey_kong_append_int(score_text, s->avoided_barrels, (int)sizeof(score_text));
-    sys_text(s->window.x + 166, s->window.y + 74, t->text, score_text);
+    sys_text(stat3.x + 6, stat3.y + 16, t->text, score_text);
+    sys_text(help.x + 6, help.y + 6, t->text, "Setas movem");
+    sys_text(help.x + 6, help.y + 18, t->text, "Space pula");
+    sys_text(help.x + 6, help.y + 30, t->text, "Suba ate o topo");
     if (s->game_over) {
-        sys_text(s->window.x + 166, s->window.y + 90, t->text, "Game over");
-        sys_text(s->window.x + 166, s->window.y + 104, t->text, "R/Space/Enter");
+        sys_text(status.x + 6, status.y + 8, t->text, "Game over");
+        sys_text(status.x + 6, status.y + 18, t->text, "R reinicia");
     } else if (s->win) {
-        sys_text(s->window.x + 166, s->window.y + 90, t->text, "Resgate!");
-        sys_text(s->window.x + 166, s->window.y + 104, t->text, "R/Space/Enter");
+        sys_text(status.x + 6, status.y + 8, t->text, "Pauline!");
+        sys_text(status.x + 6, status.y + 18, t->text, "R reinicia");
     } else {
-        sys_text(s->window.x + 166, s->window.y + 90, t->text, "Setas + Space");
+        sys_text(status.x + 6, status.y + 8, t->text, "Desvie dos barris");
+        sys_text(status.x + 6, status.y + 18, t->text, "e alcance o topo");
     }
 }

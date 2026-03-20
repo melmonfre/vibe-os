@@ -2,7 +2,7 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/syscalls.h>
 
-static const struct rect DEFAULT_TASKMGR_WINDOW = {30, 30, 260, 160};
+static const struct rect DEFAULT_TASKMGR_WINDOW = {30, 30, 400, 300};
 static const int TASKMGR_ROW_HEIGHT = 16;
 
 static void append_uint(char *buf, unsigned v) {
@@ -35,8 +35,8 @@ void taskmgr_init_state(struct taskmgr_state *tm) {
 }
 
 static struct rect taskmgr_row_rect(const struct taskmgr_state *tm, int visible_index) {
-    struct rect r = {tm->window.x + 6, tm->window.y + 24 + (visible_index * TASKMGR_ROW_HEIGHT),
-                     tm->window.w - 12, TASKMGR_ROW_HEIGHT - 2};
+    struct rect r = {tm->window.x + 10, tm->window.y + 64 + (visible_index * TASKMGR_ROW_HEIGHT),
+                     tm->window.w - 20, TASKMGR_ROW_HEIGHT - 2};
     return r;
 }
 
@@ -56,9 +56,15 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
                           int close_hover) {
     const struct desktop_theme *theme = ui_theme_get();
     struct rect body = {tm->window.x + 4, tm->window.y + 18, tm->window.w - 8, tm->window.h - 22};
+    struct rect hero = {tm->window.x + 10, tm->window.y + 24, tm->window.w - 20, 30};
+    struct rect list = {tm->window.x + 10, tm->window.y + 60, tm->window.w - 20, tm->window.h - 72};
 
     draw_window_frame(&tm->window, "TASKS", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, theme->window_bg);
+    ui_draw_surface(&hero, ui_color_panel());
+    ui_draw_inset(&list, ui_color_canvas());
+    sys_text(hero.x + 6, hero.y + 6, theme->text, "Aplicacoes ativas");
+    sys_text(hero.x + hero.w - 90, hero.y + 6, ui_color_muted(), "uptime / close");
 
     int visible_index = 0;
     for (int i = 0; i < win_count; ++i) {

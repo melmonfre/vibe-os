@@ -57,7 +57,7 @@ void I_Quit(void) {
     I_ShutdownMusic();
     M_SaveDefaults();
     I_ShutdownGraphics();
-    doom_port_request_quit("DOOM finalizado", 0);
+    doom_port_abort_run("DOOM finalizado", 0);
 }
 
 void I_WaitVBL(int count) {
@@ -83,13 +83,16 @@ byte *I_AllocLow(int length) {
 void I_Error(char *error, ...) {
     char msg[96];
     va_list argptr;
-    (void)argptr;
-    str_copy_limited(msg, error ? error : "Erro desconhecido", (int)sizeof(msg));
+    va_start(argptr, error);
+    vsnprintf(msg, sizeof(msg), error ? error : "Erro desconhecido", argptr);
+    va_end(argptr);
 
     if (demorecording) {
         G_CheckDemoStatus();
     }
     D_QuitNetGame();
+    I_ShutdownSound();
+    I_ShutdownMusic();
     I_ShutdownGraphics();
-    doom_port_request_quit(msg, 1);
+    doom_port_abort_run(msg, 1);
 }

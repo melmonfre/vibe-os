@@ -1,14 +1,18 @@
 #include <userland/applications/games/doom_port/doom_port.h>
 #include <userland/modules/include/utils.h>
+#include <setjmp.h>
+#include <userland/modules/include/syscalls.h>
 
 void D_DoomMain(void);
-int myargc;
-char **myargv;
+extern int myargc;
+extern char **myargv;
 
 static int g_quit = 0;
 static int g_code = 0;
+static int g_run_active = 0;
 static char g_error[96] = "";
 static uint8_t g_palette_map[256];
+static jmp_buf g_run_jmp;
 
 int doom_port_should_quit(void) {
     return g_quit;
@@ -19,6 +23,17 @@ void doom_port_request_quit(const char *reason, int code) {
     g_code = code;
     if (reason != 0) {
         str_copy_limited(g_error, reason, (int)sizeof(g_error));
+    }
+}
+
+void doom_port_abort_run(const char *reason, int code) {
+    doom_port_request_quit(reason, code);
+    if (g_run_active) {
+        g_run_active = 0;
+        longjmp(g_run_jmp, 1);
+    }
+    for (;;) {
+        sys_yield();
     }
 }
 
@@ -58,6 +73,10 @@ int doom_port_run_full(void) {
 
     myargc = 2;
     myargv = argv;
-    D_DoomMain();
+    g_run_active = 1;
+    if (setjmp(g_run_jmp) == 0) {
+        D_DoomMain();
+    }
+    g_run_active = 0;
     return g_code;
 }

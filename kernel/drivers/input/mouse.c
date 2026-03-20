@@ -3,11 +3,13 @@
 #include <kernel/drivers/video/video.h>
 #include <kernel/interrupt.h>
 
-struct mouse_state {
-    int x;
-    int y;
-    uint8_t buttons;
-};
+#define PS2_STATUS_PORT 0x64u
+#define PS2_DATA_PORT 0x60u
+#define PS2_STATUS_OUTPUT_FULL 0x01u
+#define PS2_STATUS_INPUT_FULL 0x02u
+#define PS2_STATUS_AUX_OUTPUT_FULL 0x20u
+#define PS2_TIMEOUT_SPINS 1000000u
+#define PS2_DRAIN_LIMIT 128u
 
 #define MOUSE_EVENT_QUEUE_CAPACITY 128u
 
@@ -52,14 +54,18 @@ static void kernel_mouse_clamp_to_mode(const struct video_mode *mode) {
     }
 }
 
-static void ps2_wait_write(void) {
-    while ((inb(0x64) & 0x02u) != 0u) {
+static int ps2_wait_write_timeout(void) {
+    for (uint32_t i = 0u; i < PS2_TIMEOUT_SPINS; ++i) {
+        if ((inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL) == 0u) {
+            return 1;
+        }
     }
+    return 0;
 }
 
 static int ps2_wait_read_timeout(void) {
-    for (uint32_t i = 0u; i < 1000000u; ++i) {
-        if ((inb(0x64) & 0x01u) != 0u) {
+    for (uint32_t i = 0u; i < PS2_TIMEOUT_SPINS; ++i) {
+        if ((inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) != 0u) {
             return 1;
         }
     }
@@ -67,16 +73,24 @@ static int ps2_wait_read_timeout(void) {
 }
 
 static void ps2_drain_output(void) {
-    while ((inb(0x64) & 0x01u) != 0u) {
-        (void)inb(0x60);
+    for (uint32_t i = 0u; i < PS2_DRAIN_LIMIT; ++i) {
+        if ((inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) == 0u) {
+            break;
+        }
+        (void)inb(PS2_DATA_PORT);
     }
 }
 
-static void mouse_write_cmd(uint8_t value) {
-    ps2_wait_write();
-    outb(0x64, 0xD4);
-    ps2_wait_write();
-    outb(0x60, value);
+static int mouse_write_cmd(uint8_t value) {
+    if (!ps2_wait_write_timeout()) {
+        return 0;
+    }
+    outb(PS2_STATUS_PORT, 0xD4);
+    if (!ps2_wait_write_timeout()) {
+        return 0;
+    }
+    outb(PS2_DATA_PORT, value);
+    return 1;
 }
 
 static int mouse_expect_ack(void) {
@@ -89,32 +103,49 @@ static int mouse_expect_ack(void) {
 void kernel_mouse_init(void) {
     uint8_t config;
 
+    g_kernel_mouse_ready = 0u;
+    g_kernel_mouse_packet_index = 0u;
     ps2_drain_output();
 
-    ps2_wait_write();
-    outb(0x64, 0xA8u);
+    if (!ps2_wait_write_timeout()) {
+        return;
+    }
+    outb(PS2_STATUS_PORT, 0xA8u);
 
-    ps2_wait_write();
-    outb(0x64, 0x20u);
+    ps2_drain_output();
+    if (!ps2_wait_write_timeout()) {
+        return;
+    }
+    outb(PS2_STATUS_PORT, 0x20u);
     if (!ps2_wait_read_timeout()) {
         return;
     }
 
-    config = inb(0x60);
+    config = inb(PS2_DATA_PORT);
     config |= 0x02u;
     config &= (uint8_t)~0x20u;
 
-    ps2_wait_write();
-    outb(0x64, 0x60u);
-    ps2_wait_write();
-    outb(0x60, config);
+    if (!ps2_wait_write_timeout()) {
+        return;
+    }
+    outb(PS2_STATUS_PORT, 0x60u);
+    if (!ps2_wait_write_timeout()) {
+        return;
+    }
+    outb(PS2_DATA_PORT, config);
 
-    mouse_write_cmd(0xF6u);
+    ps2_drain_output();
+    if (!mouse_write_cmd(0xF6u)) {
+        return;
+    }
     if (!mouse_expect_ack()) {
         return;
     }
 
-    mouse_write_cmd(0xF4u);
+    ps2_drain_output();
+    if (!mouse_write_cmd(0xF4u)) {
+        return;
+    }
     if (!mouse_expect_ack()) {
         return;
     }
@@ -177,13 +208,22 @@ void kernel_mouse_sync_to_video(void) {
 }
 
 void kernel_mouse_irq_handler(void) {
-    const uint8_t data = inb(0x60);
+    const uint8_t status = inb(PS2_STATUS_PORT);
+    uint8_t data;
     struct video_mode *mode = kernel_video_get_mode();
 
     if (!g_kernel_mouse_ready) {
         kernel_pic_send_eoi(12);
         return;
     }
+
+    if ((status & PS2_STATUS_OUTPUT_FULL) == 0u ||
+        (status & PS2_STATUS_AUX_OUTPUT_FULL) == 0u) {
+        kernel_pic_send_eoi(12);
+        return;
+    }
+
+    data = inb(PS2_DATA_PORT);
 
     if (g_kernel_mouse_packet_index == 0u && (data & 0x08u) == 0u) {
         kernel_pic_send_eoi(12);
@@ -208,4 +248,13 @@ void kernel_mouse_irq_handler(void) {
     kernel_mouse_queue_event_unlocked();
 
     kernel_pic_send_eoi(12);
+}
+
+void kernel_mouse_prepare_for_graphics(void) {
+    uint32_t flags = kernel_irq_save();
+
+    g_kernel_mouse_packet_index = 0u;
+    ps2_drain_output();
+
+    kernel_irq_restore(flags);
 }

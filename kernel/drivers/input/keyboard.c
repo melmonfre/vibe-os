@@ -10,6 +10,9 @@
 #define PS2_DATA_PORT 0x60u
 #define PS2_STATUS_OUTPUT_FULL 0x01u
 #define PS2_STATUS_INPUT_FULL 0x02u
+#define PS2_STATUS_AUX_OUTPUT_FULL 0x20u
+#define PS2_TIMEOUT_SPINS 1000000u
+#define PS2_DRAIN_LIMIT 64u
 
 extern keymap_t keymap_us;
 extern keymap_t keymap_pt_br;
@@ -39,13 +42,17 @@ static volatile uint8_t g_kernel_kbd_extended = 0u;
 static volatile uint8_t g_kernel_kbd_ready = 0u;
 static const keymap_t* g_current_keymap = &keymap_us;
 
-static void ps2_wait_write(void) {
-    while ((inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL) != 0u) {
+static int ps2_wait_write_timeout(void) {
+    for (uint32_t i = 0u; i < PS2_TIMEOUT_SPINS; ++i) {
+        if ((inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL) == 0u) {
+            return 1;
+        }
     }
+    return 0;
 }
 
 static int ps2_wait_read_timeout(void) {
-    for (uint32_t i = 0u; i < 1000000u; ++i) {
+    for (uint32_t i = 0u; i < PS2_TIMEOUT_SPINS; ++i) {
         if ((inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) != 0u) {
             return 1;
         }
@@ -54,14 +61,20 @@ static int ps2_wait_read_timeout(void) {
 }
 
 static void ps2_drain_output(void) {
-    while ((inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) != 0u) {
+    for (uint32_t i = 0u; i < PS2_DRAIN_LIMIT; ++i) {
+        if ((inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) == 0u) {
+            break;
+        }
         (void)inb(PS2_DATA_PORT);
     }
 }
 
-static void kbd_write_cmd(uint8_t value) {
-    ps2_wait_write();
+static int kbd_write_cmd(uint8_t value) {
+    if (!ps2_wait_write_timeout()) {
+        return 0;
+    }
     outb(PS2_DATA_PORT, value);
+    return 1;
 }
 
 static int kbd_expect_ack(void) {
@@ -119,7 +132,16 @@ int kernel_keyboard_read(void) {
 }
 
 void kernel_keyboard_irq_handler(void) {
-    const uint8_t scancode = inb(PS2_DATA_PORT);
+    const uint8_t status = inb(PS2_STATUS_PORT);
+    uint8_t scancode;
+
+    if ((status & PS2_STATUS_OUTPUT_FULL) == 0u ||
+        (status & PS2_STATUS_AUX_OUTPUT_FULL) != 0u) {
+        kernel_pic_send_eoi(1);
+        return;
+    }
+
+    scancode = inb(PS2_DATA_PORT);
 
     if (!g_kernel_kbd_ready) {
         kernel_pic_send_eoi(1);
@@ -216,10 +238,15 @@ void kernel_keyboard_init(void) {
 
     ps2_drain_output();
 
-    ps2_wait_write();
+    if (!ps2_wait_write_timeout()) {
+        return;
+    }
     outb(PS2_STATUS_PORT, 0xAEu);
 
-    ps2_wait_write();
+    ps2_drain_output();
+    if (!ps2_wait_write_timeout()) {
+        return;
+    }
     outb(PS2_STATUS_PORT, 0x20u);
     if (!ps2_wait_read_timeout()) {
         return;
@@ -229,20 +256,39 @@ void kernel_keyboard_init(void) {
     config |= 0x01u;
     config &= (uint8_t)~0x10u;
 
-    ps2_wait_write();
+    if (!ps2_wait_write_timeout()) {
+        return;
+    }
     outb(PS2_STATUS_PORT, 0x60u);
-    ps2_wait_write();
+    if (!ps2_wait_write_timeout()) {
+        return;
+    }
     outb(PS2_DATA_PORT, config);
 
-    kbd_write_cmd(0xF6u);
+    ps2_drain_output();
+    if (!kbd_write_cmd(0xF6u)) {
+        return;
+    }
     if (!kbd_expect_ack()) {
         return;
     }
 
-    kbd_write_cmd(0xF4u);
+    ps2_drain_output();
+    if (!kbd_write_cmd(0xF4u)) {
+        return;
+    }
     if (!kbd_expect_ack()) {
         return;
     }
 
     g_kernel_kbd_ready = 1u;
+}
+
+void kernel_keyboard_prepare_for_graphics(void) {
+    uint32_t flags = kernel_irq_save();
+
+    g_kernel_kbd_extended = 0u;
+    ps2_drain_output();
+
+    kernel_irq_restore(flags);
 }
