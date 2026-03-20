@@ -75,6 +75,23 @@ int		columnofs[MAXWIDTH];
 //
 byte		translations[3][256];	
  
+static int R_ClampColumnBounds(int *x, int *yl, int *yh, int max_x, int max_y)
+{
+    if (x == NULL || yl == NULL || yh == NULL) {
+        return 0;
+    }
+
+    if (*x < 0 || *x > max_x) {
+        return 0;
+    }
+    if (*yl < 0) {
+        *yl = 0;
+    }
+    if (*yh > max_y) {
+        *yh = max_y;
+    }
+    return *yl <= *yh;
+}
  
 
 
@@ -108,29 +125,29 @@ void R_DrawColumn (void)
     byte*		dest; 
     fixed_t		frac;
     fixed_t		fracstep;	 
- 
-    count = dc_yh - dc_yl; 
+    int                 clamped_x = dc_x;
+    int                 clamped_yl = dc_yl;
+    int                 clamped_yh = dc_yh;
+
+    if (!R_ClampColumnBounds(&clamped_x, &clamped_yl, &clamped_yh,
+                             SCREENWIDTH - 1, SCREENHEIGHT - 1))
+        return;
+
+    count = clamped_yh - clamped_yl; 
 
     // Zero length, column does not exceed a pixel.
     if (count < 0) 
 	return; 
-				 
-#ifdef RANGECHECK 
-    if ((unsigned)dc_x >= SCREENWIDTH
-	|| dc_yl < 0
-	|| dc_yh >= SCREENHEIGHT) 
-	I_Error ("R_DrawColumn: %i to %i at %i", dc_yl, dc_yh, dc_x); 
-#endif 
 
     // Framebuffer destination address.
     // Use ylookup LUT to avoid multiply with ScreenWidth.
     // Use columnofs LUT for subwindows? 
-    dest = ylookup[dc_yl] + columnofs[dc_x];  
+    dest = ylookup[clamped_yl] + columnofs[clamped_x];  
 
     // Determine scaling,
     //  which is the only mapping to be done.
     fracstep = dc_iscale; 
-    frac = dc_texturemid + (dc_yl-centery)*fracstep; 
+    frac = dc_texturemid + (clamped_yl-centery)*fracstep; 
 
     // Inner loop that does the actual texture mapping,
     //  e.g. a DDA-lile scaling.
@@ -215,31 +232,28 @@ void R_DrawColumnLow (void)
     byte*		dest2;
     fixed_t		frac;
     fixed_t		fracstep;	 
+    int                 clamped_x = dc_x;
+    int                 clamped_yl = dc_yl;
+    int                 clamped_yh = dc_yh;
  
-    count = dc_yh - dc_yl; 
+    if (!R_ClampColumnBounds(&clamped_x, &clamped_yl, &clamped_yh,
+                             (SCREENWIDTH >> 1) - 1, SCREENHEIGHT - 1))
+        return;
+
+    count = clamped_yh - clamped_yl; 
 
     // Zero length.
     if (count < 0) 
 	return; 
-				 
-#ifdef RANGECHECK 
-    if ((unsigned)dc_x >= SCREENWIDTH
-	|| dc_yl < 0
-	|| dc_yh >= SCREENHEIGHT)
-    {
-	
-	I_Error ("R_DrawColumn: %i to %i at %i", dc_yl, dc_yh, dc_x);
-    }
-    //	dccount++; 
-#endif 
+
     // Blocky mode, need to multiply by 2.
-    dc_x <<= 1;
+    clamped_x <<= 1;
     
-    dest = ylookup[dc_yl] + columnofs[dc_x];
-    dest2 = ylookup[dc_yl] + columnofs[dc_x+1];
+    dest = ylookup[clamped_yl] + columnofs[clamped_x];
+    dest2 = ylookup[clamped_yl] + columnofs[clamped_x+1];
     
     fracstep = dc_iscale; 
-    frac = dc_texturemid + (dc_yl-centery)*fracstep;
+    frac = dc_texturemid + (clamped_yl-centery)*fracstep;
     
     do 
     {
@@ -288,30 +302,27 @@ void R_DrawFuzzColumn (void)
     byte*		dest; 
     fixed_t		frac;
     fixed_t		fracstep;	 
+    int                 clamped_x = dc_x;
+    int                 clamped_yl = dc_yl;
+    int                 clamped_yh = dc_yh;
 
     // Adjust borders. Low... 
-    if (!dc_yl) 
-	dc_yl = 1;
+    if (!clamped_yl) 
+	clamped_yl = 1;
 
     // .. and high.
-    if (dc_yh == viewheight-1) 
-	dc_yh = viewheight - 2; 
+    if (clamped_yh == viewheight-1) 
+	clamped_yh = viewheight - 2; 
+
+    if (!R_ClampColumnBounds(&clamped_x, &clamped_yl, &clamped_yh,
+                             SCREENWIDTH - 1, SCREENHEIGHT - 1))
+        return;
 		 
-    count = dc_yh - dc_yl; 
+    count = clamped_yh - clamped_yl; 
 
     // Zero length.
     if (count < 0) 
 	return; 
-
-    
-#ifdef RANGECHECK 
-    if ((unsigned)dc_x >= SCREENWIDTH
-	|| dc_yl < 0 || dc_yh >= SCREENHEIGHT)
-    {
-	I_Error ("R_DrawFuzzColumn: %i to %i at %i",
-		 dc_yl, dc_yh, dc_x);
-    }
-#endif
 
 
     // Keep till detailshift bug in blocky mode fixed,
@@ -340,11 +351,11 @@ void R_DrawFuzzColumn (void)
 
     
     // Does not work with blocky mode.
-    dest = ylookup[dc_yl] + columnofs[dc_x];
+    dest = ylookup[clamped_yl] + columnofs[clamped_x];
 
     // Looks familiar.
     fracstep = dc_iscale; 
-    frac = dc_texturemid + (dc_yl-centery)*fracstep; 
+    frac = dc_texturemid + (clamped_yl-centery)*fracstep; 
 
     // Looks like an attempt at dithering,
     //  using the colormap #6 (of 0-31, a bit
@@ -388,21 +399,17 @@ void R_DrawTranslatedColumn (void)
     byte*		dest; 
     fixed_t		frac;
     fixed_t		fracstep;	 
+    int                 clamped_x = dc_x;
+    int                 clamped_yl = dc_yl;
+    int                 clamped_yh = dc_yh;
  
-    count = dc_yh - dc_yl; 
+    if (!R_ClampColumnBounds(&clamped_x, &clamped_yl, &clamped_yh,
+                             SCREENWIDTH - 1, SCREENHEIGHT - 1))
+        return;
+
+    count = clamped_yh - clamped_yl; 
     if (count < 0) 
 	return; 
-				 
-#ifdef RANGECHECK 
-    if ((unsigned)dc_x >= SCREENWIDTH
-	|| dc_yl < 0
-	|| dc_yh >= SCREENHEIGHT)
-    {
-	I_Error ( "R_DrawColumn: %i to %i at %i",
-		  dc_yl, dc_yh, dc_x);
-    }
-    
-#endif 
 
 
     // WATCOM VGA specific.
@@ -425,11 +432,11 @@ void R_DrawTranslatedColumn (void)
 
     
     // FIXME. As above.
-    dest = ylookup[dc_yl] + columnofs[dc_x]; 
+    dest = ylookup[clamped_yl] + columnofs[clamped_x]; 
 
     // Looks familiar.
     fracstep = dc_iscale; 
-    frac = dc_texturemid + (dc_yl-centery)*fracstep; 
+    frac = dc_texturemid + (clamped_yl-centery)*fracstep; 
 
     // Here we do an additional index re-mapping.
     do 
