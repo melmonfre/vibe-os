@@ -210,14 +210,13 @@ static uint32_t sys_write_debug(uint32_t a, uint32_t b, uint32_t c,
 
 static uint32_t sys_input_key(uint32_t a, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
-    int value;
-
     (void)a; (void)b; (void)c; (void)d; (void)e;
-    value = kernel_keyboard_read();
-    if (value == 0) {
-        value = mk_input_service_read_key();
-    }
-    return value;
+    /*
+     * Key polling is latency-sensitive and already backed by the global
+     * kernel PS/2 queue. Going through the input worker adds an avoidable
+     * IPC/restart failure mode without improving arbitration.
+     */
+    return (uint32_t)kernel_keyboard_read();
 }
 
 static uint32_t sys_text_clear(uint32_t a, uint32_t b, uint32_t c,

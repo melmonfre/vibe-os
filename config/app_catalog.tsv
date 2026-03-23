@@ -1,0 +1,27 @@
+# name	build_var	shell_visible	prefer_external	stub_paths
+hello	HELLO_APP_BIN	1	0	/bin/hello
+js	JS_APP_BIN	1	0	/bin/js
+ruby	RUBY_APP_BIN	1	0	/bin/ruby
+python	PYTHON_APP_BIN	1	0	/bin/python
+java	JAVA_APP_BIN	1	0	/bin/java,/usr/bin/java
+javac	JAVAC_APP_BIN	1	0	/bin/javac,/usr/bin/javac
+userland	USERLAND_BOOT_APP_BIN	0	0
+lua	LUA_APP_BIN	1	0	/bin/lua
+sectorc	SECTORC_APP_BIN	1	0	/bin/sectorc
+startx	STARTX_APP_BIN	1	1	/bin/startx
+edit	EDIT_APP_BIN	1	1	/bin/edit
+nano	NANO_APP_BIN	1	1	/bin/nano
+echo	ECHO_APP_BIN	1	1	/compat/bin/echo
+cat	CAT_APP_BIN	1	1	/compat/bin/cat
+wc	WC_APP_BIN	1	0	/compat/bin/wc
+pwd	PWD_APP_BIN	1	1	/bin/pwd,/usr/bin/pwd,/compat/bin/pwd
+head	HEAD_APP_BIN	1	0	/bin/head,/usr/bin/head,/compat/bin/head
+sleep	SLEEP_APP_BIN	1	0	/bin/sleep,/usr/bin/sleep,/compat/bin/sleep
+rmdir	RMDIR_APP_BIN	1	0	/bin/rmdir,/usr/bin/rmdir,/compat/bin/rmdir
+mkdir	MKDIR_APP_BIN	1	1	/bin/mkdir,/usr/bin/mkdir,/compat/bin/mkdir
+tail	TAIL_APP_BIN	1	0	/bin/tail,/usr/bin/tail,/compat/bin/tail
+grep	GREP_APP_BIN	1	0	/bin/grep,/usr/bin/grep,/compat/bin/grep
+loadkeys	LOADKEYS_APP_BIN	1	0	/bin/loadkeys,/compat/bin/loadkeys
+true	TRUE_APP_BIN	1	1	/compat/bin/true
+false	FALSE_APP_BIN	1	1	/compat/bin/false
+printf	PRINTF_APP_BIN	1	1	/compat/bin/printf

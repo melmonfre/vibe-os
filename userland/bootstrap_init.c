@@ -13,7 +13,8 @@ static void bootstrap_print_banner(void) {
     console_write("VibeOS bootstrap init\n");
     console_write("kernel pequeno, apps externas via AppFS\n");
     console_write("userland.app carregada automaticamente no boot\n");
-    console_write("comandos: help, apps, clear, shutdown, run <app> [args]\n");
+    console_write("use 'help' para listar comandos e apps modulares\n");
+    console_write("atalhos graficos: startx, edit, nano\n");
 }
 
 static int bootstrap_run_startup_apps(void) {

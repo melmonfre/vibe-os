@@ -7,6 +7,7 @@
 #include <userland/modules/include/shell.h> /* for history print */
 #include <userland/modules/include/ui.h>    /* for startx */
 #include <userland/modules/include/syscalls.h>
+#include "app_catalog.h"
 #include <stddef.h> /* for size_t */
 
 struct kernel_cpu_topology {
@@ -68,6 +69,36 @@ __attribute__((weak)) void desktop_request_open_nano(const char *path) {
 
 __attribute__((weak)) void desktop_main(void) {
 }
+
+struct command {
+    const char *name;
+    int (*handler)(int argc, char **argv);
+};
+
+static const char *const g_builtin_help_commands[] = {
+    "help",
+    "pwd",
+    "ls",
+    "cd",
+    "mkdir",
+    "touch",
+    "rm",
+    "cat",
+    "echo",
+    "clear",
+    "uname",
+    "vibefetch",
+    "fetch",
+    "exit",
+    "shutdown",
+    "startx",
+    "history",
+    "edit",
+    "nano",
+    "lua",
+    "sectorc",
+    "cc",
+};
 
 /* minimal string compare so we don't depend on libc */
 static int strcmp(const char *a, const char *b) {
@@ -181,32 +212,70 @@ static int try_run_external(int argc, char **argv) {
     return -1;
 }
 
-static int should_prefer_external(const char *cmd) {
-    static const char *prefer_external[] = {
-        "echo",
-        "cat",
-        "pwd",
-        "mkdir",
-        "true",
-        "false",
-        "printf"
-    };
-    int i;
+static int try_run_external_as(int argc, char **argv, const char *name) {
+    char *patched_argv[32];
+    int patched_argc = argc;
 
-    for (i = 0; i < (int)(sizeof(prefer_external) / sizeof(prefer_external[0])); ++i) {
-        if (strcmp(cmd, prefer_external[i]) == 0) {
+    if (!name || name[0] == '\0') {
+        return -1;
+    }
+
+    if (patched_argc > 31) {
+        patched_argc = 31;
+    }
+    for (int i = 0; i < patched_argc; ++i) {
+        patched_argv[i] = argv[i];
+    }
+    patched_argv[0] = (char *)name;
+    patched_argv[patched_argc] = 0;
+    return lang_try_run(patched_argc, patched_argv);
+}
+
+static int should_prefer_external(const char *cmd) {
+    for (int i = 0; i < (int)G_APP_CATALOG_PREFER_EXTERNAL_COUNT; ++i) {
+        if (strcmp(cmd, g_app_catalog_prefer_external[i]) == 0) {
             return 1;
         }
     }
     return 0;
 }
 
+static int command_exists_in_builtin_help(const char *name) {
+    for (int i = 0; i < (int)(sizeof(g_builtin_help_commands) / sizeof(g_builtin_help_commands[0])); ++i) {
+        if (strcmp(name, g_builtin_help_commands[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void help_write_name(const char *name, int *need_space) {
+    if (*need_space) {
+        console_putc(' ');
+    }
+    console_write(name);
+    *need_space = 1;
+}
+
 /* return value: 0 normal, 1 exit shell */
 
 static int cmd_help(int argc, char **argv) {
+    int need_space = 0;
+
     (void)argc; (void)argv;
-    const char *list = "commands: pwd ls cd mkdir touch rm cat echo clear uname vibefetch fetch help exit shutdown startx history edit nano lua sectorc cc hello js ruby python java javac\n";
-    console_write(list);
+
+    console_write("commands:");
+    for (int i = 0; i < (int)(sizeof(g_builtin_help_commands) / sizeof(g_builtin_help_commands[0])); ++i) {
+        help_write_name(g_builtin_help_commands[i], &need_space);
+    }
+
+    for (int i = 0; i < (int)G_APP_CATALOG_SHELL_COMMANDS_COUNT; ++i) {
+        if (!command_exists_in_builtin_help(g_app_catalog_shell_commands[i])) {
+            help_write_name(g_app_catalog_shell_commands[i], &need_space);
+        }
+    }
+
+    console_putc('\n');
     return 0;
 }
 
@@ -550,6 +619,12 @@ static int cmd_sectorc(int argc, char **argv) {
     if (rc >= 0) {
         return rc;
     }
+    if (argc > 0 && argv && argv[0] && strcmp(argv[0], "cc") == 0) {
+        rc = try_run_external_as(argc, argv, "sectorc");
+        if (rc >= 0) {
+            return rc;
+        }
+    }
     rc = sectorc_main(argc, argv);
     if (rc >= 0) {
         return rc;
@@ -557,11 +632,6 @@ static int cmd_sectorc(int argc, char **argv) {
     console_write("sectorc indisponivel\n");
     return 0;
 }
-
-struct command {
-    const char *name;
-    int (*handler)(int argc, char **argv);
-};
 
 static const struct command g_commands[] = {
     {"help", cmd_help},

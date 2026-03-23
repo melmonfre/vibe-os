@@ -120,6 +120,10 @@ endif
 endif
 
 BUILD_DIR := build
+APP_CATALOG_MANIFEST := config/app_catalog.tsv
+APP_CATALOG_GENERATED_DIR := $(BUILD_DIR)/generated
+APP_CATALOG_GENERATED_MK := $(APP_CATALOG_GENERATED_DIR)/app_catalog.mk
+APP_CATALOG_GENERATED_H := $(APP_CATALOG_GENERATED_DIR)/app_catalog.h
 BOOT_DIR := boot
 USERLAND_DIR := userland
 LINKER_DIR := linker
@@ -425,6 +429,7 @@ IMAGE := $(BUILD_DIR)/boot.img
 
 CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
 CFLAGS += -Ilang/glibc/include
+CFLAGS += -I$(APP_CATALOG_GENERATED_DIR)
 CFLAGS += -MMD -MP
 LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N --allow-multiple-definition
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
@@ -484,6 +489,119 @@ JAVAC_APP_OBJS := \
 JAVAC_APP_ELF := $(BUILD_DIR)/lang/javac.elf
 JAVAC_APP_BIN := $(BUILD_DIR)/lang/javac.app
 
+LUA_APP_BUILD_DIR := $(BUILD_DIR)/lang/lua
+LUA_APP_SRCS := \
+	$(USERLAND_DIR)/lua/lua_app_main.c \
+	$(USERLAND_DIR)/lua/lua_app_entry.c \
+	$(USERLAND_DIR)/modules/console.c \
+	$(USERLAND_DIR)/modules/fs.c \
+	$(USERLAND_DIR)/modules/utils.c \
+	$(USERLAND_DIR)/modules/syscalls.c \
+	$(USERLAND_DIR)/lua/lua_main.c \
+	$(USERLAND_DIR)/lua/lua_repl.c \
+	$(USERLAND_DIR)/lua/lua_runner.c \
+	$(USERLAND_DIR)/lua/lua_runtime.c \
+	$(USERLAND_DIR)/lua/lua_bindings_console.c \
+	$(USERLAND_DIR)/lua/lua_bindings_sys.c \
+	$(USERLAND_DIR)/lua/lua_port.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lapi.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lauxlib.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lbaselib.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lcode.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lctype.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/ldebug.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/ldump.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/ldo.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lfunc.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lgc.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/llex.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lmem.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lobject.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lopcodes.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lparser.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lstate.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lstring.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/ltable.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/ltm.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lundump.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lvm.c \
+	$(USERLAND_DIR)/lua/vendor/lua-5.4.6/src/lzio.c
+LUA_APP_OBJS := $(patsubst %.c,$(LUA_APP_BUILD_DIR)/%.o,$(LUA_APP_SRCS))
+LUA_APP_ELF := $(BUILD_DIR)/lang/lua.elf
+LUA_APP_BIN := $(BUILD_DIR)/lang/lua.app
+
+DESKTOP_APP_SRCS := \
+	$(USERLAND_DIR)/applications/desktop_app_main.c \
+	$(USERLAND_DIR)/applications/startx_game_stubs.c \
+	$(USERLAND_DIR)/modules/shell.c \
+	$(USERLAND_DIR)/modules/busybox.c \
+	$(USERLAND_DIR)/modules/console.c \
+	$(USERLAND_DIR)/modules/fs.c \
+	$(USERLAND_DIR)/modules/bmp.c \
+	$(USERLAND_DIR)/modules/lang_loader.c \
+	$(USERLAND_DIR)/modules/utils.c \
+	$(USERLAND_DIR)/modules/syscalls.c \
+	$(USERLAND_DIR)/modules/ui.c \
+	$(USERLAND_DIR)/modules/dirty_rects.c \
+	$(USERLAND_DIR)/modules/ui_clip.c \
+	$(USERLAND_DIR)/modules/ui_cursor.c \
+	$(USERLAND_DIR)/applications/desktop.c \
+	$(USERLAND_DIR)/applications/terminal.c \
+	$(USERLAND_DIR)/applications/clock.c \
+	$(USERLAND_DIR)/applications/filemanager.c \
+	$(USERLAND_DIR)/applications/editor.c \
+	$(USERLAND_DIR)/applications/taskmgr.c \
+	$(USERLAND_DIR)/applications/calculator.c \
+	$(USERLAND_DIR)/applications/sketchpad.c \
+	$(USERLAND_DIR)/applications/games/snake.c \
+	$(USERLAND_DIR)/applications/games/tetris.c \
+	$(USERLAND_DIR)/applications/games/pacman.c \
+	$(USERLAND_DIR)/applications/games/space_invaders.c \
+	$(USERLAND_DIR)/applications/games/pong.c \
+	$(USERLAND_DIR)/applications/games/donkey_kong.c \
+	$(USERLAND_DIR)/applications/games/brick_race.c \
+	$(USERLAND_DIR)/applications/games/flap_birb.c \
+	$(USERLAND_DIR)/applications/games/doom.c \
+	$(USERLAND_DIR)/applications/games/craft/craft_app.c
+STARTX_APP_BUILD_DIR := $(BUILD_DIR)/lang/startx
+STARTX_APP_OBJS := $(patsubst %.c,$(STARTX_APP_BUILD_DIR)/%.o,$(DESKTOP_APP_SRCS)) \
+	$(STARTX_APP_BUILD_DIR)/app_entry.o \
+	$(STARTX_APP_BUILD_DIR)/app_runtime.o
+STARTX_APP_ELF := $(BUILD_DIR)/lang/startx.elf
+STARTX_APP_BIN := $(BUILD_DIR)/lang/startx.app
+
+EDIT_APP_BUILD_DIR := $(BUILD_DIR)/lang/edit
+EDIT_APP_OBJS := $(patsubst %.c,$(EDIT_APP_BUILD_DIR)/%.o,$(DESKTOP_APP_SRCS)) \
+	$(EDIT_APP_BUILD_DIR)/app_entry.o \
+	$(EDIT_APP_BUILD_DIR)/app_runtime.o
+EDIT_APP_ELF := $(BUILD_DIR)/lang/edit.elf
+EDIT_APP_BIN := $(BUILD_DIR)/lang/edit.app
+
+NANO_APP_BUILD_DIR := $(BUILD_DIR)/lang/nano
+NANO_APP_OBJS := $(patsubst %.c,$(NANO_APP_BUILD_DIR)/%.o,$(DESKTOP_APP_SRCS)) \
+	$(NANO_APP_BUILD_DIR)/app_entry.o \
+	$(NANO_APP_BUILD_DIR)/app_runtime.o
+NANO_APP_ELF := $(BUILD_DIR)/lang/nano.elf
+NANO_APP_BIN := $(BUILD_DIR)/lang/nano.app
+
+SECTORC_APP_BUILD_DIR := $(BUILD_DIR)/lang/sectorc
+SECTORC_APP_SRCS := \
+	$(USERLAND_DIR)/sectorc/sectorc_app_main.c \
+	$(USERLAND_DIR)/modules/console.c \
+	$(USERLAND_DIR)/modules/fs.c \
+	$(USERLAND_DIR)/modules/utils.c \
+	$(USERLAND_DIR)/modules/syscalls.c \
+	$(USERLAND_DIR)/sectorc/sectorc_main.c \
+	$(USERLAND_DIR)/sectorc/sectorc_driver.c \
+	$(USERLAND_DIR)/sectorc/sectorc_port.c \
+	$(USERLAND_DIR)/sectorc/sectorc_runtime.c \
+	$(USERLAND_DIR)/sectorc/sectorc_exec.c
+SECTORC_APP_OBJS := $(patsubst %.c,$(SECTORC_APP_BUILD_DIR)/%.o,$(SECTORC_APP_SRCS)) \
+	$(SECTORC_APP_BUILD_DIR)/app_entry.o \
+	$(SECTORC_APP_BUILD_DIR)/app_runtime.o
+SECTORC_APP_ELF := $(BUILD_DIR)/lang/sectorc.elf
+SECTORC_APP_BIN := $(BUILD_DIR)/lang/sectorc.app
+
 USERLAND_BOOT_APP_BUILD_DIR := $(BUILD_DIR)/lang/userland_app
 USERLAND_BOOT_APP_SRCS := \
 	$(USERLAND_DIR)/userland.c \
@@ -516,7 +634,11 @@ FALSE_APP_BIN := $(BUILD_DIR)/ported/false.app
 PRINTF_APP_BIN := $(BUILD_DIR)/ported/printf.app
 PORTED_APPS_STAMP := $(BUILD_DIR)/.ported_apps.stamp
 
-LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(JAVA_APP_BIN) $(JAVAC_APP_BIN) $(USERLAND_BOOT_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN)
+$(shell mkdir -p $(APP_CATALOG_GENERATED_DIR))
+$(shell $(PYTHON) tools/generate_app_catalog.py --manifest $(APP_CATALOG_MANIFEST) --mk $(APP_CATALOG_GENERATED_MK) --header $(APP_CATALOG_GENERATED_H))
+-include $(APP_CATALOG_GENERATED_MK)
+
+LANG_APP_BINS := $(APP_CATALOG_APP_BINS)
 
 # Include compatibility layer build rules
 include Build.compat.mk
@@ -609,6 +731,21 @@ $(BUILD_DIR)/userland/applications/games/craft/upstream/deps/lodepng/lodepng.o: 
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -DLODEPNG_NO_COMPILE_DISK -c $< -o $@
 
+$(APP_CATALOG_GENERATED_MK) $(APP_CATALOG_GENERATED_H): $(APP_CATALOG_MANIFEST) tools/generate_app_catalog.py | $(BUILD_DIR)
+	@mkdir -p $(APP_CATALOG_GENERATED_DIR)
+	$(PYTHON) tools/generate_app_catalog.py --manifest $(APP_CATALOG_MANIFEST) --mk $(APP_CATALOG_GENERATED_MK) --header $(APP_CATALOG_GENERATED_H)
+
+$(BUILD_DIR)/userland/modules/busybox.o: $(APP_CATALOG_GENERATED_H)
+$(BUILD_DIR)/userland/modules/fs.o: $(APP_CATALOG_GENERATED_H)
+$(STARTX_APP_BUILD_DIR)/userland/modules/busybox.o: $(APP_CATALOG_GENERATED_H)
+$(STARTX_APP_BUILD_DIR)/userland/modules/fs.o: $(APP_CATALOG_GENERATED_H)
+$(EDIT_APP_BUILD_DIR)/userland/modules/busybox.o: $(APP_CATALOG_GENERATED_H)
+$(EDIT_APP_BUILD_DIR)/userland/modules/fs.o: $(APP_CATALOG_GENERATED_H)
+$(NANO_APP_BUILD_DIR)/userland/modules/busybox.o: $(APP_CATALOG_GENERATED_H)
+$(NANO_APP_BUILD_DIR)/userland/modules/fs.o: $(APP_CATALOG_GENERATED_H)
+$(USERLAND_BOOT_APP_BUILD_DIR)/userland/modules/busybox.o: $(APP_CATALOG_GENERATED_H)
+$(USERLAND_BOOT_APP_BUILD_DIR)/userland/modules/fs.o: $(APP_CATALOG_GENERATED_H)
+
 
 $(BUILD_DIR)/%.o: %.asm
 	@mkdir -p $(dir $@)
@@ -686,6 +823,22 @@ $(JAVAC_APP_BUILD_DIR)/javac_main.o: lang/apps/javac/javac_main.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(LUA_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_USERLAND_APP -c $< -o $@
+
+$(SECTORC_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"sectorc\" -DVIBE_APP_BUILD_HEAP_SIZE=131072u -c $< -o $@
+
+$(SECTORC_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SECTORC_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_USERLAND_APP -c $< -o $@
+
 $(AP_TRAMPOLINE_BIN): $(BOOT_DIR)/ap_trampoline.asm | $(BUILD_DIR)
 	$(AS) -f bin $< -o $@
 
@@ -748,6 +901,77 @@ $(JAVAC_APP_ELF): $(JAVAC_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(JAVAC_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(JAVAC_APP_BIN): $(JAVAC_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(LUA_APP_ELF): $(LUA_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
+	$(LD) $(LDFLAGS_APP) $(LUA_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(LUA_APP_BIN): $(LUA_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(STARTX_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"startx\" -DVIBE_APP_BUILD_HEAP_SIZE=393216u -c $< -o $@
+
+$(STARTX_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(STARTX_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(STARTX_APP_ELF): $(STARTX_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
+	$(LD) $(LDFLAGS_APP) $(STARTX_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(STARTX_APP_BIN): $(STARTX_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(EDIT_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"edit\" -DVIBE_APP_BUILD_HEAP_SIZE=393216u -c $< -o $@
+
+$(EDIT_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(EDIT_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(EDIT_APP_ELF): $(EDIT_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
+	$(LD) $(LDFLAGS_APP) $(EDIT_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(EDIT_APP_BIN): $(EDIT_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(NANO_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"nano\" -DVIBE_APP_BUILD_HEAP_SIZE=393216u -c $< -o $@
+
+$(NANO_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(NANO_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(NANO_APP_ELF): $(NANO_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
+	$(LD) $(LDFLAGS_APP) $(NANO_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(NANO_APP_BIN): $(NANO_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(SECTORC_APP_ELF): $(SECTORC_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
+	$(LD) $(LDFLAGS_APP) $(SECTORC_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(SECTORC_APP_BIN): $(SECTORC_APP_ELF)
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
 

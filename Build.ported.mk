@@ -623,7 +623,7 @@ build/app_runtime_sed.o: $(APP_RUNTIME) | build
 
 build/ported/sed/%.o: applications/ported/sed/%.c $(COMPAT_LIB) | build
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -Iapplications/ported/sed -c $< -o $@
 
 $(SED_ELF): $(SED_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)

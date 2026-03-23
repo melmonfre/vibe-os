@@ -9,6 +9,8 @@
 #include <stdint.h>
 
 static struct vibe_app_context g_app_ctx;
+static struct vibe_appfs_directory g_cached_directory;
+static int g_cached_directory_valid = 0;
 static void lang_debug_vga(int row, const char *text);
 void *malloc(size_t size);
 void *realloc(void *ptr, size_t size);
@@ -570,6 +572,11 @@ static int lang_load_directory(struct vibe_appfs_directory *directory) {
         return -1;
     }
 
+    if (g_cached_directory_valid) {
+        lang_memcpy(directory, &g_cached_directory, (uint32_t)sizeof(*directory));
+        return 0;
+    }
+
     for (int attempt = 0; attempt < LANG_DIRECTORY_RETRY_COUNT; ++attempt) {
         if (lang_storage_read_bytes(VIBE_APPFS_DIRECTORY_LBA,
                                     raw_directory,
@@ -607,6 +614,8 @@ static int lang_load_directory(struct vibe_appfs_directory *directory) {
             continue;
         }
         directory->checksum = checksum;
+        lang_memcpy(&g_cached_directory, directory, (uint32_t)sizeof(*directory));
+        g_cached_directory_valid = 1;
         return 0;
     }
     return -1;

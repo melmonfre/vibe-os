@@ -2,6 +2,7 @@
 #include <userland/modules/include/syscalls.h>
 #include <kernel/drivers/storage/ata.h>
 #include <userland/modules/include/utils.h> // for str_* functions
+#include "app_catalog.h"
 #include <string.h>
 
 #define FS_PERSIST_MAGIC 0x56465331u
@@ -1099,45 +1100,6 @@ void fs_build_path(int node, char *out, int max_len) {
 void fs_init(void) {
     int i;
     extern void kernel_debug_puts(const char *);
-    static const char *compat_exec_stubs[] = {
-        "/bin/hello",
-        "/bin/js",
-        "/bin/ruby",
-        "/bin/python",
-        "/bin/java",
-        "/bin/javac",
-        "/bin/head",
-        "/bin/tail",
-        "/bin/grep",
-        "/bin/loadkeys",
-        "/bin/pwd",
-        "/bin/sleep",
-        "/bin/rmdir",
-        "/bin/mkdir",
-        "/usr/bin/head",
-        "/usr/bin/tail",
-        "/usr/bin/grep",
-        "/usr/bin/java",
-        "/usr/bin/javac",
-        "/usr/bin/pwd",
-        "/usr/bin/sleep",
-        "/usr/bin/rmdir",
-        "/usr/bin/mkdir",
-        "/compat/bin/echo",
-        "/compat/bin/cat",
-        "/compat/bin/wc",
-        "/compat/bin/pwd",
-        "/compat/bin/head",
-        "/compat/bin/sleep",
-        "/compat/bin/rmdir",
-        "/compat/bin/mkdir",
-        "/compat/bin/tail",
-        "/compat/bin/grep",
-        "/compat/bin/loadkeys",
-        "/compat/bin/true",
-        "/compat/bin/false",
-        "/compat/bin/printf"
-    };
 
     g_fs_sync_suspended = 1;
     g_fs_doom_assets_scanned = 0;
@@ -1191,8 +1153,8 @@ void fs_init(void) {
                         "}\n",
                         0);
     kernel_debug_puts("fs: base tree created\n");
-    for (i = 0; i < (int)(sizeof(compat_exec_stubs) / sizeof(compat_exec_stubs[0])); ++i) {
-        (void)fs_write_file(compat_exec_stubs[i], "", 0);
+    for (i = 0; i < (int)G_APP_CATALOG_STUB_PATHS_COUNT; ++i) {
+        (void)fs_write_file(g_app_catalog_stub_paths[i], "", 0);
     }
     kernel_debug_puts("fs: compat stubs created\n");
     kernel_debug_puts("fs: asset scans deferred\n");
