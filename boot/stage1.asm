@@ -207,7 +207,7 @@ try_enable_best_vesa:
 
 .apply_best:
     cmp word [best_vesa_mode],0xFFFF
-    je .done
+    je .fallback_640
 
     mov ax,0x4F01
     mov cx,[best_vesa_mode]
@@ -224,6 +224,30 @@ try_enable_best_vesa:
     jne .done
 
     mov ax,[best_vesa_mode]
+    call store_current_vesa_mode
+    jmp .done
+
+.fallback_640:
+    cmp word [VESA_INFO_ADDR + 0],0
+    jne .done
+    mov ax,0x4F01
+    mov cx,0x0101
+    mov di,VESA_MODEINFO_ADDR
+    int 0x10
+    cmp ax,0x004F
+    jne .done
+    mov ax,0x4F02
+    mov bx,0x4101
+    int 0x10
+    cmp ax,0x004F
+    jne .done
+    mov ax,0x0101
+    call store_current_vesa_mode
+
+.done:
+    ret
+
+store_current_vesa_mode:
     mov [VESA_INFO_ADDR + 0],ax
     mov eax,[VESA_MODEINFO_ADDR + 40]
     mov [VESA_INFO_ADDR + 2],eax
@@ -235,8 +259,6 @@ try_enable_best_vesa:
     mov [VESA_INFO_ADDR + 10],ax
     mov al,[VESA_MODEINFO_ADDR + 25]
     mov [VESA_INFO_ADDR + 12],al
-
-.done:
     ret
 
 remember_vesa_mode:
@@ -244,24 +266,8 @@ remember_vesa_mode:
     cmp cx,VESA_MODE_LIST_MAX
     jae .done
 
-    xor bx,bx
-.scan:
-    cmp bx,cx
-    jae .store
-    shl bx,2
-    mov ax,[VESA_INFO_ADDR + 14 + bx]
-    cmp ax,[VESA_MODEINFO_ADDR + 18]
-    jne .next
-    mov ax,[VESA_INFO_ADDR + 16 + bx]
-    cmp ax,[VESA_MODEINFO_ADDR + 20]
-    je .done
-.next:
-    shr bx,2
-    inc bx
-    jmp .scan
-
-.store:
-    shl bx,2
+    shl cx,2
+    mov bx,cx
     mov ax,[VESA_MODEINFO_ADDR + 18]
     mov [VESA_INFO_ADDR + 14 + bx],ax
     mov ax,[VESA_MODEINFO_ADDR + 20]

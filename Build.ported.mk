@@ -59,16 +59,17 @@ endif
 endif
 
 PYTHON ?= python3
+CPU_ARCH_CFLAGS := -march=i586 -mtune=generic -mno-mmx -mno-sse -mno-sse2
 
 # Compiler flags - same as other apps
-CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
+CFLAGS := -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
 	-fno-builtin -nostdlib -Wall -Wextra
 INCLUDES := -I. -Icompat/include -Ilang/include -Iapplications/ported/include -Iheaders
 LDFLAGS := -m elf_i386 -T linker/app.ld -nostdlib -N --allow-multiple-definition
 
 UNAME_S := $(shell uname -s 2>/dev/null || echo Unknown)
 ifeq ($(UNAME_S),Linux)
-LIBGCC_A := $(shell $(CC) -m32 -print-libgcc-file-name 2>/dev/null)
+LIBGCC_A := $(shell $(CC) -m32 $(CPU_ARCH_CFLAGS) -print-libgcc-file-name 2>/dev/null)
 else
 LIBGCC_A :=
 endif

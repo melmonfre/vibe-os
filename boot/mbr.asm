@@ -67,6 +67,7 @@ load_stage1:
     ret
 
 try_enable_vesa:
+    mov dword [VESA_MODEINFO_ADDR], '2EBV'
     mov ax, 0x4F00
     mov di, VESA_MODEINFO_ADDR
     int 0x10

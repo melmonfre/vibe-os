@@ -45,6 +45,14 @@ enum storage_backend {
     STORAGE_BACKEND_AHCI = 2
 };
 
+struct appfs_probe_directory {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t entry_count;
+    uint32_t checksum;
+    uint8_t rest[(8u * 512u) - 16u];
+};
+
 static int g_ata_ready = 0;
 static uint32_t g_ata_total_sectors = 0u;
 static uint16_t g_ata_io_base = ATA_PRIMARY_IO;
@@ -67,6 +75,9 @@ static uint32_t pci_config_read32(uint8_t bus, uint8_t slot, uint8_t func, uint8
 static uint16_t pci_bar_io_base(uint32_t bar, uint16_t fallback);
 static int storage_backend_read_sector(uint32_t lba, uint8_t *buf);
 static int storage_backend_write_sector(uint32_t lba, const uint8_t *buf);
+static int storage_appfs_catalog_valid_with_reader(int (*read_sector)(uint32_t lba, uint8_t *buf));
+static int ahci_read_sector(uint32_t lba, uint8_t *buf);
+static int ata_read_sector(uint32_t lba, uint8_t *buf);
 
 struct ahci_hba_port {
     uint32_t clb;
@@ -146,6 +157,40 @@ static inline uint32_t inl_local(uint16_t port) {
 
 static uintptr_t align_up_ptr(uintptr_t value, uintptr_t align) {
     return (value + align - 1u) & ~(align - 1u);
+}
+
+static uint32_t storage_checksum_bytes(const uint8_t *data, size_t size) {
+    uint32_t hash = 2166136261u;
+
+    for (size_t i = 0; i < size; ++i) {
+        hash ^= data[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static int storage_appfs_catalog_valid_with_reader(int (*read_sector)(uint32_t lba, uint8_t *buf)) {
+    struct appfs_probe_directory directory;
+    uint32_t expected_checksum;
+
+    if (read_sector == 0) {
+        return 0;
+    }
+    memset(&directory, 0, sizeof(directory));
+    for (uint32_t i = 0; i < KERNEL_APPFS_DIRECTORY_SECTORS; ++i) {
+        if (read_sector(KERNEL_APPFS_START_LBA + i,
+                        ((uint8_t *)&directory) + (i * KERNEL_PERSIST_SECTOR_SIZE)) != 0) {
+            return 0;
+        }
+    }
+
+    if (directory.magic != 0x53465056u || directory.version != 1u || directory.entry_count > 48u) {
+        return 0;
+    }
+
+    expected_checksum = directory.checksum;
+    directory.checksum = 0u;
+    return storage_checksum_bytes((const uint8_t *)&directory, 16u + (48u * 32u)) == expected_checksum;
 }
 
 static volatile struct ahci_hba_port *ahci_port_regs(void) {
@@ -336,6 +381,11 @@ static int ahci_write_sector(uint32_t lba, const uint8_t *buf) {
 }
 
 static int ahci_init_probe(void) {
+    int fallback_found = 0;
+    volatile uint8_t *fallback_port = 0;
+    uint32_t fallback_port_index = 0u;
+    uint32_t fallback_total_sectors = 0u;
+
     for (uint16_t bus = 0; bus < 256u; ++bus) {
         for (uint8_t slot = 0; slot < 32u; ++slot) {
             for (uint8_t func = 0; func < 8u; ++func) {
@@ -388,11 +438,27 @@ static int ahci_init_probe(void) {
                         kernel_debug_printf("ahci: sata port=%d sectors=%d\n",
                                             (int)port_idx,
                                             (int)g_ahci_total_sectors);
-                        return 0;
+                        if (storage_appfs_catalog_valid_with_reader(ahci_read_sector)) {
+                            kernel_debug_printf("ahci: selected boot appfs port=%d\n", (int)port_idx);
+                            return 0;
+                        }
+                        if (!fallback_found) {
+                            fallback_found = 1;
+                            fallback_port = (volatile uint8_t *)port;
+                            fallback_port_index = port_idx;
+                            fallback_total_sectors = g_ahci_total_sectors;
+                        }
                     }
                 }
             }
         }
+    }
+    if (fallback_found) {
+        g_ahci_port = fallback_port;
+        g_ahci_port_index = fallback_port_index;
+        g_ahci_total_sectors = fallback_total_sectors;
+        kernel_debug_printf("ahci: falling back to first sata port=%d\n", (int)fallback_port_index);
+        return 0;
     }
     return -1;
 }
@@ -593,6 +659,12 @@ static int ata_identify_current(void) {
 }
 
 static int ata_identify_probe(void) {
+    int fallback_found = 0;
+    uint16_t fallback_io_base = ATA_PRIMARY_IO;
+    uint16_t fallback_ctrl_base = ATA_PRIMARY_CTRL;
+    uint8_t fallback_drive_select = 0xE0u;
+    uint32_t fallback_total_sectors = 0u;
+
     static const struct {
         uint16_t *io;
         uint16_t *ctrl;
@@ -616,10 +688,28 @@ static int ata_identify_probe(void) {
                                 g_ata_ctrl_base,
                                 probes[i].drive,
                                 (int)g_ata_total_sectors);
-            return 0;
+            if (storage_appfs_catalog_valid_with_reader(ata_read_sector)) {
+                kernel_debug_printf("ata: selected boot appfs device=%s\n", probes[i].name);
+                return 0;
+            }
+            if (!fallback_found) {
+                fallback_found = 1;
+                fallback_io_base = g_ata_io_base;
+                fallback_ctrl_base = g_ata_ctrl_base;
+                fallback_drive_select = g_ata_drive_select;
+                fallback_total_sectors = g_ata_total_sectors;
+            }
         }
     }
 
+    if (fallback_found) {
+        g_ata_io_base = fallback_io_base;
+        g_ata_ctrl_base = fallback_ctrl_base;
+        g_ata_drive_select = fallback_drive_select;
+        g_ata_total_sectors = fallback_total_sectors;
+        kernel_debug_printf("ata: falling back to first detected legacy device\n");
+        return 0;
+    }
     kernel_debug_printf("ata: no legacy ATA device detected\n");
     return -1;
 }
