@@ -52,6 +52,7 @@ endif
 ifeq ($(strip $(QEMU)),)
 QEMU := qemu-system-i386
 endif
+QEMU_MEMORY_MB ?= 3072
 ifeq ($(strip $(PYTHON)),)
 PYTHON := python3
 endif
@@ -724,12 +725,12 @@ $(IMAGE): $(BOOT_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEX
 
 run: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -drive format=raw,file=$(IMAGE) -boot c; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c; \
 	else \
 		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			echo "Usando qemu-system-x86_64"; \
-			qemu-system-x86_64 -drive format=raw,file=$(IMAGE) -boot c; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c; \
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \
@@ -739,10 +740,10 @@ run: $(IMAGE)
 
 run-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -serial stdio; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -751,12 +752,12 @@ run-debug: $(IMAGE)
 
 debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -drive format=raw,file=$(IMAGE) -boot c -s -S; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -s -S; \
 	else \
 		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			echo "Usando qemu-system-x86_64 com debug"; \
-			qemu-system-x86_64 -drive format=raw,file=$(IMAGE) -boot c -s -S; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -s -S; \
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \
