@@ -356,7 +356,8 @@ Pendências imediatas da fase 1
 
 - [ ] Portar `true` e `false` (não presentes em `compat/bin`, seguir para próxima fase)
 - [ ] Portar `printf` (fora de `compat/bin`, próxima fase)
-- [ ] Expandir próximos alvos de `compat/bin` (`mkdir`, `sync`) conforme APIs necessárias
+- [ ] Expandir próximos alvos de `compat/bin` (`sync`) conforme APIs necessárias
+- [x] Port de `mkdir` baseado em `compat/bin/mkdir/mkdir.c`
 
 ====================================================================
 HANDOFF TÉCNICO (PARA PRÓXIMO AGENTE)

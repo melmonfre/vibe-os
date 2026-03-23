@@ -245,13 +245,10 @@ static int read_line(char *buf, int maxlen, const char *prompt) {
     }
 }
 
-void shell_start(void) {
+void shell_start_ready(void) {
     char line[LINE_MAX];
     char *argv[SHELL_MAX_ARGS + 1];
     char prompt[96];
-
-    console_init();
-    fs_init();
 
     for (;;) {
         int argc;
@@ -283,4 +280,10 @@ void shell_start(void) {
 
     fs_flush();
     console_write("bye\n");
+}
+
+void shell_start(void) {
+    console_init();
+    fs_init();
+    shell_start_ready();
 }

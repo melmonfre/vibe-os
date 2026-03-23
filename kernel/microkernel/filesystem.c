@@ -4,6 +4,7 @@
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/service.h>
 #include <kernel/microkernel/transfer.h>
+#include <kernel/userland_service.h>
 #include <kernel/scheduler.h>
 #include <sys/stat.h>
 
@@ -207,11 +208,15 @@ static int mk_fs_local_handler(const struct mk_message *request,
 }
 
 void mk_filesystem_service_init(void) {
-    (void)mk_service_launch_worker(MK_SERVICE_FILESYSTEM,
-                                   "filesystem",
-                                   mk_fs_local_handler,
-                                   0,
-                                   0u);
+    (void)mk_service_launch_task(MK_SERVICE_FILESYSTEM,
+                                 "filesystem",
+                                 mk_fs_local_handler,
+                                 0,
+                                 userland_service_entry,
+                                 8192u,
+                                 MK_LAUNCH_FLAG_BOOTSTRAP |
+                                 MK_LAUNCH_FLAG_BUILTIN |
+                                 MK_LAUNCH_FLAG_CRITICAL);
 }
 
 int mk_filesystem_service_open(const char *path, int flags) {

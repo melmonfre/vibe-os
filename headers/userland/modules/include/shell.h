@@ -4,6 +4,7 @@
 /* public interface for the UNIX-like shell */
 
 void shell_start(void);
+void shell_start_ready(void);
 void shell_history_add(const char *line);
 void shell_history_print(void);
 

@@ -72,6 +72,16 @@ process_t *process_create_with_stack(void (*entry)(void),
     return p;
 }
 
+void process_terminate(process_t *proc) {
+    if (!proc) {
+        return;
+    }
+
+    proc->state = PROCESS_TERMINATED;
+    proc->current_cpu = -1;
+    proc->preferred_cpu = -1;
+}
+
 void process_destroy(process_t *proc) {
     if (!proc) {
         return;

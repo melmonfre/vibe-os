@@ -9,7 +9,7 @@
 #include <kernel/lock.h>
 #include <kernel/memory/heap.h>
 
-#define IPC_QUEUE_SIZE 16
+#define IPC_QUEUE_SIZE 64
 #define IPC_MAX_QUEUES 64
 
 /* messages are simple pointers to a buffer with length */

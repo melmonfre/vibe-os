@@ -21,6 +21,7 @@ struct fs_persist_image {
 struct fs_node g_fs_nodes[FS_MAX_NODES];
 int g_fs_root = -1;
 int g_fs_cwd = -1;
+static struct fs_persist_image g_fs_persist_image;
 static int g_fs_sync_suspended = 0;
 static uint32_t g_fs_total_sectors_cache = 0u;
 static int g_fs_dirty = 0;
@@ -418,53 +419,55 @@ static int fs_validate_loaded_tree(void) {
 }
 
 static int fs_load_persistent_image(void) {
-    struct fs_persist_image image;
+    struct fs_persist_image *image = &g_fs_persist_image;
     uint32_t checksum;
     extern void kernel_debug_puts(const char *);
 
     kernel_debug_puts("fs: sys_storage_load begin\n");
-    if (sys_storage_load(&image, (uint32_t)sizeof(image)) != 0) {
+    if (sys_storage_load(image, (uint32_t)sizeof(*image)) != 0) {
         kernel_debug_puts("fs: sys_storage_load failed\n");
         return -1;
     }
     kernel_debug_puts("fs: sys_storage_load returned\n");
-    if (image.magic != FS_PERSIST_MAGIC || image.version != FS_PERSIST_VERSION) {
+    if (image->magic != FS_PERSIST_MAGIC || image->version != FS_PERSIST_VERSION) {
         return -1;
     }
 
-    checksum = image.checksum;
-    image.checksum = 0u;
-    if (checksum != fs_checksum_bytes((const uint8_t *)&image, (int)sizeof(image))) {
+    checksum = image->checksum;
+    image->checksum = 0u;
+    if (checksum != fs_checksum_bytes((const uint8_t *)image, (int)sizeof(*image))) {
         return -1;
     }
+    image->checksum = checksum;
 
     for (int i = 0; i < FS_MAX_NODES; ++i) {
-        g_fs_nodes[i] = image.nodes[i];
+        g_fs_nodes[i] = image->nodes[i];
     }
-    g_fs_root = image.root;
-    g_fs_cwd = image.cwd;
+    g_fs_root = image->root;
+    g_fs_cwd = image->cwd;
     return fs_validate_loaded_tree() ? 0 : -1;
 }
 
 static int fs_sync_now(void) {
-    struct fs_persist_image image = {0};
+    struct fs_persist_image *image = &g_fs_persist_image;
     extern void kernel_debug_puts(const char *);
 
     if (g_fs_sync_suspended) {
         return 0;
     }
 
-    image.magic = FS_PERSIST_MAGIC;
-    image.version = FS_PERSIST_VERSION;
-    image.root = g_fs_root;
-    image.cwd = g_fs_cwd;
+    memset(image, 0, sizeof(*image));
+    image->magic = FS_PERSIST_MAGIC;
+    image->version = FS_PERSIST_VERSION;
+    image->root = g_fs_root;
+    image->cwd = g_fs_cwd;
     for (int i = 0; i < FS_MAX_NODES; ++i) {
-        image.nodes[i] = g_fs_nodes[i];
+        image->nodes[i] = g_fs_nodes[i];
     }
-    image.checksum = 0u;
-    image.checksum = fs_checksum_bytes((const uint8_t *)&image, (int)sizeof(image));
+    image->checksum = 0u;
+    image->checksum = fs_checksum_bytes((const uint8_t *)image, (int)sizeof(*image));
     kernel_debug_puts("fs: sys_storage_save begin\n");
-    if (sys_storage_save(&image, (uint32_t)sizeof(image)) != 0) {
+    if (sys_storage_save(image, (uint32_t)sizeof(*image)) != 0) {
         kernel_debug_puts("fs: sys_storage_save failed\n");
         return -1;
     }
@@ -1110,6 +1113,7 @@ void fs_init(void) {
         "/bin/pwd",
         "/bin/sleep",
         "/bin/rmdir",
+        "/bin/mkdir",
         "/usr/bin/head",
         "/usr/bin/tail",
         "/usr/bin/grep",
@@ -1118,6 +1122,7 @@ void fs_init(void) {
         "/usr/bin/pwd",
         "/usr/bin/sleep",
         "/usr/bin/rmdir",
+        "/usr/bin/mkdir",
         "/compat/bin/echo",
         "/compat/bin/cat",
         "/compat/bin/wc",
@@ -1125,6 +1130,7 @@ void fs_init(void) {
         "/compat/bin/head",
         "/compat/bin/sleep",
         "/compat/bin/rmdir",
+        "/compat/bin/mkdir",
         "/compat/bin/tail",
         "/compat/bin/grep",
         "/compat/bin/loadkeys",

@@ -2,7 +2,6 @@
 import argparse
 import os
 import shutil
-import struct
 import subprocess
 import tempfile
 
@@ -15,6 +14,41 @@ def write_file(path, data, offset=0):
     with open(path, "r+b") as handle:
         handle.seek(offset)
         handle.write(data)
+
+
+def ensure_mtools_path(part_path, destination):
+    mmd = shutil.which("mmd") or "mmd"
+    normalized = destination.strip()
+
+    if not normalized:
+        raise SystemExit("boot file destination cannot be empty")
+    normalized = normalized.replace("\\", "/")
+    if not normalized.startswith("/"):
+        normalized = "/" + normalized
+
+    components = [component for component in normalized.split("/")[:-1] if component]
+    current = ""
+    for component in components:
+        current += "/" + component
+        subprocess.run(
+            [mmd, "-i", part_path, f"::{current}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+
+def copy_boot_file(part_path, source_path, destination):
+    mcopy = shutil.which("mcopy") or "mcopy"
+    normalized = destination.strip().replace("\\", "/")
+
+    if not normalized:
+        raise SystemExit("boot file destination cannot be empty")
+    if not normalized.startswith("/"):
+        normalized = "/" + normalized
+
+    ensure_mtools_path(part_path, normalized)
+    run([mcopy, "-i", part_path, "-o", source_path, f"::{normalized}"])
 
 
 def main():
@@ -30,6 +64,10 @@ def main():
     parser.add_argument("--boot-partition-reserved-sectors", type=int, required=True)
     parser.add_argument("--boot-stage2-start-sector", type=int, required=True)
     parser.add_argument("--boot-kernel-start-sector", type=int, required=True)
+    parser.add_argument("--data-partition-start-lba", type=int, default=0)
+    parser.add_argument("--data-partition-sectors", type=int, default=0)
+    parser.add_argument("--data-partition-image")
+    parser.add_argument("--boot-file", action="append", default=[])
     args = parser.parse_args()
 
     image_size = args.image_total_sectors * 512
@@ -95,20 +133,30 @@ def main():
             if padding > 0:
                 part.write(b"\0" * padding)
 
-        # Keep a visible copy of the kernel inside FAT32 for diagnostics.
-        run(
-            [
-                shutil.which("mcopy") or "mcopy",
-                "-i",
-                part_path,
-                "-o",
-                args.kernel,
-                "::KERNEL.BIN",
-            ]
-        )
+        boot_files = list(args.boot_file)
+        if not boot_files:
+            boot_files.append(f"{args.kernel}::/KERNEL.BIN")
+
+        for spec in boot_files:
+            source_path, separator, destination = spec.partition("::")
+
+            if separator == "" or not source_path or not destination:
+                raise SystemExit(f"invalid --boot-file spec: {spec!r}")
+            copy_boot_file(part_path, source_path, destination)
 
         with open(part_path, "rb") as part:
             write_file(args.image, part.read(), args.boot_partition_start_lba * 512)
+
+    if args.data_partition_image:
+        if args.data_partition_start_lba <= 0 or args.data_partition_sectors <= 0:
+            raise SystemExit("data partition geometry is required with --data-partition-image")
+
+        with open(args.data_partition_image, "rb") as handle:
+            data_partition = handle.read()
+        max_size = args.data_partition_sectors * 512
+        if len(data_partition) > max_size:
+            raise SystemExit("data partition image does not fit inside the target partition")
+        write_file(args.image, data_partition, args.data_partition_start_lba * 512)
 
 
 if __name__ == "__main__":

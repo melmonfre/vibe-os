@@ -135,6 +135,7 @@ APPFS_APP_AREA_SECTORS := 1536
 PERSIST_SECTOR_COUNT := 640
 IMAGE_ASSET_START_LBA := $(shell echo $$(( $(APPFS_DIRECTORY_LBA) + $(APPFS_DIRECTORY_SECTORS) + $(APPFS_APP_AREA_SECTORS) + $(PERSIST_SECTOR_COUNT) )))
 IMAGE_TOTAL_SECTORS := 524288
+DATA_PARTITION_SECTORS := $(shell echo $$(( $(IMAGE_TOTAL_SECTORS) - $(DATA_PARTITION_START_LBA) )))
 DOOM_WAD_SRC := userland/applications/games/DOOM/DOOM.WAD
 DOOM_WAD_IMAGE_LBA := $(IMAGE_ASSET_START_LBA)
 CRAFT_TEXTURE_SRC := userland/applications/games/craft/upstream/textures/texture.png
@@ -146,6 +147,11 @@ CRAFT_FONT_IMAGE_LBA := 30128
 CRAFT_SKY_IMAGE_LBA := 30256
 CRAFT_SIGN_IMAGE_LBA := 30416
 IMAGE_ASSET_MANIFEST := $(BUILD_DIR)/image-assets.manifest
+DATA_IMAGE := $(BUILD_DIR)/data-partition.img
+DATA_IMAGE_MANIFEST := $(BUILD_DIR)/data-partition.manifest
+BOOT_VOLUME_MANIFEST := $(BUILD_DIR)/boot-volume-layout.txt
+BOOT_POLICY_MANIFEST := $(BUILD_DIR)/boot-policy.txt
+PHASE6_REPORT := $(BUILD_DIR)/phase6-validation.md
 CRAFT_UPSTREAM_EXPERIMENTAL ?= 1
 
 # Kernel sources - kernel only, no stage2
@@ -256,7 +262,10 @@ endif
 USERLAND_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(USERLAND_SRCS))
 KERNEL_USERLAND_SRCS := \
 	$(USERLAND_DIR)/bootstrap_init.c \
+	$(USERLAND_DIR)/bootstrap_service.c \
 	$(USERLAND_DIR)/bootstrap_runtime.c \
+	$(USERLAND_DIR)/modules/shell.c \
+	$(USERLAND_DIR)/modules/busybox.c \
 	$(USERLAND_DIR)/modules/console.c \
 	$(USERLAND_DIR)/modules/fs.c \
 	$(USERLAND_DIR)/modules/lang_loader.c \
@@ -475,6 +484,22 @@ JAVAC_APP_OBJS := \
 JAVAC_APP_ELF := $(BUILD_DIR)/lang/javac.elf
 JAVAC_APP_BIN := $(BUILD_DIR)/lang/javac.app
 
+USERLAND_BOOT_APP_BUILD_DIR := $(BUILD_DIR)/lang/userland_app
+USERLAND_BOOT_APP_SRCS := \
+	$(USERLAND_DIR)/userland.c \
+	$(USERLAND_DIR)/modules/shell.c \
+	$(USERLAND_DIR)/modules/busybox.c \
+	$(USERLAND_DIR)/modules/console.c \
+	$(USERLAND_DIR)/modules/fs.c \
+	$(USERLAND_DIR)/modules/lang_loader.c \
+	$(USERLAND_DIR)/modules/utils.c \
+	$(USERLAND_DIR)/modules/syscalls.c
+USERLAND_BOOT_APP_OBJS := $(patsubst %.c,$(USERLAND_BOOT_APP_BUILD_DIR)/%.o,$(USERLAND_BOOT_APP_SRCS)) \
+	$(USERLAND_BOOT_APP_BUILD_DIR)/app_entry.o \
+	$(USERLAND_BOOT_APP_BUILD_DIR)/app_runtime.o
+USERLAND_BOOT_APP_ELF := $(BUILD_DIR)/lang/userland.elf
+USERLAND_BOOT_APP_BIN := $(BUILD_DIR)/lang/userland.app
+
 ECHO_APP_BIN := $(BUILD_DIR)/ported/echo.app
 CAT_APP_BIN := $(BUILD_DIR)/ported/cat.app
 WC_APP_BIN := $(BUILD_DIR)/ported/wc.app
@@ -485,22 +510,26 @@ LOADKEYS_APP_BIN := $(BUILD_DIR)/ported/loadkeys.app
 PWD_APP_BIN := $(BUILD_DIR)/ported/pwd.app
 SLEEP_APP_BIN := $(BUILD_DIR)/ported/sleep.app
 RMDIR_APP_BIN := $(BUILD_DIR)/ported/rmdir.app
+MKDIR_APP_BIN := $(BUILD_DIR)/ported/mkdir.app
 TRUE_APP_BIN := $(BUILD_DIR)/ported/true.app
 FALSE_APP_BIN := $(BUILD_DIR)/ported/false.app
 PRINTF_APP_BIN := $(BUILD_DIR)/ported/printf.app
 PORTED_APPS_STAMP := $(BUILD_DIR)/.ported_apps.stamp
 
-LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(JAVA_APP_BIN) $(JAVAC_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN)
+LANG_APP_BINS := $(HELLO_APP_BIN) $(JS_APP_BIN) $(RUBY_APP_BIN) $(PYTHON_APP_BIN) $(JAVA_APP_BIN) $(JAVAC_APP_BIN) $(USERLAND_BOOT_APP_BIN) $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN)
 
 # Include compatibility layer build rules
 include Build.compat.mk
 
 REQUIRED_BUILD_TOOLS := $(AS) $(CC) $(LD) $(NM) $(OBJCOPY) $(AR) $(RANLIB) $(PYTHON)
+REQUIRED_IMAGE_TOOLS := mkfs.fat mcopy mmd
 
 all: check-tools $(IMAGE)
 # Optional legacy monolithic payload for experiments outside the default image.
 all-monolith: check-tools $(IMAGE) $(USERLAND_MAIN_BIN)
 userland-main: check-tools $(USERLAND_MAIN_BIN)
+legacy-data-img: check-tools $(DATA_IMAGE)
+boot-manifest: check-tools $(BOOT_VOLUME_MANIFEST)
 # Note: glibc separate build available via: make -f Build.glibc.mk glibc-build
 # To link glibc instead of stubs, modify KERNEL_ELF dependencies below
 
@@ -515,6 +544,13 @@ check-tools:
 				echo "Linux: instale binutils/gcc 32-bit + nasm + qemu-system-x86"; \
 				echo "Ou use toolchain cruzada i686-elf-*."; \
 			fi; \
+			exit 1; \
+		fi; \
+	done; \
+	for tool in $(REQUIRED_IMAGE_TOOLS); do \
+		if ! command -v $$tool >/dev/null 2>&1; then \
+			echo "Erro: '$$tool' nao encontrado no PATH."; \
+			echo "Instale os utilitarios de imagem FAT32/mtools (ex.: dosfstools + mtools)."; \
 			exit 1; \
 		fi; \
 	done
@@ -715,18 +751,69 @@ $(JAVAC_APP_BIN): $(JAVAC_APP_ELF)
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
 
+$(USERLAND_BOOT_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"userland\" -DVIBE_APP_BUILD_HEAP_SIZE=131072u -c $< -o $@
+
+$(USERLAND_BOOT_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(USERLAND_BOOT_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_USERLAND_APP -c $< -o $@
+
+$(USERLAND_BOOT_APP_ELF): $(USERLAND_BOOT_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
+	$(LD) $(LDFLAGS_APP) $(USERLAND_BOOT_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(USERLAND_BOOT_APP_BIN): $(USERLAND_BOOT_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
 # Ported GNU apps (echo, cat, wc, head, tail, grep, etc)
 # Build once via stamp to avoid parallel duplicate sub-make executions.
 $(PORTED_APPS_STAMP): $(COMPAT_LIB)
 	@mkdir -p $(dir $@)
 	$(MAKE) -j1 -f Build.ported.mk \
 		CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NM="$(NM)" AR="$(AR)" RANLIB="$(RANLIB)" \
-		ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-loadkeys ported-true ported-false ported-printf
+		ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-mkdir ported-tail ported-grep ported-loadkeys ported-true ported-false ported-printf
 	@touch $@
 
-$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
+$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
 
-$(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC)
+$(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC)
+	$(PYTHON) tools/build_data_partition.py \
+		--image $@ \
+		--image-total-sectors $(DATA_PARTITION_SECTORS) \
+		--directory-lba $(APPFS_DIRECTORY_LBA) \
+		--directory-sectors $(APPFS_DIRECTORY_SECTORS) \
+		--app-area-sectors $(APPFS_APP_AREA_SECTORS) \
+		--persist-sectors $(PERSIST_SECTOR_COUNT) \
+		--manifest $(DATA_IMAGE_MANIFEST) \
+		--asset "$(DOOM_WAD_SRC):$(DOOM_WAD_IMAGE_LBA):DOOM.WAD" \
+		--asset "$(CRAFT_TEXTURE_SRC):$(CRAFT_TEXTURE_IMAGE_LBA):texture.png" \
+		--asset "$(CRAFT_FONT_SRC):$(CRAFT_FONT_IMAGE_LBA):font.png" \
+		--asset "$(CRAFT_SKY_SRC):$(CRAFT_SKY_IMAGE_LBA):sky.png" \
+		--asset "$(CRAFT_SIGN_SRC):$(CRAFT_SIGN_IMAGE_LBA):sign.png" \
+		$(LANG_APP_BINS)
+	@cp $(DATA_IMAGE_MANIFEST) $(IMAGE_ASSET_MANIFEST)
+
+$(BOOT_VOLUME_MANIFEST): $(KERNEL_BIN) $(STAGE2_BIN) $(DATA_IMAGE)
+	@mkdir -p $(dir $@)
+	@kernel_size=$$(wc -c < "$(KERNEL_BIN)" | tr -d '[:space:]'); \
+	stage2_size=$$(wc -c < "$(STAGE2_BIN)" | tr -d '[:space:]'); \
+	data_size=$$(wc -c < "$(DATA_IMAGE)" | tr -d '[:space:]'); \
+	printf "# vibeOS FAT32 boot volume layout\nboot_partition_start_lba=%s\nboot_partition_sectors=%s\nboot_reserved_sectors=%s\nboot_stage2_sector=%s\nboot_kernel_sector=%s\ndata_partition_start_lba=%s\ndata_partition_sectors=%s\nkernel_bytes=%s\nstage2_bytes=%s\ndata_partition_bytes=%s\n" \
+		"$(BOOT_PARTITION_START_LBA)" "$(BOOT_PARTITION_SECTORS)" "$(BOOT_PARTITION_RESERVED_SECTORS)" \
+		"$(BOOT_STAGE2_START_SECTOR)" "$(BOOT_KERNEL_START_SECTOR)" \
+		"$(DATA_PARTITION_START_LBA)" "$(DATA_PARTITION_SECTORS)" \
+		"$$kernel_size" "$$stage2_size" "$$data_size" > $@
+
+$(BOOT_POLICY_MANIFEST): $(KERNEL_BIN) $(STAGE2_BIN) $(DATA_IMAGE)
+	@mkdir -p $(dir $@)
+	@printf "# vibeOS USB boot/loading strategy\nbios_disk_transport=edd-int13\nboot_partition_fs=fat32\nstage2_path=/STAGE2.BIN\nkernel_path=/KERNEL.BIN\nruntime_storage_probe=ahci-then-ata\ndata_volume_resolution=mbr-data-partition-with-raw-layout-fallback\nusb_scope=phase4-relies-on-bios-mass-storage-before-native-usb-service\n" > $@
+
+$(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOOT_VOLUME_MANIFEST) $(BOOT_POLICY_MANIFEST)
 	$(PYTHON) tools/build_partitioned_image.py \
 		--image $@ \
 		--mbr $(MBR_BIN) \
@@ -738,42 +825,15 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(LANG_APP_BINS) $(
 		--boot-partition-sectors $(BOOT_PARTITION_SECTORS) \
 		--boot-partition-reserved-sectors $(BOOT_PARTITION_RESERVED_SECTORS) \
 		--boot-stage2-start-sector $(BOOT_STAGE2_START_SECTOR) \
-		--boot-kernel-start-sector $(BOOT_KERNEL_START_SECTOR)
-	$(PYTHON) tools/build_appfs.py --image $@ --partition-base-lba $(DATA_PARTITION_START_LBA) --directory-lba $(APPFS_DIRECTORY_LBA) --directory-sectors $(APPFS_DIRECTORY_SECTORS) --app-area-sectors $(APPFS_APP_AREA_SECTORS) $(LANG_APP_BINS)
-	@mkdir -p $(BUILD_DIR)
-	@echo "# bundled assets" > $(IMAGE_ASSET_MANIFEST)
-	@if [ -f "$(DOOM_WAD_SRC)" ]; then \
-		size=$$(wc -c < "$(DOOM_WAD_SRC)" | tr -d '[:space:]'); \
-		sectors=$$(((size + 511) / 512)); \
-		abs_lba=$$(( $(DATA_PARTITION_START_LBA) + $(DOOM_WAD_IMAGE_LBA) )); \
-		end_lba=$$(( abs_lba + sectors )); \
-		if [ "$$end_lba" -gt "$(IMAGE_TOTAL_SECTORS)" ]; then \
-			echo "Erro: DOOM.WAD excede a imagem final ($$end_lba > $(IMAGE_TOTAL_SECTORS) setores)."; \
-			exit 1; \
-		fi; \
-		dd if="$(DOOM_WAD_SRC)" of="$@" bs=512 seek="$$abs_lba" conv=notrunc; \
-		printf "DOOM.WAD lba=%s physical_lba=%s sectors=%s bytes=%s\n" "$(DOOM_WAD_IMAGE_LBA)" "$$abs_lba" "$$sectors" "$$size" >> $(IMAGE_ASSET_MANIFEST); \
-	fi
-	@for asset in \
-		"$(CRAFT_TEXTURE_SRC):$(CRAFT_TEXTURE_IMAGE_LBA):texture.png" \
-		"$(CRAFT_FONT_SRC):$(CRAFT_FONT_IMAGE_LBA):font.png" \
-		"$(CRAFT_SKY_SRC):$(CRAFT_SKY_IMAGE_LBA):sky.png" \
-		"$(CRAFT_SIGN_SRC):$(CRAFT_SIGN_IMAGE_LBA):sign.png"; do \
-		src=$${asset%%:*}; \
-		rest=$${asset#*:}; \
-		lba=$${rest%%:*}; \
-		name=$${rest##*:}; \
-		size=$$(wc -c < "$$src" | tr -d '[:space:]'); \
-		sectors=$$(((size + 511) / 512)); \
-		abs_lba=$$(( $(DATA_PARTITION_START_LBA) + lba )); \
-		end_lba=$$(( abs_lba + sectors )); \
-		if [ "$$end_lba" -gt "$(IMAGE_TOTAL_SECTORS)" ]; then \
-			echo "Erro: $$name excede a imagem final ($$end_lba > $(IMAGE_TOTAL_SECTORS) setores)."; \
-			exit 1; \
-		fi; \
-		dd if="$$src" of="$@" bs=512 seek="$$abs_lba" conv=notrunc; \
-		printf "CRAFT.%s lba=%s physical_lba=%s sectors=%s bytes=%s\n" "$$name" "$$lba" "$$abs_lba" "$$sectors" "$$size" >> $(IMAGE_ASSET_MANIFEST); \
-	done
+		--boot-kernel-start-sector $(BOOT_KERNEL_START_SECTOR) \
+		--data-partition-start-lba $(DATA_PARTITION_START_LBA) \
+		--data-partition-sectors $(DATA_PARTITION_SECTORS) \
+		--data-partition-image $(DATA_IMAGE) \
+		--boot-file "$(KERNEL_BIN)::/KERNEL.BIN" \
+		--boot-file "$(STAGE2_BIN)::/STAGE2.BIN" \
+		--boot-file "$(BOOT_VOLUME_MANIFEST)::/LAYOUT.TXT" \
+		--boot-file "$(BOOT_POLICY_MANIFEST)::/BOOTPOLICY.TXT" \
+		--boot-file "$(DATA_IMAGE_MANIFEST)::/DATAINFO.TXT"
 	@echo "Imagem gerada: $(IMAGE)"
 
 run: $(IMAGE)
@@ -814,6 +874,85 @@ run-headless-debug: $(IMAGE)
 			exit 1; \
 		fi; \
 	fi
+
+run-headless-core2duo-debug: $(IMAGE)
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -cpu core2duo -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -cpu core2duo -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
+
+run-headless-pentium-debug: $(IMAGE)
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -cpu pentium -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -cpu pentium -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
+
+run-headless-atom-debug: $(IMAGE)
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -cpu n270 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -cpu n270 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(IMAGE) -boot c -display none -serial stdio -monitor none; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
+
+run-headless-ahci-debug: $(IMAGE)
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -machine q35 -m $(QEMU_MEMORY_MB) \
+			-drive if=none,id=bootdisk,format=raw,file=$(IMAGE) \
+			-device ahci,id=ahci \
+			-device ide-hd,drive=bootdisk,bus=ahci.0,bootindex=0 \
+			-boot c -display none -serial stdio -monitor none; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -machine q35 -m $(QEMU_MEMORY_MB) \
+				-drive if=none,id=bootdisk,format=raw,file=$(IMAGE) \
+				-device ahci,id=ahci \
+				-device ide-hd,drive=bootdisk,bus=ahci.0,bootindex=0 \
+				-boot c -display none -serial stdio -monitor none; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
+
+run-headless-usb-debug: $(IMAGE)
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -m $(QEMU_MEMORY_MB) \
+			-drive if=none,id=usbdisk,format=raw,file=$(IMAGE) \
+			-usb \
+			-device usb-storage,drive=usbdisk,bootindex=0 \
+			-boot menu=off -display none -serial stdio -monitor none; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) \
+				-drive if=none,id=usbdisk,format=raw,file=$(IMAGE) \
+				-usb \
+				-device usb-storage,drive=usbdisk,bootindex=0 \
+				-boot menu=off -display none -serial stdio -monitor none; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
+
+validate-phase6: $(IMAGE)
+	$(PYTHON) tools/validate_phase6.py --image $(IMAGE) --report $(PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
 debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \

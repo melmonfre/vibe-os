@@ -6,6 +6,7 @@
 #include <kernel/microkernel/storage.h>
 #include <kernel/microkernel/transfer.h>
 #include <kernel/scheduler.h>
+#include <kernel/userland_service.h>
 
 static struct mk_message g_last_storage_request;
 static struct mk_message g_last_storage_reply;
@@ -134,11 +135,15 @@ void mk_storage_service_init(void) {
     memset(&g_last_storage_request, 0, sizeof(g_last_storage_request));
     memset(&g_last_storage_reply, 0, sizeof(g_last_storage_reply));
     if (kernel_storage_ready()) {
-        (void)mk_service_launch_worker(MK_SERVICE_STORAGE,
-                                   "storage",
-                                   mk_storage_local_handler,
-                                   0,
-                                   0u);
+        (void)mk_service_launch_task(MK_SERVICE_STORAGE,
+                                     "storage",
+                                     mk_storage_local_handler,
+                                     0,
+                                     userland_service_entry,
+                                     8192u,
+                                     MK_LAUNCH_FLAG_BOOTSTRAP |
+                                     MK_LAUNCH_FLAG_BUILTIN |
+                                     MK_LAUNCH_FLAG_CRITICAL);
     }
 }
 

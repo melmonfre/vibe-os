@@ -22,5 +22,6 @@ void yield(void);
 process_t *scheduler_current(void);
 process_t *scheduler_current_for_cpu(uint32_t cpu_index);
 process_t *scheduler_find_task_by_pid(int pid);
+void scheduler_terminate_task(process_t *task);
 
 #endif /* KERNEL_SCHEDULER_H */

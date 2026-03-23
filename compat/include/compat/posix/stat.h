@@ -23,8 +23,14 @@ struct stat {
     uint32_t st_blocks;
 };
 
+#define S_IFMT   0170000
+#define S_IFDIR  0040000
+#define S_IFREG  0100000
+#define S_ISDIR(mode) (((mode) & S_IFMT) == S_IFDIR)
+
 int stat(const char *path, struct stat *buf);
 int fstat(int fd, struct stat *buf);
 int lstat(const char *path, struct stat *buf);
+int mkdir(const char *path, mode_t mode);
 
 #endif /* COMPAT_SYS_STAT_H */

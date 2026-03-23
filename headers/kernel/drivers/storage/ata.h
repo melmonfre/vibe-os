@@ -12,6 +12,7 @@
 #define KERNEL_PERSIST_SECTOR_COUNT 640u
 #define KERNEL_PERSIST_MAX_BYTES (KERNEL_PERSIST_SECTOR_SIZE * KERNEL_PERSIST_SECTOR_COUNT)
 
+int kernel_ata_init(void);
 void kernel_storage_init(void);
 
 #endif

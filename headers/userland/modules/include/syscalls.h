@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <include/userland_api.h>
 
+struct mk_message;
+
 int sys_poll_mouse(struct mouse_state *state);
 int sys_poll_key(void);
 void sys_clear(uint8_t color);
@@ -41,6 +43,9 @@ int sys_text_write(const char *msg);
 int sys_keyboard_set_layout(const char *name);
 int sys_keyboard_get_layout(char *buffer, int size);
 int sys_keyboard_get_available_layouts(char *buffer, int size);
+int sys_service_receive(struct mk_message *message);
+int sys_service_send(const struct mk_message *message);
+int sys_service_backend(const struct mk_message *request, struct mk_message *reply);
 void sys_shutdown(void);
 
 #endif // SYSCALLS_H

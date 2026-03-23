@@ -10,15 +10,19 @@
 
     global context_switch
 context_switch:
-    ; grab parameters
-    mov ebx, [esp+4]    ; old regs pointer (may be NULL)
-    mov esi, [esp+8]    ; new regs pointer
+    ; Save the caller state before touching general registers for our own
+    ; bookkeeping. Otherwise we end up persisting the argument pointers as the
+    ; task's saved ebx/esi values.
+    pusha
+
+    ; grab parameters from the pre-pusha stack frame
+    mov ebx, [esp+36]   ; old regs pointer (may be NULL)
+    mov esi, [esp+40]   ; new regs pointer
 
     cmp ebx, 0
     je .load_new        ; nothing to save if old==NULL
 
     ; save caller register state into *ebx
-    pusha                      ; saves eax..edi (esp value before pusha)
     mov eax, [esp + 32]        ; return address pushed by CALL
     mov [ebx + 0], eax         ; regs.eip
     mov eax, [esp + 12]        ; original ESP value
@@ -37,7 +41,6 @@ context_switch:
     mov [ebx +28], eax         ; regs.esi
     mov eax, [esp + 0]
     mov [ebx +32], eax         ; regs.edi
-    popa                        ; restore caller registers
 
 .load_new:
     ; load new context pointed to by esi

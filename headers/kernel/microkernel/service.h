@@ -1,6 +1,7 @@
 #ifndef KERNEL_MICROKERNEL_SERVICE_H
 #define KERNEL_MICROKERNEL_SERVICE_H
 
+#include <kernel/microkernel/launch.h>
 #include <stdint.h>
 
 struct process;
@@ -12,6 +13,7 @@ struct mk_message;
 typedef int (*mk_service_local_handler_fn)(const struct mk_message *request,
                                            struct mk_message *reply,
                                            void *context);
+typedef void (*mk_service_entry_fn)(void);
 
 enum mk_service_type {
     MK_SERVICE_NONE = 0,
@@ -32,9 +34,11 @@ struct mk_service_record {
     struct process *process;
     mk_service_local_handler_fn local_handler;
     void *context;
+    mk_service_entry_fn entry;
     uint32_t launch_flags;
     uint32_t stack_size;
     uint32_t restart_count;
+    uint32_t transport_degraded;
 };
 
 void mk_service_init(void);
@@ -49,9 +53,17 @@ int mk_service_launch_worker(uint32_t type,
                              mk_service_local_handler_fn handler,
                              void *context,
                              uint32_t stack_size);
+int mk_service_launch_task(uint32_t type,
+                           const char *name,
+                           mk_service_local_handler_fn handler,
+                           void *context,
+                           mk_service_entry_fn entry,
+                           uint32_t stack_size,
+                           uint32_t launch_flags);
 int mk_service_is_online(uint32_t type);
 int mk_service_ensure(uint32_t type);
 int mk_service_request(uint32_t type, const struct mk_message *request, struct mk_message *reply);
+int mk_service_backend_handle_current(const struct mk_message *request, struct mk_message *reply);
 const struct mk_service_record *mk_service_find_by_type(uint32_t type);
 const struct mk_service_record *mk_service_find_by_name(const char *name);
 

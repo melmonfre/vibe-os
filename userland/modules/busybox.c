@@ -46,6 +46,29 @@ __attribute__((weak)) size_t physmem_usable_size(void) {
     return 0u;
 }
 
+__attribute__((weak)) int vibe_lua_main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    return -1;
+}
+
+__attribute__((weak)) int sectorc_main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    return -1;
+}
+
+__attribute__((weak)) void desktop_request_open_editor(const char *path) {
+    (void)path;
+}
+
+__attribute__((weak)) void desktop_request_open_nano(const char *path) {
+    (void)path;
+}
+
+__attribute__((weak)) void desktop_main(void) {
+}
+
 /* minimal string compare so we don't depend on libc */
 static int strcmp(const char *a, const char *b) {
     while (*a && *b && *a == *b) {
@@ -163,6 +186,7 @@ static int should_prefer_external(const char *cmd) {
         "echo",
         "cat",
         "pwd",
+        "mkdir",
         "true",
         "false",
         "printf"
@@ -451,9 +475,17 @@ static int cmd_shutdown(int argc, char **argv) {
 
 static int cmd_startx(int argc, char **argv) {
     (void)argc; (void)argv;
+#ifdef VIBE_USERLAND_APP
+    if (try_run_external(argc, argv) >= 0) {
+        return 0;
+    }
+    console_write("startx indisponivel nesta app de boot\n");
+    return 0;
+#else
     /* switch to graphics by simply calling desktop_main() */
     desktop_main();
     return 0;
+#endif
 }
 
 static int cmd_history(int argc, char **argv) {
@@ -463,6 +495,13 @@ static int cmd_history(int argc, char **argv) {
 }
 
 static int cmd_edit(int argc, char **argv) {
+#ifdef VIBE_USERLAND_APP
+    if (try_run_external(argc, argv) >= 0) {
+        return 0;
+    }
+    console_write("edit indisponivel nesta app de boot\n");
+    return 0;
+#else
     if (argc > 1) {
         desktop_request_open_editor(argv[1]);
     } else {
@@ -470,9 +509,17 @@ static int cmd_edit(int argc, char **argv) {
     }
     desktop_main();
     return 0;
+#endif
 }
 
 static int cmd_nano(int argc, char **argv) {
+#ifdef VIBE_USERLAND_APP
+    if (try_run_external(argc, argv) >= 0) {
+        return 0;
+    }
+    console_write("nano indisponivel nesta app de boot\n");
+    return 0;
+#else
     if (argc > 1) {
         desktop_request_open_nano(argv[1]);
     } else {
@@ -480,14 +527,35 @@ static int cmd_nano(int argc, char **argv) {
     }
     desktop_main();
     return 0;
+#endif
 }
 
 static int cmd_lua(int argc, char **argv) {
-    return vibe_lua_main(argc, argv);
+    int rc = try_run_external(argc, argv);
+
+    if (rc >= 0) {
+        return rc;
+    }
+    rc = vibe_lua_main(argc, argv);
+    if (rc >= 0) {
+        return rc;
+    }
+    console_write("lua indisponivel\n");
+    return 0;
 }
 
 static int cmd_sectorc(int argc, char **argv) {
-    return sectorc_main(argc, argv);
+    int rc = try_run_external(argc, argv);
+
+    if (rc >= 0) {
+        return rc;
+    }
+    rc = sectorc_main(argc, argv);
+    if (rc >= 0) {
+        return rc;
+    }
+    console_write("sectorc indisponivel\n");
+    return 0;
 }
 
 struct command {

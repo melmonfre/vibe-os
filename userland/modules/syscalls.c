@@ -164,6 +164,23 @@ int sys_keyboard_get_available_layouts(char *buffer, int size) {
     return syscall5(SYSCALL_KEYBOARD_GET_AVAILABLE_LAYOUTS, (int)(uintptr_t)buffer, size, 0, 0, 0);
 }
 
+int sys_service_receive(struct mk_message *message) {
+    return syscall5(SYSCALL_SERVICE_RECV, (int)(uintptr_t)message, 0, 0, 0, 0);
+}
+
+int sys_service_send(const struct mk_message *message) {
+    return syscall5(SYSCALL_SERVICE_SEND, (int)(uintptr_t)message, 0, 0, 0, 0);
+}
+
+int sys_service_backend(const struct mk_message *request, struct mk_message *reply) {
+    return syscall5(SYSCALL_SERVICE_BACKEND,
+                    (int)(uintptr_t)request,
+                    (int)(uintptr_t)reply,
+                    0,
+                    0,
+                    0);
+}
+
 void sys_shutdown(void) {
     (void)syscall5(SYSCALL_SHUTDOWN, 0, 0, 0, 0, 0);
 }

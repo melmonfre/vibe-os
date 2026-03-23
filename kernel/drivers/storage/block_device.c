@@ -2,6 +2,10 @@
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/kernel_string.h>
 
+#define BLOCK_DEVICE_MBR_PARTITION_OFFSET 446u
+#define BLOCK_DEVICE_MBR_SIGNATURE_OFFSET 510u
+#define BLOCK_DEVICE_STORAGE_PARTITION_INDEX 1u
+
 struct kernel_block_device {
     const char *name;
     void *context;
@@ -12,6 +16,13 @@ struct kernel_block_device {
 };
 
 static struct kernel_block_device g_primary_block_device;
+
+static uint32_t block_device_read_u32_le(const uint8_t *src) {
+    return (uint32_t)src[0]
+         | ((uint32_t)src[1] << 8)
+         | ((uint32_t)src[2] << 16)
+         | ((uint32_t)src[3] << 24);
+}
 
 void kernel_block_device_reset(void) {
     memset(&g_primary_block_device, 0, sizeof(g_primary_block_device));
@@ -33,6 +44,47 @@ int kernel_block_device_register_primary(const char *name,
     g_primary_block_device.partition_start_lba = partition_start_lba;
     g_primary_block_device.read_sector = read_sector;
     g_primary_block_device.write_sector = write_sector;
+    return 0;
+}
+
+int kernel_block_device_detect_mbr_partition(void *context,
+                                             uint32_t total_sectors,
+                                             kernel_block_device_read_fn read_sector,
+                                             uint32_t *partition_start_lba,
+                                             uint32_t *partition_sector_count) {
+    uint8_t mbr[KERNEL_PERSIST_SECTOR_SIZE];
+    const uint8_t *entry;
+    uint32_t start_lba;
+    uint32_t sector_count;
+
+    if (partition_start_lba == 0 || partition_sector_count == 0 || read_sector == 0 ||
+        total_sectors == 0u) {
+        return -1;
+    }
+
+    *partition_start_lba = 0u;
+    *partition_sector_count = total_sectors;
+
+    if (read_sector(context, 0u, mbr) != 0) {
+        return 0;
+    }
+    if (mbr[BLOCK_DEVICE_MBR_SIGNATURE_OFFSET] != 0x55u ||
+        mbr[BLOCK_DEVICE_MBR_SIGNATURE_OFFSET + 1] != 0xAAu) {
+        return 0;
+    }
+
+    entry = &mbr[BLOCK_DEVICE_MBR_PARTITION_OFFSET + (BLOCK_DEVICE_STORAGE_PARTITION_INDEX * 16u)];
+    start_lba = block_device_read_u32_le(entry + 8);
+    sector_count = block_device_read_u32_le(entry + 12);
+    if (start_lba == 0u || sector_count == 0u || start_lba >= total_sectors) {
+        return 0;
+    }
+    if (sector_count > (total_sectors - start_lba)) {
+        sector_count = total_sectors - start_lba;
+    }
+
+    *partition_start_lba = start_lba;
+    *partition_sector_count = sector_count;
     return 0;
 }
 

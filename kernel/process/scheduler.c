@@ -290,3 +290,32 @@ process_t *scheduler_find_task_by_pid(int pid) {
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
     return NULL;
 }
+
+void scheduler_terminate_task(process_t *task) {
+    uint32_t flags;
+    uint32_t cpu;
+
+    if (task == NULL) {
+        return;
+    }
+
+    flags = spinlock_lock_irqsave(&g_scheduler_lock);
+    task->state = PROCESS_TERMINATED;
+    task->current_cpu = -1;
+    task->preferred_cpu = -1;
+    task->last_cpu = -1;
+
+    for (cpu = 0u; cpu < 32u; ++cpu) {
+        if (g_current[cpu] == task) {
+            g_current[cpu] = NULL;
+        }
+        if (g_cursor[cpu] == task) {
+            g_cursor[cpu] = task->next != NULL ? task->next : g_head;
+            if (g_cursor[cpu] == task) {
+                g_cursor[cpu] = NULL;
+            }
+        }
+    }
+
+    spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+}

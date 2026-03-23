@@ -56,6 +56,7 @@ process_t *process_create_with_stack(void (*entry)(void),
                                      enum process_kind kind,
                                      uint32_t service_type,
                                      uint32_t stack_size);
+void process_terminate(process_t *proc);
 void process_destroy(process_t *proc);
 
 #endif /* KERNEL_PROCESS_H */

@@ -172,7 +172,6 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
 
     kernel_text_puts("Initializing storage...\n");
     kernel_storage_init();
-    mk_storage_service_init();
     kernel_text_puts(kernel_storage_ready() ? "Storage OK\n" : "Storage unavailable\n");
 
     kernel_text_puts("Initializing scheduler/driver manager...\n");
@@ -190,6 +189,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
 
     kernel_text_puts("Initializing VFS...\n");
     vfs_init();
+    mk_storage_service_init();
     mk_filesystem_service_init();
     mk_video_service_init();
     mk_input_service_init();

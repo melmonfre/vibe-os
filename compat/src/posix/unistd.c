@@ -326,6 +326,29 @@ int rmdir(const char *path) {
     return -1;
 }
 
+int mkdir(const char *path, mode_t mode) {
+    int rc;
+
+    (void)mode;
+
+    if (!path || path[0] == '\0') {
+        errno = EINVAL;
+        return -1;
+    }
+
+    rc = vibe_app_create_dir(path);
+    if (rc == 0) {
+        return 0;
+    }
+    if (rc == -2) {
+        errno = EEXIST;
+        return -1;
+    }
+
+    errno = ENOENT;
+    return -1;
+}
+
 unsigned int sleep(unsigned int seconds) {
     unsigned int i;
 

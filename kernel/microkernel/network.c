@@ -3,6 +3,7 @@
 #include <kernel/microkernel/network.h>
 #include <kernel/microkernel/service.h>
 #include <kernel/scheduler.h>
+#include <kernel/userland_service.h>
 
 static struct mk_message g_last_network_request;
 static struct mk_message g_last_network_reply;
@@ -119,11 +120,14 @@ static int mk_network_local_handler(const struct mk_message *request,
 void mk_network_service_init(void) {
     memset(&g_last_network_request, 0, sizeof(g_last_network_request));
     memset(&g_last_network_reply, 0, sizeof(g_last_network_reply));
-    (void)mk_service_launch_worker(MK_SERVICE_NETWORK,
-                                   "network",
-                                   mk_network_local_handler,
-                                   0,
-                                   0u);
+    (void)mk_service_launch_task(MK_SERVICE_NETWORK,
+                                 "network",
+                                 mk_network_local_handler,
+                                 0,
+                                 userland_service_entry,
+                                 8192u,
+                                 MK_LAUNCH_FLAG_BOOTSTRAP |
+                                 MK_LAUNCH_FLAG_BUILTIN);
 }
 
 int mk_network_service_ready(void) {

@@ -7,6 +7,7 @@
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/fs.h>
 #include <kernel/microkernel.h>
+#include <kernel/ipc.h>
 #include <kernel/process.h>
 #include <kernel/hal/io.h>
 #include <stdint.h>
@@ -312,6 +313,60 @@ static uint32_t sys_shutdown(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uin
     __builtin_unreachable();
 }
 
+static uint32_t sys_service_receive(uint32_t message_ptr, uint32_t b, uint32_t c,
+                                    uint32_t d, uint32_t e) {
+    process_t *current;
+
+    (void)b; (void)c; (void)d; (void)e;
+    if (message_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    current = scheduler_current();
+    if (current == 0) {
+        return (uint32_t)-1;
+    }
+
+    return (uint32_t)ipc_receive(current,
+                                 (void *)(uintptr_t)message_ptr,
+                                 sizeof(struct mk_message));
+}
+
+static uint32_t sys_service_send(uint32_t message_ptr, uint32_t b, uint32_t c,
+                                 uint32_t d, uint32_t e) {
+    const struct mk_message *message;
+    process_t *destination;
+
+    (void)b; (void)c; (void)d; (void)e;
+    if (message_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    message = (const struct mk_message *)(uintptr_t)message_ptr;
+    if (message->target_pid == 0u) {
+        return (uint32_t)-1;
+    }
+
+    destination = scheduler_find_task_by_pid((int)message->target_pid);
+    if (destination == 0) {
+        return (uint32_t)-1;
+    }
+
+    return (uint32_t)ipc_send(destination, message, sizeof(*message));
+}
+
+static uint32_t sys_service_backend(uint32_t request_ptr, uint32_t reply_ptr, uint32_t c,
+                                    uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (request_ptr == 0u || reply_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    return (uint32_t)mk_service_backend_handle_current(
+        (const struct mk_message *)(uintptr_t)request_ptr,
+        (struct mk_message *)(uintptr_t)reply_ptr);
+}
+
 void syscall_init(void) {
     /* register new kernel syscalls; numbers are defined in
        include/userland_api.h */
@@ -354,6 +409,9 @@ void syscall_init(void) {
     syscall_table[SYSCALL_KEYBOARD_GET_LAYOUT] = sys_keyboard_get_layout;
     syscall_table[SYSCALL_KEYBOARD_GET_AVAILABLE_LAYOUTS] = sys_keyboard_get_available_layouts;
     syscall_table[SYSCALL_SHUTDOWN] = sys_shutdown;
+    syscall_table[SYSCALL_SERVICE_RECV] = sys_service_receive;
+    syscall_table[SYSCALL_SERVICE_SEND] = sys_service_send;
+    syscall_table[SYSCALL_SERVICE_BACKEND] = sys_service_backend;
 }
 
 /* dispatch routine called by ISR */

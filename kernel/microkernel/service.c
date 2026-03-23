@@ -12,6 +12,12 @@ static int g_console_request_trace_emitted = 0;
 static int g_console_worker_entry_trace_emitted = 0;
 static int g_console_worker_trace_emitted = 0;
 static int g_console_reply_trace_emitted = 0;
+static int g_transport_fallback_budget = 16;
+static int g_request_send_fail_budget = 16;
+static int g_unexpected_reply_budget = 16;
+static int g_storage_request_trace_budget = 8;
+static int g_storage_worker_trace_budget = 8;
+static int g_storage_reply_trace_budget = 8;
 
 static void mk_service_worker_entry(void);
 
@@ -60,6 +66,7 @@ static int mk_service_register_impl(uint32_t type,
             if (pid != 0 || process != 0) {
                 g_services[slot].pid = pid;
                 g_services[slot].process = process;
+                g_services[slot].transport_degraded = 0u;
             }
             if (local_handler != 0) {
                 g_services[slot].local_handler = local_handler;
@@ -78,6 +85,7 @@ static int mk_service_register_impl(uint32_t type,
             g_services[slot].process = process;
             g_services[slot].local_handler = local_handler;
             g_services[slot].context = context;
+            g_services[slot].transport_degraded = 0u;
             strncpy(g_services[slot].name, name, MK_SERVICE_NAME_MAX - 1u);
             g_services[slot].name[MK_SERVICE_NAME_MAX - 1u] = '\0';
             return 0;
@@ -118,8 +126,25 @@ static int mk_service_process_online(const struct mk_service_record *service) {
     return scheduler_find_task_by_pid(service->pid) != 0;
 }
 
+static void mk_service_discard_worker_record(struct mk_service_record *service) {
+    if (service == 0) {
+        return;
+    }
+
+    if (service->process != 0) {
+        scheduler_terminate_task(service->process);
+    }
+    if (service->pid > 0) {
+        mk_launch_release_pid(service->pid);
+    }
+
+    service->pid = 0;
+    service->process = 0;
+}
+
 static int mk_service_restart_worker_record(struct mk_service_record *service) {
     struct mk_launch_descriptor descriptor;
+    int force_restart;
     int pid;
 
     if (service == 0 || service->type == MK_SERVICE_NONE) {
@@ -131,18 +156,21 @@ static int mk_service_restart_worker_record(struct mk_service_record *service) {
     if (service->name[0] == '\0') {
         return -1;
     }
-    if (service->process == 0 && service->pid == 0) {
+    if (service->process == 0 && service->pid == 0 && service->launch_flags == 0u) {
         return 0;
     }
-    if (mk_service_process_online(service)) {
+    force_restart = service->transport_degraded != 0u;
+    if (!force_restart && mk_service_process_online(service)) {
         return 0;
     }
 
     if (service->pid > 0) {
-        mk_launch_release_pid(service->pid);
+        kernel_debug_printf("service: restarting type=%d old_pid=%d restarts=%d\n",
+                            (int)service->type,
+                            service->pid,
+                            (int)service->restart_count);
     }
-    service->pid = 0;
-    service->process = 0;
+    mk_service_discard_worker_record(service);
 
     memset(&descriptor, 0, sizeof(descriptor));
     descriptor.abi_version = MK_LAUNCH_ABI_VERSION;
@@ -152,13 +180,14 @@ static int mk_service_restart_worker_record(struct mk_service_record *service) {
     descriptor.stack_size = service->stack_size;
     strncpy(descriptor.name, service->name, MK_LAUNCH_NAME_MAX - 1u);
     descriptor.name[MK_LAUNCH_NAME_MAX - 1u] = '\0';
-    descriptor.entry = mk_service_worker_entry;
+    descriptor.entry = service->entry != 0 ? service->entry : mk_service_worker_entry;
 
     pid = mk_launch_bootstrap(&descriptor);
     if (pid < 0) {
         return -1;
     }
 
+    service->transport_degraded = 0u;
     service->restart_count += 1u;
     return 0;
 }
@@ -175,7 +204,27 @@ static int mk_service_reply_process(const struct mk_message *reply) {
         return -1;
     }
 
-    return ipc_send(destination, reply, sizeof(*reply));
+    if (reply->source_pid != 0u && g_storage_reply_trace_budget > 0 &&
+        scheduler_find_task_by_pid((int)reply->source_pid) != 0) {
+        process_t *source = scheduler_find_task_by_pid((int)reply->source_pid);
+        if (source != 0 && source->service_type == MK_SERVICE_STORAGE) {
+            g_storage_reply_trace_budget -= 1;
+            kernel_debug_printf("service: storage reply src=%d dst=%d type=%d\n",
+                                (int)reply->source_pid,
+                                (int)reply->target_pid,
+                                (int)reply->type);
+        }
+    }
+
+    if (ipc_send(destination, reply, sizeof(*reply)) != 0) {
+        kernel_debug_printf("service: reply send failed src=%d dst=%d type=%d\n",
+                            (int)reply->source_pid,
+                            (int)reply->target_pid,
+                            (int)reply->type);
+        return -1;
+    }
+
+    return 0;
 }
 
 static int mk_service_requeue_message(process_t *destination, const struct mk_message *message) {
@@ -205,6 +254,13 @@ static void mk_service_worker_step(const struct mk_service_record *service) {
     if (service->type == MK_SERVICE_CONSOLE && !g_console_worker_trace_emitted) {
         g_console_worker_trace_emitted = 1;
         kernel_debug_printf("service: console worker pid=%d received request type=%d from pid=%d\n",
+                            current->pid,
+                            (int)request.type,
+                            (int)request.source_pid);
+    }
+    if (service->type == MK_SERVICE_STORAGE && g_storage_worker_trace_budget > 0) {
+        g_storage_worker_trace_budget -= 1;
+        kernel_debug_printf("service: storage worker pid=%d received type=%d from pid=%d\n",
                             current->pid,
                             (int)request.type,
                             (int)request.source_pid);
@@ -258,10 +314,26 @@ int mk_service_launch_worker(uint32_t type,
                              mk_service_local_handler_fn handler,
                              void *context,
                              uint32_t stack_size) {
+    return mk_service_launch_task(type,
+                                  name,
+                                  handler,
+                                  context,
+                                  mk_service_worker_entry,
+                                  stack_size,
+                                  MK_LAUNCH_FLAG_BOOTSTRAP | MK_LAUNCH_FLAG_BUILTIN);
+}
+
+int mk_service_launch_task(uint32_t type,
+                           const char *name,
+                           mk_service_local_handler_fn handler,
+                           void *context,
+                           mk_service_entry_fn entry,
+                           uint32_t stack_size,
+                           uint32_t launch_flags) {
     struct mk_service_record *service;
     struct mk_launch_descriptor descriptor;
 
-    if (type == MK_SERVICE_NONE || name == 0 || handler == 0) {
+    if (type == MK_SERVICE_NONE || name == 0 || handler == 0 || entry == 0) {
         return -1;
     }
 
@@ -283,11 +355,12 @@ int mk_service_launch_worker(uint32_t type,
     descriptor.abi_version = MK_LAUNCH_ABI_VERSION;
     descriptor.kind = MK_LAUNCH_KIND_SERVICE;
     descriptor.service_type = type;
-    descriptor.flags = MK_LAUNCH_FLAG_BOOTSTRAP | MK_LAUNCH_FLAG_BUILTIN;
+    descriptor.flags = launch_flags;
     descriptor.stack_size = stack_size;
     strncpy(descriptor.name, name, MK_LAUNCH_NAME_MAX - 1u);
     descriptor.name[MK_LAUNCH_NAME_MAX - 1u] = '\0';
-    descriptor.entry = mk_service_worker_entry;
+    descriptor.entry = entry;
+    service->entry = entry;
     service->launch_flags = descriptor.flags;
     service->stack_size = descriptor.stack_size;
     return mk_launch_bootstrap(&descriptor);
@@ -344,8 +417,38 @@ static int mk_service_request_process(const struct mk_service_record *service,
                             current->pid,
                             service->pid);
     }
+    if (service->type == MK_SERVICE_STORAGE && g_storage_request_trace_budget > 0) {
+        g_storage_request_trace_budget -= 1;
+        kernel_debug_printf("service: storage request type=%d from pid=%d to pid=%d\n",
+                            (int)request_copy.type,
+                            current->pid,
+                            service->pid);
+    }
 
     if (ipc_send(service->process, &request_copy, sizeof(request_copy)) != 0) {
+        if (service->local_handler != 0) {
+            struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
+
+            if (mutable_service != 0) {
+                mutable_service->transport_degraded = 1u;
+            }
+            if (g_transport_fallback_budget > 0) {
+                g_transport_fallback_budget -= 1;
+                kernel_debug_printf("service: transport fallback type=%d src=%d dst=%d service=%d\n",
+                                    (int)request_copy.type,
+                                    (int)request_copy.source_pid,
+                                    (int)request_copy.target_pid,
+                                    (int)service->type);
+            }
+            return service->local_handler(&request_copy, reply, service->context);
+        }
+        if (g_request_send_fail_budget > 0) {
+            g_request_send_fail_budget -= 1;
+            kernel_debug_printf("service: request send failed type=%d src=%d dst=%d\n",
+                                (int)request_copy.type,
+                                (int)request_copy.source_pid,
+                                (int)request_copy.target_pid);
+        }
         return -1;
     }
 
@@ -362,8 +465,23 @@ static int mk_service_request_process(const struct mk_service_record *service,
                                         (int)response.source_pid,
                                         (int)response.target_pid);
                 }
+                {
+                    struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
+
+                    if (mutable_service != 0) {
+                        mutable_service->transport_degraded = 0u;
+                    }
+                }
                 *reply = response;
                 return 0;
+            }
+            if (g_unexpected_reply_budget > 0) {
+                g_unexpected_reply_budget -= 1;
+                kernel_debug_printf("service: unexpected reply src=%d dst=%d waiting_src=%d waiting_dst=%d\n",
+                                    (int)response.source_pid,
+                                    (int)response.target_pid,
+                                    service->pid,
+                                    current->pid);
             }
             (void)mk_service_requeue_message(current, &response);
         }
@@ -383,6 +501,18 @@ int mk_service_request(uint32_t type, const struct mk_message *request, struct m
         return -1;
     }
 
+    if (service->transport_degraded != 0u && service->process != 0) {
+        (void)mk_service_ensure(type);
+        service = mk_service_find_by_type(type);
+        if (service == 0) {
+            return -1;
+        }
+    }
+
+    if (service->transport_degraded != 0u && service->local_handler != 0) {
+        return service->local_handler(request, reply, service->context);
+    }
+
     if (service->process != 0) {
         if (!mk_service_process_online(service) && mk_service_ensure(type) != 0) {
             return -1;
@@ -399,6 +529,28 @@ int mk_service_request(uint32_t type, const struct mk_message *request, struct m
     }
 
     return -1;
+}
+
+int mk_service_backend_handle_current(const struct mk_message *request, struct mk_message *reply) {
+    process_t *current;
+    const struct mk_service_record *service;
+
+    if (request == 0 || reply == 0) {
+        return -1;
+    }
+
+    current = scheduler_current();
+    if (current == 0 || current->kind != PROCESS_KIND_SERVICE ||
+        current->service_type == MK_SERVICE_NONE) {
+        return -1;
+    }
+
+    service = mk_service_find_by_type(current->service_type);
+    if (service == 0 || service->local_handler == 0) {
+        return -1;
+    }
+
+    return service->local_handler(request, reply, service->context);
 }
 
 const struct mk_service_record *mk_service_find_by_type(uint32_t type) {

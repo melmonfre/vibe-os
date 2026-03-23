@@ -6,6 +6,7 @@
 #include <kernel/microkernel/transfer.h>
 #include <kernel/microkernel/video.h>
 #include <kernel/scheduler.h>
+#include <kernel/userland_service.h>
 
 #define MK_VIDEO_PALETTE_BYTES 768u
 
@@ -282,11 +283,15 @@ static int mk_video_local_handler(const struct mk_message *request,
 }
 
 void mk_video_service_init(void) {
-    (void)mk_service_launch_worker(MK_SERVICE_VIDEO,
-                                   "video",
-                                   mk_video_local_handler,
-                                   0,
-                                   0u);
+    (void)mk_service_launch_task(MK_SERVICE_VIDEO,
+                                 "video",
+                                 mk_video_local_handler,
+                                 0,
+                                 userland_service_entry,
+                                 8192u,
+                                 MK_LAUNCH_FLAG_BOOTSTRAP |
+                                 MK_LAUNCH_FLAG_BUILTIN |
+                                 MK_LAUNCH_FLAG_CRITICAL);
 }
 
 int mk_video_service_clear(uint8_t color) {

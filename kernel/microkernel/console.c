@@ -6,6 +6,7 @@
 #include <kernel/microkernel/service.h>
 #include <kernel/microkernel/transfer.h>
 #include <kernel/scheduler.h>
+#include <kernel/userland_service.h>
 
 static uint32_t mk_console_current_pid(void) {
     process_t *current = scheduler_current();
@@ -157,11 +158,15 @@ static int mk_console_local_handler(const struct mk_message *request,
 }
 
 void mk_console_service_init(void) {
-    (void)mk_service_launch_worker(MK_SERVICE_CONSOLE,
-                                   "console",
-                                   mk_console_local_handler,
-                                   0,
-                                   0u);
+    (void)mk_service_launch_task(MK_SERVICE_CONSOLE,
+                                 "console",
+                                 mk_console_local_handler,
+                                 0,
+                                 userland_service_entry,
+                                 8192u,
+                                 MK_LAUNCH_FLAG_BOOTSTRAP |
+                                 MK_LAUNCH_FLAG_BUILTIN |
+                                 MK_LAUNCH_FLAG_CRITICAL);
 }
 
 static int mk_console_service_string_request(uint32_t type, const char *message) {

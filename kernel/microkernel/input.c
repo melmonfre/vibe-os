@@ -6,11 +6,44 @@
 #include <kernel/microkernel/service.h>
 #include <kernel/microkernel/transfer.h>
 #include <kernel/scheduler.h>
+#include <kernel/userland_service.h>
 
 static uint32_t mk_input_current_pid(void) {
     process_t *current = scheduler_current();
 
     return current != 0 ? (uint32_t)current->pid : 0u;
+}
+
+static int g_input_service_transport_degraded = 0;
+
+static int mk_input_should_use_local_fallback(void) {
+    const struct mk_service_record *service = mk_service_find_by_type(MK_SERVICE_INPUT);
+
+    if (service == 0) {
+        return 1;
+    }
+    if (service->process == 0 || service->pid <= 0) {
+        return 1;
+    }
+
+    if (g_input_service_transport_degraded ||
+        service->transport_degraded != 0u ||
+        !mk_service_is_online(MK_SERVICE_INPUT)) {
+        if (mk_service_ensure(MK_SERVICE_INPUT) != 0) {
+            return 1;
+        }
+        service = mk_service_find_by_type(MK_SERVICE_INPUT);
+        if (service == 0 ||
+            service->process == 0 ||
+            service->pid <= 0 ||
+            service->transport_degraded != 0u ||
+            !mk_service_is_online(MK_SERVICE_INPUT)) {
+            return 1;
+        }
+        g_input_service_transport_degraded = 0;
+    }
+
+    return 0;
 }
 
 static int mk_input_share_transfer(uint32_t transfer_id, uint32_t permissions) {
@@ -202,39 +235,79 @@ static int mk_input_local_handler(const struct mk_message *request,
 }
 
 void mk_input_service_init(void) {
-    (void)mk_service_launch_worker(MK_SERVICE_INPUT,
-                                   "input",
-                                   mk_input_local_handler,
-                                   0,
-                                   0u);
+    g_input_service_transport_degraded = 0;
+    (void)mk_service_launch_task(MK_SERVICE_INPUT,
+                                 "input",
+                                 mk_input_local_handler,
+                                 0,
+                                 userland_service_entry,
+                                 8192u,
+                                 MK_LAUNCH_FLAG_BOOTSTRAP |
+                                 MK_LAUNCH_FLAG_BUILTIN |
+                                 MK_LAUNCH_FLAG_CRITICAL);
 }
 
 int mk_input_service_poll_mouse(struct mouse_state *state) {
     struct mk_message request;
     struct mk_message reply;
+    int rc;
+    int x;
+    int y;
+    int dx;
+    int dy;
+    uint8_t buttons;
 
     if (state == 0) {
         return 0;
     }
-    if (mk_input_prepare_request(&request, MK_MSG_INPUT_MOUSE_POLL, 0, 0u) != 0) {
-        return -1;
+    if (mk_input_should_use_local_fallback() ||
+        mk_input_prepare_request(&request, MK_MSG_INPUT_MOUSE_POLL, 0, 0u) != 0) {
+        if (!kernel_mouse_has_data()) {
+            memset(state, 0, sizeof(*state));
+            return 0;
+        }
+        kernel_mouse_read(&x, &y, &dx, &dy, &buttons);
+        state->x = x;
+        state->y = y;
+        state->dx = dx;
+        state->dy = dy;
+        state->buttons = buttons;
+        return 1;
     }
-    if (mk_service_request(MK_SERVICE_INPUT, &request, &reply) != 0) {
-        return -1;
+    rc = mk_service_request(MK_SERVICE_INPUT, &request, &reply);
+    if (rc != 0) {
+        g_input_service_transport_degraded = 1;
+        if (!kernel_mouse_has_data()) {
+            memset(state, 0, sizeof(*state));
+            return 0;
+        }
+        kernel_mouse_read(&x, &y, &dx, &dy, &buttons);
+        state->x = x;
+        state->y = y;
+        state->dx = dx;
+        state->dy = dy;
+        state->buttons = buttons;
+        return 1;
     }
+    g_input_service_transport_degraded = 0;
     return mk_input_decode_mouse(&reply, state);
 }
 
 int mk_input_service_read_key(void) {
     struct mk_message request;
     struct mk_message reply;
+    int rc;
 
-    if (mk_input_prepare_request(&request, MK_MSG_INPUT_KEY_READ, 0, 0u) != 0) {
-        return -1;
+    if (mk_input_should_use_local_fallback() ||
+        mk_input_prepare_request(&request, MK_MSG_INPUT_KEY_READ, 0, 0u) != 0) {
+        return kernel_keyboard_read();
     }
-    if (mk_service_request(MK_SERVICE_INPUT, &request, &reply) != 0) {
-        return -1;
+    rc = mk_service_request(MK_SERVICE_INPUT, &request, &reply);
+    if (rc != 0) {
+        g_input_service_transport_degraded = 1;
+        return kernel_keyboard_read();
     }
+    g_input_service_transport_degraded = 0;
     return mk_input_decode_result(&reply);
 }
 
@@ -263,14 +336,17 @@ int mk_input_service_set_layout(const char *name) {
 
     payload.name_length = length;
     payload.transfer_id = transfer_id;
-    if (mk_input_prepare_request(&request, MK_MSG_INPUT_SET_LAYOUT, &payload, sizeof(payload)) != 0) {
+    if (mk_input_should_use_local_fallback() ||
+        mk_input_prepare_request(&request, MK_MSG_INPUT_SET_LAYOUT, &payload, sizeof(payload)) != 0) {
         (void)mk_transfer_destroy(transfer_id);
-        return -1;
+        return kernel_keyboard_set_layout(name);
     }
     if (mk_service_request(MK_SERVICE_INPUT, &request, &reply) != 0) {
+        g_input_service_transport_degraded = 1;
         (void)mk_transfer_destroy(transfer_id);
-        return -1;
+        return kernel_keyboard_set_layout(name);
     }
+    g_input_service_transport_degraded = 0;
     (void)mk_transfer_destroy(transfer_id);
     return mk_input_decode_result(&reply);
 }
@@ -295,15 +371,40 @@ static int mk_input_service_fill_buffer_request(uint32_t type, char *buffer, int
 
     payload.buffer_size = (uint32_t)size;
     payload.transfer_id = transfer_id;
-    if (mk_input_prepare_request(&request, type, &payload, sizeof(payload)) != 0) {
+    if (mk_input_should_use_local_fallback() ||
+        mk_input_prepare_request(&request, type, &payload, sizeof(payload)) != 0) {
         (void)mk_transfer_destroy(transfer_id);
-        return -1;
+        if (type == MK_MSG_INPUT_GET_LAYOUT) {
+            const char *name = kernel_keyboard_get_layout();
+            int length = (int)strlen(name);
+
+            if (size <= length) {
+                return 0;
+            }
+            memcpy(buffer, name, (size_t)length + 1u);
+            return length;
+        }
+        kernel_keyboard_get_available_layouts(buffer, size);
+        return 0;
     }
     if (mk_service_request(MK_SERVICE_INPUT, &request, &reply) != 0) {
+        g_input_service_transport_degraded = 1;
         (void)mk_transfer_destroy(transfer_id);
-        return -1;
+        if (type == MK_MSG_INPUT_GET_LAYOUT) {
+            const char *name = kernel_keyboard_get_layout();
+            int length = (int)strlen(name);
+
+            if (size <= length) {
+                return 0;
+            }
+            memcpy(buffer, name, (size_t)length + 1u);
+            return length;
+        }
+        kernel_keyboard_get_available_layouts(buffer, size);
+        return 0;
     }
 
+    g_input_service_transport_degraded = 0;
     rc = mk_input_decode_result(&reply);
     if (rc >= 0 && mk_transfer_copy_to(transfer_id, buffer, (uint32_t)size) != 0) {
         (void)mk_transfer_destroy(transfer_id);

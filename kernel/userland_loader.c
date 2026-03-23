@@ -10,7 +10,7 @@ static const struct mk_launch_descriptor g_init_launch = {
     .kind = MK_LAUNCH_KIND_SERVICE,
     .service_type = MK_SERVICE_INIT,
     .flags = MK_LAUNCH_FLAG_BOOTSTRAP | MK_LAUNCH_FLAG_CRITICAL | MK_LAUNCH_FLAG_BUILTIN,
-    .stack_size = MK_LAUNCH_STACK_SIZE_DEFAULT,
+    .stack_size = 65536u,
     .name = "init",
     .entry = userland_entry,
 };
