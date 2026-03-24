@@ -26,63 +26,77 @@ static syscall_fn syscall_table[MAX_SYSCALLS];
 static uint32_t sys_gfx_clear(uint32_t color, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
-    return (uint32_t)mk_video_service_clear((uint8_t)(color & 0xFFu));
+    kernel_video_clear((uint8_t)(color & 0xFFu));
+    return 0u;
 }
 
 static uint32_t sys_gfx_rect(uint32_t x, uint32_t y, uint32_t w,
                              uint32_t h, uint32_t color) {
-    return (uint32_t)mk_video_service_rect((int)x, (int)y, (int)w, (int)h, (uint8_t)(color & 0xFFu));
+    kernel_gfx_rect((int)x, (int)y, (int)w, (int)h, (uint8_t)(color & 0xFFu));
+    return 0u;
 }
 
 static uint32_t sys_gfx_text(uint32_t x, uint32_t y, uint32_t text_ptr,
                              uint32_t color, uint32_t e) {
     (void)e;
-    return (uint32_t)mk_video_service_text((int)x,
-                                           (int)y,
-                                           (uint8_t)(color & 0xFFu),
-                                           (const char *)(uintptr_t)text_ptr);
+    if (text_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    kernel_gfx_draw_text((int)x,
+                         (int)y,
+                         (const char *)(uintptr_t)text_ptr,
+                         (uint8_t)(color & 0xFFu));
+    return 0u;
 }
 
 static uint32_t sys_gfx_flip(uint32_t a, uint32_t b, uint32_t c,
                              uint32_t d, uint32_t e) {
     (void)a; (void)b; (void)c; (void)d; (void)e;
-    return (uint32_t)mk_video_service_flip();
+    kernel_video_flip();
+    return 0u;
 }
 
 static uint32_t sys_gfx_blit8(uint32_t src_ptr, uint32_t packed_wh, uint32_t dst_x,
                               uint32_t dst_y, uint32_t scale) {
     int src_w = (int)(packed_wh & 0xFFFFu);
     int src_h = (int)((packed_wh >> 16) & 0xFFFFu);
-    return (uint32_t)mk_video_service_blit8((const uint8_t *)(uintptr_t)src_ptr,
-                                            src_w,
-                                            src_h,
-                                            (int)dst_x,
-                                            (int)dst_y,
-                                            (int)scale);
+
+    if (src_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    kernel_gfx_blit8((const uint8_t *)(uintptr_t)src_ptr,
+                     src_w,
+                     src_h,
+                     (int)dst_x,
+                     (int)dst_y,
+                     (int)scale);
+    return 0u;
 }
 
 static uint32_t sys_gfx_leave(uint32_t a, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
     (void)a; (void)b; (void)c; (void)d; (void)e;
-    return (uint32_t)mk_video_service_leave_graphics();
+    kernel_video_leave_graphics();
+    return 0u;
 }
 
 static uint32_t sys_gfx_set_mode(uint32_t width, uint32_t height, uint32_t c,
                                  uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
-    return (uint32_t)mk_video_service_set_mode(width, height);
+    return (uint32_t)kernel_video_set_mode(width, height);
 }
 
 static uint32_t sys_gfx_set_palette(uint32_t ptr, uint32_t b, uint32_t c,
                                     uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
-    return (uint32_t)mk_video_service_set_palette((const uint8_t *)(uintptr_t)ptr);
+    return (uint32_t)kernel_video_set_palette((const uint8_t *)(uintptr_t)ptr);
 }
 
 static uint32_t sys_gfx_get_palette(uint32_t ptr, uint32_t b, uint32_t c,
                                     uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
-    return (uint32_t)mk_video_service_get_palette((uint8_t *)(uintptr_t)ptr);
+    return (uint32_t)kernel_video_get_palette((uint8_t *)(uintptr_t)ptr);
 }
 
 static uint32_t sys_storage_load(uint32_t ptr, uint32_t size, uint32_t c,
@@ -262,10 +276,16 @@ static uint32_t sys_time_ticks(uint32_t a, uint32_t b, uint32_t c,
 
 static uint32_t sys_gfx_info(uint32_t out_ptr, uint32_t b, uint32_t c,
                              uint32_t d, uint32_t e) {
+    struct video_mode *out;
+
     (void)b; (void)c; (void)d; (void)e;
-    if (out_ptr == 0)
+    if (out_ptr == 0) {
         return (uint32_t)-1;
-    return (uint32_t)mk_video_service_get_info((struct video_mode *)(uintptr_t)out_ptr);
+    }
+
+    out = (struct video_mode *)(uintptr_t)out_ptr;
+    *out = *kernel_video_get_mode();
+    return 0u;
 }
 
 static uint32_t sys_gfx_caps(uint32_t out_ptr, uint32_t b, uint32_t c,
@@ -277,7 +297,8 @@ static uint32_t sys_gfx_caps(uint32_t out_ptr, uint32_t b, uint32_t c,
         return (uint32_t)-1;
     }
     out = (struct video_capabilities *)(uintptr_t)out_ptr;
-    return (uint32_t)mk_video_service_get_caps(out);
+    kernel_video_get_capabilities(out);
+    return 0u;
 }
 
 static uint32_t sys_keyboard_set_layout(uint32_t name_ptr, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {

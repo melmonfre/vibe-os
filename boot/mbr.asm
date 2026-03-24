@@ -130,14 +130,6 @@ setup_vesa:
     mov dx, VBE_MODE_640X480X8
     call try_vbe_mode
     jnc .mode_ready
-    mov dx, VBE_MODE_640X480X16
-    call try_vbe_mode
-    jnc .mode_ready
-    mov dx, VBE_MODE_800X600X8
-    call try_vbe_mode
-    jnc .mode_ready
-    mov dx, VBE_MODE_800X600X16
-    call try_vbe_mode
     jc .done
 
 .mode_ready:

@@ -5,6 +5,7 @@
 #include <userland/applications/games/craft/upstream/deps/lodepng/lodepng.h>
 #include <userland/applications/games/craft/upstream/src/util.h>
 #include <userland/modules/include/fs.h>
+#include <userland/modules/include/syscalls.h>
 
 #define CRAFT_TILE_SIZE 16u
 #define CRAFT_ATLAS_TILES 16u
@@ -207,6 +208,11 @@ static void craft_make_fallback_font_or_sign(unsigned char value) {
 }
 
 static void craft_load_png_fallback(const char *file_name) {
+    if (file_name) {
+        sys_write_debug("craft: texture fallback ");
+        sys_write_debug(file_name);
+        sys_write_debug("\n");
+    }
     if (!file_name) {
         return;
     }
@@ -331,9 +337,24 @@ void load_png_texture(const char *file_name) {
     unsigned int error;
     unsigned char *data;
     unsigned int width, height;
-    int node = fs_resolve(file_name);
+    int node = -1;
     unsigned char *buffer;
     int bytes_read;
+    char absolute_path[80];
+
+    if (file_name) {
+        node = fs_resolve(file_name);
+        if (node < 0 && file_name[0] != '/') {
+            int pos = 0;
+            absolute_path[pos++] = '/';
+            while (file_name[pos - 1] != '\0' && pos < (int)sizeof(absolute_path) - 1) {
+                absolute_path[pos] = file_name[pos - 1];
+                ++pos;
+            }
+            absolute_path[pos] = '\0';
+            node = fs_resolve(absolute_path);
+        }
+    }
 
     if (node < 0) {
         craft_load_png_fallback(file_name);
@@ -362,6 +383,9 @@ void load_png_texture(const char *file_name) {
         craft_load_png_fallback(file_name);
         return;
     }
+    sys_write_debug("craft: texture loaded ");
+    sys_write_debug(file_name);
+    sys_write_debug("\n");
     flip_image_vertical(data, width, height);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
         GL_UNSIGNED_BYTE, data);

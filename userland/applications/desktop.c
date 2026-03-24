@@ -67,7 +67,6 @@ struct personalize_state {
 static struct personalize_state g_pers;
 static int g_pers_used = 0;
 
-/* 256-color palette */
 static const uint8_t g_color_palette_256[] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
@@ -160,34 +159,6 @@ static struct resolution_option g_resolution_options[VIDEO_MODE_LIST_MAX];
 static int g_resolution_option_count = 0;
 static int g_resolution_can_set = 0;
 
-struct start_menu_entry {
-    const char *label;
-    const char *meta;
-    enum app_type type;
-    enum start_menu_tab tab;
-};
-
-static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT] = {
-    {"Terminal", "Sistema", APP_TERMINAL, START_MENU_TAB_APPS},
-    {"Relogio", "Acessorios", APP_CLOCK, START_MENU_TAB_APPS},
-    {"Arquivos", "Sistema", APP_FILEMANAGER, START_MENU_TAB_APPS},
-    {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS},
-    {"Tasks", "Sistema", APP_TASKMANAGER, START_MENU_TAB_APPS},
-    {"Calculadora", "Acessorios", APP_CALCULATOR, START_MENU_TAB_APPS},
-    {"Sketchpad", "Criacao", APP_SKETCHPAD, START_MENU_TAB_APPS},
-    {"Personalizar", "Desktop", APP_PERSONALIZE, START_MENU_TAB_APPS},
-    {"Snake", "Classicos", APP_SNAKE, START_MENU_TAB_GAMES},
-    {"Tetris", "Classicos", APP_TETRIS, START_MENU_TAB_GAMES},
-    {"Pacman", "Arcade", APP_PACMAN, START_MENU_TAB_GAMES},
-    {"Invaders", "Arcade", APP_SPACE_INVADERS, START_MENU_TAB_GAMES},
-    {"Pong", "Arcade", APP_PONG, START_MENU_TAB_GAMES},
-    {"Donkey Kong", "Arcade", APP_DONKEY_KONG, START_MENU_TAB_GAMES},
-    {"Brick Race", "Arcade", APP_BRICK_RACE, START_MENU_TAB_GAMES},
-    {"Flap Birb", "Arcade", APP_FLAP_BIRB, START_MENU_TAB_GAMES},
-    {"DOOM", "Port", APP_DOOM, START_MENU_TAB_GAMES},
-    {"Craft", "Port", APP_CRAFT, START_MENU_TAB_GAMES}
-};
-
 static void refresh_resolution_options(void) {
     struct video_capabilities caps;
     int count = 0;
@@ -244,6 +215,34 @@ static void refresh_resolution_options(void) {
 
     g_resolution_option_count = count;
 }
+
+struct start_menu_entry {
+    const char *label;
+    const char *meta;
+    enum app_type type;
+    enum start_menu_tab tab;
+};
+
+static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT] = {
+    {"Terminal", "Sistema", APP_TERMINAL, START_MENU_TAB_APPS},
+    {"Relogio", "Acessorios", APP_CLOCK, START_MENU_TAB_APPS},
+    {"Arquivos", "Sistema", APP_FILEMANAGER, START_MENU_TAB_APPS},
+    {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS},
+    {"Tasks", "Sistema", APP_TASKMANAGER, START_MENU_TAB_APPS},
+    {"Calculadora", "Acessorios", APP_CALCULATOR, START_MENU_TAB_APPS},
+    {"Sketchpad", "Criacao", APP_SKETCHPAD, START_MENU_TAB_APPS},
+    {"Personalizar", "Desktop", APP_PERSONALIZE, START_MENU_TAB_APPS},
+    {"Snake", "Classicos", APP_SNAKE, START_MENU_TAB_GAMES},
+    {"Tetris", "Classicos", APP_TETRIS, START_MENU_TAB_GAMES},
+    {"Pacman", "Arcade", APP_PACMAN, START_MENU_TAB_GAMES},
+    {"Invaders", "Arcade", APP_SPACE_INVADERS, START_MENU_TAB_GAMES},
+    {"Pong", "Arcade", APP_PONG, START_MENU_TAB_GAMES},
+    {"Donkey Kong", "Arcade", APP_DONKEY_KONG, START_MENU_TAB_GAMES},
+    {"Brick Race", "Arcade", APP_BRICK_RACE, START_MENU_TAB_GAMES},
+    {"Flap Birb", "Arcade", APP_FLAP_BIRB, START_MENU_TAB_GAMES},
+    {"DOOM", "Port", APP_DOOM, START_MENU_TAB_GAMES},
+    {"Craft", "Port", APP_CRAFT, START_MENU_TAB_GAMES}
+};
 
 static void sync_window_instance_rect(int widx);
 static int alloc_window(enum app_type type);
@@ -1422,6 +1421,9 @@ static int alloc_window(enum app_type type) {
                 g_pers_used = 1;
                 g_pers.window = (struct rect){16, 16, 424, 372};
                 g_pers.selected_slot = THEME_SLOT_BACKGROUND;
+                g_pers.color_picker_open = 0;
+                g_pers.color_picker_start_x = 0;
+                g_pers.color_picker_start_y = 0;
                 instance = 0;
                 rect = g_pers.window;
                 break;
@@ -1582,8 +1584,6 @@ static struct rect personalize_window_slot_rect(const struct rect *w, int slot) 
     return r;
 }
 
-
-
 static struct rect personalize_window_wallpaper_button_rect(const struct rect *w, int index) {
     struct rect r = {w->x + 242, w->y + 132 + (index * 14), 160, 12};
     return r;
@@ -1595,7 +1595,6 @@ static struct rect personalize_window_resolution_button_rect(const struct rect *
 }
 
 static struct rect personalize_color_picker_rect(void) {
-    /* 16x16 grid of colors, 12px each, centered-ish */
     struct rect r = {(int)SCREEN_WIDTH / 2 - 98, (int)SCREEN_HEIGHT / 2 - 100, 200, 220};
     return r;
 }
@@ -1967,7 +1966,6 @@ static void draw_personalize_window(struct personalize_state *state,
     int bmp_count = find_bmp_nodes(bmp_nodes, 4);
     int current_wallpaper = ui_wallpaper_source_node();
     uint8_t selected_color = theme->background;
-    refresh_resolution_options();
     struct rect body = {state->window.x + 6, state->window.y + 20, state->window.w - 12, state->window.h - 26};
     struct rect theme_panel = {body.x + 8, body.y + 8, 216, 190};
     struct rect preview_panel = {body.x + 232, body.y + 8, body.w - 240, 62};
@@ -1977,6 +1975,8 @@ static void draw_personalize_window(struct personalize_state *state,
     struct rect preview = {preview_panel.x + 12, preview_panel.y + 20, preview_panel.w - 24, 34};
     struct rect preview_chip = {preview.x + 8, preview.y + 8, 48, 16};
     struct rect preview_strip = {preview.x + 8, preview.y + 26, preview.w - 16, 3};
+
+    refresh_resolution_options();
 
     draw_window_frame(&state->window, "Personalizar", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, ui_color_panel());
@@ -2032,13 +2032,15 @@ static void draw_personalize_window(struct personalize_state *state,
              "Aa");
     sys_text(preview.x + 78, preview.y + 28, theme->text, ui_theme_slot_name(state->selected_slot));
     sys_text(preview_panel.x + 16, preview_panel.y + 68, theme->text, "Ajuste rapido do desktop");
-    
-    /* Draw "Seletor de cores" button */
-    struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 30, palette_panel.w - 16, 14};
-    int mais_cores_hover = point_in_rect(&mais_cores_btn, mouse->x, mouse->y);
-    ui_draw_button(&mais_cores_btn, "Seletor de cores",
-                   state->color_picker_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
-                   mais_cores_hover);
+
+    {
+        struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 30, palette_panel.w - 16, 14};
+        int mais_cores_hover = point_in_rect(&mais_cores_btn, mouse->x, mouse->y);
+
+        ui_draw_button(&mais_cores_btn, "Seletor de cores",
+                       state->color_picker_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                       mais_cores_hover);
+    }
 
     for (int i = -1; i < bmp_count; ++i) {
         struct rect button = personalize_window_wallpaper_button_rect(&state->window, i + 1);
@@ -2072,27 +2074,25 @@ static void draw_personalize_window(struct personalize_state *state,
                        (g_resolution_can_set ? UI_BUTTON_PRIMARY : UI_BUTTON_NORMAL),
                        hover);
     }
-    const char *res_text = g_resolution_can_set ? "Aplicacao imediata" : "modos VESA detectados no boot";
-    int res_text_w = str_len(res_text) * 6;
-    sys_text(resolution_panel.x + (resolution_panel.w - res_text_w) / 2,
-             resolution_panel.y + resolution_panel.h - 14, theme->text,
-             res_text);
+    {
+        const char *res_text = g_resolution_can_set ? "Aplicacao imediata" : "modos VESA detectados no boot";
+        int res_text_w = str_len(res_text) * 6;
 
-    /* Draw 256-color picker popup */
+        sys_text(resolution_panel.x + (resolution_panel.w - res_text_w) / 2,
+                 resolution_panel.y + resolution_panel.h - 14, theme->text,
+                 res_text);
+    }
+
     if (state->color_picker_open) {
         struct rect picker = personalize_color_picker_rect();
-        
-        /* Draw semi-transparent background */
+
         ui_draw_surface(&picker, ui_color_muted());
-        
-        /* Draw title */
         sys_text(picker.x + 8, picker.y + 6, theme->text, "Selecione cor (0-255)");
-        
-        /* Draw 256 color swatches in 16x16 grid */
+
         for (int i = 0; i < 256; ++i) {
             struct rect swatch = personalize_color_swatch_rect(&picker, i);
             int hover = point_in_rect(&swatch, mouse->x, mouse->y);
-            
+
             if (hover) {
                 sys_rect(swatch.x - 1, swatch.y - 1, swatch.w + 2, swatch.h + 2, theme->text);
             }
@@ -3079,9 +3079,9 @@ void desktop_main(void) {
                             int bmp_nodes[4];
                             int bmp_count = find_bmp_nodes(bmp_nodes, 4);
 
-                            /* Handle color picker popup */
                             if (g_pers.color_picker_open) {
                                 struct rect picker = personalize_color_picker_rect();
+
                                 for (int i = 0; i < 256; ++i) {
                                     struct rect swatch = personalize_color_swatch_rect(&picker, i);
                                     if (point_in_rect(&swatch, click_x, click_y)) {
@@ -3091,7 +3091,6 @@ void desktop_main(void) {
                                         break;
                                     }
                                 }
-                                /* Click outside closes popup */
                                 if (!point_in_rect(&picker, click_x, click_y)) {
                                     g_pers.color_picker_open = 0;
                                 }
@@ -3102,6 +3101,7 @@ void desktop_main(void) {
                                                    g_windows[hit_window].rect.h - 26};
                                 struct rect palette_panel = {body.x + 8, body.y + body.h - 98, 216, 88};
                                 struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 30, palette_panel.w - 16, 14};
+
                                 if (point_in_rect(&mais_cores_btn, click_x, click_y)) {
                                     g_pers.color_picker_open = 1;
                                     dirty = 1;
@@ -3114,7 +3114,6 @@ void desktop_main(void) {
                                         dirty = 1;
                                     }
                                 }
-
                             }
                             for (int i = -1; i < bmp_count; ++i) {
                                 struct rect button = personalize_window_wallpaper_button_rect(&g_windows[hit_window].rect, i + 1);

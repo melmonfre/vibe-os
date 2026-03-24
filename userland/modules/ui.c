@@ -12,7 +12,8 @@ uint32_t SCREEN_WIDTH = 640;
 uint32_t SCREEN_HEIGHT = 480;
 uint32_t SCREEN_PITCH = 640;
 struct video_mode g_screen_mode = {0};
-static struct desktop_theme g_theme = {1, 7, 3, 14, 7, 3, 15, 0};
+static const struct desktop_theme g_classic_theme = {1u, 7u, 3u, 14u, 7u, 3u, 15u, 0u};
+static struct desktop_theme g_theme = {1u, 7u, 3u, 14u, 7u, 3u, 15u, 0u};
 static int g_ui_loading_settings = 0;
 static struct {
     int active;
@@ -31,10 +32,6 @@ static struct {
 #define START_MENU_ITEM_H 30
 #define START_MENU_ITEM_STEP 34
 #define UI_SETTINGS_PATH "/config/ui.cfg"
-#define UI_CANVAS_COLOR 1u
-#define UI_PANEL_COLOR 8u
-#define UI_MUTED_COLOR 7u
-
 static void ui_build_desktop_palette(uint8_t *palette) {
     static const uint8_t ega16[16][3] = {
         {0x00u, 0x00u, 0x00u},
@@ -66,6 +63,10 @@ static void ui_build_desktop_palette(uint8_t *palette) {
         palette[i * 3 + 1] = (uint8_t)((((unsigned)i >> 2) & 0x07u) * 255u / 7u);
         palette[i * 3 + 2] = (uint8_t)(((unsigned)i & 0x03u) * 255u / 3u);
     }
+}
+
+static void ui_reset_theme_defaults(void) {
+    g_theme = g_classic_theme;
 }
 
 static void ui_apply_desktop_palette(void) {
@@ -156,6 +157,7 @@ static void ui_save_settings(void) {
     ui_append_kv_u32(text, "background=", g_theme.background, (int)sizeof(text));
     ui_append_kv_u32(text, "menu=", g_theme.menu, (int)sizeof(text));
     ui_append_kv_u32(text, "menu_button=", g_theme.menu_button, (int)sizeof(text));
+    ui_append_kv_u32(text, "menu_button_inactive=", g_theme.menu_button_inactive, (int)sizeof(text));
     ui_append_kv_u32(text, "taskbar=", g_theme.taskbar, (int)sizeof(text));
     ui_append_kv_u32(text, "window=", g_theme.window, (int)sizeof(text));
     ui_append_kv_u32(text, "window_bg=", g_theme.window_bg, (int)sizeof(text));
@@ -204,6 +206,8 @@ static void ui_load_settings(void) {
             loaded.menu = (uint8_t)value;
         } else if (ui_starts_with(line, "menu_button=") && ui_parse_uint(line + 12, &value)) {
             loaded.menu_button = (uint8_t)value;
+        } else if (ui_starts_with(line, "menu_button_inactive=") && ui_parse_uint(line + 21, &value)) {
+            loaded.menu_button_inactive = (uint8_t)value;
         } else if (ui_starts_with(line, "taskbar=") && ui_parse_uint(line + 8, &value)) {
             loaded.taskbar = (uint8_t)value;
         } else if (ui_starts_with(line, "window=") && ui_parse_uint(line + 7, &value)) {
@@ -261,6 +265,7 @@ void ui_refresh_metrics(void) {
 
 void ui_init(void) {
     ui_refresh_metrics();
+    ui_reset_theme_defaults();
     g_ui_loading_settings = 1;
     ui_load_settings();
     g_ui_loading_settings = 0;
@@ -395,6 +400,7 @@ void ui_theme_save_named(const char *name) {
     ui_append_kv_u32(text, "background=", g_theme.background, (int)sizeof(text));
     ui_append_kv_u32(text, "menu=", g_theme.menu, (int)sizeof(text));
     ui_append_kv_u32(text, "menu_button=", g_theme.menu_button, (int)sizeof(text));
+    ui_append_kv_u32(text, "menu_button_inactive=", g_theme.menu_button_inactive, (int)sizeof(text));
     ui_append_kv_u32(text, "taskbar=", g_theme.taskbar, (int)sizeof(text));
     ui_append_kv_u32(text, "window=", g_theme.window, (int)sizeof(text));
     ui_append_kv_u32(text, "window_bg=", g_theme.window_bg, (int)sizeof(text));
@@ -429,6 +435,8 @@ void ui_theme_load_named(const char *name) {
             loaded.menu = (uint8_t)value;
         else if (ui_starts_with(line, "menu_button=") && ui_parse_uint(line + 12, &value))
             loaded.menu_button = (uint8_t)value;
+        else if (ui_starts_with(line, "menu_button_inactive=") && ui_parse_uint(line + 21, &value))
+            loaded.menu_button_inactive = (uint8_t)value;
         else if (ui_starts_with(line, "taskbar=") && ui_parse_uint(line + 8, &value))
             loaded.taskbar = (uint8_t)value;
         else if (ui_starts_with(line, "window=") && ui_parse_uint(line + 7, &value))
@@ -448,6 +456,7 @@ void ui_theme_export(const char *export_path) {
     ui_append_kv_u32(text, "background=", g_theme.background, (int)sizeof(text));
     ui_append_kv_u32(text, "menu=", g_theme.menu, (int)sizeof(text));
     ui_append_kv_u32(text, "menu_button=", g_theme.menu_button, (int)sizeof(text));
+    ui_append_kv_u32(text, "menu_button_inactive=", g_theme.menu_button_inactive, (int)sizeof(text));
     ui_append_kv_u32(text, "taskbar=", g_theme.taskbar, (int)sizeof(text));
     ui_append_kv_u32(text, "window=", g_theme.window, (int)sizeof(text));
     ui_append_kv_u32(text, "window_bg=", g_theme.window_bg, (int)sizeof(text));
@@ -476,6 +485,8 @@ void ui_theme_import(const char *import_path) {
             loaded.menu = (uint8_t)value;
         else if (ui_starts_with(line, "menu_button=") && ui_parse_uint(line + 12, &value))
             loaded.menu_button = (uint8_t)value;
+        else if (ui_starts_with(line, "menu_button_inactive=") && ui_parse_uint(line + 21, &value))
+            loaded.menu_button_inactive = (uint8_t)value;
         else if (ui_starts_with(line, "taskbar=") && ui_parse_uint(line + 8, &value))
             loaded.taskbar = (uint8_t)value;
         else if (ui_starts_with(line, "window=") && ui_parse_uint(line + 7, &value))
@@ -491,14 +502,7 @@ void ui_theme_import(const char *import_path) {
 
 void ui_theme_create_classic(void) {
     /* Classic - VibeOS default theme */
-    g_theme.background = 1;
-    g_theme.menu = 7;
-    g_theme.menu_button = 3;
-    g_theme.menu_button_inactive = 14;
-    g_theme.taskbar = 7;
-    g_theme.window = 3;
-    g_theme.window_bg = 15;
-    g_theme.text = 0;
+    ui_reset_theme_defaults();
     ui_theme_save_named("classic");
 }
 
@@ -561,15 +565,15 @@ struct rect ui_desktop_craft_icon_rect(void) {
 }
 
 uint8_t ui_color_canvas(void) {
-    return UI_CANVAS_COLOR;
+    return g_theme.background;
 }
 
 uint8_t ui_color_panel(void) {
-    return UI_PANEL_COLOR;
+    return g_theme.menu;
 }
 
 uint8_t ui_color_muted(void) {
-    return UI_MUTED_COLOR;
+    return g_theme.menu_button_inactive;
 }
 
 void ui_draw_surface(const struct rect *r, uint8_t fill) {
@@ -579,7 +583,7 @@ void ui_draw_surface(const struct rect *r, uint8_t fill) {
 
     sys_rect(r->x, r->y, r->w, r->h, 0);
     if (r->w > 2 && r->h > 2) {
-        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, UI_PANEL_COLOR);
+        sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, ui_color_panel());
     }
     if (r->w > 4 && r->h > 4) {
         sys_rect(r->x + 2, r->y + 2, r->w - 4, r->h - 4, fill);
@@ -591,7 +595,7 @@ void ui_draw_inset(const struct rect *r, uint8_t fill) {
         return;
     }
 
-    sys_rect(r->x, r->y, r->w, r->h, UI_PANEL_COLOR);
+    sys_rect(r->x, r->y, r->w, r->h, ui_color_panel());
     if (r->w > 2 && r->h > 2) {
         sys_rect(r->x + 1, r->y + 1, r->w - 2, r->h - 2, 0);
     }
@@ -602,7 +606,7 @@ void ui_draw_inset(const struct rect *r, uint8_t fill) {
 
 void ui_draw_button(const struct rect *r, const char *label,
                     enum ui_button_style style, int highlighted) {
-    uint8_t fill = UI_PANEL_COLOR;
+    uint8_t fill = ui_color_panel();
     uint8_t border = highlighted ? 15 : 0;
     int text_x;
     int text_y;
@@ -613,7 +617,7 @@ void ui_draw_button(const struct rect *r, const char *label,
 
     switch (style) {
     case UI_BUTTON_NORMAL:
-        fill = UI_PANEL_COLOR;
+        fill = ui_color_panel();
         break;
     case UI_BUTTON_PRIMARY:
         fill = g_theme.menu_button;
@@ -625,7 +629,7 @@ void ui_draw_button(const struct rect *r, const char *label,
         fill = g_theme.window;
         break;
     default:
-        fill = UI_PANEL_COLOR;
+        fill = ui_color_panel();
         break;
     }
 
@@ -712,7 +716,7 @@ void draw_window_frame(const struct rect *w, const char *title,
     const struct rect outer = {w->x, w->y, w->w, w->h};
     const struct rect title_bar = {w->x + 2, w->y + 2, w->w - 4, 12};
 
-    ui_draw_surface(&outer, UI_PANEL_COLOR);
+    ui_draw_surface(&outer, ui_color_panel());
     sys_rect(title_bar.x, title_bar.y, title_bar.w, title_bar.h, active ? g_theme.window : g_theme.taskbar);
     sys_rect(title_bar.x, title_bar.y + title_bar.h - 1, title_bar.w, 1, 0);
     sys_text(w->x + 8, w->y + 4, g_theme.text, title);
@@ -771,13 +775,19 @@ void draw_desktop(const struct mouse_state *mouse,
     {
         struct rect banner = {18, 18, 154, 20};
         struct rect files_icon = ui_desktop_files_icon_rect();
+        struct rect craft_icon = ui_desktop_craft_icon_rect();
         struct rect files_plate = {files_icon.x + 16, files_icon.y + 10, 52, 40};
+        struct rect craft_plate = {craft_icon.x + 16, craft_icon.y + 10, 52, 40};
         int files_hover = point_in_rect(&files_icon, mouse->x, mouse->y);
+        int craft_hover = point_in_rect(&craft_icon, mouse->x, mouse->y);
 
         ui_draw_button(&banner, "VIBE DESKTOP", UI_BUTTON_ACTIVE, 0);
         ui_draw_button(&files_icon, "", files_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, files_hover);
+        ui_draw_button(&craft_icon, "", craft_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, craft_hover);
         ui_draw_surface(&files_plate, g_theme.window);
+        ui_draw_surface(&craft_plate, g_theme.menu_button_inactive);
         sys_text(files_icon.x + 24, files_icon.y + 60, g_theme.text, "Arquivos");
+        sys_text(craft_icon.x + 30, craft_icon.y + 60, g_theme.text, "Craft");
     }
 
     draw_taskbar(wins, win_count, focused, start_hover);
