@@ -52,6 +52,13 @@ static uintptr_t align_up_uintptr(uintptr_t value, uintptr_t align) {
     return (value + align - 1u) & ~(align - 1u);
 }
 
+static uintptr_t align_down_uintptr(uintptr_t value, uintptr_t align) {
+    if (align == 0u) {
+        return value;
+    }
+    return value & ~(align - 1u);
+}
+
 static void *lang_memcpy(void *dst, const void *src, uint32_t size) {
     uint8_t *out = (uint8_t *)dst;
     const uint8_t *in = (const uint8_t *)src;
@@ -665,6 +672,10 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
         sys_write_debug("lang: entry exceeds app area\n");
         return -1;
     }
+    if (entry->sector_count > (VIBE_APP_ARENA_SIZE / LANG_SECTOR_SIZE)) {
+        sys_write_debug("lang: entry exceeds arena\n");
+        return -1;
+    }
 
     if (lang_storage_read_retry(entry->lba_start, first_sector, 1u) != 0) {
         sys_write_debug("lang: header read failed\n");
@@ -710,7 +721,8 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
         header->image_size > entry->image_size ||
         header->memory_size < header->image_size ||
         header->memory_size > VIBE_APP_ARENA_SIZE ||
-        header->entry_offset >= header->memory_size) {
+        header->entry_offset >= header->memory_size ||
+        header->entry_offset >= header->image_size) {
         sys_write_debug("lang: header sizing invalid\n");
         return -1;
     }
@@ -761,12 +773,38 @@ static void lang_write_missing_runtime(const char *name) {
     console_putc('\n');
 }
 
+static uintptr_t lang_app_stack_top(uint32_t load_address) {
+    return align_down_uintptr((uintptr_t)load_address + VIBE_APP_ARENA_SIZE, 16u);
+}
+
+__attribute__((noinline, optimize("O0")))
 static int lang_call_app(vibe_app_entry_t entry,
                          const struct vibe_app_context *ctx,
                          int argc,
-                         char **argv) {
+                         char **argv,
+                         uintptr_t stack_top) {
+    uintptr_t saved_esp;
+    int rc;
+
     sys_write_debug("lang: calling app entry\n");
-    return entry(ctx, argc, argv);
+    __asm__ volatile(
+        "mov %%esp, %[saved_esp]\n\t"
+        "mov %[stack_top], %%esp\n\t"
+        "push %[argv]\n\t"
+        "push %[argc]\n\t"
+        "push %[ctx]\n\t"
+        "call *%[entry]\n\t"
+        "add $12, %%esp\n\t"
+        "mov %[saved_esp], %%esp\n\t"
+        : [saved_esp] "=&r"(saved_esp),
+          "=a"(rc)
+        : [stack_top] "r"(stack_top),
+          [entry] "r"(entry),
+          [ctx] "g"(ctx),
+          [argc] "g"(argc),
+          [argv] "g"(argv)
+        : "ecx", "edx", "memory", "cc");
+    return rc;
 }
 
 int lang_try_run(int argc, char **argv) {
@@ -828,7 +866,11 @@ int lang_try_run(int argc, char **argv) {
     entry_addr = (uintptr_t)header->load_address + header->entry_offset;
     app_entry = (vibe_app_entry_t)entry_addr;
     sys_write_debug("lang: app entry resolved\n");
-    (void)lang_call_app(app_entry, &g_app_ctx, argc, argv);
+    (void)lang_call_app(app_entry,
+                        &g_app_ctx,
+                        argc,
+                        argv,
+                        lang_app_stack_top(header->load_address));
     sys_write_debug("lang: app returned\n");
     lang_reset_host_fds();
     lang_memcpy((void *)(uintptr_t)header->load_address,

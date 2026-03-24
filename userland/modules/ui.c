@@ -182,13 +182,13 @@ static int ui_wallpaper_set_from_node_internal(int node, int persist) {
         return -1;
     }
 
-    if (image_decode_node_to_palette_cover(node,
-                                           pixels,
-                                           (int)SCREEN_WIDTH,
-                                           (int)SCREEN_WIDTH,
-                                           (int)SCREEN_HEIGHT,
-                                           &width,
-                                           &height) != 0) {
+    if (image_decode_node_to_palette_stretch(node,
+                                             pixels,
+                                             (int)SCREEN_WIDTH,
+                                             (int)SCREEN_WIDTH,
+                                             (int)SCREEN_HEIGHT,
+                                             &width,
+                                             &height) != 0) {
         sys_write_debug("ui: wallpaper decode failed\n");
         free(pixels);
         return -1;
@@ -635,8 +635,18 @@ struct rect ui_desktop_files_icon_rect(void) {
     return r;
 }
 
-struct rect ui_desktop_craft_icon_rect(void) {
+struct rect ui_desktop_image_icon_rect(void) {
     struct rect r = {(int)SCREEN_WIDTH - 110, 116, 84, 86};
+    return r;
+}
+
+struct rect ui_desktop_craft_icon_rect(void) {
+    struct rect r = {(int)SCREEN_WIDTH - 110, 212, 84, 86};
+    return r;
+}
+
+struct rect ui_desktop_trash_icon_rect(void) {
+    struct rect r = {(int)SCREEN_WIDTH - 110, 308, 84, 86};
     return r;
 }
 
@@ -765,7 +775,9 @@ static const char *app_caption(enum app_type type) {
     case APP_FLAP_BIRB: return "Birb";
     case APP_DOOM: return "DOOM";
     case APP_CRAFT: return "Craft";
+    case APP_IMAGEVIEWER: return "Imagens";
     case APP_PERSONALIZE: return "Tema";
+    case APP_TRASH: return "Lixeira";
     default: return "App";
     }
 }
@@ -807,7 +819,7 @@ static void draw_taskbar(const struct window *wins, int win_count, int focused, 
         if (!wins[i].active) {
             continue;
         }
-        if (wins[i].type <= APP_NONE || wins[i].type > APP_PERSONALIZE) {
+        if (wins[i].type <= APP_NONE || wins[i].type > APP_TRASH) {
             continue;
         }
 
@@ -840,19 +852,43 @@ void draw_desktop(const struct mouse_state *mouse,
     {
         struct rect banner = {18, 18, 154, 20};
         struct rect files_icon = ui_desktop_files_icon_rect();
+        struct rect image_icon = ui_desktop_image_icon_rect();
         struct rect craft_icon = ui_desktop_craft_icon_rect();
+        struct rect trash_icon = ui_desktop_trash_icon_rect();
         struct rect files_plate = {files_icon.x + 16, files_icon.y + 10, 52, 40};
+        struct rect image_plate = {image_icon.x + 16, image_icon.y + 10, 52, 40};
+        struct rect image_frame = {image_plate.x + 6, image_plate.y + 6, image_plate.w - 12, image_plate.h - 12};
         struct rect craft_plate = {craft_icon.x + 16, craft_icon.y + 10, 52, 40};
+        struct rect trash_plate = {trash_icon.x + 16, trash_icon.y + 10, 52, 40};
+        struct rect trash_lid = {trash_plate.x + 12, trash_plate.y + 6, trash_plate.w - 24, 4};
+        struct rect trash_body = {trash_plate.x + 10, trash_plate.y + 12, trash_plate.w - 20, trash_plate.h - 18};
         int files_hover = point_in_rect(&files_icon, mouse->x, mouse->y);
+        int image_hover = point_in_rect(&image_icon, mouse->x, mouse->y);
         int craft_hover = point_in_rect(&craft_icon, mouse->x, mouse->y);
+        int trash_hover = point_in_rect(&trash_icon, mouse->x, mouse->y);
 
         ui_draw_button(&banner, "VIBE DESKTOP", UI_BUTTON_ACTIVE, 0);
         ui_draw_button(&files_icon, "", files_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, files_hover);
+        ui_draw_button(&image_icon, "", image_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, image_hover);
         ui_draw_button(&craft_icon, "", craft_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, craft_hover);
+        ui_draw_button(&trash_icon, "", trash_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, trash_hover);
         ui_draw_surface(&files_plate, g_theme.window);
+        ui_draw_surface(&image_plate, g_theme.window_bg);
+        ui_draw_inset(&image_frame, g_theme.menu_button_inactive);
+        sys_rect(image_frame.x + 5, image_frame.y + 15, image_frame.w - 10, 2, g_theme.window);
+        sys_rect(image_frame.x + 10, image_frame.y + 10, 6, 4, g_theme.window);
+        sys_rect(image_frame.x + 18, image_frame.y + 11, 10, 9, g_theme.window);
         ui_draw_surface(&craft_plate, g_theme.menu_button_inactive);
+        ui_draw_surface(&trash_plate, g_theme.window_bg);
+        sys_rect(trash_lid.x, trash_lid.y, trash_lid.w, trash_lid.h, g_theme.window);
+        sys_rect(trash_body.x, trash_body.y, trash_body.w, trash_body.h, g_theme.window);
+        sys_rect(trash_body.x + 5, trash_body.y + 4, 2, trash_body.h - 8, g_theme.window_bg);
+        sys_rect(trash_body.x + 11, trash_body.y + 4, 2, trash_body.h - 8, g_theme.window_bg);
+        sys_rect(trash_body.x + 17, trash_body.y + 4, 2, trash_body.h - 8, g_theme.window_bg);
         sys_text(files_icon.x + 24, files_icon.y + 60, g_theme.text, "Arquivos");
+        sys_text(image_icon.x + 26, image_icon.y + 60, g_theme.text, "Imagens");
         sys_text(craft_icon.x + 30, craft_icon.y + 60, g_theme.text, "Craft");
+        sys_text(trash_icon.x + 26, trash_icon.y + 60, g_theme.text, "Lixeira");
     }
 
     draw_taskbar(wins, win_count, focused, start_hover);

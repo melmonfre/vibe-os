@@ -59,6 +59,9 @@ static enum app_type desktop_app_type(const char *app_name) {
     if (str_eq(app_name, "craft")) {
         return APP_CRAFT;
     }
+    if (str_eq(app_name, "imageviewer")) {
+        return APP_IMAGEVIEWER;
+    }
     if (str_eq(app_name, "personalize")) {
         return APP_PERSONALIZE;
     }

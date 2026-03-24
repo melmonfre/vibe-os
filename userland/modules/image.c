@@ -7,6 +7,12 @@
 #include <userland/modules/include/image.h>
 #include <userland/modules/include/utils.h>
 
+enum image_scale_mode {
+    IMAGE_SCALE_FIT = 0,
+    IMAGE_SCALE_COVER = 1,
+    IMAGE_SCALE_STRETCH = 2
+};
+
 static int image_name_has_extension(const char *name, const char *ext) {
     int name_len;
     int ext_len;
@@ -54,7 +60,7 @@ static int image_decode_png_to_palette_internal(const uint8_t *data, int size,
                                                 uint8_t *out_pixels, int out_stride,
                                                 int target_w_limit, int target_h_limit,
                                                 int *out_w, int *out_h,
-                                                int cover) {
+                                                enum image_scale_mode mode) {
     unsigned char *rgba = 0;
     unsigned width = 0;
     unsigned height = 0;
@@ -75,7 +81,7 @@ static int image_decode_png_to_palette_internal(const uint8_t *data, int size,
 
     target_w = (int)width;
     target_h = (int)height;
-    if (cover) {
+    if (mode != IMAGE_SCALE_FIT) {
         if (target_w_limit <= 0 || target_h_limit <= 0) {
             free(rgba);
             return -1;
@@ -95,7 +101,7 @@ static int image_decode_png_to_palette_internal(const uint8_t *data, int size,
     if (target_w < 1) target_w = 1;
     if (target_h < 1) target_h = 1;
 
-    if (cover) {
+    if (mode == IMAGE_SCALE_COVER) {
         if ((uint64_t)width * (uint64_t)target_h > (uint64_t)height * (uint64_t)target_w) {
             sample_w = (unsigned)(((uint64_t)height * (uint64_t)target_w) / (uint64_t)target_h);
             sample_h = height;
@@ -149,7 +155,7 @@ static int image_decode_png_to_palette(const uint8_t *data, int size,
                                                 max_h,
                                                 out_w,
                                                 out_h,
-                                                0);
+                                                IMAGE_SCALE_FIT);
 }
 
 static int image_decode_png_to_palette_cover(const uint8_t *data, int size,
@@ -164,7 +170,22 @@ static int image_decode_png_to_palette_cover(const uint8_t *data, int size,
                                                 target_h,
                                                 out_w,
                                                 out_h,
-                                                1);
+                                                IMAGE_SCALE_COVER);
+}
+
+static int image_decode_png_to_palette_stretch(const uint8_t *data, int size,
+                                               uint8_t *out_pixels, int out_stride,
+                                               int target_w, int target_h,
+                                               int *out_w, int *out_h) {
+    return image_decode_png_to_palette_internal(data,
+                                                size,
+                                                out_pixels,
+                                                out_stride,
+                                                target_w,
+                                                target_h,
+                                                out_w,
+                                                out_h,
+                                                IMAGE_SCALE_STRETCH);
 }
 
 int image_decode_to_palette(const uint8_t *data, int size,
@@ -204,6 +225,27 @@ int image_decode_to_palette_cover(const uint8_t *data, int size,
     if (size >= (int)sizeof(png_signature) &&
         memcmp(data, png_signature, sizeof(png_signature)) == 0 &&
         image_decode_png_to_palette_cover(data, size, out_pixels, out_stride, target_w, target_h, out_w, out_h) == 0) {
+        return 0;
+    }
+    return -1;
+}
+
+int image_decode_to_palette_stretch(const uint8_t *data, int size,
+                                    uint8_t *out_pixels, int out_stride,
+                                    int target_w, int target_h,
+                                    int *out_w, int *out_h) {
+    static const uint8_t png_signature[8] = {137u, 80u, 78u, 71u, 13u, 10u, 26u, 10u};
+
+    if (!data || size <= 0 || !out_pixels || !out_w || !out_h) {
+        return -1;
+    }
+
+    if (bmp_decode_to_palette_stretch(data, size, out_pixels, out_stride, target_w, target_h, out_w, out_h) == 0) {
+        return 0;
+    }
+    if (size >= (int)sizeof(png_signature) &&
+        memcmp(data, png_signature, sizeof(png_signature)) == 0 &&
+        image_decode_png_to_palette_stretch(data, size, out_pixels, out_stride, target_w, target_h, out_w, out_h) == 0) {
         return 0;
     }
     return -1;
@@ -273,6 +315,40 @@ int image_decode_node_to_palette_cover(int node,
     }
 
     rc = image_decode_to_palette_cover(buffer, bytes_read, out_pixels, out_stride, target_w, target_h, out_w, out_h);
+    free(buffer);
+    return rc;
+}
+
+int image_decode_node_to_palette_stretch(int node,
+                                         uint8_t *out_pixels,
+                                         int out_stride,
+                                         int target_w,
+                                         int target_h,
+                                         int *out_w,
+                                         int *out_h) {
+    uint8_t *buffer;
+    int bytes_read;
+    int rc;
+
+    if (node < 0 || node >= FS_MAX_NODES || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir) {
+        return -1;
+    }
+    if (g_fs_nodes[node].size <= 0) {
+        return -1;
+    }
+
+    buffer = (uint8_t *)malloc((size_t)g_fs_nodes[node].size);
+    if (!buffer) {
+        return -1;
+    }
+
+    bytes_read = fs_read_node_bytes(node, 0, buffer, g_fs_nodes[node].size);
+    if (bytes_read != g_fs_nodes[node].size) {
+        free(buffer);
+        return -1;
+    }
+
+    rc = image_decode_to_palette_stretch(buffer, bytes_read, out_pixels, out_stride, target_w, target_h, out_w, out_h);
     free(buffer);
     return rc;
 }

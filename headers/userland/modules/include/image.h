@@ -14,6 +14,10 @@ int image_decode_to_palette_cover(const uint8_t *data, int size,
                                   uint8_t *out_pixels, int out_stride,
                                   int target_w, int target_h,
                                   int *out_w, int *out_h);
+int image_decode_to_palette_stretch(const uint8_t *data, int size,
+                                    uint8_t *out_pixels, int out_stride,
+                                    int target_w, int target_h,
+                                    int *out_w, int *out_h);
 int image_decode_node_to_palette(int node,
                                  uint8_t *out_pixels,
                                  int out_stride,
@@ -28,6 +32,13 @@ int image_decode_node_to_palette_cover(int node,
                                        int target_h,
                                        int *out_w,
                                        int *out_h);
+int image_decode_node_to_palette_stretch(int node,
+                                         uint8_t *out_pixels,
+                                         int out_stride,
+                                         int target_w,
+                                         int target_h,
+                                         int *out_w,
+                                         int *out_h);
 int image_node_is_supported(int node);
 
 #endif

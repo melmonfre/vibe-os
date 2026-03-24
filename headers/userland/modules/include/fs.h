@@ -34,6 +34,7 @@ void fs_flush(void);
 int fs_create(const char *path, int is_dir);
 int fs_remove(const char *path);
 int fs_rename_node(int node, const char *new_name);
+int fs_move_node(int node, int new_parent, const char *new_name);
 int fs_write_file(const char *path, const char *text, int append);
 int fs_write_bytes(const char *path, const uint8_t *data, int size);
 int fs_register_image_file(const char *path, uint32_t lba, uint32_t sector_count, int size);

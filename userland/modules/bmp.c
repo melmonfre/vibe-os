@@ -1,5 +1,11 @@
 #include <userland/modules/include/bmp.h>
 
+enum bmp_scale_mode {
+    BMP_SCALE_FIT = 0,
+    BMP_SCALE_COVER = 1,
+    BMP_SCALE_STRETCH = 2
+};
+
 static uint16_t bmp_read_u16(const uint8_t *p) {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
@@ -78,7 +84,7 @@ static int bmp_decode_to_palette_internal(const uint8_t *data, int size,
                                           uint8_t *out_pixels, int out_stride,
                                           int target_w_limit, int target_h_limit,
                                           int *out_w, int *out_h,
-                                          int cover) {
+                                          enum bmp_scale_mode mode) {
     uint32_t pixel_offset;
     uint32_t dib_size;
     int32_t src_w;
@@ -129,7 +135,7 @@ static int bmp_decode_to_palette_internal(const uint8_t *data, int size,
     target_w = src_w;
     target_h = src_h;
 
-    if (cover) {
+    if (mode != BMP_SCALE_FIT) {
         if (target_w_limit <= 0 || target_h_limit <= 0) {
             return -1;
         }
@@ -159,7 +165,7 @@ static int bmp_decode_to_palette_internal(const uint8_t *data, int size,
         }
     }
 
-    if (cover) {
+    if (mode == BMP_SCALE_COVER) {
         if ((int64_t)src_w * (int64_t)target_h > (int64_t)src_h * (int64_t)target_w) {
             sample_w = (src_h * target_w) / target_h;
             sample_h = src_h;
@@ -225,7 +231,7 @@ int bmp_decode_to_palette(const uint8_t *data, int size,
                                           max_h,
                                           out_w,
                                           out_h,
-                                          0);
+                                          BMP_SCALE_FIT);
 }
 
 int bmp_decode_to_palette_cover(const uint8_t *data, int size,
@@ -236,11 +242,26 @@ int bmp_decode_to_palette_cover(const uint8_t *data, int size,
                                           size,
                                           out_pixels,
                                           out_stride,
+                                target_w,
+                                target_h,
+                                out_w,
+                                out_h,
+                                BMP_SCALE_COVER);
+}
+
+int bmp_decode_to_palette_stretch(const uint8_t *data, int size,
+                                  uint8_t *out_pixels, int out_stride,
+                                  int target_w, int target_h,
+                                  int *out_w, int *out_h) {
+    return bmp_decode_to_palette_internal(data,
+                                          size,
+                                          out_pixels,
+                                          out_stride,
                                           target_w,
                                           target_h,
                                           out_w,
                                           out_h,
-                                          1);
+                                          BMP_SCALE_STRETCH);
 }
 
 int bmp_encode_8bit(const uint8_t *pixels, int width, int height, int stride,

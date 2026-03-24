@@ -17,6 +17,7 @@ filemanager	FILEMANAGER_APP_BIN	1	0	/bin/filemanager
 editor	EDITOR_APP_BIN	1	0	/bin/editor
 taskmgr	TASKMGR_APP_BIN	1	0	/bin/taskmgr
 calculator	CALCULATOR_APP_BIN	1	0	/bin/calculator
+imageviewer	IMAGEVIEWER_APP_BIN	1	0	/bin/imageviewer
 sketchpad	SKETCHPAD_APP_BIN	1	0	/bin/sketchpad
 snake	SNAKE_APP_BIN	1	0	/bin/snake
 tetris	TETRIS_APP_BIN	1	0	/bin/tetris

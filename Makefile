@@ -235,6 +235,7 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/applications/editor.c \
 	$(USERLAND_DIR)/applications/taskmgr.c \
 	$(USERLAND_DIR)/applications/calculator.c \
+	$(USERLAND_DIR)/applications/imageviewer.c \
 	$(USERLAND_DIR)/applications/sketchpad.c \
 	$(USERLAND_DIR)/applications/games/snake.c \
 	$(USERLAND_DIR)/applications/games/tetris.c \
@@ -565,6 +566,7 @@ DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/applications/editor.c \
 	$(USERLAND_DIR)/applications/taskmgr.c \
 	$(USERLAND_DIR)/applications/calculator.c \
+	$(USERLAND_DIR)/applications/imageviewer.c \
 	$(USERLAND_DIR)/applications/sketchpad.c \
 	$(USERLAND_DIR)/applications/games/snake.c \
 	$(USERLAND_DIR)/applications/games/tetris.c \
@@ -620,6 +622,7 @@ DESKTOP_LAUNCHER_APPS := \
 	editor \
 	taskmgr \
 	calculator \
+	imageviewer \
 	sketchpad \
 	snake \
 	tetris \
@@ -642,6 +645,7 @@ FILEMANAGER_APP_BIN := $(BUILD_DIR)/lang/filemanager.app
 EDITOR_APP_BIN := $(BUILD_DIR)/lang/editor.app
 TASKMGR_APP_BIN := $(BUILD_DIR)/lang/taskmgr.app
 CALCULATOR_APP_BIN := $(BUILD_DIR)/lang/calculator.app
+IMAGEVIEWER_APP_BIN := $(BUILD_DIR)/lang/imageviewer.app
 SKETCHPAD_APP_BIN := $(BUILD_DIR)/lang/sketchpad.app
 SNAKE_APP_BIN := $(BUILD_DIR)/lang/snake.app
 TETRIS_APP_BIN := $(BUILD_DIR)/lang/tetris.app
@@ -1108,7 +1112,7 @@ $(PRIMES_APP_BIN) $(QUIZ_APP_BIN) $(RAIN_APP_BIN) $(RANDOM_APP_BIN) $(ROBOTS_APP
 $(SNAKE_BSD_APP_BIN) $(TEACHGAMMON_APP_BIN) $(TETRIS_BSD_APP_BIN) $(TREK_APP_BIN) \
 $(WARGAMES_APP_BIN) $(WORM_APP_BIN) $(WORMS_APP_BIN) $(WUMP_APP_BIN): $(BSD_GAMES_APPS_STAMP)
 
-$(WALLPAPER_RUNTIME_PNG): $(WALLPAPER_SRC) tools/build_runtime_png_asset.py | $(BUILD_DIR)
+$(WALLPAPER_RUNTIME_PNG): $(WALLPAPER_SRC) tools/build_runtime_png_asset.py Makefile | $(BUILD_DIR)
 	$(PYTHON) tools/build_runtime_png_asset.py \
 		--input $(WALLPAPER_SRC) \
 		--output $@ \

@@ -16,6 +16,10 @@ int bmp_decode_to_palette_cover(const uint8_t *data, int size,
                                 uint8_t *out_pixels, int out_stride,
                                 int target_w, int target_h,
                                 int *out_w, int *out_h);
+int bmp_decode_to_palette_stretch(const uint8_t *data, int size,
+                                  uint8_t *out_pixels, int out_stride,
+                                  int target_w, int target_h,
+                                  int *out_w, int *out_h);
 int bmp_encode_8bit(const uint8_t *pixels, int width, int height, int stride,
                     uint8_t *out, int out_cap);
 

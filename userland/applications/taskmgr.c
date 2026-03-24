@@ -101,7 +101,9 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
         case APP_FLAP_BIRB: name = "FLAP"; break;
         case APP_DOOM: name = "DOOM"; break;
         case APP_CRAFT: name = "CRAFT"; break;
+        case APP_IMAGEVIEWER: name = "IMG"; break;
         case APP_PERSONALIZE: name = "PERS"; break;
+        case APP_TRASH: name = "TRASH"; break;
         default: name = "???"; break;
         }
         while (*name && len < (int)sizeof(line) - 1) {

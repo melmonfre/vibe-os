@@ -880,6 +880,62 @@ int fs_rename_node(int node, const char *new_name) {
     return 0;
 }
 
+int fs_move_node(int node, int new_parent, const char *new_name) {
+    int old_parent;
+    int existing;
+    int cursor;
+    int guard = 0;
+
+    if (node < 0 || node >= FS_MAX_NODES || !g_fs_nodes[node].used || node == g_fs_root) {
+        return -1;
+    }
+    if (new_parent < 0 || new_parent >= FS_MAX_NODES ||
+        !g_fs_nodes[new_parent].used || !g_fs_nodes[new_parent].is_dir) {
+        return -2;
+    }
+    if (!fs_name_is_valid(new_name)) {
+        return -3;
+    }
+    if (node == new_parent) {
+        return -4;
+    }
+
+    if (g_fs_nodes[node].is_dir) {
+        cursor = new_parent;
+        while (++guard <= FS_MAX_NODES) {
+            if (cursor == node) {
+                return -5;
+            }
+            if (cursor == g_fs_root) {
+                break;
+            }
+            cursor = g_fs_nodes[cursor].parent;
+            if (cursor < 0 || cursor >= FS_MAX_NODES || !g_fs_nodes[cursor].used) {
+                return -5;
+            }
+        }
+        if (guard > FS_MAX_NODES) {
+            return -5;
+        }
+    }
+
+    existing = fs_find_child(new_parent, new_name);
+    if (existing >= 0 && existing != node) {
+        return -6;
+    }
+
+    old_parent = g_fs_nodes[node].parent;
+    if (old_parent == new_parent && str_eq(g_fs_nodes[node].name, new_name)) {
+        return 0;
+    }
+
+    fs_unlink_child(old_parent, node);
+    str_copy_limited(g_fs_nodes[node].name, new_name, FS_NAME_MAX + 1);
+    fs_link_child(new_parent, node);
+    fs_mark_dirty();
+    return 0;
+}
+
 int fs_write_file(const char *path, const char *text, int append) {
     int idx = fs_resolve(path);
     int i;
@@ -1179,6 +1235,7 @@ void fs_init(void) {
     (void)fs_create("/textures", 1);
     (void)fs_create("/docs", 1);
     (void)fs_create("/config", 1);
+    (void)fs_create("/trash", 1);
     (void)fs_write_file("/README", "SISTEMA DE ARQUIVOS VFS", 0);
     (void)fs_write_file("/teste.lua",
                         "print(\"hello from lua\")\n"
