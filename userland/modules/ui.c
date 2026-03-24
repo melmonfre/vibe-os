@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/fs.h>
 #include <userland/modules/include/image.h>
@@ -21,8 +23,8 @@ static struct {
     int explicit_none;
     int width;
     int height;
-    uint8_t pixels[IMAGE_MAX_TARGET_H][IMAGE_MAX_TARGET_W];
-} g_wallpaper = {0, -1, 0, 0, 0, {{0}}};
+    uint8_t *pixels;
+} g_wallpaper = {0, -1, 0, 0, 0, 0};
 
 #define TASKBAR_HEIGHT 22
 #define START_MENU_WIDTH 336
@@ -35,6 +37,16 @@ static struct {
 #define UI_SETTINGS_PATH "/config/ui.cfg"
 
 static void ui_save_settings(void);
+
+static void ui_wallpaper_release_pixels(void) {
+    if (g_wallpaper.pixels) {
+        free(g_wallpaper.pixels);
+        g_wallpaper.pixels = 0;
+    }
+    g_wallpaper.active = 0;
+    g_wallpaper.width = 0;
+    g_wallpaper.height = 0;
+}
 
 static void ui_build_desktop_palette(uint8_t *palette) {
     static const uint8_t ega16[16][3] = {
@@ -145,31 +157,45 @@ static void ui_append_kv_u32(char *buf, const char *key, uint32_t value, int max
 }
 
 static void ui_wallpaper_reset(int explicit_none) {
-    g_wallpaper.active = 0;
+    ui_wallpaper_release_pixels();
     g_wallpaper.source_node = -1;
     g_wallpaper.explicit_none = explicit_none;
-    g_wallpaper.width = 0;
-    g_wallpaper.height = 0;
 }
 
 static int ui_wallpaper_set_from_node_internal(int node, int persist) {
+    uint8_t *pixels = 0;
     int width = 0;
     int height = 0;
+    size_t pixel_count;
 
     if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir) {
         return -1;
     }
-    if (image_decode_node_to_palette(node,
-                                     &g_wallpaper.pixels[0][0],
-                                     IMAGE_MAX_TARGET_W,
-                                     IMAGE_MAX_TARGET_W,
-                                     IMAGE_MAX_TARGET_H,
-                                     &width,
-                                     &height) != 0) {
-        sys_write_debug("ui: wallpaper decode failed\n");
+    if (SCREEN_WIDTH == 0u || SCREEN_HEIGHT == 0u) {
         return -1;
     }
 
+    pixel_count = (size_t)SCREEN_WIDTH * (size_t)SCREEN_HEIGHT;
+    pixels = (uint8_t *)malloc(pixel_count);
+    if (!pixels) {
+        sys_write_debug("ui: wallpaper buffer alloc failed\n");
+        return -1;
+    }
+
+    if (image_decode_node_to_palette_cover(node,
+                                           pixels,
+                                           (int)SCREEN_WIDTH,
+                                           (int)SCREEN_WIDTH,
+                                           (int)SCREEN_HEIGHT,
+                                           &width,
+                                           &height) != 0) {
+        sys_write_debug("ui: wallpaper decode failed\n");
+        free(pixels);
+        return -1;
+    }
+
+    ui_wallpaper_release_pixels();
+    g_wallpaper.pixels = pixels;
     g_wallpaper.active = 1;
     g_wallpaper.source_node = node;
     g_wallpaper.explicit_none = 0;
@@ -190,6 +216,21 @@ static int ui_try_set_default_wallpaper(void) {
         return -1;
     }
     return ui_wallpaper_set_from_node_internal(node, 0);
+}
+
+static void ui_reload_wallpaper_for_current_mode(void) {
+    int node = g_wallpaper.source_node;
+
+    if (g_wallpaper.explicit_none || node < 0) {
+        return;
+    }
+    if (ui_wallpaper_set_from_node_internal(node, 0) == 0) {
+        return;
+    }
+
+    ui_wallpaper_release_pixels();
+    sys_write_debug("ui: wallpaper reload failed for current mode\n");
+    (void)ui_try_set_default_wallpaper();
 }
 
 static void ui_save_settings(void) {
@@ -346,6 +387,7 @@ int ui_set_resolution(uint32_t width, uint32_t height) {
     dirty_init();
     clip_init();
     cursor_init();
+    ui_reload_wallpaper_for_current_mode();
     if (!g_ui_loading_settings) {
         ui_save_settings();
     }
@@ -696,27 +738,12 @@ void ui_draw_status(const struct rect *r, const char *text) {
 }
 
 static void draw_wallpaper(int desktop_h) {
+    (void)desktop_h;
     if (!g_wallpaper.active || g_wallpaper.width <= 0 || g_wallpaper.height <= 0) {
-        sys_rect(0, 0, (int)SCREEN_WIDTH, desktop_h, g_theme.background);
+        sys_rect(0, 0, (int)SCREEN_WIDTH, (int)SCREEN_HEIGHT, g_theme.background);
         return;
     }
-
-    for (int y = 0; y < g_wallpaper.height; ++y) {
-        int y0 = (y * desktop_h) / g_wallpaper.height;
-        int y1 = ((y + 1) * desktop_h) / g_wallpaper.height;
-        if (y1 <= y0) {
-            y1 = y0 + 1;
-        }
-
-        for (int x = 0; x < g_wallpaper.width; ++x) {
-            int x0 = (x * (int)SCREEN_WIDTH) / g_wallpaper.width;
-            int x1 = ((x + 1) * (int)SCREEN_WIDTH) / g_wallpaper.width;
-            if (x1 <= x0) {
-                x1 = x0 + 1;
-            }
-            sys_rect(x0, y0, x1 - x0, y1 - y0, g_wallpaper.pixels[y][x]);
-        }
-    }
+    sys_gfx_blit8(g_wallpaper.pixels, g_wallpaper.width, g_wallpaper.height, 0, 0, 1);
 }
 
 static const char *app_caption(enum app_type type) {
