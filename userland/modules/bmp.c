@@ -16,7 +16,7 @@ static int32_t bmp_read_s32(const uint8_t *p) {
 }
 
 void bmp_palette_color(uint8_t index, uint8_t *r, uint8_t *g, uint8_t *b) {
-    static const uint8_t palette[20][3] = {
+    static const uint8_t ega16[16][3] = {
         {0, 0, 0},
         {0, 0, 170},
         {0, 170, 0},
@@ -33,29 +33,25 @@ void bmp_palette_color(uint8_t index, uint8_t *r, uint8_t *g, uint8_t *b) {
         {255, 85, 255},
         {255, 255, 85},
         {255, 255, 255},
-        {255, 170, 170},
-        {0, 136, 136},
-        {255, 170, 85},
-        {136, 0, 136}
     };
 
-    if (index < (uint8_t)(sizeof(palette) / sizeof(palette[0]))) {
-        *r = palette[index][0];
-        *g = palette[index][1];
-        *b = palette[index][2];
+    if (index < 16u) {
+        *r = ega16[index][0];
+        *g = ega16[index][1];
+        *b = ega16[index][2];
         return;
     }
 
-    *r = index;
-    *g = index;
-    *b = index;
+    *r = (uint8_t)((((unsigned)index >> 5) & 0x07u) * 255u / 7u);
+    *g = (uint8_t)((((unsigned)index >> 2) & 0x07u) * 255u / 7u);
+    *b = (uint8_t)(((unsigned)index & 0x03u) * 255u / 3u);
 }
 
 static uint8_t bmp_nearest_palette(uint8_t r, uint8_t g, uint8_t b) {
     uint32_t best_dist = 0xFFFFFFFFu;
     uint8_t best = 0;
 
-    for (uint8_t i = 0; i < 20u; ++i) {
+    for (int i = 0; i < 256; ++i) {
         uint8_t pr;
         uint8_t pg;
         uint8_t pb;
@@ -64,14 +60,14 @@ static uint8_t bmp_nearest_palette(uint8_t r, uint8_t g, uint8_t b) {
         int db;
         uint32_t dist;
 
-        bmp_palette_color(i, &pr, &pg, &pb);
+        bmp_palette_color((uint8_t)i, &pr, &pg, &pb);
         dr = (int)r - (int)pr;
         dg = (int)g - (int)pg;
         db = (int)b - (int)pb;
         dist = (uint32_t)(dr * dr + dg * dg + db * db);
         if (dist < best_dist) {
             best_dist = dist;
-            best = i;
+            best = (uint8_t)i;
         }
     }
 

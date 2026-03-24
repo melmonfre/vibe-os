@@ -2,9 +2,10 @@
 #define BMP_H
 
 #include <stdint.h>
+#include <userland/modules/include/image.h>
 
-#define BMP_MAX_TARGET_W 80
-#define BMP_MAX_TARGET_H 60
+#define BMP_MAX_TARGET_W IMAGE_MAX_TARGET_W
+#define BMP_MAX_TARGET_H IMAGE_MAX_TARGET_H
 
 void bmp_palette_color(uint8_t index, uint8_t *r, uint8_t *g, uint8_t *b);
 int bmp_decode_to_palette(const uint8_t *data, int size,

@@ -62,7 +62,7 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
     draw_window_frame(&tm->window, "TASKS", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, theme->window_bg);
     ui_draw_surface(&hero, ui_color_panel());
-    ui_draw_inset(&list, ui_color_canvas());
+    ui_draw_inset(&list, ui_color_window_bg());
     sys_text(hero.x + 6, hero.y + 6, theme->text, "Aplicacoes ativas");
     sys_text(hero.x + hero.w - 90, hero.y + 6, ui_color_muted(), "uptime / close");
 
@@ -74,7 +74,7 @@ void taskmgr_draw_window(struct taskmgr_state *tm,
 
         row = taskmgr_row_rect(tm, visible_index);
         close_button = taskmgr_close_button_rect(tm, visible_index);
-        ui_draw_inset(&row, ui_color_canvas());
+        ui_draw_inset(&row, ui_color_window_bg());
         ui_draw_button(&close_button, "Finalizar", UI_BUTTON_DANGER, 0);
 
         char line[64];

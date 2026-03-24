@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import PurePosixPath
+
+BYTES_PER_LINE = 12
+HEX_BYTES = tuple(f"0x{byte:02x}" for byte in range(256))
+XXD_PATH = shutil.which("xxd")
+
+
+def c_string(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def collect_parent_dirs(path: str):
+    parents = []
+    current = PurePosixPath(path).parent
+    while str(current) not in ("", ".", "/"):
+        parents.append(str(current))
+        current = current.parent
+    return list(reversed(parents))
+
+
+def write_line(handle, text: str = "") -> None:
+    handle.write(text)
+    handle.write("\n")
+
+
+def write_blob_array(handle, name: str, src_path: str, xxd_work_dir: str = None) -> None:
+    if XXD_PATH and xxd_work_dir is not None:
+        write_blob_array_xxd(handle, name, src_path, xxd_work_dir)
+        return
+
+    write_blob_array_python(handle, name, src_path)
+
+
+def write_blob_array_xxd(handle, name: str, src_path: str, xxd_work_dir: str) -> None:
+    work_path = os.path.join(xxd_work_dir, name)
+    copied_input = False
+
+    try:
+        try:
+            os.symlink(os.path.abspath(src_path), work_path)
+        except OSError:
+            shutil.copyfile(src_path, work_path)
+            copied_input = True
+
+        result = subprocess.run([XXD_PATH, "-i", name],
+                                cwd=xxd_work_dir,
+                                stdout=handle,
+                                stderr=subprocess.PIPE,
+                                text=True,
+                                encoding="utf-8")
+        if result.returncode != 0:
+            raise RuntimeError(f"xxd failed for {src_path}: {result.stderr.strip()}")
+    finally:
+        try:
+            os.unlink(work_path)
+        except FileNotFoundError:
+            pass
+
+    write_line(handle)
+
+
+def write_blob_array_python(handle, name: str, src_path: str) -> None:
+    write_line(handle, f"static const unsigned char {name}[] = {{")
+    wrote_any = False
+    remainder = b""
+
+    with open(src_path, "rb") as src:
+        while True:
+            chunk = src.read(65536)
+            if not chunk:
+                break
+            data = remainder + chunk
+            full_size = len(data) - (len(data) % BYTES_PER_LINE)
+
+            for offset in range(0, full_size, BYTES_PER_LINE):
+                if wrote_any:
+                    handle.write(",\n")
+                line = data[offset:offset + BYTES_PER_LINE]
+                handle.write("    ")
+                handle.write(", ".join(HEX_BYTES[byte] for byte in line))
+                wrote_any = True
+
+            remainder = data[full_size:]
+
+    if remainder:
+        if wrote_any:
+            handle.write(",\n")
+        handle.write("    ")
+        handle.write(", ".join(HEX_BYTES[byte] for byte in remainder))
+        wrote_any = True
+
+    if wrote_any:
+        handle.write("\n")
+    write_line(handle, "};")
+    write_line(handle)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--file", action="append", default=[],
+                        help="Install a file: /target/path=source/path")
+    parser.add_argument("--empty", action="append", default=[],
+                        help="Install an empty file at /target/path")
+    args = parser.parse_args()
+
+    files = []
+    seen_dirs = set()
+    ordered_dirs = []
+
+    def note_dirs(path: str):
+        for directory in collect_parent_dirs(path):
+            if directory not in seen_dirs:
+                seen_dirs.add(directory)
+                ordered_dirs.append(directory)
+
+    for spec in args.file:
+        dst, sep, src = spec.partition("=")
+        if sep == "" or not dst or not src:
+            raise SystemExit(f"invalid --file spec: {spec!r}")
+        note_dirs(dst)
+        files.append({
+            "dst": dst,
+            "src": src,
+            "size": os.path.getsize(src),
+            "array": f"g_asset_{len(files)}",
+        })
+
+    for dst in args.empty:
+        if not dst:
+            raise SystemExit("empty --empty path")
+        note_dirs(dst)
+        files.append({
+            "dst": dst,
+            "src": None,
+            "size": 0,
+            "array": f"g_asset_{len(files)}",
+        })
+
+    output_dir = os.path.dirname(args.output) or "."
+    os.makedirs(output_dir, exist_ok=True)
+
+    temp_path = None
+    try:
+        with tempfile.TemporaryDirectory(prefix=".asset-installer-xxd-", dir=output_dir) as xxd_work_dir:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=output_dir,
+                                             prefix=".asset-installer-", suffix=".tmp",
+                                             delete=False) as handle:
+                temp_path = handle.name
+
+                write_line(handle, "/* Auto-generated by tools/generate_asset_installer.py. */")
+                write_line(handle, '#include "vibe_bsdgame_shim.h"')
+                write_line(handle)
+                write_line(handle, "#include <lang/include/vibe_app_runtime.h>")
+                write_line(handle)
+                write_line(handle, "struct vibe_bsdgame_asset_entry {")
+                write_line(handle, "    const char *path;")
+                write_line(handle, "    const unsigned char *data;")
+                write_line(handle, "    unsigned int size;")
+                write_line(handle, "};")
+                write_line(handle)
+                write_line(handle, "static void vibe_bsdgame_install_dir(const char *path) {")
+                write_line(handle, "    struct vibe_app_stat stat_buf;")
+                write_line(handle)
+                write_line(handle, "    if (!path || path[0] == '\\0') {")
+                write_line(handle, "        return;")
+                write_line(handle, "    }")
+                write_line(handle, "    if (vibe_app_stat(path, &stat_buf) == 0 && stat_buf.is_dir) {")
+                write_line(handle, "        return;")
+                write_line(handle, "    }")
+                write_line(handle, "    (void)vibe_app_create_dir(path);")
+                write_line(handle, "}")
+                write_line(handle)
+                write_line(handle, "static void vibe_bsdgame_install_file(const struct vibe_bsdgame_asset_entry *entry) {")
+                write_line(handle, "    struct vibe_app_stat stat_buf;")
+                write_line(handle)
+                write_line(handle, "    if (!entry || !entry->path) {")
+                write_line(handle, "        return;")
+                write_line(handle, "    }")
+                write_line(handle, "    if (vibe_app_stat(entry->path, &stat_buf) == 0 && !stat_buf.is_dir && stat_buf.size >= 0) {")
+                write_line(handle, "        return;")
+                write_line(handle, "    }")
+                write_line(handle, "    (void)vibe_app_write_file(entry->path, entry->data, (int)entry->size);")
+                write_line(handle, "}")
+                write_line(handle)
+
+                for entry in files:
+                    if entry["src"] is None:
+                        write_line(handle, f"static const unsigned char {entry['array']}[] = {{")
+                        write_line(handle, "};")
+                        write_line(handle)
+                    else:
+                        write_blob_array(handle, entry["array"], entry["src"], xxd_work_dir)
+
+                write_line(handle)
+                write_line(handle, "static const struct vibe_bsdgame_asset_entry g_assets[] = {")
+                for entry in files:
+                    write_line(handle, f"    {{ {c_string(entry['dst'])}, {entry['array']}, {entry['size']}u }},")
+                write_line(handle, "};")
+                write_line(handle)
+                write_line(handle, "void vibe_bsdgame_install_assets(void) {")
+                for directory in ordered_dirs:
+                    write_line(handle, f"    vibe_bsdgame_install_dir({c_string(directory)});")
+                if ordered_dirs:
+                    write_line(handle)
+                write_line(handle, "    for (unsigned int i = 0; i < (unsigned int)(sizeof(g_assets) / sizeof(g_assets[0])); ++i) {")
+                write_line(handle, "        vibe_bsdgame_install_file(&g_assets[i]);")
+                write_line(handle, "    }")
+                write_line(handle, "}")
+                write_line(handle)
+
+            os.replace(temp_path, args.output)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+if __name__ == "__main__":
+    main()

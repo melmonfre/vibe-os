@@ -38,7 +38,6 @@
 #include <err.h>
 #include <signal.h>
 #include <stdlib.h>
-#include <termios.h>
 #include <unistd.h>
 
 volatile sig_atomic_t sig_caught = 0;
@@ -52,17 +51,10 @@ main(int argc, char *argv[])
 	int x, y, j;
 	long tcols, tlines;
 	const char *errstr;
-	struct termios term;
 	struct timespec sleeptime;
-	speed_t speed;
 	time_t delay = 0;
 	int ch;
 	int xpos[5], ypos[5];
-
-	/* set default delay based on terminal baud rate */
-	if (tcgetattr(STDOUT_FILENO, &term) == 0 &&
-	    (speed = cfgetospeed(&term)) > B9600)
-		delay = (speed / B9600) - 1;
 
 	while ((ch = getopt(argc, argv, "d:h")) != -1)
 		switch(ch) {

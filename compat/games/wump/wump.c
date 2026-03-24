@@ -39,8 +39,6 @@
  * would care to remember.
  */
 
-#include <sys/wait.h>
-
 #include <err.h>
 #include <fcntl.h>
 #include <paths.h>
@@ -862,11 +860,6 @@ int_compare(const void *a, const void *b)
 void
 instructions(void)
 {
-	const char *pager;
-	pid_t pid;
-	int status;
-	int fd;
-
 	/*
 	 * read the instructions file, if needed, and show the user how to
 	 * play this game!
@@ -874,34 +867,14 @@ instructions(void)
 	if (!getans("Instructions? (y-n) "))
 		return;
 
-	if ((fd = open(_PATH_WUMPINFO, O_RDONLY)) == -1) {
-		(void)printf(
-"Sorry, but the instruction file seems to have disappeared in a\n\
-puff of greasy black smoke! (poof)\n");
-		return;
-	}
-
-	if (!isatty(1))
-		pager = "/bin/cat";
-	else {
-		if (!(pager = getenv("PAGER")) || (*pager == 0))
-			pager = _PATH_PAGER;
-	}
-	switch (pid = fork()) {
-	case 0: /* child */
-		if (dup2(fd, 0) == -1)
-			err(1, "dup2");
-		(void)execl(_PATH_BSHELL, "sh", "-c", pager, (char *)NULL);
-		err(1, "exec sh -c %s", pager);
-		/* NOT REACHED */
-	case -1:
-		err(1, "fork");
-		/* NOT REACHED */
-	default:
-		(void)waitpid(pid, &status, 0);
-		close(fd);
-		break;
-	}
+	(void)printf(
+"\nHunt the Wumpus instructions:\n\
+- You stand in a cave of linked rooms.\n\
+- Nearby hazards are hinted by smells, bats and pits.\n\
+- Choose whether to move or shoot each turn.\n\
+- Shooting accepts a short list of room numbers for the arrow path.\n\
+- Hit the Wumpus before you run out of arrows.\n\
+- Avoid pits, bats and the Wumpus itself.\n\n");
 }
 
 void

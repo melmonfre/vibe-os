@@ -469,15 +469,15 @@ void space_invaders_draw_window(struct space_invaders_state *s, int active, int 
     int phase = (int)((s->tick_count / 12u) & 1u);
 
     draw_window_frame(&s->window, "ALIENS", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&body, ui_color_canvas());
+    ui_draw_surface(&body, ui_color_window_bg());
     ui_draw_surface(&topbar, ui_color_panel());
-    ui_draw_inset(&board, ui_color_canvas());
-    ui_draw_inset(&hud, ui_color_canvas());
-    ui_draw_inset(&stat1, ui_color_canvas());
-    ui_draw_inset(&stat2, ui_color_canvas());
-    ui_draw_inset(&stat3, ui_color_canvas());
-    ui_draw_inset(&help, ui_color_canvas());
-    ui_draw_inset(&status, ui_color_canvas());
+    ui_draw_inset(&board, ui_color_window_bg());
+    ui_draw_inset(&hud, ui_color_window_bg());
+    ui_draw_inset(&stat1, ui_color_window_bg());
+    ui_draw_inset(&stat2, ui_color_window_bg());
+    ui_draw_inset(&stat3, ui_color_window_bg());
+    ui_draw_inset(&help, ui_color_window_bg());
+    ui_draw_inset(&status, ui_color_window_bg());
     sys_text(topbar.x + 6, topbar.y + 5, ui_color_muted(), "Arcade assault");
     sys_rect(board.x + 1, board.y + 1, board.w - 2, board.h - 2, t->background);
 

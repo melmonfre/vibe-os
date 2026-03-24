@@ -164,12 +164,12 @@ void craft_draw_window(struct craft_state *state, int active,
     struct rect client = craft_client_rect(state);
 
     draw_window_frame(&state->window, "CRAFT", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&client, ui_color_canvas());
+    ui_draw_surface(&client, ui_color_window_bg());
 
     if (state->started) {
         craft_upstream_blit(client.x, client.y);
     } else {
-        ui_draw_inset(&client, ui_color_canvas());
+        ui_draw_inset(&client, ui_color_window_bg());
         sys_text(client.x + 10, client.y + 10, theme->text, state->status);
     }
 }

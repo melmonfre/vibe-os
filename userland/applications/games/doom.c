@@ -115,8 +115,8 @@ void doom_draw_window(struct doom_state *s, int active,
     struct rect cta = {body.x + 10, body.y + body.h - 20, body.w - 20, 14};
 
     draw_window_frame(&s->window, "DOOM", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&(struct rect){s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22}, ui_color_canvas());
-    ui_draw_inset(&body, ui_color_canvas());
+    ui_draw_surface(&(struct rect){s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22}, ui_color_window_bg());
+    ui_draw_inset(&body, ui_color_window_bg());
 
     sys_text(body.x + 8, body.y + 8, t->text, "Port completo linuxdoom-1.10");
     sys_text(body.x + 8, body.y + 22, t->text, "Engine original + camada I_* para VibeOS");

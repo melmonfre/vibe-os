@@ -53,7 +53,11 @@ COMPAT_SRCS := \
 	compat/src/posix/unistd.c \
 	compat/src/posix/time.c \
 	compat/src/posix/sched.c \
-	compat/src/posix/pthread.c
+	compat/src/posix/pthread.c \
+	compat/lib/libc/regex/regcomp.c \
+	compat/lib/libc/regex/regexec.c \
+	compat/lib/libc/regex/regfree.c \
+	compat/lib/libc/regex/regerror.c
 
 COMPAT_OBJS := $(COMPAT_SRCS:%.c=build/%.o)
 COMPAT_LIB := build/libcompat.a
@@ -63,9 +67,21 @@ CPU_ARCH_CFLAGS := -march=i586 -mtune=generic -mno-mmx -mno-sse -mno-sse2
 COMPAT_CFLAGS := -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie \
 	-fno-stack-protector -fno-builtin -nostdlib \
 	-Wall -Wextra -Werror \
-	-I. -Icompat/include -Iheaders -Ilang/include
+	-I. -Icompat/include -Icompat/lib/libc/regex -Iheaders -Ilang/include \
+	-D'DEF_WEAK(x)='
+COMPAT_REGEX_CFLAGS := $(COMPAT_CFLAGS) \
+	-Icompat/sys \
+	-D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809L -D__XPG_VISIBLE=700 -D__ISO_C_VISIBLE=2011 \
+	-D__mode_t=mode_t \
+	-Wno-error=sign-compare \
+	-Wno-error=maybe-uninitialized \
+	-Wno-error=unused-but-set-variable
 
 # Pattern rule for compat objects
+build/compat/lib/libc/regex/%.o: compat/lib/libc/regex/%.c | build
+	@mkdir -p $(dir $@)
+	$(CC) $(COMPAT_REGEX_CFLAGS) -c $< -o $@
+
 build/compat/%.o: compat/%.c | build
 	@mkdir -p $(dir $@)
 	$(CC) $(COMPAT_CFLAGS) -c $< -o $@

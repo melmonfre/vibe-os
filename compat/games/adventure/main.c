@@ -131,7 +131,6 @@ main(int argc, char *argv[])
 		case 0:			/* The restore worked fine */
 			yea = Start();
 			k = null;
-			unlink(argv[1]);/* Don't re-use the save */
 			goto l8;	/* Get where we're going */
 		case 1:		/* Couldn't open it */
 			errx(1, "can't open file");	/* So give up */

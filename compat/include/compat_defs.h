@@ -12,6 +12,8 @@ typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 typedef int ino_t;
 typedef int dev_t;
+typedef long long quad_t;
+typedef unsigned long long u_quad_t;
 typedef long int time_t;
 typedef int clockid_t;
 typedef char *__va_list;

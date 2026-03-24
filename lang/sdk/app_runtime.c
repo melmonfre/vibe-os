@@ -32,6 +32,8 @@ typedef struct FILE {
     int capacity;
     int dirty;
     int in_use;
+    int ungot_valid;
+    int ungot_char;
     char path[256];
 } FILE;
 
@@ -41,6 +43,7 @@ static void (*g_atexit_handlers[16])(void);
 static int g_atexit_count = 0;
 static FILE g_file_pool[VIBE_APP_MAX_OPEN_FILES];
 static int g_current_thread_id = 0;
+static int g_next_file_fd = 3;
 
 #define VIBE_APP_MAX_THREADS 8
 static vibe_app_thread_t g_thread_pool[VIBE_APP_MAX_THREADS];
@@ -126,6 +129,7 @@ void vibe_app_runtime_init(const struct vibe_app_context *ctx) {
     memset(g_atexit_handlers, 0, sizeof(g_atexit_handlers));
     memset(g_file_pool, 0, sizeof(g_file_pool));
     memset(g_thread_pool, 0, sizeof(g_thread_pool));
+    g_next_file_fd = 3;
     if (ctx) {
         heap_init(ctx->heap_base, ctx->heap_size);
         if (ctx->host && ctx->host->write_debug) {
@@ -836,9 +840,9 @@ char *strchr(const char *text, int c) {
 
 /* ============ STDIO Implementation ============ */
 
-static FILE _stdin = {0, VIBE_FILE_FLAG_READ | VIBE_FILE_FLAG_CONSOLE, 0, 0, 0, 0, 0, 0, 0, 1, {0}};
-static FILE _stdout = {1, VIBE_FILE_FLAG_WRITE | VIBE_FILE_FLAG_CONSOLE, 0, 0, 0, 0, 0, 0, 0, 1, {0}};
-static FILE _stderr = {2, VIBE_FILE_FLAG_WRITE | VIBE_FILE_FLAG_CONSOLE, 0, 0, 0, 0, 0, 0, 0, 1, {0}};
+static FILE _stdin = {0, VIBE_FILE_FLAG_READ | VIBE_FILE_FLAG_CONSOLE, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, {0}};
+static FILE _stdout = {1, VIBE_FILE_FLAG_WRITE | VIBE_FILE_FLAG_CONSOLE, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, {0}};
+static FILE _stderr = {2, VIBE_FILE_FLAG_WRITE | VIBE_FILE_FLAG_CONSOLE, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, {0}};
 
 FILE *stdin = &_stdin;
 FILE *stdout = &_stdout;
@@ -861,14 +865,66 @@ static int vibe_copy_limited(char *dst, int max_len, const char *src) {
     return i;
 }
 
+static int vibe_file_reserve(FILE *f, int needed);
+
 static FILE *vibe_alloc_file(void) {
     for (int i = 0; i < VIBE_APP_MAX_OPEN_FILES; ++i) {
         if (!g_file_pool[i].in_use) {
             memset(&g_file_pool[i], 0, sizeof(g_file_pool[i]));
             g_file_pool[i].in_use = 1;
+            g_file_pool[i].fd = g_next_file_fd++;
             return &g_file_pool[i];
         }
     }
+    return 0;
+}
+
+static void vibe_file_clear_pushback(FILE *f) {
+    if (!f) {
+        return;
+    }
+    f->ungot_valid = 0;
+    f->ungot_char = 0;
+}
+
+static int vibe_load_file_contents(FILE *f, const char *filename) {
+    struct vibe_app_stat stat_buf;
+    int fd;
+
+    if (!f || !filename) {
+        return -1;
+    }
+    if (vibe_app_stat(filename, &stat_buf) != 0) {
+        return -1;
+    }
+    if (stat_buf.is_dir) {
+        return -1;
+    }
+    if (stat_buf.size > 0 && vibe_file_reserve(f, stat_buf.size) != 0) {
+        return -1;
+    }
+
+    fd = vibe_app_open(filename, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    f->size = 0;
+    while (f->size < stat_buf.size) {
+        int chunk = stat_buf.size - f->size;
+        int rc;
+
+        if (chunk > 256) {
+            chunk = 256;
+        }
+        rc = vibe_app_read(fd, f->buf + f->size, chunk);
+        if (rc <= 0) {
+            (void)vibe_app_close(fd);
+            return -1;
+        }
+        f->size += rc;
+    }
+    (void)vibe_app_close(fd);
     return 0;
 }
 
@@ -1114,8 +1170,6 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list ap) {
 FILE *fopen(const char *filename, const char *mode) {
     FILE *f;
     int flags = 0;
-    const char *src = 0;
-    int size = 0;
 
     if (!filename || vibe_parse_mode(mode, &flags) != 0) {
         return 0;
@@ -1128,17 +1182,9 @@ FILE *fopen(const char *filename, const char *mode) {
     vibe_copy_limited(f->path, (int)sizeof(f->path), filename);
 
     if ((flags & VIBE_FILE_FLAG_APPEND) || mode[0] == 'r' || strchr(mode, '+')) {
-        if (vibe_app_read_file(filename, &src, &size) == 0 && src && size >= 0) {
-            if (size > 0 && vibe_file_reserve(f, size) != 0) {
-                f->in_use = 0;
-                return 0;
-            }
-            if (size > 0) {
-                memcpy(f->buf, src, (size_t)size);
-            }
-            f->size = size;
+        if (vibe_load_file_contents(f, filename) == 0) {
             if (flags & VIBE_FILE_FLAG_APPEND) {
-                f->pos = size;
+                f->pos = f->size;
             }
         } else if (mode[0] == 'r') {
             f->in_use = 0;
@@ -1171,12 +1217,18 @@ int fclose(FILE *stream) {
     free(stream->buf);
     stream->buf = 0;
     stream->in_use = 0;
+    vibe_file_clear_pushback(stream);
     return 0;
 }
 
 int fflush(FILE *stream) {
     if (!stream) {
-        return -1;
+        for (int i = 0; i < VIBE_APP_MAX_OPEN_FILES; ++i) {
+            if (g_file_pool[i].in_use && vibe_file_flush(&g_file_pool[i]) != 0) {
+                return -1;
+            }
+        }
+        return 0;
     }
     return vibe_file_flush(stream);
 }
@@ -1184,23 +1236,37 @@ int fflush(FILE *stream) {
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
     size_t total;
     size_t available;
+    unsigned char *out = (unsigned char *)ptr;
+    size_t copied = 0u;
 
     if (!ptr || !stream || size == 0u || nmemb == 0u || vibe_is_console_file(stream)) {
         return 0;
     }
     total = size * nmemb;
+    if (stream->ungot_valid && total > 0u) {
+        out[copied++] = (unsigned char)stream->ungot_char;
+        stream->ungot_valid = 0;
+        if (copied == total) {
+            stream->eof = 0;
+            return copied / size;
+        }
+    }
     if (stream->pos >= stream->size) {
         stream->eof = 1;
-        return 0;
+        return copied / size;
     }
     available = (size_t)(stream->size - stream->pos);
+    total -= copied;
     if (total > available) {
         total = available;
         stream->eof = 1;
+    } else {
+        stream->eof = 0;
     }
-    memcpy(ptr, stream->buf + stream->pos, total);
+    memcpy(out + copied, stream->buf + stream->pos, total);
     stream->pos += (long)total;
-    return total / size;
+    copied += total;
+    return copied / size;
 }
 
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
@@ -1240,6 +1306,15 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
 
 int fgetc(FILE *stream) {
     unsigned char c;
+
+    if (!stream) {
+        return EOF;
+    }
+    if (stream->ungot_valid) {
+        stream->ungot_valid = 0;
+        stream->eof = 0;
+        return stream->ungot_char;
+    }
     if (stream == stdin) {
         return vibe_app_poll_key();
     }
@@ -1250,11 +1325,16 @@ int fgetc(FILE *stream) {
 }
 
 int fputc(int c, FILE *stream) {
+    unsigned char ch = (unsigned char)c;
+
+    if (!stream) {
+        return EOF;
+    }
     if (stream == stdout || stream == stderr) {
         vibe_app_console_putc((char)c);
         return c;
     }
-    return EOF;
+    return fwrite(&ch, 1u, 1u, stream) == 1u ? c : EOF;
 }
 
 char *fgets(char *s, int size, FILE *stream) {
@@ -1282,6 +1362,8 @@ char *fgets(char *s, int size, FILE *stream) {
 }
 
 int fputs(const char *s, FILE *stream) {
+    size_t len;
+
     if (!s || !stream) {
         return EOF;
     }
@@ -1289,7 +1371,8 @@ int fputs(const char *s, FILE *stream) {
         vibe_app_console_write(s);
         return 0;
     }
-    return EOF;
+    len = strlen(s);
+    return fwrite(s, 1u, len, stream) == len ? 0 : EOF;
 }
 
 int puts(const char *s) {
@@ -1304,12 +1387,13 @@ int puts(const char *s) {
 void clearerr(FILE *stream) {
     if (stream) {
         stream->error = 0;
+        stream->eof = 0;
     }
 }
 
 int feof(FILE *stream) {
     if (stream) {
-        return (stream->flags & 1) ? 1 : 0;
+        return stream->eof;
     }
     return 0;
 }
@@ -1347,12 +1431,13 @@ int fseek(FILE *stream, long offset, int whence) {
     }
     stream->pos = next;
     stream->eof = 0;
+    vibe_file_clear_pushback(stream);
     return 0;
 }
 
 long ftell(FILE *stream) {
     if (stream) {
-        return stream->pos;
+        return stream->ungot_valid ? (stream->pos - 1) : stream->pos;
     }
     return -1;
 }
@@ -1373,14 +1458,45 @@ int putchar(int c) {
 }
 
 int getc(FILE *stream) {
-    if (stream == stdin) {
-        return vibe_app_poll_key();
-    }
-    return EOF;
+    return fgetc(stream);
 }
 
 int putc(int c, FILE *stream) {
     return fputc(c, stream);
+}
+
+int ungetc(int c, FILE *stream) {
+    if (!stream || c == EOF || stream->ungot_valid) {
+        return EOF;
+    }
+    stream->ungot_valid = 1;
+    stream->ungot_char = (unsigned char)c;
+    stream->eof = 0;
+    return c;
+}
+
+int fileno(FILE *stream) {
+    if (!stream) {
+        return -1;
+    }
+    return stream->fd;
+}
+
+int setvbuf(FILE *stream, char *buf, int mode, size_t size) {
+    (void)stream;
+    (void)buf;
+    (void)mode;
+    (void)size;
+    return 0;
+}
+
+int fpurge(FILE *stream) {
+    if (!stream) {
+        return -1;
+    }
+    vibe_file_clear_pushback(stream);
+    stream->eof = 0;
+    return 0;
 }
 
 unsigned int sleep(unsigned int seconds) {

@@ -4,23 +4,40 @@
 #include <userland/modules/include/shell.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h>
+#include <kernel/bootinfo.h>
 #include <kernel/drivers/storage/ata.h>
 
 #define BOOTSTRAP_STORAGE_SMOKE_SECTOR (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT - 1u)
 #define BOOTSTRAP_STORAGE_SMOKE_SIZE 512u
 
 static void bootstrap_print_banner(void) {
+    struct userland_launch_info info;
+
     console_write("VibeOS bootstrap init\n");
     console_write("kernel pequeno, apps externas via AppFS\n");
     console_write("userland.app carregada automaticamente no boot\n");
     console_write("use 'help' para listar comandos e apps modulares\n");
     console_write("atalhos graficos: startx, edit, nano\n");
+    if (sys_launch_info(&info) == 0) {
+        if ((info.boot_flags & BOOTINFO_FLAG_BOOT_SAFE_MODE) != 0u) {
+            console_write("boot mode: safe mode\n");
+        } else if ((info.boot_flags & BOOTINFO_FLAG_BOOT_RESCUE_SHELL) != 0u) {
+            console_write("boot mode: rescue shell\n");
+        }
+    }
 }
 
 static int bootstrap_run_startup_apps(void) {
     char *argv[2];
     int rc;
+    struct userland_launch_info info;
     extern void kernel_debug_puts(const char *);
+
+    if (sys_launch_info(&info) == 0 &&
+        (info.boot_flags & BOOTINFO_FLAG_BOOT_RESCUE_SHELL) != 0u) {
+        kernel_debug_puts("init: rescue shell requested, skipping userland app\n");
+        return -2;
+    }
 
     argv[0] = "userland";
     argv[1] = 0;
@@ -85,7 +102,11 @@ __attribute__((section(".entry"))) void userland_entry(void) {
 
     rc = bootstrap_run_startup_apps();
     if (rc != 0) {
-        console_write("init: fallback para shell embutido userland/modules\n");
+        if (rc == -2) {
+            console_write("init: rescue shell builtin ativa\n");
+        } else {
+            console_write("init: fallback para shell embutido userland/modules\n");
+        }
     }
     kernel_debug_puts("init: bootstrap shell active\n");
     shell_start_ready();

@@ -147,10 +147,13 @@ CRAFT_TEXTURE_SRC := userland/applications/games/craft/upstream/textures/texture
 CRAFT_FONT_SRC := userland/applications/games/craft/upstream/textures/font.png
 CRAFT_SKY_SRC := userland/applications/games/craft/upstream/textures/sky.png
 CRAFT_SIGN_SRC := userland/applications/games/craft/upstream/textures/sign.png
+WALLPAPER_SRC := assets/wallpaper.png
+BOOTLOADER_BG_SRC := assets/bootloader_background.png
 CRAFT_TEXTURE_IMAGE_LBA := 30000
 CRAFT_FONT_IMAGE_LBA := 30128
 CRAFT_SKY_IMAGE_LBA := 30256
 CRAFT_SIGN_IMAGE_LBA := 30416
+WALLPAPER_IMAGE_LBA := 30720
 IMAGE_ASSET_MANIFEST := $(BUILD_DIR)/image-assets.manifest
 DATA_IMAGE := $(BUILD_DIR)/data-partition.img
 DATA_IMAGE_MANIFEST := $(BUILD_DIR)/data-partition.manifest
@@ -177,6 +180,7 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/modules/console.c \
 	$(USERLAND_DIR)/modules/fs.c \
 	$(USERLAND_DIR)/modules/bmp.c \
+	$(USERLAND_DIR)/modules/image.c \
 	$(USERLAND_DIR)/modules/lang_loader.c \
 	$(USERLAND_DIR)/modules/utils.c \
 	$(USERLAND_DIR)/modules/syscalls.c \
@@ -243,6 +247,7 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/applications/games/craft/craft_auth_compat.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_client_compat.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_db_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/upstream/deps/lodepng/lodepng.c \
 	$(USERLAND_DIR)/applications/games/craft/world.c \
 	$(USERLAND_DIR)/applications/games/craft/noise.c \
 	$(USERLAND_DIR)/applications/games/doom_port/doom_port_main.c \
@@ -256,7 +261,6 @@ ifeq ($(CRAFT_UPSTREAM_EXPERIMENTAL),1)
 USERLAND_SRCS += \
 	$(USERLAND_DIR)/applications/games/craft/craft_math_compat.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_util_compat.c \
-	$(USERLAND_DIR)/applications/games/craft/upstream/deps/lodepng/lodepng.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_upstream_map.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_upstream_matrix.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_upstream_ring.c \
@@ -427,6 +431,7 @@ KERNEL_ELF := $(BUILD_DIR)/kernel.elf
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 USERLAND_MAIN_ELF := $(BUILD_DIR)/userland-main.elf
 USERLAND_MAIN_BIN := $(BUILD_DIR)/userland-main.bin
+BOOTLOADER_BG_BIN := $(BUILD_DIR)/bootloader-bg.bin
 IMAGE := $(BUILD_DIR)/boot.img
 
 CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
@@ -538,6 +543,7 @@ DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/modules/console.c \
 	$(USERLAND_DIR)/modules/fs.c \
 	$(USERLAND_DIR)/modules/bmp.c \
+	$(USERLAND_DIR)/modules/image.c \
 	$(USERLAND_DIR)/modules/lang_loader.c \
 	$(USERLAND_DIR)/modules/utils.c \
 	$(USERLAND_DIR)/modules/syscalls.c \
@@ -571,6 +577,7 @@ DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/applications/games/craft/craft_auth_compat.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_client_compat.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_db_compat.c \
+	$(USERLAND_DIR)/applications/games/craft/upstream/deps/lodepng/lodepng.c \
 	$(USERLAND_DIR)/applications/games/craft/world.c \
 	$(USERLAND_DIR)/applications/games/craft/noise.c \
 	$(USERLAND_DIR)/applications/games/doom_port/doom_port_main.c \
@@ -584,7 +591,6 @@ ifeq ($(CRAFT_UPSTREAM_EXPERIMENTAL),1)
 DESKTOP_RUNTIME_EXTRA_SRCS += \
 	$(USERLAND_DIR)/applications/games/craft/craft_math_compat.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_util_compat.c \
-	$(USERLAND_DIR)/applications/games/craft/upstream/deps/lodepng/lodepng.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_upstream_map.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_upstream_matrix.c \
 	$(USERLAND_DIR)/applications/games/craft/craft_upstream_ring.c \
@@ -697,6 +703,48 @@ FALSE_APP_BIN := $(BUILD_DIR)/ported/false.app
 PRINTF_APP_BIN := $(BUILD_DIR)/ported/printf.app
 SED_APP_BIN := $(BUILD_DIR)/ported/sed.app
 PORTED_APPS_STAMP := $(BUILD_DIR)/.ported_apps.stamp
+ADVENTURE_APP_BIN := $(BUILD_DIR)/ported/adventure.app
+ARITHMETIC_APP_BIN := $(BUILD_DIR)/ported/arithmetic.app
+ATC_APP_BIN := $(BUILD_DIR)/ported/atc.app
+BACKGAMMON_APP_BIN := $(BUILD_DIR)/ported/backgammon.app
+BANNER_APP_BIN := $(BUILD_DIR)/ported/banner.app
+BCD_APP_BIN := $(BUILD_DIR)/ported/bcd.app
+BATTLESTAR_APP_BIN := $(BUILD_DIR)/ported/battlestar.app
+BOGGLE_APP_BIN := $(BUILD_DIR)/ported/boggle.app
+BS_APP_BIN := $(BUILD_DIR)/ported/bs.app
+CAESAR_APP_BIN := $(BUILD_DIR)/ported/caesar.app
+CANFIELD_APP_BIN := $(BUILD_DIR)/ported/canfield.app
+CRIBBAGE_APP_BIN := $(BUILD_DIR)/ported/cribbage.app
+FACTOR_APP_BIN := $(BUILD_DIR)/ported/factor.app
+FISH_APP_BIN := $(BUILD_DIR)/ported/fish.app
+FORTUNE_APP_BIN := $(BUILD_DIR)/ported/fortune.app
+GOMOKU_APP_BIN := $(BUILD_DIR)/ported/gomoku.app
+GRDC_APP_BIN := $(BUILD_DIR)/ported/grdc.app
+HACK_APP_BIN := $(BUILD_DIR)/ported/hack.app
+HANGMAN_APP_BIN := $(BUILD_DIR)/ported/hangman.app
+MILLE_APP_BIN := $(BUILD_DIR)/ported/mille.app
+MONOP_APP_BIN := $(BUILD_DIR)/ported/monop.app
+MORSE_APP_BIN := $(BUILD_DIR)/ported/morse.app
+NUMBER_APP_BIN := $(BUILD_DIR)/ported/number.app
+PHANTASIA_APP_BIN := $(BUILD_DIR)/ported/phantasia.app
+PIG_APP_BIN := $(BUILD_DIR)/ported/pig.app
+POM_APP_BIN := $(BUILD_DIR)/ported/pom.app
+PPT_APP_BIN := $(BUILD_DIR)/ported/ppt.app
+PRIMES_APP_BIN := $(BUILD_DIR)/ported/primes.app
+QUIZ_APP_BIN := $(BUILD_DIR)/ported/quiz.app
+RAIN_APP_BIN := $(BUILD_DIR)/ported/rain.app
+RANDOM_APP_BIN := $(BUILD_DIR)/ported/random.app
+ROBOTS_APP_BIN := $(BUILD_DIR)/ported/robots.app
+SAIL_APP_BIN := $(BUILD_DIR)/ported/sail.app
+SNAKE_BSD_APP_BIN := $(BUILD_DIR)/ported/snake-bsd.app
+TEACHGAMMON_APP_BIN := $(BUILD_DIR)/ported/teachgammon.app
+TETRIS_BSD_APP_BIN := $(BUILD_DIR)/ported/tetris-bsd.app
+TREK_APP_BIN := $(BUILD_DIR)/ported/trek.app
+WARGAMES_APP_BIN := $(BUILD_DIR)/ported/wargames.app
+WORM_APP_BIN := $(BUILD_DIR)/ported/worm.app
+WORMS_APP_BIN := $(BUILD_DIR)/ported/worms.app
+WUMP_APP_BIN := $(BUILD_DIR)/ported/wump.app
+BSD_GAMES_APPS_STAMP := $(BUILD_DIR)/.bsd_games_apps.stamp
 
 $(shell mkdir -p $(APP_CATALOG_GENERATED_DIR))
 $(shell $(PYTHON) tools/generate_app_catalog.py --manifest $(APP_CATALOG_MANIFEST) --mk $(APP_CATALOG_GENERATED_MK) --header $(APP_CATALOG_GENERATED_H))
@@ -766,6 +814,13 @@ $(STAGE2_BIN): $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
 		echo "Erro: stage2 excede a janela reservada antes do kernel ($$stage2_sectors setores)."; \
 		exit 1; \
 	fi
+
+$(BOOTLOADER_BG_BIN): $(BOOTLOADER_BG_SRC) tools/build_boot_palette_asset.py | $(BUILD_DIR)
+	$(PYTHON) tools/build_boot_palette_asset.py \
+		--input $(BOOTLOADER_BG_SRC) \
+		--output $@ \
+		--width 80 \
+		--height 60
 
 $(BOOT_BIN): $(BOOT_DIR)/stage1.asm $(STAGE2_BIN) | $(BUILD_DIR)
 	@stage2_sectors=$$((($$(wc -c < $(STAGE2_BIN)) + 511) / 512)); \
@@ -1029,7 +1084,24 @@ $(PORTED_APPS_STAMP): $(COMPAT_LIB) Build.ported.mk lang/sdk/app_entry.c lang/sd
 
 $(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(SED_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
 
-$(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC)
+$(BSD_GAMES_APPS_STAMP): $(COMPAT_LIB) Build.bsdgames.mk lang/sdk/app_entry.c lang/sdk/app_runtime.c lang/include/vibe_app.h tools/patch_app_header.py \
+	applications/ported/bsdgames/vibe_bsdgame_main.c applications/ported/bsdgames/vibe_bsdgame_compat.c applications/ported/bsdgames/vibe_bsdgame_shim.h
+	@mkdir -p $(dir $@)
+	$(MAKE) -j1 -f Build.bsdgames.mk \
+		CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NM="$(NM)" AR="$(AR)" RANLIB="$(RANLIB)" \
+		bsdgames-all
+	@touch $@
+
+$(ADVENTURE_APP_BIN) $(ARITHMETIC_APP_BIN) $(ATC_APP_BIN) $(BACKGAMMON_APP_BIN) $(BANNER_APP_BIN) $(BCD_APP_BIN) \
+$(BATTLESTAR_APP_BIN) $(BOGGLE_APP_BIN) $(BS_APP_BIN) $(CAESAR_APP_BIN) $(CANFIELD_APP_BIN) \
+$(CRIBBAGE_APP_BIN) $(FACTOR_APP_BIN) $(FISH_APP_BIN) $(FORTUNE_APP_BIN) $(GOMOKU_APP_BIN) \
+$(GRDC_APP_BIN) $(HACK_APP_BIN) $(HANGMAN_APP_BIN) $(MILLE_APP_BIN) $(MONOP_APP_BIN) $(MORSE_APP_BIN) \
+$(NUMBER_APP_BIN) $(PHANTASIA_APP_BIN) $(PIG_APP_BIN) $(POM_APP_BIN) $(PPT_APP_BIN) \
+$(PRIMES_APP_BIN) $(QUIZ_APP_BIN) $(RAIN_APP_BIN) $(RANDOM_APP_BIN) $(ROBOTS_APP_BIN) $(SAIL_APP_BIN) \
+$(SNAKE_BSD_APP_BIN) $(TEACHGAMMON_APP_BIN) $(TETRIS_BSD_APP_BIN) $(TREK_APP_BIN) \
+$(WARGAMES_APP_BIN) $(WORM_APP_BIN) $(WORMS_APP_BIN) $(WUMP_APP_BIN): $(BSD_GAMES_APPS_STAMP)
+
+$(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC) $(WALLPAPER_SRC)
 	$(PYTHON) tools/build_data_partition.py \
 		--image $@ \
 		--image-total-sectors $(DATA_PARTITION_SECTORS) \
@@ -1043,6 +1115,7 @@ $(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FON
 		--asset "$(CRAFT_FONT_SRC):$(CRAFT_FONT_IMAGE_LBA):font.png" \
 		--asset "$(CRAFT_SKY_SRC):$(CRAFT_SKY_IMAGE_LBA):sky.png" \
 		--asset "$(CRAFT_SIGN_SRC):$(CRAFT_SIGN_IMAGE_LBA):sign.png" \
+		--asset "$(WALLPAPER_SRC):$(WALLPAPER_IMAGE_LBA):wallpaper.png" \
 		$(LANG_APP_BINS)
 	@cp $(DATA_IMAGE_MANIFEST) $(IMAGE_ASSET_MANIFEST)
 
@@ -1061,7 +1134,7 @@ $(BOOT_POLICY_MANIFEST): $(KERNEL_BIN) $(STAGE2_BIN) $(DATA_IMAGE)
 	@mkdir -p $(dir $@)
 	@printf "# vibeOS USB boot/loading strategy\nbios_disk_transport=edd-int13\nboot_partition_fs=fat32\nstage2_path=/STAGE2.BIN\nkernel_path=/KERNEL.BIN\nruntime_storage_probe=ahci-then-ata\ndata_volume_resolution=mbr-data-partition-with-raw-layout-fallback\nusb_scope=phase4-relies-on-bios-mass-storage-before-native-usb-service\n" > $@
 
-$(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOOT_VOLUME_MANIFEST) $(BOOT_POLICY_MANIFEST)
+$(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOOT_VOLUME_MANIFEST) $(BOOT_POLICY_MANIFEST) $(BOOTLOADER_BG_BIN)
 	$(PYTHON) tools/build_partitioned_image.py \
 		--image $@ \
 		--mbr $(MBR_BIN) \
@@ -1079,6 +1152,7 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOO
 		--data-partition-image $(DATA_IMAGE) \
 		--boot-file "$(KERNEL_BIN)::/KERNEL.BIN" \
 		--boot-file "$(STAGE2_BIN)::/STAGE2.BIN" \
+		--boot-file "$(BOOTLOADER_BG_BIN)::/VIBEBG.BIN" \
 		--boot-file "$(BOOT_VOLUME_MANIFEST)::/LAYOUT.TXT" \
 		--boot-file "$(BOOT_POLICY_MANIFEST)::/BOOTPOLICY.TXT" \
 		--boot-file "$(DATA_IMAGE_MANIFEST)::/DATAINFO.TXT"

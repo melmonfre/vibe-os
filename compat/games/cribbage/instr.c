@@ -30,49 +30,23 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/wait.h>
-
 #include <err.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <paths.h>
+#include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 
 #include "pathnames.h"
 
 void
 instructions(void)
 {
-	int pstat;
-	int fd;
-	pid_t pid;
-	const char *pager;
+	FILE *fp;
+	char line[256];
 
-	if ((fd = open(_PATH_INSTR, O_RDONLY)) == - 1)
+	if ((fp = fopen(_PATH_INSTR, "r")) == NULL)
 		errx(1, "can't open %s", _PATH_INSTR);
 
-	switch (pid = vfork()) {
-	case -1:
-		err(1, "vfork");
-	case 0:
-		if (!isatty(1))
-			pager = "/bin/cat";
-		else {
-			if (!(pager = getenv("PAGER")) || (*pager == 0))
-				pager = _PATH_MORE;
-		}
-		if (dup2(fd, 0) == -1)
-			err(1, "dup2");
-		execl(_PATH_BSHELL, "sh", "-c", pager, (char *)NULL);
-		err(1, "exec sh -c %s", pager);
-	default:
-		do {
-			pid = waitpid(pid, &pstat, 0);
-		} while (pid == -1 && errno == EINTR);
-		close(fd);
-		if (pid == -1 || WEXITSTATUS(pstat))
-			exit(1);
-		break;
+	while (fgets(line, sizeof(line), fp) != NULL) {
+		(void)fputs(line, stdout);
 	}
+	(void)fclose(fp);
 }

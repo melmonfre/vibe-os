@@ -37,7 +37,6 @@
 
 #include <assert.h>
 #include <ctype.h>
-#include <dirent.h>
 #include <err.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -601,24 +600,34 @@ all_forts(FILEDESC *fp, char *offensive)
 int
 add_dir(FILEDESC *fp)
 {
-	DIR		*dir;
-	struct dirent  *dirent;
 	FILEDESC	*tailp;
 	char		*name;
+	static const char *const fortune_files[] = {
+		"fortunes",
+		"fortunes-o",
+		"fortunes2",
+		"fortunes2-o",
+		"limerick",
+		"recipes",
+		"startrek",
+		"zippy",
+		NULL
+	};
+	const char *const *entry;
 
 	(void) close(fp->fd);
 	fp->fd = -1;
-	if ((dir = opendir(fp->path)) == NULL) {
-		perror(fp->path);
+	if (strcmp(fp->path, FORTDIR) != 0) {
+		(void) fprintf(stderr,
+		    "fortune: %s: directory scan unsupported in this port.\n",
+		    fp->path);
 		return 0;
 	}
 	tailp = NULL;
 	DPRINTF(1, (stderr, "adding dir \"%s\"\n", fp->path));
 	fp->num_children = 0;
-	while ((dirent = readdir(dir)) != NULL) {
-		if (dirent->d_namlen == 0)
-			continue;
-		name = copy(dirent->d_name, NULL);
+	for (entry = fortune_files; *entry != NULL; ++entry) {
+		name = copy((char *)*entry, NULL);
 		if (add_file(NO_PROB, name, fp->path, &fp->child, &tailp, fp))
 			fp->num_children++;
 		else
@@ -627,10 +636,8 @@ add_dir(FILEDESC *fp)
 	if (fp->num_children == 0) {
 		(void) fprintf(stderr,
 		    "fortune: %s: No fortune files in directory.\n", fp->path);
-		closedir(dir);
 		return 0;
 	}
-	closedir(dir);
 	return 1;
 }
 

@@ -1,6 +1,6 @@
 #include <userland/modules/include/ui.h>
-#include <userland/modules/include/bmp.h>
 #include <userland/modules/include/fs.h>
+#include <userland/modules/include/image.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/terminal.h>
 #include <userland/modules/include/dirty_rects.h>
@@ -18,10 +18,11 @@ static int g_ui_loading_settings = 0;
 static struct {
     int active;
     int source_node;
+    int explicit_none;
     int width;
     int height;
-    uint8_t pixels[BMP_MAX_TARGET_H][BMP_MAX_TARGET_W];
-} g_wallpaper = {0, -1, 0, 0, {{0}}};
+    uint8_t pixels[IMAGE_MAX_TARGET_H][IMAGE_MAX_TARGET_W];
+} g_wallpaper = {0, -1, 0, 0, 0, {{0}}};
 
 #define TASKBAR_HEIGHT 22
 #define START_MENU_WIDTH 336
@@ -32,6 +33,9 @@ static struct {
 #define START_MENU_ITEM_H 30
 #define START_MENU_ITEM_STEP 34
 #define UI_SETTINGS_PATH "/config/ui.cfg"
+
+static void ui_save_settings(void);
+
 static void ui_build_desktop_palette(uint8_t *palette) {
     static const uint8_t ega16[16][3] = {
         {0x00u, 0x00u, 0x00u},
@@ -140,6 +144,52 @@ static void ui_append_kv_u32(char *buf, const char *key, uint32_t value, int max
     str_append(buf, "\n", max_len);
 }
 
+static void ui_wallpaper_reset(int explicit_none) {
+    g_wallpaper.active = 0;
+    g_wallpaper.source_node = -1;
+    g_wallpaper.explicit_none = explicit_none;
+    g_wallpaper.width = 0;
+    g_wallpaper.height = 0;
+}
+
+static int ui_wallpaper_set_from_node_internal(int node, int persist) {
+    int width = 0;
+    int height = 0;
+
+    if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir) {
+        return -1;
+    }
+    if (image_decode_node_to_palette(node,
+                                     &g_wallpaper.pixels[0][0],
+                                     IMAGE_MAX_TARGET_W,
+                                     IMAGE_MAX_TARGET_W,
+                                     IMAGE_MAX_TARGET_H,
+                                     &width,
+                                     &height) != 0) {
+        return -1;
+    }
+
+    g_wallpaper.active = 1;
+    g_wallpaper.source_node = node;
+    g_wallpaper.explicit_none = 0;
+    g_wallpaper.width = width;
+    g_wallpaper.height = height;
+    if (persist && !g_ui_loading_settings) {
+        ui_save_settings();
+    }
+    return 0;
+}
+
+static int ui_try_set_default_wallpaper(void) {
+    int node = fs_resolve("/wallpaper.png");
+
+    if (node < 0) {
+        ui_wallpaper_reset(0);
+        return -1;
+    }
+    return ui_wallpaper_set_from_node_internal(node, 0);
+}
+
 static void ui_save_settings(void) {
     char text[256];
     char wallpaper[80];
@@ -152,6 +202,8 @@ static void ui_save_settings(void) {
     wallpaper[0] = '\0';
     if (g_wallpaper.source_node >= 0) {
         fs_build_path(g_wallpaper.source_node, wallpaper, (int)sizeof(wallpaper));
+    } else if (g_wallpaper.explicit_none) {
+        str_copy_limited(wallpaper, "@none", (int)sizeof(wallpaper));
     }
 
     ui_append_kv_u32(text, "background=", g_theme.background, (int)sizeof(text));
@@ -240,13 +292,17 @@ static void ui_load_settings(void) {
 
     g_theme = loaded;
     if (clear_wallpaper) {
-        ui_wallpaper_clear();
+        ui_wallpaper_reset(0);
+        (void)ui_try_set_default_wallpaper();
+    } else if (str_eq(wallpaper, "@none")) {
+        ui_wallpaper_reset(1);
     } else {
         int node = fs_resolve(wallpaper);
         if (node >= 0) {
-            (void)ui_wallpaper_set_from_node(node);
+            (void)ui_wallpaper_set_from_node_internal(node, 0);
         } else {
-            ui_wallpaper_clear();
+            ui_wallpaper_reset(0);
+            (void)ui_try_set_default_wallpaper();
         }
     }
 
@@ -268,6 +324,9 @@ void ui_init(void) {
     ui_reset_theme_defaults();
     g_ui_loading_settings = 1;
     ui_load_settings();
+    if (!g_wallpaper.active && !g_wallpaper.explicit_none) {
+        (void)ui_try_set_default_wallpaper();
+    }
     g_ui_loading_settings = 0;
     ui_apply_desktop_palette();
 
@@ -296,41 +355,14 @@ const struct desktop_theme *ui_theme_get(void) {
 }
 
 void ui_wallpaper_clear(void) {
-    g_wallpaper.active = 0;
-    g_wallpaper.source_node = -1;
-    g_wallpaper.width = 0;
-    g_wallpaper.height = 0;
+    ui_wallpaper_reset(1);
     if (!g_ui_loading_settings) {
         ui_save_settings();
     }
 }
 
 int ui_wallpaper_set_from_node(int node) {
-    int width = 0;
-    int height = 0;
-
-    if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir) {
-        return -1;
-    }
-    if (bmp_decode_to_palette((const uint8_t *)g_fs_nodes[node].data,
-                              g_fs_nodes[node].size,
-                              &g_wallpaper.pixels[0][0],
-                              BMP_MAX_TARGET_W,
-                              BMP_MAX_TARGET_W,
-                              BMP_MAX_TARGET_H,
-                              &width,
-                              &height) != 0) {
-        return -1;
-    }
-
-    g_wallpaper.active = 1;
-    g_wallpaper.source_node = node;
-    g_wallpaper.width = width;
-    g_wallpaper.height = height;
-    if (!g_ui_loading_settings) {
-        ui_save_settings();
-    }
-    return 0;
+    return ui_wallpaper_set_from_node_internal(node, 1);
 }
 
 int ui_wallpaper_source_node(void) {
@@ -566,6 +598,10 @@ struct rect ui_desktop_craft_icon_rect(void) {
 
 uint8_t ui_color_canvas(void) {
     return g_theme.background;
+}
+
+uint8_t ui_color_window_bg(void) {
+    return g_theme.window_bg;
 }
 
 uint8_t ui_color_panel(void) {

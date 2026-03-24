@@ -33,8 +33,6 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/wait.h>
-
 #include <err.h>
 #include <fcntl.h>
 #include <paths.h>
@@ -446,40 +444,19 @@ getans(const char *prompt)
 void
 instructions(void)
 {
-	const char *pager;
-	pid_t pid;
-	int status;
 	int input;
-	int fd;
 
 	if (getans("Would you like instructions (y or n)? ") == 0)
 		return;
 
-	if ((fd = open(_PATH_INSTR, O_RDONLY)) == -1)
-		(void)printf("No instruction file found!\n");
-	else {
-		switch (pid = fork()) {
-		case 0: /* child */
-			if (!isatty(1))
-				pager = "/bin/cat";
-			else {
-				if (!(pager = getenv("PAGER")) || (*pager == 0))
-					pager = _PATH_MORE;
-			}
-			if (dup2(fd, 0) == -1)
-				err(1, "dup2");
-			(void)execl(_PATH_BSHELL, "sh", "-c", pager, (char *)NULL);
-			err(1, "exec sh -c %s", pager);
-			/* NOT REACHED */
-		case -1:
-			err(1, "fork");
-			/* NOT REACHED */
-		default:
-			(void)waitpid(pid, &status, 0);
-			close(fd);
-			break;
-		}
-	}
+	(void)printf(
+"\nGo Fish instructions:\n\
+- Ask for a rank that exists in your hand.\n\
+- If I have that rank, you take all matching cards and keep playing.\n\
+- Otherwise I say GO FISH and you draw from the deck.\n\
+- Four cards of the same rank make a book.\n\
+- Press Enter on an empty prompt to see counts and current books.\n\
+- Type 'quit' to leave the game.\n\n");
 
 	(void)printf("Hit return to continue...\n");
 	while ((input = getchar()) != EOF && input != '\n');

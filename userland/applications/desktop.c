@@ -19,6 +19,7 @@
 #include <userland/applications/include/games/flap_birb.h>
 #include <userland/applications/include/games/doom.h>
 #include <userland/applications/include/games/craft.h>
+#include <userland/modules/include/image.h>
 #include <userland/modules/include/utils.h>
 #include <userland/modules/include/fs.h>
 
@@ -101,7 +102,7 @@ enum {
     FMENU_COUNT
 };
 enum {
-    START_MENU_ENTRY_COUNT = 18,
+    START_MENU_ENTRY_COUNT = 59,
     START_MENU_SEARCH_MAX = 24,
     START_MENU_SCROLLBAR_W = 10
 };
@@ -114,6 +115,7 @@ enum file_dialog_mode {
     FILE_DIALOG_NONE = 0,
     FILE_DIALOG_EDITOR_SAVE,
     FILE_DIALOG_SKETCH_EXPORT,
+    FILE_DIALOG_WALLPAPER_PATH,
     FILE_DIALOG_FILE_RENAME
 };
 struct app_context_state {
@@ -133,6 +135,7 @@ struct file_dialog_state {
     char confirm[16];
     char name[FS_NAME_MAX + 1];
     char ext[FS_NAME_MAX + 1];
+    char path[80];
     char status[40];
 };
 static int g_clipboard_node = -1;
@@ -221,27 +224,69 @@ struct start_menu_entry {
     const char *meta;
     enum app_type type;
     enum start_menu_tab tab;
+    const char *command;
 };
 
 static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT] = {
-    {"Terminal", "Sistema", APP_TERMINAL, START_MENU_TAB_APPS},
-    {"Relogio", "Acessorios", APP_CLOCK, START_MENU_TAB_APPS},
-    {"Arquivos", "Sistema", APP_FILEMANAGER, START_MENU_TAB_APPS},
-    {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS},
-    {"Tasks", "Sistema", APP_TASKMANAGER, START_MENU_TAB_APPS},
-    {"Calculadora", "Acessorios", APP_CALCULATOR, START_MENU_TAB_APPS},
-    {"Sketchpad", "Criacao", APP_SKETCHPAD, START_MENU_TAB_APPS},
-    {"Personalizar", "Desktop", APP_PERSONALIZE, START_MENU_TAB_APPS},
-    {"Snake", "Classicos", APP_SNAKE, START_MENU_TAB_GAMES},
-    {"Tetris", "Classicos", APP_TETRIS, START_MENU_TAB_GAMES},
-    {"Pacman", "Arcade", APP_PACMAN, START_MENU_TAB_GAMES},
-    {"Invaders", "Arcade", APP_SPACE_INVADERS, START_MENU_TAB_GAMES},
-    {"Pong", "Arcade", APP_PONG, START_MENU_TAB_GAMES},
-    {"Donkey Kong", "Arcade", APP_DONKEY_KONG, START_MENU_TAB_GAMES},
-    {"Brick Race", "Arcade", APP_BRICK_RACE, START_MENU_TAB_GAMES},
-    {"Flap Birb", "Arcade", APP_FLAP_BIRB, START_MENU_TAB_GAMES},
-    {"DOOM", "Port", APP_DOOM, START_MENU_TAB_GAMES},
-    {"Craft", "Port", APP_CRAFT, START_MENU_TAB_GAMES}
+    {"Terminal", "Sistema", APP_TERMINAL, START_MENU_TAB_APPS, 0},
+    {"Relogio", "Acessorios", APP_CLOCK, START_MENU_TAB_APPS, 0},
+    {"Arquivos", "Sistema", APP_FILEMANAGER, START_MENU_TAB_APPS, 0},
+    {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS, 0},
+    {"Tasks", "Sistema", APP_TASKMANAGER, START_MENU_TAB_APPS, 0},
+    {"Calculadora", "Acessorios", APP_CALCULATOR, START_MENU_TAB_APPS, 0},
+    {"Sketchpad", "Criacao", APP_SKETCHPAD, START_MENU_TAB_APPS, 0},
+    {"Personalizar", "Desktop", APP_PERSONALIZE, START_MENU_TAB_APPS, 0},
+    {"Snake", "Classicos", APP_SNAKE, START_MENU_TAB_GAMES, 0},
+    {"Tetris", "Classicos", APP_TETRIS, START_MENU_TAB_GAMES, 0},
+    {"Adventure", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "adventure"},
+    {"Arithmetic", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "arithmetic"},
+    {"ATC", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "atc"},
+    {"Backgammon", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "backgammon"},
+    {"Banner", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "banner"},
+    {"BCD", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "bcd"},
+    {"Battlestar", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "battlestar"},
+    {"Boggle", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "boggle"},
+    {"Battleship", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "bs"},
+    {"Caesar", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "caesar"},
+    {"Canfield", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "canfield"},
+    {"Cribbage", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "cribbage"},
+    {"Factor", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "factor"},
+    {"Fish", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "fish"},
+    {"Fortune", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "fortune"},
+    {"Gomoku", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "gomoku"},
+    {"GRDC", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "grdc"},
+    {"Hack", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "hack"},
+    {"Hangman", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "hangman"},
+    {"Mille", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "mille"},
+    {"Monop", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "monop"},
+    {"Morse", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "morse"},
+    {"Number", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "number"},
+    {"Phantasia", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "phantasia"},
+    {"Pig", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "pig"},
+    {"Pom", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "pom"},
+    {"PPT", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "ppt"},
+    {"Primes", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "primes"},
+    {"Quiz", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "quiz"},
+    {"Rain", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "rain"},
+    {"Random", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "random"},
+    {"Robots", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "robots"},
+    {"Sail", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "sail"},
+    {"Snake BSD", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "snake-bsd"},
+    {"Teachgammon", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "teachgammon"},
+    {"Tetris BSD", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "tetris-bsd"},
+    {"Trek", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "trek"},
+    {"Wargames", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "wargames"},
+    {"Worm", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "worm"},
+    {"Worms", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "worms"},
+    {"Wump", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "wump"},
+    {"Pacman", "Arcade", APP_PACMAN, START_MENU_TAB_GAMES, 0},
+    {"Invaders", "Arcade", APP_SPACE_INVADERS, START_MENU_TAB_GAMES, 0},
+    {"Pong", "Arcade", APP_PONG, START_MENU_TAB_GAMES, 0},
+    {"Donkey Kong", "Arcade", APP_DONKEY_KONG, START_MENU_TAB_GAMES, 0},
+    {"Brick Race", "Arcade", APP_BRICK_RACE, START_MENU_TAB_GAMES, 0},
+    {"Flap Birb", "Arcade", APP_FLAP_BIRB, START_MENU_TAB_GAMES, 0},
+    {"DOOM", "Port", APP_DOOM, START_MENU_TAB_GAMES, 0},
+    {"Craft", "Port", APP_CRAFT, START_MENU_TAB_GAMES, 0}
 };
 
 static void sync_window_instance_rect(int widx);
@@ -249,6 +294,7 @@ static int alloc_window(enum app_type type);
 static int find_window_by_type(enum app_type type);
 static int raise_window_to_front(int widx, int *focused);
 static int open_window_or_focus_existing(enum app_type type, int *focused);
+static int launch_start_menu_entry(const struct start_menu_entry *entry, int *focused);
 static void append_uint_limited(char *buf, unsigned value, int max_len);
 static void debug_window_event(const char *tag, int widx, enum app_type type, int instance);
 static void clamp_mouse_state(struct mouse_state *mouse);
@@ -605,29 +651,16 @@ static int clone_node_to_directory(int src_node, int dst_parent) {
     return fs_resolve(path);
 }
 
-static int node_has_extension(int node, const char *ext) {
-    const char *name;
-    int name_len;
-    int ext_len;
-
-    if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir) {
-        return 0;
-    }
-
-    name = g_fs_nodes[node].name;
-    name_len = str_len(name);
-    ext_len = str_len(ext);
-    if (ext_len <= 0 || name_len <= ext_len) {
-        return 0;
-    }
-    return str_eq_ci(name + name_len - ext_len, ext);
+static int node_is_wallpaper_candidate(int node) {
+    return image_node_is_supported(node);
 }
 
-static int find_bmp_nodes(int *out_nodes, int max_nodes) {
+static int find_wallpaper_nodes(int *out_nodes, int max_nodes) {
     int count = 0;
 
+    (void)fs_resolve("/wallpaper.png");
     for (int i = 0; i < FS_MAX_NODES && count < max_nodes; ++i) {
-        if (node_has_extension(i, ".bmp")) {
+        if (node_is_wallpaper_candidate(i)) {
             out_nodes[count++] = i;
         }
     }
@@ -782,6 +815,11 @@ static struct rect file_dialog_ext_rect(const struct file_dialog_state *dialog) 
     return r;
 }
 
+static struct rect file_dialog_path_rect(const struct file_dialog_state *dialog) {
+    struct rect r = {dialog->window.x + 16, dialog->window.y + 34, dialog->window.w - 32, 16};
+    return r;
+}
+
 static struct rect file_dialog_ok_rect(const struct file_dialog_state *dialog) {
     struct rect r = {dialog->window.x + dialog->window.w - 118, dialog->window.y + dialog->window.h - 24, 50, 14};
     return r;
@@ -802,6 +840,7 @@ static void file_dialog_reset(struct file_dialog_state *dialog) {
     dialog->confirm[0] = '\0';
     dialog->name[0] = '\0';
     dialog->ext[0] = '\0';
+    dialog->path[0] = '\0';
     dialog->status[0] = '\0';
 }
 
@@ -870,12 +909,33 @@ static void file_dialog_open_rename(struct file_dialog_state *dialog, int window
     set_dialog_status(dialog, "O nome final deve caber em 15 chars");
 }
 
+static void file_dialog_open_wallpaper(struct file_dialog_state *dialog, int window_index) {
+    int node = ui_wallpaper_source_node();
+
+    file_dialog_reset(dialog);
+    dialog->active = 1;
+    dialog->mode = FILE_DIALOG_WALLPAPER_PATH;
+    dialog->owner_window = window_index;
+    dialog->window = file_dialog_window_rect();
+    dialog->active_field = 0;
+    str_copy_limited(dialog->title, "Escolher wallpaper", (int)sizeof(dialog->title));
+    str_copy_limited(dialog->confirm, "Aplicar", (int)sizeof(dialog->confirm));
+    if (node >= 0 && g_fs_nodes[node].used) {
+        fs_build_path(node, dialog->path, (int)sizeof(dialog->path));
+    } else {
+        str_copy_limited(dialog->path, "/wallpaper.png", (int)sizeof(dialog->path));
+    }
+    set_dialog_status(dialog, "Digite um caminho .bmp ou .png");
+}
+
 static int file_dialog_apply(struct file_dialog_state *dialog) {
     char filename[FS_NAME_MAX + 1];
 
-    if (!build_filename_from_dialog(dialog, filename, (int)sizeof(filename))) {
-        set_dialog_status(dialog, "Nome ou extensao invalido");
-        return 0;
+    if (dialog->mode != FILE_DIALOG_WALLPAPER_PATH) {
+        if (!build_filename_from_dialog(dialog, filename, (int)sizeof(filename))) {
+            set_dialog_status(dialog, "Nome ou extensao invalido");
+            return 0;
+        }
     }
 
     if (dialog->mode == FILE_DIALOG_EDITOR_SAVE) {
@@ -899,11 +959,30 @@ static int file_dialog_apply(struct file_dialog_state *dialog) {
         }
         return 1;
     }
+    if (dialog->mode == FILE_DIALOG_WALLPAPER_PATH) {
+        int node = fs_resolve(dialog->path);
+
+        if (node < 0) {
+            set_dialog_status(dialog, "Arquivo nao encontrado");
+            return 0;
+        }
+        if (!node_is_wallpaper_candidate(node)) {
+            set_dialog_status(dialog, "Use arquivo .bmp ou .png");
+            return 0;
+        }
+        if (ui_wallpaper_set_from_node(node) != 0) {
+            set_dialog_status(dialog, "Falha ao aplicar imagem");
+            return 0;
+        }
+        return 1;
+    }
     return 0;
 }
 
-static int file_dialog_accepts_char(int field, int key) {
-    (void)field;
+static int file_dialog_accepts_char(const struct file_dialog_state *dialog, int key) {
+    if (dialog->mode == FILE_DIALOG_WALLPAPER_PATH) {
+        return key >= 32 && key <= 126;
+    }
     return key >= 32 && key <= 126 && key != '/' && key != '.';
 }
 
@@ -912,7 +991,13 @@ static void file_dialog_insert_char(struct file_dialog_state *dialog, int key) {
     int max_len = dialog->active_field == 0 ? (int)sizeof(dialog->name) : (int)sizeof(dialog->ext);
     int len = str_len(dst);
 
-    if (!file_dialog_accepts_char(dialog->active_field, key) || len >= max_len - 1) {
+    if (dialog->mode == FILE_DIALOG_WALLPAPER_PATH) {
+        dst = dialog->path;
+        max_len = (int)sizeof(dialog->path);
+        len = str_len(dst);
+    }
+
+    if (!file_dialog_accepts_char(dialog, key) || len >= max_len - 1) {
         return;
     }
     dst[len] = (char)key;
@@ -922,6 +1007,11 @@ static void file_dialog_insert_char(struct file_dialog_state *dialog, int key) {
 static void file_dialog_backspace(struct file_dialog_state *dialog) {
     char *dst = dialog->active_field == 0 ? dialog->name : dialog->ext;
     int len = str_len(dst);
+
+    if (dialog->mode == FILE_DIALOG_WALLPAPER_PATH) {
+        dst = dialog->path;
+        len = str_len(dst);
+    }
 
     if (len > 0) {
         dst[len - 1] = '\0';
@@ -935,6 +1025,7 @@ static void draw_file_dialog(const struct file_dialog_state *dialog, const struc
     struct rect close = file_dialog_close_rect(dialog);
     struct rect name_field = file_dialog_name_rect(dialog);
     struct rect ext_field = file_dialog_ext_rect(dialog);
+    struct rect path_field = file_dialog_path_rect(dialog);
     struct rect ok = file_dialog_ok_rect(dialog);
     struct rect cancel = file_dialog_cancel_rect(dialog);
     int close_hover = point_in_rect(&close, mouse->x, mouse->y);
@@ -950,33 +1041,50 @@ static void draw_file_dialog(const struct file_dialog_state *dialog, const struc
     sys_rect(title.x, title.y + title.h - 1, title.w, 1, 0);
     sys_text(dialog->window.x + 8, dialog->window.y + 4, theme->text, dialog->title);
     ui_draw_button(&close, "X", UI_BUTTON_DANGER, close_hover);
-    ui_draw_surface(&body, ui_color_canvas());
+    ui_draw_surface(&body, ui_color_window_bg());
 
-    sys_text(body.x + 8, body.y + 10, theme->text, "Nome");
-    sys_text(body.x + 170, body.y + 10, theme->text, "Ext");
-    if (name_active) {
-        sys_rect(name_field.x - 1, name_field.y - 1, name_field.w + 2, name_field.h + 2, theme->window);
-    }
-    if (ext_active) {
-        sys_rect(ext_field.x - 1, ext_field.y - 1, ext_field.w + 2, ext_field.h + 2, theme->window);
-    }
-    ui_draw_inset(&name_field, ui_color_canvas());
-    ui_draw_inset(&ext_field, ui_color_canvas());
-    sys_text(name_field.x + 4, name_field.y + 4, theme->text, dialog->name);
-    sys_text(ext_field.x + 4, ext_field.y + 4, theme->text, dialog->ext);
-    if (name_active && name_len < FS_NAME_MAX) {
-        sys_rect(name_field.x + 4 + (name_len * 6), name_field.y + 12, 6, 1, theme->text);
-    }
-    if (ext_active && ext_len < FS_NAME_MAX) {
-        sys_rect(ext_field.x + 4 + (ext_len * 6), ext_field.y + 12, 6, 1, theme->text);
-    }
+    if (dialog->mode == FILE_DIALOG_WALLPAPER_PATH) {
+        int path_len = str_len(dialog->path);
 
-    sys_text(body.x + 8, body.y + 58, ui_color_muted(), "Preview");
-    {
-        char preview[FS_NAME_MAX + 2] = "";
-        build_filename_from_dialog(dialog, preview, (int)sizeof(preview));
-        ui_draw_inset(&(struct rect){body.x + 8, body.y + 68, body.w - 16, 14}, ui_color_canvas());
-        sys_text(body.x + 12, body.y + 72, theme->text, preview[0] != '\0' ? preview : "(vazio)");
+        sys_text(body.x + 8, body.y + 10, theme->text, "Arquivo");
+        if (name_active) {
+            sys_rect(path_field.x - 1, path_field.y - 1, path_field.w + 2, path_field.h + 2, theme->window);
+        }
+        ui_draw_inset(&path_field, ui_color_window_bg());
+        sys_text(path_field.x + 4, path_field.y + 4, theme->text, dialog->path);
+        if (name_active && path_len < (int)sizeof(dialog->path) - 1) {
+            sys_rect(path_field.x + 4 + (path_len * 6), path_field.y + 12, 6, 1, theme->text);
+        }
+        sys_text(body.x + 8, body.y + 58, ui_color_muted(), "Preview");
+        ui_draw_inset(&(struct rect){body.x + 8, body.y + 68, body.w - 16, 14}, ui_color_window_bg());
+        sys_text(body.x + 12, body.y + 72, theme->text, dialog->path[0] != '\0' ? dialog->path : "(vazio)");
+    } else {
+        sys_text(body.x + 8, body.y + 10, theme->text, "Nome");
+        sys_text(body.x + 170, body.y + 10, theme->text, "Ext");
+        if (name_active) {
+            sys_rect(name_field.x - 1, name_field.y - 1, name_field.w + 2, name_field.h + 2, theme->window);
+        }
+        if (ext_active) {
+            sys_rect(ext_field.x - 1, ext_field.y - 1, ext_field.w + 2, ext_field.h + 2, theme->window);
+        }
+        ui_draw_inset(&name_field, ui_color_window_bg());
+        ui_draw_inset(&ext_field, ui_color_window_bg());
+        sys_text(name_field.x + 4, name_field.y + 4, theme->text, dialog->name);
+        sys_text(ext_field.x + 4, ext_field.y + 4, theme->text, dialog->ext);
+        if (name_active && name_len < FS_NAME_MAX) {
+            sys_rect(name_field.x + 4 + (name_len * 6), name_field.y + 12, 6, 1, theme->text);
+        }
+        if (ext_active && ext_len < FS_NAME_MAX) {
+            sys_rect(ext_field.x + 4 + (ext_len * 6), ext_field.y + 12, 6, 1, theme->text);
+        }
+
+        sys_text(body.x + 8, body.y + 58, ui_color_muted(), "Preview");
+        {
+            char preview[FS_NAME_MAX + 2] = "";
+            build_filename_from_dialog(dialog, preview, (int)sizeof(preview));
+            ui_draw_inset(&(struct rect){body.x + 8, body.y + 68, body.w - 16, 14}, ui_color_window_bg());
+            sys_text(body.x + 12, body.y + 72, theme->text, preview[0] != '\0' ? preview : "(vazio)");
+        }
     }
     ui_draw_status(&(struct rect){body.x + 8, body.y + 86, body.w - 16, 12}, dialog->status);
     ui_draw_button(&ok, dialog->confirm, UI_BUTTON_PRIMARY, ok_hover);
@@ -1210,6 +1318,61 @@ void desktop_request_open_app(enum app_type type) {
         return;
     }
     g_launch_app_type = type;
+}
+
+static void desktop_request_open_terminal_command(const char *command) {
+    if (!command) {
+        return;
+    }
+    str_copy_limited(g_launch_terminal_command, command, (int)sizeof(g_launch_terminal_command));
+    g_launch_terminal_pending = g_launch_terminal_command[0] != '\0';
+}
+
+static int desktop_process_pending_launches(int *focused) {
+    int dirty = 0;
+
+    if (!focused) {
+        return 0;
+    }
+
+    if (g_launch_app_type != APP_NONE) {
+        if (open_window_or_focus_existing(g_launch_app_type, focused) >= 0) {
+            dirty = 1;
+        }
+        g_launch_app_type = APP_NONE;
+    }
+
+    if (g_launch_editor_pending) {
+        int idx = open_editor_window_for_node(-1, focused);
+
+        if (idx >= 0) {
+            editor_set_nano_mode(&g_editors[g_windows[idx].instance], g_launch_editor_nano);
+        }
+        if (idx >= 0 && g_launch_editor_path[0] != '\0') {
+            int node = fs_resolve(g_launch_editor_path);
+
+            if (node >= 0 && !g_fs_nodes[node].is_dir) {
+                (void)editor_load_node(&g_editors[g_windows[idx].instance], node);
+            }
+        }
+        g_launch_editor_pending = 0;
+        g_launch_editor_nano = 0;
+        g_launch_editor_path[0] = '\0';
+        dirty = 1;
+    }
+
+    if (g_launch_terminal_pending) {
+        int idx = open_window_or_focus_existing(APP_TERMINAL, focused);
+
+        if (idx >= 0) {
+            terminal_run_command(&g_terms[g_windows[idx].instance], g_launch_terminal_command, 1);
+            dirty = 1;
+        }
+        g_launch_terminal_pending = 0;
+        g_launch_terminal_command[0] = '\0';
+    }
+
+    return dirty;
 }
 
 static void sync_window_instance_rect(int widx) {
@@ -1515,6 +1678,17 @@ static int find_window_by_type(enum app_type type) {
     return -1;
 }
 
+static int launch_start_menu_entry(const struct start_menu_entry *entry, int *focused) {
+    if (!entry) {
+        return -1;
+    }
+    if (entry->command && entry->command[0] != '\0') {
+        desktop_request_open_terminal_command(entry->command);
+        return 0;
+    }
+    return open_window_or_focus_existing(entry->type, focused);
+}
+
 static int topmost_window_at(int x, int y) {
     for (int i = MAX_WINDOWS - 1; i >= 0; --i) {
         if (g_windows[i].active &&
@@ -1587,6 +1761,10 @@ static struct rect personalize_window_slot_rect(const struct rect *w, int slot) 
 static struct rect personalize_window_wallpaper_button_rect(const struct rect *w, int index) {
     struct rect r = {w->x + 242, w->y + 132 + (index * 14), 160, 12};
     return r;
+}
+
+static struct rect personalize_window_wallpaper_choose_rect(const struct rect *w) {
+    return personalize_window_wallpaper_button_rect(w, 4);
 }
 
 static struct rect personalize_window_resolution_button_rect(const struct rect *w, int index) {
@@ -1905,9 +2083,9 @@ static void draw_start_menu_with_tab(enum start_menu_tab active_tab,
                    active_tab == START_MENU_TAB_GAMES ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                    games_tab_hover);
 
-    ui_draw_inset(&list_panel, ui_color_canvas());
-    ui_draw_inset(&search, ui_color_canvas());
-    ui_draw_surface(&sidebar, ui_color_canvas());
+    ui_draw_inset(&list_panel, ui_color_window_bg());
+    ui_draw_inset(&search, ui_color_window_bg());
+    ui_draw_surface(&sidebar, ui_color_window_bg());
     sys_text(sidebar.x + 10, sidebar.y + 10, theme->text, "Painel");
     sys_text(sidebar.x + 10, sidebar.y + 24, theme->text,
              start_menu_search_active(query) ? "Busca global" :
@@ -1962,9 +2140,10 @@ static void draw_personalize_window(struct personalize_state *state,
                                     int close_hover,
                                     const struct mouse_state *mouse) {
     const struct desktop_theme *theme = ui_theme_get();
-    int bmp_nodes[4];
-    int bmp_count = find_bmp_nodes(bmp_nodes, 4);
+    int wallpaper_nodes[3];
+    int wallpaper_count = find_wallpaper_nodes(wallpaper_nodes, 3);
     int current_wallpaper = ui_wallpaper_source_node();
+    int current_in_quick_list = current_wallpaper < 0;
     uint8_t selected_color = theme->background;
     struct rect body = {state->window.x + 6, state->window.y + 20, state->window.w - 12, state->window.h - 26};
     struct rect theme_panel = {body.x + 8, body.y + 8, 216, 190};
@@ -1980,11 +2159,11 @@ static void draw_personalize_window(struct personalize_state *state,
 
     draw_window_frame(&state->window, "Personalizar", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, ui_color_panel());
-    ui_draw_surface(&theme_panel, ui_color_canvas());
-    ui_draw_surface(&preview_panel, ui_color_canvas());
-    ui_draw_surface(&wallpaper_panel, ui_color_canvas());
-    ui_draw_surface(&palette_panel, ui_color_canvas());
-    ui_draw_surface(&resolution_panel, ui_color_canvas());
+    ui_draw_surface(&theme_panel, ui_color_window_bg());
+    ui_draw_surface(&preview_panel, ui_color_window_bg());
+    ui_draw_surface(&wallpaper_panel, ui_color_window_bg());
+    ui_draw_surface(&palette_panel, ui_color_window_bg());
+    ui_draw_surface(&resolution_panel, ui_color_window_bg());
 
     sys_text(theme_panel.x + 8, theme_panel.y + 8, theme->text, "Area do tema");
     sys_text(preview_panel.x + 8, preview_panel.y + 8, theme->text, "Preview");
@@ -2018,12 +2197,12 @@ static void draw_personalize_window(struct personalize_state *state,
             sys_text(tile.x + 29, tile.y + 6, color, "A");
         } else {
             sys_rect(tile.x + 8, tile.y + 17, tile.w - 16, 4,
-                     slot == (int)state->selected_slot ? ui_color_canvas() : ui_color_muted());
+                     slot == (int)state->selected_slot ? ui_color_window_bg() : ui_color_muted());
         }
         sys_text(tile.x + 3, tile.y + 20, theme->text, ui_theme_slot_name((enum theme_slot)slot));
     }
 
-    ui_draw_inset(&preview, ui_color_canvas());
+    ui_draw_inset(&preview, ui_color_window_bg());
     sys_rect(preview_chip.x, preview_chip.y, preview_chip.w, preview_chip.h,
              state->selected_slot == THEME_SLOT_TEXT ? theme->window : selected_color);
     sys_rect(preview_strip.x, preview_strip.y, preview_strip.w, preview_strip.h, theme->window);
@@ -2042,20 +2221,32 @@ static void draw_personalize_window(struct personalize_state *state,
                        mais_cores_hover);
     }
 
-    for (int i = -1; i < bmp_count; ++i) {
+    for (int i = -1; i < wallpaper_count; ++i) {
         struct rect button = personalize_window_wallpaper_button_rect(&state->window, i + 1);
-        int node = i < 0 ? -1 : bmp_nodes[i];
+        int node = i < 0 ? -1 : wallpaper_nodes[i];
         int hover = point_in_rect(&button, mouse->x, mouse->y);
         int selected = current_wallpaper == node;
         const char *label = i < 0 ? "Somente cor" : g_fs_nodes[node].name;
 
+        if (selected) {
+            current_in_quick_list = 1;
+        }
         ui_draw_button(&button,
                        label,
                        selected ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                        hover);
     }
-    if (bmp_count == 0) {
-        sys_text(wallpaper_panel.x + 8, wallpaper_panel.y + wallpaper_panel.h - 16, theme->text, "nenhum .bmp encontrado");
+    {
+        struct rect choose_button = personalize_window_wallpaper_choose_rect(&state->window);
+        int choose_hover = point_in_rect(&choose_button, mouse->x, mouse->y);
+
+        ui_draw_button(&choose_button,
+                       "Escolher arquivo...",
+                       (!current_in_quick_list && current_wallpaper >= 0) ? UI_BUTTON_ACTIVE : UI_BUTTON_PRIMARY,
+                       choose_hover);
+    }
+    if (wallpaper_count == 0) {
+        sys_text(wallpaper_panel.x + 8, wallpaper_panel.y + wallpaper_panel.h - 16, theme->text, "sem atalhos .bmp/.png");
     }
 
     for (int i = 0; i < g_resolution_option_count; ++i) {
@@ -2206,43 +2397,12 @@ void desktop_main(void) {
     for (int i = 0; i < MAX_CRAFT; ++i) g_craft_used[i] = 0;
     g_clipboard_node = -1;
 
-    if (g_launch_app_type != APP_NONE) {
-        if (open_window_or_focus_existing(g_launch_app_type, &focused) >= 0) {
-            dirty = 1;
-        }
-        g_launch_app_type = APP_NONE;
-    }
-
-    if (g_launch_editor_pending) {
-        int idx = open_editor_window_for_node(-1, &focused);
-        if (idx >= 0) {
-            editor_set_nano_mode(&g_editors[g_windows[idx].instance], g_launch_editor_nano);
-        }
-        if (idx >= 0 && g_launch_editor_path[0] != '\0') {
-            int node = fs_resolve(g_launch_editor_path);
-            if (node >= 0 && !g_fs_nodes[node].is_dir) {
-                (void)editor_load_node(&g_editors[g_windows[idx].instance], node);
-            }
-        }
-        g_launch_editor_pending = 0;
-        g_launch_editor_nano = 0;
-        g_launch_editor_path[0] = '\0';
-        dirty = 1;
-    }
-
-    if (g_launch_terminal_pending) {
-        int idx = open_window_or_focus_existing(APP_TERMINAL, &focused);
-        if (idx >= 0) {
-            terminal_run_command(&g_terms[g_windows[idx].instance], g_launch_terminal_command, 1);
-        }
-        g_launch_terminal_pending = 0;
-        g_launch_terminal_command[0] = '\0';
-        dirty = 1;
-    }
+    dirty |= desktop_process_pending_launches(&focused);
 
     while (running) {
         int key;
         fs_tick();
+        dirty |= desktop_process_pending_launches(&focused);
         uint32_t ticks = sys_ticks();
         int mouse_event = 0;
         int left_pressed = (mouse.buttons & 0x01u) != 0;
@@ -2540,7 +2700,7 @@ void desktop_main(void) {
                     hit_window = new_index;
                     fm = &g_fms[g_windows[hit_window].instance];
                     target = filemanager_hit_test_entry(fm, click_x, click_y);
-                    g_fm_context_has_wallpaper_action = (target >= 0) && node_has_extension(target, ".bmp");
+                    g_fm_context_has_wallpaper_action = (target >= 0) && node_is_wallpaper_candidate(target);
                     fm_context_menu = filemanager_context_menu_rect(click_x, click_y);
                     fm_context_open = 1;
                     fm_context_window = hit_window;
@@ -2602,6 +2762,7 @@ void desktop_main(void) {
                 struct rect close = file_dialog_close_rect(&file_dialog);
                 struct rect name_field = file_dialog_name_rect(&file_dialog);
                 struct rect ext_field = file_dialog_ext_rect(&file_dialog);
+                struct rect path_field = file_dialog_path_rect(&file_dialog);
                 struct rect ok = file_dialog_ok_rect(&file_dialog);
                 struct rect cancel = file_dialog_cancel_rect(&file_dialog);
 
@@ -2615,10 +2776,15 @@ void desktop_main(void) {
                         file_dialog_reset(&file_dialog);
                     }
                     dirty = 1;
+                } else if (file_dialog.mode == FILE_DIALOG_WALLPAPER_PATH &&
+                           point_in_rect(&path_field, click_x, click_y)) {
+                    file_dialog.active_field = 0;
+                    dirty = 1;
                 } else if (point_in_rect(&name_field, click_x, click_y)) {
                     file_dialog.active_field = 0;
                     dirty = 1;
-                } else if (point_in_rect(&ext_field, click_x, click_y)) {
+                } else if (file_dialog.mode != FILE_DIALOG_WALLPAPER_PATH &&
+                           point_in_rect(&ext_field, click_x, click_y)) {
                     file_dialog.active_field = 1;
                     dirty = 1;
                 }
@@ -2823,6 +2989,7 @@ void desktop_main(void) {
                                       &start_menu_search_scroll :
                                       &start_menu_scroll[(int)start_menu_tab];
                     int menu_contains_click = point_in_rect(&menu_rect, click_x, click_y);
+                    const struct start_menu_entry *launch_entry = 0;
 
                     if (menu_contains_click) {
                         if (point_in_rect(&apps_tab, click_x, click_y)) {
@@ -2866,10 +3033,19 @@ void desktop_main(void) {
                                                                             click_y);
 
                             if (clicked_result >= 0 && clicked_result < filtered_count) {
-                                launch_type = g_start_menu_entries[filtered_indices[clicked_result]].type;
+                                launch_entry = &g_start_menu_entries[filtered_indices[clicked_result]];
                             }
                         }
-                        if (launch_type != APP_NONE) {
+                        if (launch_entry != 0) {
+                            if (launch_start_menu_entry(launch_entry, &focused) >= 0) {
+                                dirty = 1;
+                            }
+                            menu_open = 0;
+                            menu_scroll_dragging = 0;
+                            context_open = 0;
+                            fm_context_open = 0;
+                            app_context.open = 0;
+                        } else if (launch_type != APP_NONE) {
                             if (open_window_or_focus_existing(launch_type, &focused) >= 0) {
                                 dirty = 1;
                             }
@@ -3076,8 +3252,8 @@ void desktop_main(void) {
                                 dirty = 1;
                             }
                         } else if (type == APP_PERSONALIZE) {
-                            int bmp_nodes[4];
-                            int bmp_count = find_bmp_nodes(bmp_nodes, 4);
+                            int wallpaper_nodes[3];
+                            int wallpaper_count = find_wallpaper_nodes(wallpaper_nodes, 3);
 
                             if (g_pers.color_picker_open) {
                                 struct rect picker = personalize_color_picker_rect();
@@ -3115,14 +3291,21 @@ void desktop_main(void) {
                                     }
                                 }
                             }
-                            for (int i = -1; i < bmp_count; ++i) {
+                            for (int i = -1; i < wallpaper_count; ++i) {
                                 struct rect button = personalize_window_wallpaper_button_rect(&g_windows[hit_window].rect, i + 1);
                                 if (point_in_rect(&button, click_x, click_y)) {
                                     if (i < 0) {
                                         ui_wallpaper_clear();
                                     } else {
-                                        (void)ui_wallpaper_set_from_node(bmp_nodes[i]);
+                                        (void)ui_wallpaper_set_from_node(wallpaper_nodes[i]);
                                     }
+                                    dirty = 1;
+                                }
+                            }
+                            {
+                                struct rect choose_button = personalize_window_wallpaper_choose_rect(&g_windows[hit_window].rect);
+                                if (point_in_rect(&choose_button, click_x, click_y)) {
+                                    file_dialog_open_wallpaper(&file_dialog, hit_window);
                                     dirty = 1;
                                 }
                             }
@@ -3172,7 +3355,9 @@ void desktop_main(void) {
                     file_dialog_backspace(&file_dialog);
                     dirty = 1;
                 } else if (key == '\t') {
-                    file_dialog.active_field = 1 - file_dialog.active_field;
+                    if (file_dialog.mode != FILE_DIALOG_WALLPAPER_PATH) {
+                        file_dialog.active_field = 1 - file_dialog.active_field;
+                    }
                     dirty = 1;
                 } else if (key == '\n') {
                     if (file_dialog_apply(&file_dialog)) {
@@ -3215,9 +3400,10 @@ void desktop_main(void) {
                 }
                 if (key == '\n') {
                     if (filtered_count > 0) {
-                        enum app_type launch_type = g_start_menu_entries[filtered_indices[*scroll_ptr]].type;
+                        const struct start_menu_entry *launch_entry =
+                            &g_start_menu_entries[filtered_indices[*scroll_ptr]];
 
-                        if (open_window_or_focus_existing(launch_type, &focused) >= 0) {
+                        if (launch_start_menu_entry(launch_entry, &focused) >= 0) {
                             dirty = 1;
                         }
                         menu_open = 0;
@@ -3257,12 +3443,8 @@ void desktop_main(void) {
                 continue;
             }
             if (key == 20) {
-                int terminal_window = open_window_or_focus_existing(APP_TERMINAL, &focused);
-
-                if (terminal_window >= 0) {
-                    terminal_run_command(&g_terms[g_windows[terminal_window].instance], "vibefetch", 1);
-                    dirty = 1;
-                }
+                desktop_request_open_terminal_command("vibefetch");
+                dirty = 1;
                 continue;
             }
 

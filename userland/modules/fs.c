@@ -29,17 +29,20 @@ static int g_fs_dirty = 0;
 static uint32_t g_fs_last_sync_tick = 0u;
 static int g_fs_doom_assets_scanned = 0;
 static int g_fs_texture_assets_scanned = 0;
+static int g_fs_wallpaper_asset_scanned = 0;
 
 #define FS_SYNC_PERIOD_TICKS 1000u
 
 static void fs_ensure_doom_wad_registered(void);
 static void fs_ensure_craft_textures_registered(void);
+static void fs_ensure_wallpaper_registered(void);
 static uint32_t fs_storage_total_sectors(void);
 
 #define CRAFT_TEXTURE_IMAGE_LBA 30000u
 #define CRAFT_FONT_IMAGE_LBA 30128u
 #define CRAFT_SKY_IMAGE_LBA 30256u
 #define CRAFT_SIGN_IMAGE_LBA 30416u
+#define WALLPAPER_IMAGE_LBA 30720u
 
 static void fs_reset_node(int idx) {
     int i;
@@ -227,6 +230,11 @@ static void fs_maybe_register_boot_assets_for_path(const char *path) {
     if (fs_path_matches_root_prefix(path, "/textures") && !g_fs_texture_assets_scanned) {
         g_fs_texture_assets_scanned = 1;
         fs_ensure_craft_textures_registered();
+    }
+
+    if (fs_path_matches_root_prefix(path, "/wallpaper.png") && !g_fs_wallpaper_asset_scanned) {
+        g_fs_wallpaper_asset_scanned = 1;
+        fs_ensure_wallpaper_registered();
     }
 }
 
@@ -1083,6 +1091,14 @@ static void fs_ensure_craft_textures_registered(void) {
     fs_register_png_asset("/textures/sign.png", CRAFT_SIGN_IMAGE_LBA);
 }
 
+static void fs_ensure_wallpaper_registered(void) {
+    if (g_fs_root < 0) {
+        return;
+    }
+
+    fs_register_png_asset("/wallpaper.png", WALLPAPER_IMAGE_LBA);
+}
+
 void fs_build_path(int node, char *out, int max_len) {
     int stack[FS_MAX_NODES];
     int top = 0;
@@ -1125,6 +1141,7 @@ void fs_init(void) {
     g_fs_sync_suspended = 1;
     g_fs_doom_assets_scanned = 0;
     g_fs_texture_assets_scanned = 0;
+    g_fs_wallpaper_asset_scanned = 0;
     for (i = 0; i < FS_MAX_NODES; ++i) {
         fs_reset_node(i);
     }

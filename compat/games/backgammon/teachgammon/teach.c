@@ -119,6 +119,7 @@ leave(void)
 {
 	clear();
 	endwin();
-	execl(EXEC, "backgammon", "-n", (char *)NULL);
-	errx(1, "help! Backgammon program is missing!!");
+	(void)printf(
+	    "Tutorial finished. Launch 'backgammon' from the Games menu or shell to play.\n");
+	exit(0);
 }

@@ -39,6 +39,8 @@ extern int errno;
 #define EROFS      30
 #define EMLINK     31
 #define EPIPE      32
+#define ERANGE     34
+#define ENAMETOOLONG 36
 #define ENOTEMPTY  39
 #define ETIMEDOUT  60
 

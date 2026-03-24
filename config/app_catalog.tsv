@@ -20,6 +20,47 @@ calculator	CALCULATOR_APP_BIN	1	0	/bin/calculator
 sketchpad	SKETCHPAD_APP_BIN	1	0	/bin/sketchpad
 snake	SNAKE_APP_BIN	1	0	/bin/snake
 tetris	TETRIS_APP_BIN	1	0	/bin/tetris
+adventure	ADVENTURE_APP_BIN	1	0
+arithmetic	ARITHMETIC_APP_BIN	1	0
+atc	ATC_APP_BIN	1	0
+backgammon	BACKGAMMON_APP_BIN	1	0
+banner	BANNER_APP_BIN	1	0
+bcd	BCD_APP_BIN	1	0
+battlestar	BATTLESTAR_APP_BIN	1	0
+boggle	BOGGLE_APP_BIN	1	0
+bs	BS_APP_BIN	1	0
+caesar	CAESAR_APP_BIN	1	0
+canfield	CANFIELD_APP_BIN	1	0
+cribbage	CRIBBAGE_APP_BIN	1	0
+factor	FACTOR_APP_BIN	1	0
+fish	FISH_APP_BIN	1	0
+fortune	FORTUNE_APP_BIN	1	0
+gomoku	GOMOKU_APP_BIN	1	0
+grdc	GRDC_APP_BIN	1	0
+hack	HACK_APP_BIN	1	0
+hangman	HANGMAN_APP_BIN	1	0
+mille	MILLE_APP_BIN	1	0
+monop	MONOP_APP_BIN	1	0
+morse	MORSE_APP_BIN	1	0
+number	NUMBER_APP_BIN	1	0
+phantasia	PHANTASIA_APP_BIN	1	0
+pig	PIG_APP_BIN	1	0
+pom	POM_APP_BIN	1	0
+ppt	PPT_APP_BIN	1	0
+primes	PRIMES_APP_BIN	1	0
+quiz	QUIZ_APP_BIN	1	0
+rain	RAIN_APP_BIN	1	0
+random	RANDOM_APP_BIN	1	0
+robots	ROBOTS_APP_BIN	1	0
+sail	SAIL_APP_BIN	1	0
+snake-bsd	SNAKE_BSD_APP_BIN	1	0
+teachgammon	TEACHGAMMON_APP_BIN	1	0
+tetris-bsd	TETRIS_BSD_APP_BIN	1	0
+trek	TREK_APP_BIN	1	0
+wargames	WARGAMES_APP_BIN	1	0
+worm	WORM_APP_BIN	1	0
+worms	WORMS_APP_BIN	1	0
+wump	WUMP_APP_BIN	1	0
 pacman	PACMAN_APP_BIN	1	0	/bin/pacman
 space_invaders	SPACE_INVADERS_APP_BIN	1	0	/bin/space_invaders
 pong	PONG_APP_BIN	1	0	/bin/pong

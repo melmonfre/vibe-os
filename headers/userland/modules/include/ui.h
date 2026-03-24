@@ -87,6 +87,7 @@ struct rect ui_start_menu_item_rect(int index);
 struct rect ui_desktop_files_icon_rect(void);
 struct rect ui_desktop_craft_icon_rect(void);
 uint8_t ui_color_canvas(void);
+uint8_t ui_color_window_bg(void);
 uint8_t ui_color_panel(void);
 uint8_t ui_color_muted(void);
 void ui_draw_surface(const struct rect *r, uint8_t fill);
