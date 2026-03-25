@@ -2177,6 +2177,7 @@ vibeloader_menu:
     call menu_flush_keyboard_buffer
     mov dword [menu_selection], 0
     mov byte [menu_initialized], 1
+    mov byte [menu_force_full_redraw], 1
     call menu_restart_timer
     mov byte [menu_dirty], 1
 
@@ -2711,12 +2712,18 @@ menu_apply_selection:
 
 menu_render:
     cmp byte [menu_first_render_done], 0
-    jne .draw_frame
-    DEBUG_PMODE_CHAR 'm'
+    je .draw_full_frame
+    cmp byte [menu_force_full_redraw], 0
+    jne .draw_full_frame
+    jmp .draw_panel_only
 
-.draw_frame:
+.draw_full_frame:
+    DEBUG_PMODE_CHAR 'm'
     call draw_background
+    mov byte [menu_force_full_redraw], 0
     DEBUG_PMODE_CHAR '3'
+
+.draw_panel_only:
 
     mov eax, 148
     add eax, [menu_base_x]
@@ -3628,6 +3635,7 @@ pmode_video_resume:
     mov byte [menu_extended], 0
     call set_desktop_palette
     call menu_compute_layout
+    mov byte [menu_force_full_redraw], 1
     mov byte [menu_dirty], 1
     call vibeloader_menu
     jmp pmode_to_real_for_kernel_boot
@@ -3658,6 +3666,7 @@ menu_dirty db 0
 menu_initialized db 0
 menu_timeout_paused db 0
 menu_first_render_done db 0
+menu_force_full_redraw db 0
 menu_loop_stable_logged db 0
 menu_extended db 0
 menu_last_scancode db 0
