@@ -12,10 +12,18 @@
 #define GRAPHICS_MAX_HEIGHT 2160u
 #define GRAPHICS_BPP 8u
 #define GRAPHICS_MIN_FB_ADDR 0x00100000u
+#define VIDEO_BACKBUFFER_MAX_BYTES (1024u * 1024u)
+#define VIDEO_BACKBUFFER_HEAP_RESERVE (2u * 1024u * 1024u)
 
 #define VGA_PEL_MASK 0x3C6u
 #define VGA_DAC_WRITE_INDEX 0x3C8u
 #define VGA_DAC_DATA 0x3C9u
+
+enum kernel_video_backend_kind {
+    KERNEL_VIDEO_BACKEND_NONE = 0,
+    KERNEL_VIDEO_BACKEND_LEGACY_LFB,
+    KERNEL_VIDEO_BACKEND_FAST_LFB
+};
 
 static struct video_mode g_mode;
 static volatile uint8_t *g_fb = 0;
@@ -27,8 +35,51 @@ static int g_palette_ready = 0;
 static int g_graphics_enabled = 0;
 static int g_video_initialized = 0;
 static int g_backbuf_alloc_failed = 0;
+static enum kernel_video_backend_kind g_backend_kind = KERNEL_VIDEO_BACKEND_NONE;
 
 extern int kernel_video_bios_set_mode(uint16_t mode);
+
+static int kernel_video_has_graphics_mode(void);
+static void kernel_video_activate_backend(enum kernel_video_backend_kind kind,
+                                          const struct video_mode *mode);
+static enum kernel_video_backend_kind kernel_video_choose_boot_backend(const struct video_mode *mode);
+
+static const char *kernel_video_backend_name_internal(enum kernel_video_backend_kind kind) {
+    switch (kind) {
+    case KERNEL_VIDEO_BACKEND_LEGACY_LFB:
+        return "legacy_lfb";
+    case KERNEL_VIDEO_BACKEND_FAST_LFB:
+        return "fast_lfb";
+    default:
+        return "none";
+    }
+}
+
+const char *kernel_video_backend_name(void) {
+    return kernel_video_backend_name_internal(g_backend_kind);
+}
+
+void kernel_video_refresh_backend(void) {
+    enum kernel_video_backend_kind preferred_backend;
+
+    if (!kernel_video_has_graphics_mode()) {
+        return;
+    }
+
+    preferred_backend = kernel_video_choose_boot_backend(&g_mode);
+    if (preferred_backend == g_backend_kind) {
+        return;
+    }
+
+    kernel_video_activate_backend(preferred_backend, &g_mode);
+    kernel_debug_printf("video: backend refresh -> %s %dx%dx%d fb=%x pitch=%d\n",
+                        kernel_video_backend_name(),
+                        (int)g_mode.width,
+                        (int)g_mode.height,
+                        (int)g_mode.bpp,
+                        (unsigned int)g_mode.fb_addr,
+                        (int)g_mode.pitch);
+}
 
 static int kernel_video_has_graphics_mode(void) {
     return g_graphics_enabled &&
@@ -201,6 +252,10 @@ static int kernel_video_backbuffer_is_lfb(void) {
            (uintptr_t)g_backbuf == (uintptr_t)g_fb;
 }
 
+static int kernel_video_backend_supports_shadow(void) {
+    return g_backend_kind == KERNEL_VIDEO_BACKEND_FAST_LFB;
+}
+
 static int kernel_video_heap_ready(void) {
     return kernel_heap_end() > kernel_heap_start();
 }
@@ -245,11 +300,52 @@ static void kernel_video_bind_graphics_mode(const struct video_mode *mode) {
     g_backbuf_alloc_failed = 0;
 }
 
+static void kernel_video_activate_backend(enum kernel_video_backend_kind kind,
+                                          const struct video_mode *mode) {
+    if (!kernel_video_mode_usable(mode)) {
+        return;
+    }
+
+    g_backend_kind = kind;
+    if (kind == KERNEL_VIDEO_BACKEND_LEGACY_LFB) {
+        g_mode = *mode;
+        g_fb = (volatile uint8_t *)(uintptr_t)mode->fb_addr;
+        g_backbuf = (uint8_t *)(uintptr_t)mode->fb_addr;
+        g_graphics_enabled = 1;
+        g_backbuf_alloc_failed = 1;
+        return;
+    }
+
+    kernel_video_bind_graphics_mode(mode);
+}
+
+static enum kernel_video_backend_kind kernel_video_choose_boot_backend(const struct video_mode *mode) {
+    size_t frame_bytes;
+    size_t heap_free;
+
+    if (!kernel_video_mode_usable(mode) || !kernel_video_heap_ready()) {
+        return KERNEL_VIDEO_BACKEND_LEGACY_LFB;
+    }
+
+    frame_bytes = (size_t)mode->pitch * (size_t)mode->height;
+    heap_free = kernel_heap_free();
+    if (frame_bytes == 0u ||
+        frame_bytes > VIDEO_BACKBUFFER_MAX_BYTES ||
+        heap_free <= frame_bytes ||
+        (heap_free - frame_bytes) < VIDEO_BACKBUFFER_HEAP_RESERVE) {
+        return KERNEL_VIDEO_BACKEND_LEGACY_LFB;
+    }
+
+    return KERNEL_VIDEO_BACKEND_FAST_LFB;
+}
+
 static void kernel_video_try_alloc_backbuffer(void) {
     uint8_t *shadow;
     size_t frame_bytes;
+    size_t heap_free;
 
     if (!kernel_video_has_graphics_mode() ||
+        !kernel_video_backend_supports_shadow() ||
         !kernel_video_backbuffer_is_lfb() ||
         g_backbuf_alloc_failed ||
         !kernel_video_heap_ready()) {
@@ -258,6 +354,13 @@ static void kernel_video_try_alloc_backbuffer(void) {
 
     frame_bytes = kernel_video_frame_bytes();
     if (frame_bytes == 0u) {
+        return;
+    }
+
+    heap_free = kernel_heap_free();
+    if (frame_bytes > VIDEO_BACKBUFFER_MAX_BYTES ||
+        heap_free <= frame_bytes ||
+        (heap_free - frame_bytes) < VIDEO_BACKBUFFER_HEAP_RESERVE) {
         return;
     }
 
@@ -334,22 +437,25 @@ static void kernel_video_enter_graphics(void) {
 
 void kernel_video_init(void) {
     struct video_mode boot_mode;
+    enum kernel_video_backend_kind boot_backend;
 
     if (g_video_initialized) {
         return;
     }
 
     if (vesa_init(&boot_mode) == 0 && kernel_video_mode_usable(&boot_mode)) {
-        kernel_video_bind_graphics_mode(&boot_mode);
+        boot_backend = kernel_video_choose_boot_backend(&boot_mode);
+        kernel_video_activate_backend(boot_backend, &boot_mode);
         kernel_video_load_default_palette();
         kernel_video_clear(0u);
         kernel_video_flip();
-        kernel_debug_printf("video: VESA %dx%dx%d fb=%x pitch=%d direct-lfb\n",
+        kernel_debug_printf("video: VESA %dx%dx%d fb=%x pitch=%d backend=%s\n",
                             (int)boot_mode.width,
                             (int)boot_mode.height,
                             (int)boot_mode.bpp,
                             (unsigned int)g_mode.fb_addr,
-                            (int)g_mode.pitch);
+                            (int)g_mode.pitch,
+                            kernel_video_backend_name());
         g_video_initialized = 1;
         return;
     }
@@ -362,6 +468,7 @@ void kernel_video_init(void) {
     g_mode.bpp = 16;
     g_fb = (volatile uint8_t *)g_mode.fb_addr;
     g_backbuf = 0;
+    g_backend_kind = KERNEL_VIDEO_BACKEND_NONE;
     g_video_initialized = 1;
     kernel_debug_puts("video: VESA 640x480x8 unavailable, staying in text mode\n");
 }
@@ -432,6 +539,7 @@ int kernel_video_set_mode(uint32_t width, uint32_t height) {
     uint16_t bios_mode;
     uint32_t irq_flags;
     int switch_rc;
+    enum kernel_video_backend_kind active_backend;
 
     if (!kernel_video_has_graphics_mode()) {
         return -1;
@@ -449,23 +557,25 @@ int kernel_video_set_mode(uint32_t width, uint32_t height) {
     irq_flags = kernel_irq_save();
     kernel_keyboard_prepare_for_graphics();
     kernel_mouse_prepare_for_graphics();
+    active_backend = g_backend_kind;
     switch_rc = kernel_video_bios_set_mode(bios_mode);
     if (switch_rc == 0 &&
         vesa_init(&new_mode) == 0 &&
         kernel_video_mode_usable(&new_mode)) {
         kernel_video_mark_catalog_active(mode_index);
-        kernel_video_bind_graphics_mode(&new_mode);
+        kernel_video_activate_backend(active_backend, &new_mode);
         kernel_video_load_default_palette();
         kernel_video_clear(0u);
         kernel_video_flip();
         kernel_mouse_sync_to_video();
         kernel_irq_restore(irq_flags);
-        kernel_debug_printf("video: runtime mode %dx%dx%d fb=%x pitch=%d\n",
+        kernel_debug_printf("video: runtime mode %dx%dx%d fb=%x pitch=%d backend=%s\n",
                             (int)new_mode.width,
                             (int)new_mode.height,
                             (int)new_mode.bpp,
                             (unsigned int)new_mode.fb_addr,
-                            (int)new_mode.pitch);
+                            (int)new_mode.pitch,
+                            kernel_video_backend_name());
         return 0;
     }
     kernel_irq_restore(irq_flags);

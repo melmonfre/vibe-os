@@ -17,6 +17,8 @@ struct framebuffer {
 /* Initialize video subsystem; chooses VESA first and falls back to VGA */
 void kernel_video_init(void);
 int vesa_init(struct video_mode *mode);
+const char *kernel_video_backend_name(void);
+void kernel_video_refresh_backend(void);
 
 /* Accessors for the currently‑selected mode */
 struct video_mode *kernel_video_get_mode(void);

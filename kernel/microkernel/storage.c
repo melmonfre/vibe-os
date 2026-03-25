@@ -161,6 +161,13 @@ int mk_storage_service_read_sectors(uint32_t lba, void *dst, uint32_t sector_cou
     if (dst == 0 || sector_count == 0u) {
         return -1;
     }
+    /*
+     * Storage syscalls already execute in kernel context and can safely access
+     * the caller buffer through the current address space mappings. Using a
+     * transfer slot here leaks heap because the kernel heap is still bump-only.
+     */
+    return kernel_storage_read_sectors(lba, dst, sector_count);
+
     byte_count = sector_count * KERNEL_PERSIST_SECTOR_SIZE;
     if (mk_transfer_create(mk_storage_current_pid(), byte_count, &transfer_id) != 0) {
         return -1;
@@ -201,6 +208,8 @@ int mk_storage_service_write_sectors(uint32_t lba, const void *src, uint32_t sec
     if (src == 0 || sector_count == 0u) {
         return -1;
     }
+    return kernel_storage_write_sectors(lba, src, sector_count);
+
     byte_count = sector_count * KERNEL_PERSIST_SECTOR_SIZE;
     if (mk_transfer_create(mk_storage_current_pid(), byte_count, &transfer_id) != 0) {
         return -1;
@@ -239,6 +248,8 @@ int mk_storage_service_load(void *dst, uint32_t size) {
     if (dst == 0 || size == 0u) {
         return -1;
     }
+    return kernel_storage_load(dst, size);
+
     if (mk_transfer_create(mk_storage_current_pid(), size, &transfer_id) != 0) {
         return -1;
     }
@@ -275,6 +286,8 @@ int mk_storage_service_save(const void *src, uint32_t size) {
     if (src == 0 || size == 0u) {
         return -1;
     }
+    return kernel_storage_save(src, size);
+
     if (mk_transfer_create(mk_storage_current_pid(), size, &transfer_id) != 0) {
         return -1;
     }

@@ -450,6 +450,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
         heap_end = 0x00900000u;
     }
     kernel_mm_init(heap_start, heap_end - heap_start);
+    kernel_video_refresh_backend();
     mk_transfer_init();
     kernel_text_puts("Memory OK\n");
     kernel_bootdebug_mark_stable();
