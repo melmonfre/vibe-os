@@ -444,6 +444,7 @@ void R_InitTextures (void)
 
     
     // Load the patch names from pnames.lmp.
+    printf("\nRIT: PNAMES");
     name[8] = 0;	
     names = W_CacheLumpName ("PNAMES", PU_STATIC);
     nummappatches = LONG ( *((int *)names) );
@@ -458,6 +459,7 @@ void R_InitTextures (void)
     Z_Free (names);
     
     // Load the map texture definitions from textures.lmp.
+    printf("\nRIT: TEXTURE1");
     // The data is contained in one or two lumps,
     //  TEXTURE1 for shareware, plus TEXTURE2 for commercial.
     maptex = maptex1 = W_CacheLumpName ("TEXTURE1", PU_STATIC);
@@ -478,6 +480,7 @@ void R_InitTextures (void)
 	maxoff2 = 0;
     }
     numtextures = numtextures1 + numtextures2;
+    printf("\nRIT: COUNT %d", numtextures);
 	
     textures = Z_Malloc (numtextures*4, PU_STATIC, 0);
     texturecolumnlump = Z_Malloc (numtextures*4, PU_STATIC, 0);
@@ -500,6 +503,7 @@ void R_InitTextures (void)
     for (i = 0; i < temp3; i++)
 	printf("\x8");
     printf("\x8\x8\x8\x8\x8\x8\x8\x8\x8\x8");	
+    printf("\nRIT: BUILD");
 	
     for (i=0 ; i<numtextures ; i++, directory++)
     {
@@ -563,10 +567,12 @@ void R_InitTextures (void)
 	Z_Free (maptex2);
     
     // Precalculate whatever possible.	
+    printf("\nRIT: LOOKUP");
     for (i=0 ; i<numtextures ; i++)
 	R_GenerateLookup (i);
     
     // Create translation table for global animation.
+    printf("\nRIT: XLT");
     texturetranslation = Z_Malloc ((numtextures+1)*4, PU_STATIC, 0);
     
     for (i=0 ; i<numtextures ; i++)
@@ -653,6 +659,7 @@ void R_InitColormaps (void)
 //
 void R_InitData (void)
 {
+    printf ("\nR_InitData: begin");
     R_InitTextures ();
     printf ("\nInitTextures");
     R_InitFlats ();
@@ -843,7 +850,6 @@ void R_PrecacheLevel (void)
 	}
     }
 }
-
 
 
 

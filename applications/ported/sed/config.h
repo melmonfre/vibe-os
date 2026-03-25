@@ -1,10 +1,18 @@
+#ifndef VIBE_SED_CONFIG_H
+#define VIBE_SED_CONFIG_H
+
+#define _GL_CONFIG_H_INCLUDED 1
+
 #define PACKAGE_NAME "GNU sed"
 #define PACKAGE_TARNAME "sed"
 #define PACKAGE_VERSION "4.9.67-03ec-modified"
 #define PACKAGE_STRING "GNU sed 4.9.67-03ec-modified"
 #define PACKAGE_BUGREPORT "bug-sed@gnu.org"
 #define PACKAGE_URL "https://www.gnu.org/software/sed/"
+#define DEFAULT_TEXT_DOMAIN PACKAGE_TARNAME
 
+#define STDC_HEADERS 1
+#define ENABLE_NLS 0
 #define HAVE_STDLIB_H 1
 #define HAVE_STRING_H 1
 #define HAVE_STDIO_H 1
@@ -12,6 +20,8 @@
 #define HAVE_LOCALE_H 1
 #define HAVE_WCHAR_H 1
 #define HAVE_WCTYPE_H 1
+#define HAVE_BTOWC 1
+#define HAVE_UINTPTR_T 1
 
 #define HAVE_ISASCII 1
 #define HAVE_MEMCPY 1
@@ -19,6 +29,7 @@
 #define HAVE_STRTOUL 1
 #define HAVE_READLINK 1
 #define HAVE_SETLOCALE 1
+#define HAVE_MKOSTEMP 1
 
 #define HAVE_FOPEN_RT 1
 #define HAVE_ISATTY 1
@@ -29,14 +40,28 @@
 #define HAVE_WCSXFRM 1
 #define HAVE_WCWIDTH 1
 #define HAVE_WCTYPE 1
-
-/* gnulib related defines */
-#define GNULIB_STRERROR 1
-#define GNULIB_STRERROR_R_POSIX 1
-#define GNULIB_TEMPNAME 1
-#define GNULIB_XALLOC 1
-#define GNULIB_XALLOC_DIE 1
+#define HAVE_SELINUX_SELINUX_H 0
+#define USE_SELINUX_SELINUX_H 0
+#define HAVE_LINUX_XATTR_H 0
+#define HAVE_LISTXATTR 0
+#define HAVE_SMACK 0
 
 #define _GL_INLINE inline
 #define _GL_EXTERN_INLINE extern inline
 #define _GL_EXTERN_INLINE_IN_USE 1
+#define _GL_INLINE_HEADER_BEGIN
+#define _GL_INLINE_HEADER_END
+#define _GL_ATTRIBUTE_FORMAT_PRINTF_STANDARD(a, b)
+#define _GL_ATTRIBUTE_MALLOC
+#define _GL_ATTRIBUTE_PURE
+#define _GL_ATTRIBUTE_CONST
+#define _GL_ATTRIBUTE_DEALLOC_FREE
+#define _GL_ATTRIBUTE_ALLOC_SIZE(args)
+#define _GL_ATTRIBUTE_RETURNS_NONNULL
+#define _GL_ATTRIBUTE_DEPRECATED
+#define _GL_ARG_NONNULL(args)
+#define _GL_UNUSED
+
+#undef HAVE_FCHOWN
+
+#endif

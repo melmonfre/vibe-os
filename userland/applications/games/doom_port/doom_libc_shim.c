@@ -3,7 +3,6 @@
 #include <userland/modules/include/console.h>
 #include <userland/modules/include/fs.h>
 #include <userland/modules/include/syscalls.h>
-#include <kernel/drivers/storage/ata.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -23,8 +22,7 @@
 #define DOOM_STDIN_FD 0
 #define DOOM_STDOUT_FD 1
 #define DOOM_STDERR_FD 2
-#define DOOM_EMBEDDED_WAD_LBA (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT)
-#define DOOM_SECTOR_SIZE 512u
+#define DOOM_IWAD_PATH "/DOOM/DOOM.WAD"
 #define DOOM_EMBEDDED_FILE_NONE 0
 #define DOOM_EMBEDDED_FILE_WAD 1
 
@@ -39,18 +37,13 @@ char *sndserver_filename = "sndserver";
 struct doom_fd_entry {
     int used;
     int embedded_kind;
+    int node;
     const char *data;
     int size;
     int pos;
-    uint32_t start_lba;
-    uint32_t cached_sector;
-    int cache_valid;
-    uint8_t cache[DOOM_SECTOR_SIZE];
 };
 
 static struct doom_fd_entry g_doom_fds[DOOM_MAX_FDS];
-static int g_embedded_wad_state = -1;
-static int g_embedded_wad_size = 0;
 
 static int doom_alloc_fd(void) {
     int i;
@@ -60,13 +53,6 @@ static int doom_alloc_fd(void) {
         }
     }
     return -1;
-}
-
-static uint32_t doom_read_u32_le(const uint8_t *src) {
-    return (uint32_t)src[0]
-         | ((uint32_t)src[1] << 8)
-         | ((uint32_t)src[2] << 16)
-         | ((uint32_t)src[3] << 24);
 }
 
 static const char *doom_path_basename(const char *path) {
@@ -96,15 +82,6 @@ static int doom_try_resolve_path(const char *path) {
 }
 
 static int doom_try_resolve_wad_candidate(const char *path, const char **resolved_path_out) {
-    static const char *doom_wad_candidates[] = {
-        "/doom/DOOM.WAD",
-        "/doom/doom.wad",
-        "/doom.wad",
-        "doom.wad",
-        "userland/applications/games/DOOM/DOOM.WAD",
-        "userland/applications/games/DOOM/doom.wad",
-        0
-    };
     int node = doom_try_resolve_path(path);
     if (node >= 0) {
         if (resolved_path_out) {
@@ -113,100 +90,50 @@ static int doom_try_resolve_wad_candidate(const char *path, const char **resolve
         return node;
     }
     if (doom_path_is_embedded_wad(path)) {
-        for (int i = 0; doom_wad_candidates[i] != 0; ++i) {
-            node = doom_try_resolve_path(doom_wad_candidates[i]);
-            if (node >= 0) {
-                if (resolved_path_out) {
-                    *resolved_path_out = doom_wad_candidates[i];
-                }
-                return node;
+        node = doom_try_resolve_path(DOOM_IWAD_PATH);
+        if (node >= 0) {
+            if (resolved_path_out) {
+                *resolved_path_out = DOOM_IWAD_PATH;
             }
+            return node;
         }
     }
     return -1;
 }
 
-static int doom_embedded_read_raw(uint32_t start_lba, uint32_t offset, void *dst, uint32_t count) {
-    uint8_t sector[DOOM_SECTOR_SIZE];
-    uint8_t *out = (uint8_t *)dst;
+static void doom_debug_path(const char *prefix, const char *path) {
+    char msg[128];
+    int pos = 0;
 
-    while (count > 0u) {
-        uint32_t sector_index = offset / DOOM_SECTOR_SIZE;
-        uint32_t sector_offset = offset % DOOM_SECTOR_SIZE;
-        uint32_t chunk = DOOM_SECTOR_SIZE - sector_offset;
-        if (chunk > count) {
-            chunk = count;
-        }
-        if (sys_storage_read_sectors(start_lba + sector_index, sector, 1u) != 0) {
-            return -1;
-        }
-        memcpy(out, sector + sector_offset, chunk);
-        out += chunk;
-        offset += chunk;
-        count -= chunk;
+    while (prefix && *prefix && pos < (int)sizeof(msg) - 1) {
+        msg[pos++] = *prefix++;
     }
-    return 0;
+    while (path && *path && pos < (int)sizeof(msg) - 2) {
+        msg[pos++] = *path++;
+    }
+    msg[pos++] = '\n';
+    msg[pos] = '\0';
+    sys_write_debug(msg);
 }
 
-static int doom_embedded_detect_wad(void) {
-    uint8_t header[12];
-    uint8_t entry[16];
-    uint32_t numlumps;
-    uint32_t infotableofs;
-    uint32_t dir_end;
-    uint32_t max_end;
+static void doom_debug_fd_event(const char *op, int fd, int a, int b, int c) {
+    char msg[160];
 
-    if (g_embedded_wad_state >= 0) {
-        return g_embedded_wad_state;
-    }
-    g_embedded_wad_state = 0;
-    g_embedded_wad_size = 0;
-
-    if (doom_embedded_read_raw(DOOM_EMBEDDED_WAD_LBA, 0u, header, (uint32_t)sizeof(header)) != 0) {
-        return 0;
-    }
-    if (memcmp(header, "IWAD", 4u) != 0 && memcmp(header, "PWAD", 4u) != 0) {
-        return 0;
-    }
-
-    numlumps = doom_read_u32_le(header + 4);
-    infotableofs = doom_read_u32_le(header + 8);
-    if (numlumps == 0u || numlumps > 65535u || infotableofs < 12u) {
-        return 0;
-    }
-
-    dir_end = infotableofs + (numlumps * 16u);
-    max_end = dir_end;
-    for (uint32_t i = 0; i < numlumps; ++i) {
-        uint32_t filepos;
-        uint32_t size;
-        uint32_t lump_end;
-
-        if (doom_embedded_read_raw(DOOM_EMBEDDED_WAD_LBA,
-                                   infotableofs + (i * 16u),
-                                   entry,
-                                   (uint32_t)sizeof(entry)) != 0) {
-            return 0;
-        }
-        filepos = doom_read_u32_le(entry + 0);
-        size = doom_read_u32_le(entry + 4);
-        lump_end = filepos + size;
-        if (lump_end > max_end) {
-            max_end = lump_end;
-        }
-    }
-
-    if (max_end == 0u || max_end > (32u * 1024u * 1024u)) {
-        return 0;
-    }
-
-    g_embedded_wad_state = 1;
-    g_embedded_wad_size = (int)max_end;
-    return 1;
+    snprintf(msg,
+             sizeof(msg),
+             "doom: %s fd=%d a=%d b=%d c=%d\n",
+             op ? op : "?",
+             fd,
+             a,
+             b,
+             c);
+    sys_write_debug(msg);
+    doom_port_debug_note(msg);
 }
 
 int doom_port_iwad_available(void) {
-    return doom_embedded_detect_wad();
+    int node = doom_try_resolve_path(DOOM_IWAD_PATH);
+    return node >= 0 && !g_fs_nodes[node].is_dir;
 }
 
 int atoi(const char *s) {
@@ -382,96 +309,142 @@ static int vsnprintf_internal(char *str, size_t size, const char *fmt, va_list a
             continue;
         }
 
-        if (*fmt == 's') {
-            const char *s = va_arg(ap, const char *);
-            if (!s) {
-                s = "(null)";
+        {
+            int zero_pad = 0;
+            int width = 0;
+            int precision = -1;
+
+            if (*fmt == '0') {
+                zero_pad = 1;
+                ++fmt;
             }
-            while (*s && written + 1u < size) {
+            while (*fmt >= '0' && *fmt <= '9') {
+                width = (width * 10) + (*fmt - '0');
+                ++fmt;
+            }
+            if (*fmt == '.') {
+                precision = 0;
+                ++fmt;
+                while (*fmt >= '0' && *fmt <= '9') {
+                    precision = (precision * 10) + (*fmt - '0');
+                    ++fmt;
+                }
+            }
+
+            if (*fmt == 's') {
+                const char *s = va_arg(ap, const char *);
+                if (!s) {
+                    s = "(null)";
+                }
+                while (*s && written + 1u < size) {
+                    if (str) {
+                        str[written] = *s;
+                    }
+                    ++written;
+                    ++s;
+                }
+                ++fmt;
+                continue;
+            }
+
+            if (*fmt == 'c') {
+                int c = va_arg(ap, int);
                 if (str) {
-                    str[written] = *s;
+                    str[written] = (char)c;
                 }
                 ++written;
-                ++s;
-            }
-            ++fmt;
-            continue;
-        }
-
-        if (*fmt == 'c') {
-            int c = va_arg(ap, int);
-            if (str) {
-                str[written] = (char)c;
-            }
-            ++written;
-            ++fmt;
-            continue;
-        }
-
-        if (*fmt == 'd' || *fmt == 'i' || *fmt == 'u' || *fmt == 'x' || *fmt == 'X' || *fmt == 'p') {
-            unsigned int base = 10u;
-            unsigned int value_u = 0u;
-            char tmp[32];
-            int pos = 0;
-            int upper = (*fmt == 'X');
-
-            if (*fmt == 'x' || *fmt == 'X' || *fmt == 'p') {
-                base = 16u;
+                ++fmt;
+                continue;
             }
 
-            if (*fmt == 'p') {
-                uintptr_t p = (uintptr_t)va_arg(ap, void *);
-                value_u = (unsigned int)p;
-            } else if (*fmt == 'd' || *fmt == 'i') {
-                int value_s = va_arg(ap, int);
-                if (value_s < 0) {
+            if (*fmt == 'd' || *fmt == 'i' || *fmt == 'u' || *fmt == 'x' || *fmt == 'X' || *fmt == 'p') {
+                unsigned int base = 10u;
+                unsigned int value_u = 0u;
+                char tmp[32];
+                int pos = 0;
+                int upper = (*fmt == 'X');
+                int negative = 0;
+                int digits;
+                int pad_count;
+
+                if (*fmt == 'x' || *fmt == 'X' || *fmt == 'p') {
+                    base = 16u;
+                }
+
+                if (*fmt == 'p') {
+                    uintptr_t p = (uintptr_t)va_arg(ap, void *);
+                    value_u = (unsigned int)p;
+                } else if (*fmt == 'd' || *fmt == 'i') {
+                    int value_s = va_arg(ap, int);
+                    if (value_s < 0) {
+                        negative = 1;
+                        value_u = (unsigned int)(-value_s);
+                    } else {
+                        value_u = (unsigned int)value_s;
+                    }
+                } else {
+                    value_u = va_arg(ap, unsigned int);
+                }
+
+                if (value_u == 0u) {
+                    tmp[pos++] = '0';
+                } else {
+                    while (value_u > 0u && pos < (int)sizeof(tmp)) {
+                        unsigned int d = value_u % base;
+                        tmp[pos++] = (char)(d < 10u ? ('0' + d) : ((upper ? 'A' : 'a') + (d - 10u)));
+                        value_u /= base;
+                    }
+                }
+
+                digits = pos;
+                if (precision > digits) {
+                    pad_count = precision - digits;
+                } else if (zero_pad && width > digits + negative) {
+                    pad_count = width - digits - negative;
+                } else {
+                    pad_count = 0;
+                }
+
+                if (negative) {
                     if (str && written + 1u < size) {
                         str[written] = '-';
                     }
                     ++written;
-                    value_u = (unsigned int)(-value_s);
-                } else {
-                    value_u = (unsigned int)value_s;
                 }
-            } else {
-                value_u = va_arg(ap, unsigned int);
+
+                if (*fmt == 'p') {
+                    if (str && written + 1u < size) {
+                        str[written] = '0';
+                    }
+                    ++written;
+                    if (str && written + 1u < size) {
+                        str[written] = 'x';
+                    }
+                    ++written;
+                }
+
+                while (pad_count-- > 0 && written + 1u < size) {
+                    if (str) {
+                        str[written] = '0';
+                    }
+                    ++written;
+                }
+                while (pos > 0 && written + 1u < size) {
+                    if (str) {
+                        str[written] = tmp[--pos];
+                    }
+                    ++written;
+                }
+                ++fmt;
+                continue;
             }
 
-            if (*fmt == 'p') {
-                if (str && written + 1u < size) {
-                    str[written] = '0';
-                }
-                ++written;
-                if (str && written + 1u < size) {
-                    str[written] = 'x';
-                }
-                ++written;
+            if (str) {
+                str[written] = *fmt;
             }
-
-            if (value_u == 0u) {
-                tmp[pos++] = '0';
-            } else {
-                while (value_u > 0u && pos < (int)sizeof(tmp)) {
-                    unsigned int d = value_u % base;
-                    tmp[pos++] = (char)(d < 10u ? ('0' + d) : ((upper ? 'A' : 'a') + (d - 10u)));
-                    value_u /= base;
-                }
-            }
-            while (pos > 0 && written + 1u < size) {
-                if (str) {
-                    str[written] = tmp[--pos];
-                }
-                ++written;
-            }
+            ++written;
             ++fmt;
-            continue;
         }
-
-        if (str) {
-            str[written] = *fmt;
-        }
-        ++written;
-        ++fmt;
     }
 
     if (str && size > 0u) {
@@ -699,11 +672,11 @@ int access(const char *path, int mode) {
     if (!path) {
         return -1;
     }
-    if (doom_path_is_embedded_wad(path) && doom_embedded_detect_wad()) {
+    node = doom_try_resolve_wad_candidate(path, 0);
+    if (node >= 0 && !g_fs_nodes[node].is_dir) {
         return 0;
     }
-    node = doom_try_resolve_wad_candidate(path, 0);
-    return (node >= 0) ? 0 : -1;
+    return -1;
 }
 
 void vibe_app_console_putc(char c) {
@@ -770,18 +743,6 @@ int vibe_app_remove_dir(const char *path) {
     return (rc == 0) ? 0 : -1;
 }
 
-void *vibe_app_malloc(size_t size) {
-    return malloc(size);
-}
-
-void vibe_app_free(void *ptr) {
-    free(ptr);
-}
-
-void *vibe_app_realloc(void *ptr, size_t size) {
-    return realloc(ptr, size);
-}
-
 int mkdir(const char *path, int mode) {
     int rc;
     (void)mode;
@@ -803,41 +764,27 @@ int open(const char *path, int flags, ...) {
     if ((flags & DOOM_O_ACCMODE) != DOOM_O_RDONLY) {
         return -1;
     }
-    if (doom_path_is_embedded_wad(path) && doom_embedded_detect_wad()) {
+    node = doom_try_resolve_wad_candidate(path, &resolved_path);
+    if (node >= 0 && !g_fs_nodes[node].is_dir) {
         fd = doom_alloc_fd();
         if (fd < 0) {
             return -1;
         }
         g_doom_fds[fd].used = 1;
-        g_doom_fds[fd].embedded_kind = DOOM_EMBEDDED_FILE_WAD;
-        g_doom_fds[fd].data = 0;
-        g_doom_fds[fd].size = g_embedded_wad_size;
+        g_doom_fds[fd].embedded_kind = DOOM_EMBEDDED_FILE_NONE;
+        g_doom_fds[fd].node = node;
+        g_doom_fds[fd].data = g_fs_nodes[node].data;
+        g_doom_fds[fd].size = g_fs_nodes[node].size;
         g_doom_fds[fd].pos = 0;
-        g_doom_fds[fd].start_lba = DOOM_EMBEDDED_WAD_LBA;
-        g_doom_fds[fd].cached_sector = 0u;
-        g_doom_fds[fd].cache_valid = 0;
+        if (g_fs_nodes[node].storage_kind == FS_NODE_STORAGE_IMAGE) {
+            g_doom_fds[fd].embedded_kind = DOOM_EMBEDDED_FILE_WAD;
+            g_doom_fds[fd].data = 0;
+        }
+        doom_debug_path("doom: wad open ", resolved_path);
+        doom_debug_fd_event("open", fd, g_doom_fds[fd].size, node, g_fs_nodes[node].storage_kind);
         return fd;
     }
-    node = doom_try_resolve_wad_candidate(path, &resolved_path);
-    if (node < 0 || g_fs_nodes[node].is_dir) {
-        return -1;
-    }
-
-    fd = doom_alloc_fd();
-    if (fd < 0) {
-        return -1;
-    }
-
-    g_doom_fds[fd].used = 1;
-    g_doom_fds[fd].embedded_kind = DOOM_EMBEDDED_FILE_NONE;
-    g_doom_fds[fd].data = g_fs_nodes[node].data;
-    g_doom_fds[fd].size = g_fs_nodes[node].size;
-    g_doom_fds[fd].pos = 0;
-    g_doom_fds[fd].start_lba = 0u;
-    g_doom_fds[fd].cached_sector = 0u;
-    g_doom_fds[fd].cache_valid = 0;
-    (void)resolved_path;
-    return fd;
+    return -1;
 }
 
 int close(int fd) {
@@ -849,12 +796,10 @@ int close(int fd) {
     }
     g_doom_fds[fd].used = 0;
     g_doom_fds[fd].embedded_kind = DOOM_EMBEDDED_FILE_NONE;
+    g_doom_fds[fd].node = 0;
     g_doom_fds[fd].data = 0;
     g_doom_fds[fd].size = 0;
     g_doom_fds[fd].pos = 0;
-    g_doom_fds[fd].start_lba = 0u;
-    g_doom_fds[fd].cached_sector = 0u;
-    g_doom_fds[fd].cache_valid = 0;
     return 0;
 }
 
@@ -862,6 +807,7 @@ ssize_t read(int fd, void *buf, size_t count) {
     struct doom_fd_entry *entry;
     size_t i;
     size_t available;
+    int bytes_read;
 
     if (!buf) {
         return -1;
@@ -878,35 +824,27 @@ ssize_t read(int fd, void *buf, size_t count) {
     }
 
     entry = &g_doom_fds[fd];
+    if (entry->embedded_kind == DOOM_EMBEDDED_FILE_WAD && count >= 1024u) {
+        doom_debug_fd_event("read-begin", fd, entry->pos, (int)count, entry->size);
+    }
     if (entry->pos >= entry->size) {
         return 0;
     }
     if (entry->embedded_kind == DOOM_EMBEDDED_FILE_WAD) {
-        uint8_t *dst = (uint8_t *)buf;
-
         available = (size_t)(entry->size - entry->pos);
         if (count > available) {
             count = available;
         }
-        for (i = 0; i < count; ) {
-            uint32_t sector_index = (uint32_t)entry->pos / DOOM_SECTOR_SIZE;
-            uint32_t sector_offset = (uint32_t)entry->pos % DOOM_SECTOR_SIZE;
-            size_t chunk = (size_t)(DOOM_SECTOR_SIZE - sector_offset);
-            if (chunk > (count - i)) {
-                chunk = count - i;
-            }
-            if (!entry->cache_valid || entry->cached_sector != sector_index) {
-                if (sys_storage_read_sectors(entry->start_lba + sector_index, entry->cache, 1u) != 0) {
-                    return i > 0u ? (ssize_t)i : -1;
-                }
-                entry->cached_sector = sector_index;
-                entry->cache_valid = 1;
-            }
-            memcpy(dst + i, entry->cache + sector_offset, chunk);
-            i += chunk;
-            entry->pos += (int)chunk;
+        bytes_read = fs_read_node_bytes(entry->node, entry->pos, buf, (int)count);
+        if (bytes_read < 0) {
+            doom_debug_fd_event("read-fail", fd, entry->pos, (int)count, entry->size);
+            return -1;
         }
-        return (ssize_t)count;
+        entry->pos += bytes_read;
+        if (bytes_read != (int)count || count >= 1024u) {
+            doom_debug_fd_event("read-end", fd, entry->pos, bytes_read, (int)count);
+        }
+        return (ssize_t)bytes_read;
     }
     available = (size_t)(entry->size - entry->pos);
     if (count > available) {
@@ -955,9 +893,13 @@ off_t lseek(int fd, off_t offset, int whence) {
     }
     next = base + (int)offset;
     if (next < 0 || next > entry->size) {
+        doom_debug_fd_event("lseek-bad", fd, base, (int)offset, entry->size);
         return -1;
     }
     entry->pos = next;
+    if (entry->embedded_kind == DOOM_EMBEDDED_FILE_WAD) {
+        doom_debug_fd_event("lseek", fd, base, (int)offset, next);
+    }
     return (off_t)next;
 }
 

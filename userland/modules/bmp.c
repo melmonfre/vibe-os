@@ -1,5 +1,11 @@
 #include <userland/modules/include/bmp.h>
 
+enum bmp_scale_mode {
+    BMP_SCALE_FIT = 0,
+    BMP_SCALE_COVER = 1,
+    BMP_SCALE_STRETCH = 2
+};
+
 static uint16_t bmp_read_u16(const uint8_t *p) {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
@@ -16,7 +22,7 @@ static int32_t bmp_read_s32(const uint8_t *p) {
 }
 
 void bmp_palette_color(uint8_t index, uint8_t *r, uint8_t *g, uint8_t *b) {
-    static const uint8_t palette[20][3] = {
+    static const uint8_t ega16[16][3] = {
         {0, 0, 0},
         {0, 0, 170},
         {0, 170, 0},
@@ -33,29 +39,25 @@ void bmp_palette_color(uint8_t index, uint8_t *r, uint8_t *g, uint8_t *b) {
         {255, 85, 255},
         {255, 255, 85},
         {255, 255, 255},
-        {255, 170, 170},
-        {0, 136, 136},
-        {255, 170, 85},
-        {136, 0, 136}
     };
 
-    if (index < (uint8_t)(sizeof(palette) / sizeof(palette[0]))) {
-        *r = palette[index][0];
-        *g = palette[index][1];
-        *b = palette[index][2];
+    if (index < 16u) {
+        *r = ega16[index][0];
+        *g = ega16[index][1];
+        *b = ega16[index][2];
         return;
     }
 
-    *r = index;
-    *g = index;
-    *b = index;
+    *r = (uint8_t)((((unsigned)index >> 5) & 0x07u) * 255u / 7u);
+    *g = (uint8_t)((((unsigned)index >> 2) & 0x07u) * 255u / 7u);
+    *b = (uint8_t)(((unsigned)index & 0x03u) * 255u / 3u);
 }
 
 static uint8_t bmp_nearest_palette(uint8_t r, uint8_t g, uint8_t b) {
     uint32_t best_dist = 0xFFFFFFFFu;
     uint8_t best = 0;
 
-    for (uint8_t i = 0; i < 20u; ++i) {
+    for (int i = 0; i < 256; ++i) {
         uint8_t pr;
         uint8_t pg;
         uint8_t pb;
@@ -64,24 +66,25 @@ static uint8_t bmp_nearest_palette(uint8_t r, uint8_t g, uint8_t b) {
         int db;
         uint32_t dist;
 
-        bmp_palette_color(i, &pr, &pg, &pb);
+        bmp_palette_color((uint8_t)i, &pr, &pg, &pb);
         dr = (int)r - (int)pr;
         dg = (int)g - (int)pg;
         db = (int)b - (int)pb;
         dist = (uint32_t)(dr * dr + dg * dg + db * db);
         if (dist < best_dist) {
             best_dist = dist;
-            best = i;
+            best = (uint8_t)i;
         }
     }
 
     return best;
 }
 
-int bmp_decode_to_palette(const uint8_t *data, int size,
-                          uint8_t *out_pixels, int out_stride,
-                          int max_w, int max_h,
-                          int *out_w, int *out_h) {
+static int bmp_decode_to_palette_internal(const uint8_t *data, int size,
+                                          uint8_t *out_pixels, int out_stride,
+                                          int target_w_limit, int target_h_limit,
+                                          int *out_w, int *out_h,
+                                          enum bmp_scale_mode mode) {
     uint32_t pixel_offset;
     uint32_t dib_size;
     int32_t src_w;
@@ -95,6 +98,10 @@ int bmp_decode_to_palette(const uint8_t *data, int size,
     int target_w;
     int target_h;
     int row_size;
+    int sample_w;
+    int sample_h;
+    int sample_x0;
+    int sample_y0;
 
     if (data == 0 || out_pixels == 0 || out_w == 0 || out_h == 0 || size < 54) {
         return -1;
@@ -128,13 +135,21 @@ int bmp_decode_to_palette(const uint8_t *data, int size,
     target_w = src_w;
     target_h = src_h;
 
-    if (target_w > max_w) {
-        target_h = (target_h * max_w) / target_w;
-        target_w = max_w;
-    }
-    if (target_h > max_h) {
-        target_w = (target_w * max_h) / target_h;
-        target_h = max_h;
+    if (mode != BMP_SCALE_FIT) {
+        if (target_w_limit <= 0 || target_h_limit <= 0) {
+            return -1;
+        }
+        target_w = target_w_limit;
+        target_h = target_h_limit;
+    } else {
+        if (target_w > target_w_limit) {
+            target_h = (target_h * target_w_limit) / target_w;
+            target_w = target_w_limit;
+        }
+        if (target_h > target_h_limit) {
+            target_w = (target_w * target_h_limit) / target_h;
+            target_h = target_h_limit;
+        }
     }
     if (target_w < 1) target_w = 1;
     if (target_h < 1) target_h = 1;
@@ -150,13 +165,34 @@ int bmp_decode_to_palette(const uint8_t *data, int size,
         }
     }
 
+    if (mode == BMP_SCALE_COVER) {
+        if ((int64_t)src_w * (int64_t)target_h > (int64_t)src_h * (int64_t)target_w) {
+            sample_w = (src_h * target_w) / target_h;
+            sample_h = src_h;
+            sample_x0 = (src_w - sample_w) / 2;
+            sample_y0 = 0;
+        } else {
+            sample_w = src_w;
+            sample_h = (src_w * target_h) / target_w;
+            sample_x0 = 0;
+            sample_y0 = (src_h - sample_h) / 2;
+        }
+        if (sample_w < 1) sample_w = 1;
+        if (sample_h < 1) sample_h = 1;
+    } else {
+        sample_w = src_w;
+        sample_h = src_h;
+        sample_x0 = 0;
+        sample_y0 = 0;
+    }
+
     for (int y = 0; y < target_h; ++y) {
-        int src_y = (y * src_h) / target_h;
+        int src_y = sample_y0 + ((y * sample_h) / target_h);
         int file_y = top_down ? src_y : (src_h - 1 - src_y);
         const uint8_t *row = data + pixel_offset + (file_y * row_size);
 
         for (int x = 0; x < target_w; ++x) {
-            int src_x = (x * src_w) / target_w;
+            int src_x = sample_x0 + ((x * sample_w) / target_w);
             uint8_t r;
             uint8_t g;
             uint8_t b;
@@ -181,6 +217,51 @@ int bmp_decode_to_palette(const uint8_t *data, int size,
     *out_w = target_w;
     *out_h = target_h;
     return 0;
+}
+
+int bmp_decode_to_palette(const uint8_t *data, int size,
+                          uint8_t *out_pixels, int out_stride,
+                          int max_w, int max_h,
+                          int *out_w, int *out_h) {
+    return bmp_decode_to_palette_internal(data,
+                                          size,
+                                          out_pixels,
+                                          out_stride,
+                                          max_w,
+                                          max_h,
+                                          out_w,
+                                          out_h,
+                                          BMP_SCALE_FIT);
+}
+
+int bmp_decode_to_palette_cover(const uint8_t *data, int size,
+                                uint8_t *out_pixels, int out_stride,
+                                int target_w, int target_h,
+                                int *out_w, int *out_h) {
+    return bmp_decode_to_palette_internal(data,
+                                          size,
+                                          out_pixels,
+                                          out_stride,
+                                target_w,
+                                target_h,
+                                out_w,
+                                out_h,
+                                BMP_SCALE_COVER);
+}
+
+int bmp_decode_to_palette_stretch(const uint8_t *data, int size,
+                                  uint8_t *out_pixels, int out_stride,
+                                  int target_w, int target_h,
+                                  int *out_w, int *out_h) {
+    return bmp_decode_to_palette_internal(data,
+                                          size,
+                                          out_pixels,
+                                          out_stride,
+                                          target_w,
+                                          target_h,
+                                          out_w,
+                                          out_h,
+                                          BMP_SCALE_STRETCH);
 }
 
 int bmp_encode_8bit(const uint8_t *pixels, int width, int height, int stride,

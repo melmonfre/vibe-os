@@ -1,11 +1,15 @@
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/hal/io.h>
 #include <kernel/driver_manager.h>  /* available via -Ikernel/include */
+#include <kernel/lock.h>
 #include <stdarg.h>
 #include <stddef.h>
 
 /* Serial port I/O for debugging output */
 #define SERIAL_PORT 0x3F8
+
+static spinlock_t g_serial_lock;
+static int g_serial_lock_ready = 0;
 
 void kernel_debug_init(void) {
     static int registered = 0;
@@ -13,6 +17,8 @@ void kernel_debug_init(void) {
         /* first call only: register the driver with manager */
         register_driver("serial", "debug", kernel_debug_init);
         registered = 1;
+        spinlock_init(&g_serial_lock);
+        g_serial_lock_ready = 1;
         return;
     }
 
@@ -31,31 +37,33 @@ static int serial_is_transmitter_empty(void) {
     return (inb(SERIAL_PORT + 5) & 0x20) != 0;
 }
 
-void kernel_debug_putc(char c) {
+static void serial_putc_raw(char c) {
     while (!serial_is_transmitter_empty()) {
     }
     outb(SERIAL_PORT, (uint8_t)c);
 }
 
-void kernel_debug_puts(const char *str) {
+static void serial_write_raw(const char *str) {
+    const char *p;
+
     if (str == NULL) {
         return;
     }
-    
-    for (const char *p = str; *p != '\0'; ++p) {
-        kernel_debug_putc(*p);
+
+    for (p = str; *p != '\0'; ++p) {
+        if (*p == '\n') {
+            serial_putc_raw('\r');
+            serial_putc_raw('\n');
+        } else {
+            serial_putc_raw(*p);
+        }
     }
 }
 
-void kernel_debug_printf(const char *fmt, ...) {
-    if (fmt == NULL) {
-        return;
-    }
-    
-    va_list args;
-    va_start(args, fmt);
-    
-    for (const char *p = fmt; *p != '\0'; ++p) {
+static void serial_vprintf_raw(const char *fmt, va_list args) {
+    const char *p;
+
+    for (p = fmt; *p != '\0'; ++p) {
         if (*p == '%') {
             ++p;
             if (*p == '\0') {
@@ -66,7 +74,7 @@ void kernel_debug_printf(const char *fmt, ...) {
             case 'd': {
                 int value = va_arg(args, int);
                 if (value < 0) {
-                    kernel_debug_putc('-');
+                    serial_putc_raw('-');
                     value = -value;
                 }
                 
@@ -85,7 +93,7 @@ void kernel_debug_printf(const char *fmt, ...) {
                     }
                 }
                 for (int i = 0; i < len; ++i) {
-                    kernel_debug_putc(buf[i]);
+                    serial_putc_raw(buf[i]);
                 }
                 break;
             }
@@ -107,35 +115,80 @@ void kernel_debug_printf(const char *fmt, ...) {
                     }
                 }
                 for (int i = 0; i < len; ++i) {
-                    kernel_debug_putc(buf[i]);
+                    serial_putc_raw(buf[i]);
                 }
                 break;
             }
             case 'c': {
                 int c = va_arg(args, int);
-                kernel_debug_putc((char)c);
+                serial_putc_raw((char)c);
                 break;
             }
             case 's': {
                 const char *str = va_arg(args, const char *);
-                kernel_debug_puts(str);
+                serial_write_raw(str);
                 break;
             }
             case '%':
-                kernel_debug_putc('%');
+                serial_putc_raw('%');
                 break;
             default:
-                kernel_debug_putc('%');
-                kernel_debug_putc(*p);
+                serial_putc_raw('%');
+                serial_putc_raw(*p);
                 break;
             }
         } else if (*p == '\n') {
-            kernel_debug_putc('\r');
-            kernel_debug_putc('\n');
+            serial_putc_raw('\r');
+            serial_putc_raw('\n');
         } else {
-            kernel_debug_putc(*p);
+            serial_putc_raw(*p);
         }
     }
-    
+}
+
+void kernel_debug_putc(char c) {
+    uint32_t flags = 0u;
+
+    if (g_serial_lock_ready) {
+        flags = spinlock_lock_irqsave(&g_serial_lock);
+    }
+    serial_putc_raw(c);
+    if (g_serial_lock_ready) {
+        spinlock_unlock_irqrestore(&g_serial_lock, flags);
+    }
+}
+
+void kernel_debug_puts(const char *str) {
+    uint32_t flags = 0u;
+
+    if (str == NULL) {
+        return;
+    }
+    if (g_serial_lock_ready) {
+        flags = spinlock_lock_irqsave(&g_serial_lock);
+    }
+    serial_write_raw(str);
+    if (g_serial_lock_ready) {
+        spinlock_unlock_irqrestore(&g_serial_lock, flags);
+    }
+}
+
+void kernel_debug_printf(const char *fmt, ...) {
+    uint32_t flags = 0u;
+    va_list args;
+
+    if (fmt == NULL) {
+        return;
+    }
+    if (g_serial_lock_ready) {
+        flags = spinlock_lock_irqsave(&g_serial_lock);
+    }
+
+    va_start(args, fmt);
+    serial_vprintf_raw(fmt, args);
     va_end(args);
+
+    if (g_serial_lock_ready) {
+        spinlock_unlock_irqrestore(&g_serial_lock, flags);
+    }
 }

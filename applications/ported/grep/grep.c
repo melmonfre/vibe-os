@@ -22,6 +22,14 @@ typedef struct {
     int invert_match;
 } grep_options_t;
 
+static void grep_debug(const char *text) {
+    const struct vibe_app_context *ctx = vibe_app_get_context();
+
+    if (ctx && ctx->host && ctx->host->write_debug && text) {
+        ctx->host->write_debug(text);
+    }
+}
+
 static int tolower_compat(int c) {
     if (c >= 'A' && c <= 'Z') return c + 32;
     return c;
@@ -105,6 +113,10 @@ static int grep_file(const char *filename, const char *pattern,
     
     if (opts->count_only) {
         printf("%d\n", matches);
+    }
+
+    if (matches > 0) {
+        grep_debug("grep: match ok\n");
     }
     
     return 0;

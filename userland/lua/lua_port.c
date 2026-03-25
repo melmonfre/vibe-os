@@ -4,7 +4,11 @@
 #include <userland/modules/include/fs.h>
 #include <userland/modules/include/syscalls.h>
 
-#define VIBE_LUA_HEAP_SIZE 65536
+// This allocator is currently shared by the built-in userland runtime,
+// not only by Lua. Keep it large enough for heavier apps such as DOOM.
+#define VIBE_LUA_HEAP_TARGET_SIZE (3ull * 1024ull * 1024ull * 1024ull)
+#define VIBE_LUA_HEAP_RESERVE_SIZE (64u * 1024u * 1024u)
+#define VIBE_LUA_HEAP_FALLBACK_SIZE (64u * 1024u * 1024u)
 
 struct heap_block {
     size_t size;
@@ -12,7 +16,18 @@ struct heap_block {
     struct heap_block *next;
 };
 
-static unsigned char g_lua_heap[VIBE_LUA_HEAP_SIZE];
+__attribute__((weak)) size_t kernel_heap_free(void) {
+    return 0u;
+}
+
+__attribute__((weak)) void *kernel_malloc(size_t size) {
+    (void)size;
+    return 0;
+}
+
+static unsigned char g_lua_heap_fallback[VIBE_LUA_HEAP_FALLBACK_SIZE];
+static unsigned char *g_lua_heap = 0;
+static size_t g_lua_heap_size = 0u;
 static struct heap_block *g_heap_head = 0;
 static int g_heap_init = 0;
 static FILE g_stdin = {-1, 0, 0, 0, 0};
@@ -23,8 +38,27 @@ int errno = 0;
 FILE *stdin = &g_stdin;
 
 static void heap_init(void) {
+    size_t free_bytes = kernel_heap_free();
+    size_t target = VIBE_LUA_HEAP_TARGET_SIZE;
+
+    if (free_bytes > VIBE_LUA_HEAP_RESERVE_SIZE + sizeof(struct heap_block) + 4096u) {
+        size_t budget = free_bytes - VIBE_LUA_HEAP_RESERVE_SIZE;
+        if (budget < target) {
+            target = budget;
+        }
+        g_lua_heap = (unsigned char *)kernel_malloc(target);
+        if (g_lua_heap) {
+            g_lua_heap_size = target;
+        }
+    }
+
+    if (!g_lua_heap) {
+        g_lua_heap = g_lua_heap_fallback;
+        g_lua_heap_size = VIBE_LUA_HEAP_FALLBACK_SIZE;
+    }
+
     g_heap_head = (struct heap_block *)g_lua_heap;
-    g_heap_head->size = VIBE_LUA_HEAP_SIZE - sizeof(struct heap_block);
+    g_heap_head->size = g_lua_heap_size - sizeof(struct heap_block);
     g_heap_head->free = 1;
     g_heap_head->next = 0;
     g_heap_init = 1;
@@ -327,6 +361,10 @@ void *malloc(size_t size) {
 
     if (!g_heap_init) {
         heap_init();
+    }
+    if (!g_heap_head) {
+        errno = ENOMEM;
+        return 0;
     }
     if (size == 0u) {
         return 0;
@@ -768,28 +806,29 @@ FILE *freopen(const char *path, const char *mode, FILE *stream) {
 
 size_t fread(void *ptr, size_t size, size_t count, FILE *stream) {
     size_t total = size * count;
-    int remaining;
+    int read_count;
 
     if (!stream || stream->node < 0 || !ptr) {
         return 0u;
     }
-
-    remaining = g_fs_nodes[stream->node].size - stream->pos;
-    if (remaining <= 0) {
+    if (stream->pos >= g_fs_nodes[stream->node].size) {
         stream->eof = 1;
         return 0u;
     }
-    if ((int)total > remaining) {
-        total = (size_t)remaining;
+
+    read_count = fs_read_node_bytes(stream->node, stream->pos, ptr, (int)total);
+    if (read_count <= 0) {
+        stream->eof = 1;
+        return 0u;
+    }
+    stream->pos += read_count;
+    if ((size_t)read_count < total) {
         stream->eof = 1;
     }
-
-    memcpy(ptr, g_fs_nodes[stream->node].data + stream->pos, total);
-    stream->pos += (int)total;
     if (size == 0u) {
         return 0u;
     }
-    return total / size;
+    return (size_t)read_count / size;
 }
 
 int getc(FILE *stream) {
@@ -803,7 +842,15 @@ int getc(FILE *stream) {
         stream->eof = 1;
         return EOF;
     }
-    return (unsigned char)g_fs_nodes[stream->node].data[stream->pos++];
+    {
+        unsigned char value = 0;
+        if (fs_read_node_bytes(stream->node, stream->pos, &value, 1) != 1) {
+            stream->eof = 1;
+            return EOF;
+        }
+        stream->pos += 1;
+        return value;
+    }
 }
 
 int fclose(FILE *stream) {

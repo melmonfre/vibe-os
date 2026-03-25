@@ -338,15 +338,15 @@ void brick_race_draw_window(struct brick_race_state *s, int active, int min_hove
     char line[32];
 
     draw_window_frame(&s->window, "BRICK RACE", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&body, ui_color_canvas());
+    ui_draw_surface(&body, ui_color_window_bg());
     ui_draw_surface(&topbar, ui_color_panel());
-    ui_draw_inset(&board, ui_color_canvas());
-    ui_draw_inset(&hud, ui_color_canvas());
-    ui_draw_inset(&stat1, ui_color_canvas());
-    ui_draw_inset(&stat2, ui_color_canvas());
-    ui_draw_inset(&stat3, ui_color_canvas());
-    ui_draw_inset(&bars, ui_color_canvas());
-    ui_draw_inset(&status, ui_color_canvas());
+    ui_draw_inset(&board, ui_color_window_bg());
+    ui_draw_inset(&hud, ui_color_window_bg());
+    ui_draw_inset(&stat1, ui_color_window_bg());
+    ui_draw_inset(&stat2, ui_color_window_bg());
+    ui_draw_inset(&stat3, ui_color_window_bg());
+    ui_draw_inset(&bars, ui_color_window_bg());
+    ui_draw_inset(&status, ui_color_window_bg());
     sys_text(topbar.x + 6, topbar.y + 5, ui_color_muted(), "F-zero inspired sprint");
 
     sys_rect(board.x + 1, board.y + 1, board.w - 2, BR_HORIZON_Y + 24, t->background);

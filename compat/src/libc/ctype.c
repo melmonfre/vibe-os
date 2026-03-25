@@ -17,6 +17,18 @@ int isspace(int c) {
     return (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v');
 }
 
+int isprint(int c) {
+    return (c >= 32 && c <= 126);
+}
+
+int isascii(int c) {
+    return (c >= 0 && c <= 127);
+}
+
+int isblank(int c) {
+    return (c == ' ' || c == '\t');
+}
+
 int isupper(int c) {
     return (c >= 'A' && c <= 'Z');
 }

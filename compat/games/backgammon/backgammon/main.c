@@ -112,10 +112,10 @@ main (int argc, char **argv)
 		if (aflag) {	/* print rules */
 			addstr(rules);
 			if (yorn(0)) {
-				endwin();
-				execl(TEACH, "teachgammon", (char *)NULL);
-
-				err(1, "%s", noteach);
+				addstr("\n");
+				addstr(noteach);
+				addstr("Launch teachgammon from the VibeOS Games menu ");
+				addstr("or shell for the guided tutorial.\n");
 			} else {/* if not rules, then instructions */
 				addstr(need);
 				if (yorn(0)) {	/* print instructions */

@@ -4,7 +4,7 @@ import struct
 import subprocess
 import sys
 
-HEADER_STRUCT = struct.Struct("<IHHIIII16s")
+HEADER_STRUCT = struct.Struct("<IHHIIIII16s")
 SYMBOLS = ("__app_load_start", "__app_image_end", "__app_bss_end", "vibe_app_entry")
 
 
@@ -51,7 +51,8 @@ def main():
         fields = list(HEADER_STRUCT.unpack(raw))
         fields[3] = image_size
         fields[4] = memory_size
-        fields[5] = entry_offset
+        fields[5] = load_start
+        fields[6] = entry_offset
 
         app_bin.seek(0)
         app_bin.write(HEADER_STRUCT.pack(*fields))

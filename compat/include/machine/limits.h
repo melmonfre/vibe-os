@@ -1,0 +1,6 @@
+#ifndef _COMPAT_MACHINE_LIMITS_H_
+#define _COMPAT_MACHINE_LIMITS_H_
+
+#define _MAX_PAGE_SHIFT 12
+
+#endif

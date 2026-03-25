@@ -27,6 +27,21 @@
 
 extern bool use_extended_syntax_p;
 
+static void *
+vibe_memrchr(const void *s, int c, size_t n)
+{
+  const unsigned char *p = (const unsigned char *) s + n;
+
+  while (n > 0)
+    {
+      --p;
+      if (*p == (unsigned char) c)
+        return (void *) p;
+      --n;
+    }
+  return NULL;
+}
+
 void
 dfaerror (char const *mesg)
 {
@@ -68,10 +83,14 @@ compile_regex_1 (struct regex *new_regex, int needed_sub)
     }
 
   if (new_regex->flags & REG_ICASE)
+#ifdef RE_ICASE
     syntax |= RE_ICASE;
-  else
+#endif
+  if ((new_regex->flags & REG_ICASE) == 0)
     new_regex->pattern.fastmap = malloc (1 << (sizeof (char) * 8));
+#ifdef RE_NO_SUB
   syntax |= needed_sub ? 0 : RE_NO_SUB;
+#endif
 
   /* If REG_NEWLINE is set, newlines are treated differently.  */
   if (new_regex->flags & REG_NEWLINE)
@@ -289,7 +308,7 @@ match_regex (struct regex *regex, char *buf, idx_t buflen,
 
       if (buf_start_offset > 0)
         {
-          const char *eol = memrchr (buf, buffer_delimiter, buf_start_offset);
+          const char *eol = vibe_memrchr (buf, buffer_delimiter, buf_start_offset);
 
           if (eol != NULL)
             beg = eol + 1;

@@ -216,9 +216,9 @@ void flap_birb_draw_window(struct flap_birb_state *s, int active,
     char best_text[32] = "Best ";
 
     draw_window_frame(&s->window, "FLAP BIRB", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&(struct rect){s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22}, ui_color_canvas());
-    ui_draw_inset(&board, ui_color_canvas());
-    ui_draw_inset(&hud_panel, ui_color_canvas());
+    ui_draw_surface(&(struct rect){s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22}, ui_color_window_bg());
+    ui_draw_inset(&board, ui_color_window_bg());
+    ui_draw_inset(&hud_panel, ui_color_window_bg());
 
     sys_rect(board.x + 1, board.y + 1, board.w - 2, board.h - 2, t->window);
     sys_rect(board.x + 1, board.y + 1, board.w - 2, board.h - FLAP_BIRB_GROUND_H - 2, t->background);

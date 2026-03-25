@@ -3,6 +3,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 /* very simple filesystem API currently backed by an in‑memory ramfs */
 
@@ -17,6 +19,13 @@ int write(int fd, const void *buf, size_t count);
 
 /* close a descriptor */
 int close(int fd);
+
+/* reposition the descriptor offset */
+off_t lseek(int fd, off_t offset, int whence);
+
+/* query metadata by path or descriptor */
+int stat(const char *path, struct stat *buf);
+int fstat(int fd, struct stat *buf);
 
 /* initialize the virtual filesystem layer (ramfs backend for now) */
 void vfs_init(void);

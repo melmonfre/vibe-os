@@ -82,7 +82,7 @@ static void draw_listing(struct filemanager_state *fm) {
     struct rect list = filemanager_list_rect(fm);
     const struct desktop_theme *theme = ui_theme_get();
 
-    ui_draw_inset(&list, ui_color_canvas());
+    ui_draw_inset(&list, ui_color_window_bg());
 
     if (fm->cwd != g_fs_root) {
         struct rect parent_row = filemanager_row_rect(fm, row++);
@@ -107,7 +107,7 @@ static void draw_listing(struct filemanager_state *fm) {
         if (child == fm->selected_node) {
             ui_draw_surface(&item, theme->window);
         } else {
-            ui_draw_inset(&item, g_fs_nodes[child].is_dir ? ui_color_panel() : ui_color_canvas());
+            ui_draw_inset(&item, g_fs_nodes[child].is_dir ? ui_color_panel() : ui_color_window_bg());
         }
 
         filemanager_row_label(child, line, sizeof(line));
@@ -183,7 +183,7 @@ void filemanager_draw_window(struct filemanager_state *fm, int active,
     ui_draw_surface(&toolbar, ui_color_panel());
     ui_draw_surface(&shelf, ui_color_panel());
 
-    ui_draw_inset(&path_bar, ui_color_canvas());
+    ui_draw_inset(&path_bar, ui_color_window_bg());
     ui_draw_button(&up_button, "UP", UI_BUTTON_PRIMARY, 0);
 
     char path[80];

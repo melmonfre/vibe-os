@@ -31,6 +31,14 @@ static inline int strcmp(const char *a, const char *b) {
     return (int)((unsigned char)*a - (unsigned char)*b);
 }
 
+static inline size_t strlen(const char *s) {
+    size_t len = 0u;
+    while (s != 0 && s[len] != '\0') {
+        ++len;
+    }
+    return len;
+}
+
 static inline char *strncpy(char *dst, const char *src, size_t n) {
     char *d = dst;
     while (n && *src) {

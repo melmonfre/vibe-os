@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <limits.h>
 #include "stat-macros.h"
 
 #include <selinux/selinux.h>

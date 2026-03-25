@@ -6,9 +6,10 @@
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/kernel.h>
+#include <kernel/lock.h>
 #include <kernel/memory/heap.h>
 
-#define IPC_QUEUE_SIZE 16
+#define IPC_QUEUE_SIZE 64
 #define IPC_MAX_QUEUES 64
 
 /* messages are simple pointers to a buffer with length */
@@ -19,6 +20,8 @@ typedef struct {
 
 /* one queue per process for simplicity */
 struct ipc_queue {
+    int owner_pid;
+    spinlock_t lock;
     ipc_msg_t msgs[IPC_QUEUE_SIZE];
     int head;
     int tail;
@@ -26,48 +29,112 @@ struct ipc_queue {
 };
 
 static struct ipc_queue *g_queues[IPC_MAX_QUEUES];
+static spinlock_t g_queue_table_lock;
 
 static struct ipc_queue *ensure_queue(process_t *p) {
-    if (!p)
+    int slot;
+    int empty_slot = -1;
+    struct ipc_queue *queue;
+    uint32_t flags;
+
+    if (!p || p->pid <= 0) {
         return NULL;
-    int idx = p->pid % IPC_MAX_QUEUES;
-    if (!g_queues[idx]) {
-        g_queues[idx] = kernel_malloc(sizeof(struct ipc_queue));
-        if (!g_queues[idx])
-            return NULL;
-        memset(g_queues[idx], 0, sizeof(struct ipc_queue));
     }
-    return g_queues[idx];
+
+    flags = spinlock_lock_irqsave(&g_queue_table_lock);
+    for (slot = 0; slot < IPC_MAX_QUEUES; ++slot) {
+        if (g_queues[slot] != NULL && g_queues[slot]->owner_pid == p->pid) {
+            queue = g_queues[slot];
+            spinlock_unlock_irqrestore(&g_queue_table_lock, flags);
+            return queue;
+        }
+        if (g_queues[slot] == NULL && empty_slot < 0) {
+            empty_slot = slot;
+        }
+    }
+    if (empty_slot < 0) {
+        spinlock_unlock_irqrestore(&g_queue_table_lock, flags);
+        return NULL;
+    }
+
+    queue = kernel_malloc(sizeof(struct ipc_queue));
+    if (!queue) {
+        spinlock_unlock_irqrestore(&g_queue_table_lock, flags);
+        return NULL;
+    }
+
+    memset(queue, 0, sizeof(struct ipc_queue));
+    queue->owner_pid = p->pid;
+    spinlock_init(&queue->lock);
+    g_queues[empty_slot] = queue;
+    spinlock_unlock_irqrestore(&g_queue_table_lock, flags);
+    return queue;
 }
 
 int ipc_send(process_t *dest, const void *data, size_t len) {
-    if (!dest || !data)
+    struct ipc_queue *q;
+    ipc_msg_t *m;
+    uint32_t flags;
+
+    if (!dest || !data || len == 0u) {
         return -1;
-    struct ipc_queue *q = ensure_queue(dest);
-    if (!q || q->count >= IPC_QUEUE_SIZE)
+    }
+
+    q = ensure_queue(dest);
+    if (!q) {
         return -1;
-    ipc_msg_t *m = &q->msgs[q->tail];
+    }
+
+    flags = spinlock_lock_irqsave(&q->lock);
+    if (q->count >= IPC_QUEUE_SIZE) {
+        spinlock_unlock_irqrestore(&q->lock, flags);
+        return -1;
+    }
+
+    m = &q->msgs[q->tail];
     m->data = kernel_malloc(len);
-    if (!m->data)
+    if (!m->data) {
+        spinlock_unlock_irqrestore(&q->lock, flags);
         return -1;
+    }
+
     memcpy(m->data, data, len);
     m->len = len;
     q->tail = (q->tail + 1) % IPC_QUEUE_SIZE;
     q->count++;
+    spinlock_unlock_irqrestore(&q->lock, flags);
     return 0;
 }
 
 int ipc_receive(process_t *self, void *buf, size_t bufsize) {
-    if (!self || !buf)
+    struct ipc_queue *q;
+    ipc_msg_t *m;
+    size_t tocopy;
+    uint32_t flags;
+
+    if (!self || !buf || bufsize == 0u) {
         return -1;
-    struct ipc_queue *q = ensure_queue(self);
-    if (!q || q->count == 0)
+    }
+
+    q = ensure_queue(self);
+    if (!q) {
         return -1;
-    ipc_msg_t *m = &q->msgs[q->head];
-    size_t tocopy = m->len < bufsize ? m->len : bufsize;
+    }
+
+    flags = spinlock_lock_irqsave(&q->lock);
+    if (q->count == 0) {
+        spinlock_unlock_irqrestore(&q->lock, flags);
+        return -1;
+    }
+
+    m = &q->msgs[q->head];
+    tocopy = m->len < bufsize ? m->len : bufsize;
     memcpy(buf, m->data, tocopy);
     kernel_free(m->data);
+    m->data = NULL;
+    m->len = 0u;
     q->head = (q->head + 1) % IPC_QUEUE_SIZE;
     q->count--;
+    spinlock_unlock_irqrestore(&q->lock, flags);
     return (int)tocopy;
 }

@@ -185,40 +185,21 @@ FILE *
 ck_mkstemp (char **p_filename, const char *tmpdir,
             const char *base, const char *mode)
 {
+  static unsigned long counter = 0;
   idx_t tmpdirlen = strlen (tmpdir), baselen = strlen (base);
-  char *template = xmalloc (tmpdirlen + baselen + 8);
+  char *template = xmalloc (tmpdirlen + baselen + 16);
   char *basecopy = mempcpy (template, tmpdir, tmpdirlen);
   *basecopy++ = '/';
   char *suffix = mempcpy (basecopy, base, baselen);
-  memset (suffix, 'X', 6);
-  suffix[6] = '\0';
+  snprintf (suffix, 16, "%06lu", counter++);
 
-   /* The ownership might change, so omit some permissions at first
-      so unauthorized users cannot nip in before the file is ready.
-      mkstemp forces O_BINARY on cygwin, so use mkostemp instead.  */
-  mode_t save_umask = umask (0077);
-  int fd = mkostemp (template, 0);
-  int err = errno;
-  umask (save_umask);
-  FILE *fp = NULL;
+  *p_filename = template;
+  register_cleanup_file (template);
 
-  if (0 <= fd)
-    {
-      *p_filename = template;
-      register_cleanup_file (template);
-
-#if O_BINARY
-      if (binary_mode && set_binary_mode (fd, O_BINARY) == -1)
-        panic (_("failed to set binary mode on '%s'"), template);
-#endif
-
-      fp = fdopen (fd, mode);
-      err = errno;
-    }
-
+  FILE *fp = fopen (template, mode);
   if (!fp)
     panic (_("couldn't open temporary file %s: %s"), template,
-           strerror (err));
+           strerror (errno));
 
   register_open_file (fp, template);
   return fp;

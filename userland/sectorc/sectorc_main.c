@@ -1,7 +1,16 @@
 #include "sectorc_internal.h"
+#include <lang/include/vibe_app_runtime.h>
 #include <userland/modules/include/fs.h>
 
 #define SECTORC_VERSION "sectorc 0.2"
+
+static void sectorc_debug(const char *text) {
+    const struct vibe_app_context *ctx = vibe_app_get_context();
+
+    if (ctx && ctx->host && ctx->host->write_debug && text) {
+        ctx->host->write_debug(text);
+    }
+}
 
 static int sectorc_arg_equal(const char *a, const char *b) {
     return sectorc_string_equal(a, b);
@@ -171,6 +180,7 @@ int sectorc_main(int argc, char **argv) {
     sectorc_write("compilando ");
     sectorc_write(path);
     sectorc_write_line("...");
+    sectorc_debug("sectorc: compile begin\n");
 
     if (sectorc_read_source(path, &source) != 0) {
         sectorc_write_line("sectorc: arquivo nao encontrado");
@@ -187,6 +197,7 @@ int sectorc_main(int argc, char **argv) {
     sectorc_write("bytecode: ");
     sectorc_write_int(program.code_count / 2);
     sectorc_write_line(" instrucoes");
+    sectorc_debug("sectorc: compile ok\n");
 
     if (output_path != 0) {
         if (build_output_dump(path, &program, output_dump, (int)sizeof(output_dump)) != 0) {

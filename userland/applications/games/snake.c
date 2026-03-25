@@ -218,8 +218,8 @@ void snake_draw_window(struct snake_state *snake, int active,
     draw_window_frame(&snake->window, "SNAKE", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&(struct rect){snake->window.x + 4, snake->window.y + 18,
                                    snake->window.w - 8, snake->window.h - 22},
-                    ui_color_canvas());
-    ui_draw_inset(&board, ui_color_canvas());
+                    ui_color_window_bg());
+    ui_draw_inset(&board, ui_color_window_bg());
     sys_rect(board.x + 1, board.y + 1, board.w - 2, board.h - 2, theme->background);
 
     for (int y = 0; y < SNAKE_GRID_H; ++y) {

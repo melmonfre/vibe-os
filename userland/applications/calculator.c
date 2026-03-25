@@ -206,7 +206,7 @@ void calculator_draw_window(struct calculator_state *calc, int active,
     ui_draw_surface(&body, theme->window_bg);
     ui_draw_surface(&hero, ui_color_panel());
 
-    ui_draw_inset(&display, ui_color_canvas());
+    ui_draw_inset(&display, ui_color_window_bg());
     sys_text(hero.x + 6, hero.y + 5, ui_color_muted(), "Operacoes basicas");
     sys_text(display.x + 6, display.y + 9, theme->text, calc->display);
 

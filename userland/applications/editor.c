@@ -231,13 +231,13 @@ void editor_draw_window(struct editor_state *ed, int active,
     ui_draw_surface(&meta, ui_color_panel());
 
     editor_compact_path(ed, path, sizeof(path));
-    ui_draw_inset(&path_bar, ui_color_canvas());
+    ui_draw_inset(&path_bar, ui_color_window_bg());
     sys_text(path_bar.x + 4, path_bar.y + 4, theme->text, path);
     ui_draw_button(&save, save_label, UI_BUTTON_PRIMARY, 0);
     sys_text(meta.x + 6, meta.y + 5, ui_color_muted(), meta_left);
     sys_text(meta.x + meta.w - 120, meta.y + 5, ui_color_muted(), meta_right);
 
-    ui_draw_inset(&area, ui_color_canvas());
+    ui_draw_inset(&area, ui_color_window_bg());
     for (int i = 0; i < ed->length; ++i) {
         char ch = ed->buffer[i];
 

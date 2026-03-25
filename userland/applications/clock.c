@@ -62,8 +62,8 @@ void clock_draw_window(struct clock_state *c, int active,
     draw_window_frame(&c->window, "RELOGIO", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, theme->window_bg);
     ui_draw_surface(&hero, ui_color_panel());
-    ui_draw_inset(&face, ui_color_canvas());
-    ui_draw_inset(&meter_bg, ui_color_canvas());
+    ui_draw_inset(&face, ui_color_window_bg());
+    ui_draw_inset(&meter_bg, ui_color_window_bg());
 
     clock_format(time_text, c->tick_count);
     append_two_digits(seconds_text, seconds);
@@ -76,7 +76,7 @@ void clock_draw_window(struct clock_state *c, int active,
     if (bar_w < 0) {
         bar_w = 0;
     }
-    ui_draw_inset(&meter, ui_color_canvas());
+    ui_draw_inset(&meter, ui_color_window_bg());
     sys_rect(meter.x + 2, meter.y + 2,
              bar_w > meter.w - 4 ? meter.w - 4 : bar_w,
              meter.h - 4,

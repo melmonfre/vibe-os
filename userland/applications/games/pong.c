@@ -255,8 +255,8 @@ void pong_draw_window(struct pong_state *s, int active, int min_hover, int max_h
     int hud_x = board.x + board.w + 18;
 
     draw_window_frame(&s->window, "PONG", active, min_hover, max_hover, close_hover);
-    ui_draw_surface(&(struct rect){s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22}, ui_color_canvas());
-    ui_draw_inset(&board, ui_color_canvas());
+    ui_draw_surface(&(struct rect){s->window.x + 4, s->window.y + 18, s->window.w - 8, s->window.h - 22}, ui_color_window_bg());
+    ui_draw_inset(&board, ui_color_window_bg());
 
     for (int y = 6; y < PONG_BOARD_H - 6; y += 10) {
         sys_rect(board.x + (PONG_BOARD_W / 2) - 1, board.y + y, 2, 5, t->menu_button_inactive);

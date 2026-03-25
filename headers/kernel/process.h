@@ -12,6 +12,12 @@ enum process_state {
     PROCESS_TERMINATED,
 };
 
+enum process_kind {
+    PROCESS_KIND_USER = 0,
+    PROCESS_KIND_SERVICE = 1,
+    PROCESS_KIND_KERNEL_TASK = 2,
+};
+
 /* saved register set for context switching.  order is important; the
    assembly context_switch routine assumes this layout. */
 typedef struct {
@@ -32,13 +38,28 @@ typedef struct process {
     regs_t regs;            /* processor state (must be first field) */
     int pid;                /* process identifier */
     void *stack;            /* base pointer of allocated stack memory */
+    uint32_t stack_size;    /* allocated stack size in bytes */
+    int current_cpu;        /* CPU que esta executando este processo, -1 se nenhuma */
+    int preferred_cpu;      /* CPU alvo para balanceamento inicial */
+    int last_cpu;           /* ultimo CPU que executou a tarefa */
     enum process_state state;
+    enum process_kind kind;
+    uint32_t service_type;
+    uint32_t runtime_ticks;
+    uint32_t last_start_tick;
+    uint32_t context_switches;
     struct process *next;   /* linked‑list pointer for scheduler */
 } process_t;
 
 /* create / destroy a process object.  the entry point will be installed
    in the register state and the stack allocated automatically. */
 process_t *process_create(void (*entry)(void));
+process_t *process_create_kind(void (*entry)(void), enum process_kind kind, uint32_t service_type);
+process_t *process_create_with_stack(void (*entry)(void),
+                                     enum process_kind kind,
+                                     uint32_t service_type,
+                                     uint32_t stack_size);
+void process_terminate(process_t *proc);
 void process_destroy(process_t *proc);
 
 #endif /* KERNEL_PROCESS_H */

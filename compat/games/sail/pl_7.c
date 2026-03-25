@@ -39,6 +39,9 @@
 #include "machdep.h"
 #include "player.h"
 
+extern int vibe_sail_single_process;
+void vibe_sail_driver_step(void);
+
 /*
  * Display interface
  */
@@ -122,6 +125,8 @@ newturn(int n)
 		(void) wmove(scroll_w, sc_line, 0);
 		(void) wclrtoeol(scroll_w);
 	}
+	if (vibe_sail_single_process && n != 0)
+		vibe_sail_driver_step();
 	if (Sync() < 0)
 		leave(LEAVE_SYNC);
 	if (!hasdriver)

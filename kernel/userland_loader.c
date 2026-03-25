@@ -1,42 +1,37 @@
-#include <stddef.h>
-#include <stdint.h>
-#include <kernel/memory/heap.h>
+#include <kernel/kernel.h>
+#include <kernel/microkernel.h>
+#include <kernel/scheduler.h>
 #include <kernel/userland.h>
 
-typedef void (*userland_entry_t)(void);
-
-/* userland now linked into kernel; entry is a normal symbol */
 extern void userland_entry(void);
 
+static const struct mk_launch_descriptor g_init_launch = {
+    .abi_version = MK_LAUNCH_ABI_VERSION,
+    .kind = MK_LAUNCH_KIND_SERVICE,
+    .service_type = MK_SERVICE_INIT,
+    .flags = MK_LAUNCH_FLAG_BOOTSTRAP | MK_LAUNCH_FLAG_CRITICAL | MK_LAUNCH_FLAG_BUILTIN,
+    .stack_size = 65536u,
+    .name = "init",
+    .entry = userland_entry,
+};
+
 __attribute__((noreturn)) void userland_run(void) {
-    /* debug breadcrumbs */
+    int pid;
+
     extern void kernel_text_puts(const char *);
     extern void kernel_debug_puts(const char *);
-    kernel_text_puts("UL jump...\n");
-    kernel_debug_puts("userland_run: jump\n");
+    kernel_text_puts("UL bootstrap...\n");
+    kernel_debug_puts("userland_run: bootstrap init service\n");
 
-    /*
-     * The userland stack sits in the reserved gap directly below the dynamic
-     * kernel heap so higher resolutions can consume more heap without
-     * colliding with userland.
-     */
-    uint32_t stack_top = (uint32_t)kernel_heap_start();
-    if (stack_top > 0x2000u) {
-        stack_top -= 0x1000u;
-    } else {
-        stack_top = 0x00480000u;
+    pid = mk_launch_bootstrap(&g_init_launch);
+    if (pid < 0) {
+        kernel_panic("userland bootstrap failed");
     }
-    stack_top = (stack_top + 0xF) & ~0xFu; /* align 16 */
 
-    __asm__ volatile("cli\n\t"
-                     "mov %0, %%esp\n\t"
-                     "sti\n\t"
-                     :
-                     : "r"(stack_top)
-                     : "memory");
-
-    userland_entry_t entry = userland_entry;
-    entry();
-
-    __builtin_unreachable();
+    kernel_text_puts("UL schedule...\n");
+    schedule();
+    kernel_panic("scheduler returned after init bootstrap");
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
 }

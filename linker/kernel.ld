@@ -8,6 +8,7 @@ SECTIONS
     .text : ALIGN(4)
     {
         KEEP(*(.entry))
+        KEEP(*(.rmstub*))
         *(.text*)
     }
 

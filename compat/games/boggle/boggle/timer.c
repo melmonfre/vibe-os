@@ -33,11 +33,9 @@
  * SUCH DAMAGE.
  */
 
-#include <sys/select.h>
 #include <curses.h>
 #include <setjmp.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "extern.h"
 
@@ -88,22 +86,25 @@ timerch(void)
 static int
 waitch(long delay)
 {
-	fd_set fdbits;
-	struct timeval duration;
+	int ch;
+	int delay_ms;
 
-	duration.tv_sec = 0;
-	duration.tv_usec = delay;
-	FD_ZERO(&fdbits);
-	FD_SET(STDIN_FILENO, &fdbits);
-	return (select(STDIN_FILENO+1, &fdbits, NULL, NULL, &duration));
+	delay_ms = (int)((delay + 999L) / 1000L);
+	if (delay_ms < 1)
+		delay_ms = 1;
+	nodelay(stdscr, 1);
+	ch = getch();
+	nodelay(stdscr, 0);
+	if (ch != ERR) {
+		ungetch(ch);
+		return (1);
+	}
+	napms(delay_ms);
+	return (0);
 }
 
 void
 delay(int tenths)
 {
-	struct timeval duration;
-
-	duration.tv_usec = (tenths % 10 ) * 100000L;
-	duration.tv_sec = tenths / 10;
-	select(0, 0, 0, 0, &duration);
+	napms(tenths * 100);
 }

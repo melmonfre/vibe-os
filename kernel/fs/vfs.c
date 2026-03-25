@@ -12,6 +12,9 @@ extern int ramfs_open(const char *path);
 extern int ramfs_read(int fd, void *buf, size_t count);
 extern int ramfs_write(int fd, const void *buf, size_t count);
 extern int ramfs_close(int fd);
+extern off_t ramfs_lseek(int fd, off_t offset, int whence);
+extern int ramfs_stat(const char *path, struct stat *buf);
+extern int ramfs_fstat(int fd, struct stat *buf);
 
 /* initialize backend and seed a small rootfs */
 void vfs_init(void) {
@@ -36,4 +39,16 @@ int write(int fd, const void *buf, size_t count) {
 
 int close(int fd) {
     return ramfs_close(fd);
+}
+
+off_t lseek(int fd, off_t offset, int whence) {
+    return ramfs_lseek(fd, offset, whence);
+}
+
+int stat(const char *path, struct stat *buf) {
+    return ramfs_stat(path, buf);
+}
+
+int fstat(int fd, struct stat *buf) {
+    return ramfs_fstat(fd, buf);
 }

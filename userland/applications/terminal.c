@@ -157,6 +157,23 @@ int terminal_execute_command(struct terminal_state *t) {
     return 0;
 }
 
+int terminal_run_command(struct terminal_state *t, const char *command, int clear_before) {
+    int i = 0;
+
+    if (clear_before) {
+        terminal_clear_lines(t);
+    }
+
+    terminal_reset_input(t);
+    while (command[i] != '\0' && i < INPUT_MAX) {
+        t->input[i] = command[i];
+        ++i;
+    }
+    t->input[i] = '\0';
+    t->input_len = i;
+    return terminal_execute_command(t);
+}
+
 void terminal_draw_window(struct terminal_state *t, int active,
                           int min_hover, int max_hover, int close_hover) {
     const struct desktop_theme *theme = ui_theme_get();

@@ -41,6 +41,36 @@ int sys_gfx_set_mode(uint32_t width, uint32_t height) {
     return syscall5(SYSCALL_GFX_SET_MODE, (int)width, (int)height, 0, 0, 0);
 }
 
+int sys_gfx_set_palette(const uint8_t *rgb_triplets) {
+    return syscall5(SYSCALL_GFX_SET_PALETTE, (int)(uintptr_t)rgb_triplets, 0, 0, 0, 0);
+}
+
+int sys_gfx_get_palette(uint8_t *rgb_triplets) {
+    return syscall5(SYSCALL_GFX_GET_PALETTE, (int)(uintptr_t)rgb_triplets, 0, 0, 0, 0);
+}
+
+void sys_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale) {
+    int packed_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
+    (void)syscall5(SYSCALL_GFX_BLIT8,
+                   (int)(uintptr_t)src,
+                   packed_wh,
+                   dst_x,
+                   dst_y,
+                   scale);
+}
+
+void sys_gfx_blit8_stretch(const uint8_t *src, int src_w, int src_h,
+                           int dst_x, int dst_y, int dst_w, int dst_h) {
+    int packed_src_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
+    int packed_dst_wh = ((dst_h & 0xFFFF) << 16) | (dst_w & 0xFFFF);
+    (void)syscall5(SYSCALL_GFX_BLIT8_STRETCH,
+                   (int)(uintptr_t)src,
+                   packed_src_wh,
+                   dst_x,
+                   dst_y,
+                   packed_dst_wh);
+}
+
 int sys_storage_load(void *dst, uint32_t size) {
     return syscall5(SYSCALL_STORAGE_LOAD, (int)(uintptr_t)dst, (int)size, 0, 0, 0);
 }
@@ -56,6 +86,66 @@ int sys_storage_read_sectors(uint32_t lba, void *dst, uint32_t sector_count) {
                     (int)sector_count,
                     0,
                     0);
+}
+
+int sys_storage_write_sectors(uint32_t lba, const void *src, uint32_t sector_count) {
+    return syscall5(SYSCALL_STORAGE_WRITE_SECTORS,
+                    (int)lba,
+                    (int)(uintptr_t)src,
+                    (int)sector_count,
+                    0,
+                    0);
+}
+
+uint32_t sys_storage_total_sectors(void) {
+    return (uint32_t)syscall5(SYSCALL_STORAGE_TOTAL_SECTORS, 0, 0, 0, 0, 0);
+}
+
+int sys_open(const char *path, int flags) {
+    return syscall5(SYSCALL_OPEN, (int)(uintptr_t)path, flags, 0, 0, 0);
+}
+
+int sys_read(int fd, void *buf, uint32_t count) {
+    return syscall5(SYSCALL_READ, fd, (int)(uintptr_t)buf, (int)count, 0, 0);
+}
+
+int sys_write(int fd, const void *buf, uint32_t count) {
+    return syscall5(SYSCALL_WRITE, fd, (int)(uintptr_t)buf, (int)count, 0, 0);
+}
+
+int sys_close(int fd) {
+    return syscall5(SYSCALL_CLOSE, fd, 0, 0, 0, 0);
+}
+
+off_t sys_lseek(int fd, off_t offset, int whence) {
+    return (off_t)syscall5(SYSCALL_LSEEK, fd, (int)offset, whence, 0, 0);
+}
+
+int sys_stat(const char *path, struct stat *buf) {
+    return syscall5(SYSCALL_STAT, (int)(uintptr_t)path, (int)(uintptr_t)buf, 0, 0, 0);
+}
+
+int sys_fstat(int fd, struct stat *buf) {
+    return syscall5(SYSCALL_FSTAT, fd, (int)(uintptr_t)buf, 0, 0, 0);
+}
+
+int sys_launch_info(struct userland_launch_info *info) {
+    return syscall5(SYSCALL_LAUNCH_INFO, (int)(uintptr_t)info, 0, 0, 0, 0);
+}
+
+int sys_task_snapshot(struct task_snapshot_summary *summary,
+                      struct task_snapshot_entry *entries,
+                      uint32_t max_entries) {
+    return syscall5(SYSCALL_TASK_SNAPSHOT,
+                    (int)(uintptr_t)summary,
+                    (int)(uintptr_t)entries,
+                    (int)max_entries,
+                    0,
+                    0);
+}
+
+int sys_task_terminate(uint32_t pid) {
+    return syscall5(SYSCALL_TASK_TERMINATE, (int)pid, 0, 0, 0, 0);
 }
 
 void sys_sleep(void) {
@@ -85,6 +175,10 @@ void sys_write_debug(const char *msg) {
     (void)syscall5(SYSCALL_WRITE_DEBUG, (int)(uintptr_t)msg, 0, 0, 0, 0);
 }
 
+int sys_text_write(const char *msg) {
+    return syscall5(SYSCALL_TEXT_WRITE, (int)(uintptr_t)msg, 0, 0, 0, 0);
+}
+
 int sys_keyboard_set_layout(const char *name) {
     return syscall5(SYSCALL_KEYBOARD_SET_LAYOUT, (int)(uintptr_t)name, 0, 0, 0, 0);
 }
@@ -95,4 +189,25 @@ int sys_keyboard_get_layout(char *buffer, int size) {
 
 int sys_keyboard_get_available_layouts(char *buffer, int size) {
     return syscall5(SYSCALL_KEYBOARD_GET_AVAILABLE_LAYOUTS, (int)(uintptr_t)buffer, size, 0, 0, 0);
+}
+
+int sys_service_receive(struct mk_message *message) {
+    return syscall5(SYSCALL_SERVICE_RECV, (int)(uintptr_t)message, 0, 0, 0, 0);
+}
+
+int sys_service_send(const struct mk_message *message) {
+    return syscall5(SYSCALL_SERVICE_SEND, (int)(uintptr_t)message, 0, 0, 0, 0);
+}
+
+int sys_service_backend(const struct mk_message *request, struct mk_message *reply) {
+    return syscall5(SYSCALL_SERVICE_BACKEND,
+                    (int)(uintptr_t)request,
+                    (int)(uintptr_t)reply,
+                    0,
+                    0,
+                    0);
+}
+
+void sys_shutdown(void) {
+    (void)syscall5(SYSCALL_SHUTDOWN, 0, 0, 0, 0, 0);
 }

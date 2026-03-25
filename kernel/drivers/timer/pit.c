@@ -1,8 +1,10 @@
 #include <kernel/drivers/timer/timer.h>
+#include <kernel/drivers/debug/debug.h>
 #include <kernel/hal/io.h>
 #include <kernel/interrupt.h>
 
 static volatile uint32_t g_kernel_ticks = 0u;
+static volatile uint32_t g_timer_trace_budget = 8u;
 
 uint32_t kernel_timer_get_ticks(void) {
     uint32_t flags = kernel_irq_save();
@@ -13,6 +15,10 @@ uint32_t kernel_timer_get_ticks(void) {
 
 void kernel_timer_irq_handler(void) {
     g_kernel_ticks += 1u;
+    if (g_timer_trace_budget != 0u && (g_kernel_ticks % 500u) == 0u) {
+        g_timer_trace_budget -= 1u;
+        kernel_debug_printf("timer: tick=%d\n", (int)g_kernel_ticks);
+    }
     kernel_pic_send_eoi(0);
 }
 

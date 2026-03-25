@@ -40,6 +40,21 @@ void console_putc(char c) {
 }
 
 void console_write(const char *s) {
+    if (s == 0) {
+        return;
+    }
+
+    if (g_console_output_handler != 0) {
+        while (*s != '\0') {
+            console_putc(*s++);
+        }
+        return;
+    }
+
+    if (sys_text_write(s) == 0) {
+        return;
+    }
+
     while (*s != '\0') {
         console_putc(*s++);
     }

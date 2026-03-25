@@ -59,12 +59,20 @@ endif
 endif
 
 PYTHON ?= python3
+CPU_ARCH_CFLAGS := -march=i586 -mtune=generic -mno-mmx -mno-sse -mno-sse2
 
 # Compiler flags - same as other apps
-CFLAGS := -m32 -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
+CFLAGS := -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
 	-fno-builtin -nostdlib -Wall -Wextra
 INCLUDES := -I. -Icompat/include -Ilang/include -Iapplications/ported/include -Iheaders
 LDFLAGS := -m elf_i386 -T linker/app.ld -nostdlib -N --allow-multiple-definition
+
+UNAME_S := $(shell uname -s 2>/dev/null || echo Unknown)
+ifeq ($(UNAME_S),Linux)
+LIBGCC_A := $(shell $(CC) -m32 $(CPU_ARCH_CFLAGS) -print-libgcc-file-name 2>/dev/null)
+else
+LIBGCC_A :=
+endif
 
 # Ported app SDK
 APP_ENTRY := lang/sdk/app_entry.c
@@ -101,7 +109,7 @@ build/ported/echo.o: $(ECHO_SRCS) $(COMPAT_LIB) | build
 
 $(ECHO_ELF): $(ECHO_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(ECHO_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(ECHO_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(ECHO_APP): $(ECHO_ELF)
 	@mkdir -p $(dir $@)
@@ -138,7 +146,7 @@ build/ported/cat.o: $(CAT_SRCS) $(COMPAT_LIB) | build
 
 $(CAT_ELF): $(CAT_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(CAT_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(CAT_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(CAT_APP): $(CAT_ELF)
 	@mkdir -p $(dir $@)
@@ -175,7 +183,7 @@ build/ported/wc.o: $(WC_SRCS) $(COMPAT_LIB) | build
 
 $(WC_ELF): $(WC_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(WC_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(WC_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(WC_APP): $(WC_ELF)
 	@mkdir -p $(dir $@)
@@ -212,7 +220,7 @@ build/ported/pwd.o: $(PWD_SRCS) $(COMPAT_LIB) | build
 
 $(PWD_ELF): $(PWD_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(PWD_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(PWD_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(PWD_APP): $(PWD_ELF)
 	@mkdir -p $(dir $@)
@@ -249,7 +257,7 @@ build/ported/head.o: $(HEAD_SRCS) $(COMPAT_LIB) | build
 
 $(HEAD_ELF): $(HEAD_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(HEAD_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(HEAD_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(HEAD_APP): $(HEAD_ELF)
 	@mkdir -p $(dir $@)
@@ -286,7 +294,7 @@ build/ported/sleep.o: $(SLEEP_SRCS) $(COMPAT_LIB) | build
 
 $(SLEEP_ELF): $(SLEEP_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(SLEEP_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(SLEEP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(SLEEP_APP): $(SLEEP_ELF)
 	@mkdir -p $(dir $@)
@@ -323,7 +331,7 @@ build/ported/rmdir.o: $(RMDIR_SRCS) $(COMPAT_LIB) | build
 
 $(RMDIR_ELF): $(RMDIR_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(RMDIR_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(RMDIR_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(RMDIR_APP): $(RMDIR_ELF)
 	@mkdir -p $(dir $@)
@@ -360,7 +368,7 @@ build/ported/tail.o: $(TAIL_SRCS) $(COMPAT_LIB) | build
 
 $(TAIL_ELF): $(TAIL_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(TAIL_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(TAIL_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(TAIL_APP): $(TAIL_ELF)
 	@mkdir -p $(dir $@)
@@ -397,7 +405,7 @@ build/ported/grep.o: $(GREP_SRCS) $(COMPAT_LIB) | build
 
 $(GREP_ELF): $(GREP_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(GREP_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(GREP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(GREP_APP): $(GREP_ELF)
 	@mkdir -p $(dir $@)
@@ -434,7 +442,7 @@ build/ported/loadkeys.o: $(LOADKEYS_SRCS) $(COMPAT_LIB) | build
 
 $(LOADKEYS_ELF): $(LOADKEYS_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(LOADKEYS_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(LOADKEYS_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(LOADKEYS_APP): $(LOADKEYS_ELF)
 	@mkdir -p $(dir $@)
@@ -443,6 +451,43 @@ $(LOADKEYS_APP): $(LOADKEYS_ELF)
 	@echo "✓ Loadkeys app: $@"
 
 ported-loadkeys: $(LOADKEYS_APP)
+
+# === MKDIR APP ===
+
+MKDIR_SRCS := applications/ported/mkdir/mkdir.c
+MKDIR_OBJS := build/ported/mkdir.o \
+	build/app_entry_mkdir.o \
+	build/app_runtime_mkdir.o
+
+MKDIR_ELF := build/ported/mkdir.elf
+MKDIR_APP := build/ported/mkdir.app
+
+build/app_entry_mkdir.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"mkdir\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_mkdir.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/mkdir.o: $(MKDIR_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(MKDIR_ELF): $(MKDIR_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(MKDIR_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(MKDIR_APP): $(MKDIR_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Mkdir app: $@"
+
+ported-mkdir: $(MKDIR_APP)
 
 # === TRUE APP ===
 
@@ -471,7 +516,7 @@ build/ported/true.o: $(TRUE_SRCS) $(COMPAT_LIB) | build
 
 $(TRUE_ELF): $(TRUE_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(TRUE_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(TRUE_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(TRUE_APP): $(TRUE_ELF)
 	@mkdir -p $(dir $@)
@@ -508,7 +553,7 @@ build/ported/false.o: $(FALSE_SRCS) $(COMPAT_LIB) | build
 
 $(FALSE_ELF): $(FALSE_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(FALSE_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(FALSE_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(FALSE_APP): $(FALSE_ELF)
 	@mkdir -p $(dir $@)
@@ -545,7 +590,7 @@ build/ported/printf.o: $(PRINTF_SRCS) $(COMPAT_LIB) | build
 
 $(PRINTF_ELF): $(PRINTF_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(PRINTF_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(PRINTF_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(PRINTF_APP): $(PRINTF_ELF)
 	@mkdir -p $(dir $@)
@@ -557,7 +602,7 @@ ported-printf: $(PRINTF_APP)
 
 # === SED APP ===
 
-SED_SRCS := $(wildcard applications/ported/sed/*.c)
+SED_SRCS := applications/ported/sed/vibe_sed.c
 SED_OBJS := $(patsubst applications/ported/sed/%.c,build/ported/sed/%.o,$(SED_SRCS)) \
 	build/app_entry_sed.o \
 	build/app_runtime_sed.o
@@ -578,11 +623,14 @@ build/app_runtime_sed.o: $(APP_RUNTIME) | build
 
 build/ported/sed/%.o: applications/ported/sed/%.c $(COMPAT_LIB) | build
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) -Iapplications/ported/sed $(INCLUDES) -DHAVE_CONFIG_H \
+		-Iapplications/ported/sed \
+		-Icompat/gnu/lib/libiberty/include \
+		-c $< -o $@
 
 $(SED_ELF): $(SED_OBJS) $(COMPAT_LIB) linker/app.ld | build
 	@mkdir -p $(dir $@)
-	$(LD) $(LDFLAGS) $(SED_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS) $(SED_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(SED_APP): $(SED_ELF)
 	@mkdir -p $(dir $@)
@@ -629,6 +677,9 @@ ported-sed-clean:
 ported-loadkeys-clean:
 	rm -f $(LOADKEYS_OBJS) $(LOADKEYS_ELF) $(LOADKEYS_APP)
 
+ported-mkdir-clean:
+	rm -f $(MKDIR_OBJS) $(MKDIR_ELF) $(MKDIR_APP)
+
 ported-true-clean:
 	rm -f $(TRUE_OBJS) $(TRUE_ELF) $(TRUE_APP)
 
@@ -638,6 +689,25 @@ ported-false-clean:
 ported-printf-clean:
 	rm -f $(PRINTF_OBJS) $(PRINTF_ELF) $(PRINTF_APP)
 
-ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-true-clean ported-false-clean ported-printf-clean
+PORTED_APP_TARGETS := \
+	$(ECHO_APP) \
+	$(CAT_APP) \
+	$(WC_APP) \
+	$(PWD_APP) \
+	$(HEAD_APP) \
+	$(SLEEP_APP) \
+	$(RMDIR_APP) \
+	$(TAIL_APP) \
+	$(GREP_APP) \
+	$(SED_APP) \
+	$(LOADKEYS_APP) \
+	$(MKDIR_APP) \
+	$(TRUE_APP) \
+	$(FALSE_APP) \
+	$(PRINTF_APP)
 
-.PHONY: ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-true ported-false ported-printf ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-true-clean ported-false-clean ported-printf-clean
+ported-all: $(PORTED_APP_TARGETS)
+
+ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean
+
+.PHONY: ported-all ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-mkdir ported-true ported-false ported-printf ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean

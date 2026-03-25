@@ -1,290 +1,200 @@
 BITS 16
 ORG 0x7C00
 
-%define KERNEL_SEG 0x1000
-%define KERNEL_OFF 0x0000
-%define BOOTINFO_ADDR 0x8000
-%define BOOTINFO_MAGIC 0x56424D49
-%define E820_BUF 0x8020
-%define VESA_INFO_ADDR 0x0500
-%define VESA_MODEINFO_ADDR 0x9000
-%define MIN_USABLE_ADDR 0x00100000
-; Number of 512-byte sectors to read for the kernel image.
-; DOOM full port significantly increases kernel.bin size, so keep a wide margin.
-%define KERNEL_SECTORS 1024
+    jmp short boot_start
+    nop
+times 90-($-$$) db 0
 
-%define CODE_SEG 0x08
-%define DATA_SEG 0x10
+%define STAGE2_SEG 0x0900
+%define STAGE2_OFF 0x0000
+%ifndef STAGE2_START_LBA
+%define STAGE2_START_LBA 1
+%endif
+%ifndef STAGE2_SECTORS
+%define STAGE2_SECTORS 8
+%endif
+%define BOOTDEBUG_ADDR 0x1000
+%define BOOTDEBUG_MAGIC 0x47444256
+%define BOOTDEBUG_DIRTY 4
+%define BOOTDEBUG_LEN 5
+%define BOOTDEBUG_LAST 6
+%define BOOTDEBUG_TRACE 7
+%define BOOTDEBUG_TRACE_MAX 48
 
-start:
-
+boot_start:
     cli
-    xor ax,ax
-    mov ds,ax
-    mov es,ax
-    mov ss,ax
-    mov sp,0x7C00
-    ; keep interrupts disabled until IDT is set by the kernel
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7C00
 
-    mov [boot_drive],dl
-    mov word [VESA_INFO_ADDR + 0], 0
-    call setup_vesa
+    mov [boot_drive], dl
+    call bootdebug_prepare
+    mov al, 'S'
+    call bootdebug_append
+    mov al, 'S'
+    out 0xE9, al
 
-    call load_kernel
+    call load_stage2
     jc disk_error
 
-    call detect_memory
+    mov al, 'L'
+    out 0xE9, al
+    mov dl, [boot_drive]
+    jmp STAGE2_SEG:STAGE2_OFF
 
-    call enable_a20
-
-    lgdt [gdt_descriptor]
-
-    cli                 ; ensure IF=0 before entering protected mode
-    mov eax,cr0
-    or eax,1
-    mov cr0,eax
-
-    jmp CODE_SEG:pmode
-
-; -----------------------------
-; kernel loader
-; -----------------------------
-
-load_kernel:
-
+load_stage2:
     pusha
 
-    mov word [disk_address_packet.sectors],1
-    mov word [disk_address_packet.offset],0
-    mov word [disk_address_packet.segment],KERNEL_SEG
-    mov dword [disk_address_packet.lba_low],1
-    mov dword [disk_address_packet.lba_high],0
-    mov cx,KERNEL_SECTORS
+    mov al, 'R'
+    call bootdebug_append
+    mov word [disk_address_packet.sectors], STAGE2_SECTORS
+    mov word [disk_address_packet.offset], STAGE2_OFF
+    mov word [disk_address_packet.segment], STAGE2_SEG
+    mov eax, [0x7C1C]
+    add eax, STAGE2_START_LBA
+    mov dword [disk_address_packet.lba_low], eax
+    mov dword [disk_address_packet.lba_high], 0
 
-.next:
-    mov si,disk_address_packet
-    mov dl,[boot_drive]
-    mov ah,0x42
+    mov si, disk_address_packet
+    mov dl, [boot_drive]
+    mov ah, 0x42
     int 0x13
     jc .fail
 
-    add word [disk_address_packet.segment],0x20
-    inc dword [disk_address_packet.lba_low]
-    adc dword [disk_address_packet.lba_high],0
-    loop .next
-
+    mov al, 'L'
+    call bootdebug_append
     popa
     clc
     ret
 
 .fail:
-
+    mov al, 'E'
+    call bootdebug_append
     popa
     stc
     ret
 
-; -----------------------------
-; memory map
-; -----------------------------
-
-detect_memory:
-
-    mov dword [BOOTINFO_ADDR + 0], BOOTINFO_MAGIC
-    mov dword [BOOTINFO_ADDR + 4], 0x00500000
-    mov dword [BOOTINFO_ADDR + 8], 0x00400000
-    mov dword [BOOTINFO_ADDR + 12], 0x00900000
-
-    xor ax,ax
-    mov es,ax
-    xor ebx,ebx
-
-.next:
-    mov eax,0xE820
-    mov edx,0x534D4150
-    mov ecx,20
-    mov di,E820_BUF
-    int 0x15
-    jc .done
-    cmp eax,0x534D4150
-    jne .done
-    cmp dword [E820_BUF + 16],1
-    jne .cont
-    cmp dword [E820_BUF + 4],0
-    jne .cont
-    cmp dword [E820_BUF + 12],0
-    jne .cont
-
-    mov eax,[E820_BUF + 0]
-    mov edx,[E820_BUF + 8]
-    test edx,edx
-    jz .cont
-    mov ecx,eax
-    add ecx,edx
-    jc .cont
-    cmp ecx,MIN_USABLE_ADDR
-    jbe .cont
-    cmp eax,MIN_USABLE_ADDR
-    jae .size_ready
-    mov eax,MIN_USABLE_ADDR
-    mov edx,ecx
-    sub edx,eax
-    jz .cont
-
-.size_ready:
-    cmp edx,[BOOTINFO_ADDR + 8]
-    jbe .cont
-    mov [BOOTINFO_ADDR + 4],eax
-    mov [BOOTINFO_ADDR + 8],edx
-    mov [BOOTINFO_ADDR + 12],ecx
-
-.cont:
-    test ebx,ebx
-    jne .next
-
-.done:
-    ret
-
-; -----------------------------
-; VESA boot graphics
-; -----------------------------
-
-setup_vesa:
-
-    mov word [VESA_INFO_ADDR + 0], 0
-
-    mov ax,0x4F02
-    mov bx,0x4101
-    int 0x10
-    cmp ax,0x004F
-    jne .done
-
-    xor ax,ax
-    mov es,ax
-    mov di,VESA_MODEINFO_ADDR
-    mov ax,0x4F01
-    mov cx,0x0101
-    int 0x10
-    cmp ax,0x004F
-    jne .done
-
-    mov ax,[VESA_MODEINFO_ADDR + 0]
-    test ax,0x0081
-    jz .done
-
-    mov ax,0x0101
-    mov [VESA_INFO_ADDR + 0],ax
-    mov eax,[VESA_MODEINFO_ADDR + 40]
-    mov [VESA_INFO_ADDR + 2],eax
-    mov ax,[VESA_MODEINFO_ADDR + 16]
-    mov [VESA_INFO_ADDR + 6],ax
-    mov ax,[VESA_MODEINFO_ADDR + 18]
-    mov [VESA_INFO_ADDR + 8],ax
-    mov ax,[VESA_MODEINFO_ADDR + 20]
-    mov [VESA_INFO_ADDR + 10],ax
-    mov al,[VESA_MODEINFO_ADDR + 25]
-    mov [VESA_INFO_ADDR + 12],al
-
-.done:
-    ret
-
-; -----------------------------
-; A20
-; -----------------------------
-
-enable_a20:
-
-    in al,0x92
-    or al,2
-    out 0x92,al
-    ret
-
-; -----------------------------
-; print
-; -----------------------------
-
-print:
-
-.next:
-    lodsb
-    test al,al
-    jz .done
-
-    mov ah,0x0E
-    mov bx,0x0007
-    int 0x10
-
-    jmp .next
-
-.done:
-    ret
-
-; -----------------------------
-; error
-; -----------------------------
-
 disk_error:
-
+    mov ax, 0x0003
+    int 0x10
+    mov si, disk_error_msg
+    call print_string
+    mov si, prev_trace_msg
+    call print_string
+    mov si, BOOTDEBUG_ADDR + BOOTDEBUG_TRACE
+    call print_string
+    mov si, prev_last_msg
+    call print_string
+    mov al, [BOOTDEBUG_ADDR + BOOTDEBUG_LAST]
+    call print_char
+    call print_newline
+    mov al, 'E'
+    out 0xE9, al
 .halt:
     hlt
     jmp .halt
 
-; -----------------------------
-; gdt
-; -----------------------------
+bootdebug_prepare:
+    cmp dword [BOOTDEBUG_ADDR], BOOTDEBUG_MAGIC
+    jne .reset
+    cmp byte [BOOTDEBUG_ADDR + BOOTDEBUG_DIRTY], 1
+    jne .reset
+    cmp byte [BOOTDEBUG_ADDR + BOOTDEBUG_LEN], 0
+    je .reset
 
-align 8
-gdt_start:
+    mov ax, 0x0003
+    int 0x10
+    mov si, prev_boot_msg
+    call print_string
+    mov si, BOOTDEBUG_ADDR + BOOTDEBUG_TRACE
+    call print_string
+    mov si, prev_last_msg
+    call print_string
+    mov al, [BOOTDEBUG_ADDR + BOOTDEBUG_LAST]
+    call print_char
+    mov si, continue_msg
+    call print_string
+    xor ah, ah
+    int 0x16
 
-dq 0
-dq 0x00CF9A000000FFFF
-dq 0x00CF92000000FFFF
+.reset:
+    mov dword [BOOTDEBUG_ADDR], BOOTDEBUG_MAGIC
+    mov byte [BOOTDEBUG_ADDR + BOOTDEBUG_DIRTY], 1
+    mov byte [BOOTDEBUG_ADDR + BOOTDEBUG_LEN], 0
+    mov byte [BOOTDEBUG_ADDR + BOOTDEBUG_LAST], '?'
+    mov byte [BOOTDEBUG_ADDR + BOOTDEBUG_TRACE], 0
+    ret
 
-gdt_end:
+bootdebug_append:
+    push ax
+    push bx
 
-gdt_descriptor:
-dw gdt_end-gdt_start-1
-dd gdt_start
+    cmp dword [BOOTDEBUG_ADDR], BOOTDEBUG_MAGIC
+    jne .done
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_LAST], al
+    xor bx, bx
+    mov bl, [BOOTDEBUG_ADDR + BOOTDEBUG_LEN]
+    cmp bl, BOOTDEBUG_TRACE_MAX - 1
+    jae .done
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_TRACE + bx], al
+    inc bl
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_LEN], bl
+    mov byte [BOOTDEBUG_ADDR + BOOTDEBUG_TRACE + bx], 0
 
-; -----------------------------
-; data
-; -----------------------------
+.done:
+    pop bx
+    pop ax
+    ret
+
+print_string:
+    cld
+.next:
+    lodsb
+    test al, al
+    jz .done
+    call print_char
+    jmp .next
+.done:
+    ret
+
+print_char:
+    push bx
+    mov ah, 0x0E
+    mov bh, 0x00
+    mov bl, 0x07
+    int 0x10
+    pop bx
+    ret
+
+print_newline:
+    mov al, 0x0D
+    call print_char
+    mov al, 0x0A
+    call print_char
+    ret
 
 boot_drive db 0
+prev_boot_msg db 'PREV BOOT ', 0
+prev_trace_msg db 'TRACE ', 0
+prev_last_msg db ' LAST ', 0
+continue_msg db 0x0D, 0x0A, 'PRESS KEY', 0
+disk_error_msg db 'STAGE1 DISK ERROR', 0x0D, 0x0A, 0
 
 disk_address_packet:
     db 16
     db 0
 .sectors:
-    dw 1
+    dw STAGE2_SECTORS
 .offset:
-    dw 0
+    dw STAGE2_OFF
 .segment:
-    dw KERNEL_SEG
+    dw STAGE2_SEG
 .lba_low:
-    dd 1
+    dd STAGE2_START_LBA
 .lba_high:
     dd 0
-
-; -----------------------------
-; protected mode
-; -----------------------------
-
-BITS 32
-
-pmode:
-
-    cli
-    mov ax,DATA_SEG
-    mov ds,ax
-    mov es,ax
-    mov fs,ax
-    mov gs,ax
-    mov ss,ax
-
-    mov esp,0x70000
-
-    ; jump to 32-bit kernel entry at physical 0x10000 (identity mapped)
-    jmp CODE_SEG:0x10000
 
 times 510-($-$$) db 0
 dw 0xAA55

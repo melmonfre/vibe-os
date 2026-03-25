@@ -1,10 +1,14 @@
 #include <userland/modules/include/fs.h>
 #include <userland/modules/include/syscalls.h>
+#include <kernel/drivers/storage/ata.h>
 #include <userland/modules/include/utils.h> // for str_* functions
+#include "app_catalog.h"
+#include <string.h>
 
 #define FS_PERSIST_MAGIC 0x56465331u
-#define FS_PERSIST_VERSION 1u
-
+#define FS_PERSIST_VERSION 2u
+#define FS_SECTOR_SIZE 512u
+#define FS_STORAGE_DATA_START_LBA (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT)
 struct fs_persist_image {
     uint32_t magic;
     uint32_t version;
@@ -17,7 +21,28 @@ struct fs_persist_image {
 struct fs_node g_fs_nodes[FS_MAX_NODES];
 int g_fs_root = -1;
 int g_fs_cwd = -1;
+static struct fs_persist_image g_fs_persist_image;
 static int g_fs_sync_suspended = 0;
+static uint32_t g_fs_total_sectors_cache = 0u;
+static int g_fs_dirty = 0;
+static uint32_t g_fs_last_sync_tick = 0u;
+static int g_fs_doom_assets_scanned = 0;
+static int g_fs_texture_assets_scanned = 0;
+static int g_fs_wallpaper_asset_scanned = 0;
+
+#define FS_SYNC_PERIOD_TICKS 1000u
+
+static void fs_ensure_doom_wad_registered(void);
+static void fs_ensure_craft_textures_registered(void);
+static void fs_ensure_wallpaper_registered(void);
+static uint32_t fs_storage_total_sectors(void);
+
+#define DOOM_WAD_IMAGE_LBA 131728u
+#define CRAFT_TEXTURE_IMAGE_LBA 30000u
+#define CRAFT_FONT_IMAGE_LBA 30128u
+#define CRAFT_SKY_IMAGE_LBA 30256u
+#define CRAFT_SIGN_IMAGE_LBA 30416u
+#define WALLPAPER_IMAGE_LBA 30720u
 
 static void fs_reset_node(int idx) {
     int i;
@@ -27,7 +52,10 @@ static void fs_reset_node(int idx) {
     g_fs_nodes[idx].parent = -1;
     g_fs_nodes[idx].first_child = -1;
     g_fs_nodes[idx].next_sibling = -1;
+    g_fs_nodes[idx].storage_kind = FS_NODE_STORAGE_INLINE;
     g_fs_nodes[idx].size = 0;
+    g_fs_nodes[idx].image_lba = 0u;
+    g_fs_nodes[idx].image_sector_count = 0u;
 
     for (i = 0; i <= FS_NAME_MAX; ++i) {
         g_fs_nodes[idx].name[i] = '\0';
@@ -46,6 +74,312 @@ static uint32_t fs_checksum_bytes(const uint8_t *data, int size) {
         hash *= 16777619u;
     }
     return hash;
+}
+
+static uint32_t fs_read_u32_le(const uint8_t *src) {
+    return (uint32_t)src[0]
+         | ((uint32_t)src[1] << 8)
+         | ((uint32_t)src[2] << 16)
+         | ((uint32_t)src[3] << 24);
+}
+
+static uint32_t fs_read_u32_be(const uint8_t *src) {
+    return ((uint32_t)src[0] << 24)
+         | ((uint32_t)src[1] << 16)
+         | ((uint32_t)src[2] << 8)
+         | (uint32_t)src[3];
+}
+
+static int fs_read_image_bytes(uint32_t lba, uint32_t offset, void *dst, uint32_t size) {
+    uint8_t sector[FS_SECTOR_SIZE];
+    uint8_t *out = (uint8_t *)dst;
+
+    while (size > 0u) {
+        uint32_t sector_index = offset / FS_SECTOR_SIZE;
+        uint32_t sector_offset = offset % FS_SECTOR_SIZE;
+        uint32_t chunk = FS_SECTOR_SIZE - sector_offset;
+        if (chunk > size) {
+            chunk = size;
+        }
+        if (sys_storage_read_sectors(lba + sector_index, sector, 1u) != 0) {
+            return -1;
+        }
+        for (uint32_t i = 0; i < chunk; ++i) {
+            out[i] = sector[sector_offset + i];
+        }
+        out += chunk;
+        offset += chunk;
+        size -= chunk;
+    }
+    return 0;
+}
+
+static uint32_t fs_storage_total_sectors(void) {
+    if (g_fs_total_sectors_cache == 0u) {
+        g_fs_total_sectors_cache = sys_storage_total_sectors();
+    }
+    return g_fs_total_sectors_cache;
+}
+
+static uint32_t fs_sector_count_for_size(int size) {
+    if (size <= 0) {
+        return 0u;
+    }
+    return ((uint32_t)size + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
+}
+
+static void fs_clear_node_storage(int idx) {
+    g_fs_nodes[idx].storage_kind = FS_NODE_STORAGE_INLINE;
+    g_fs_nodes[idx].image_lba = 0u;
+    g_fs_nodes[idx].image_sector_count = 0u;
+    g_fs_nodes[idx].size = 0;
+    g_fs_nodes[idx].data[0] = '\0';
+}
+
+struct fs_extent_info {
+    uint32_t lba;
+    uint32_t sector_count;
+};
+
+static int fs_compare_extents(const struct fs_extent_info *a, const struct fs_extent_info *b) {
+    if (a->lba < b->lba) {
+        return -1;
+    }
+    if (a->lba > b->lba) {
+        return 1;
+    }
+    return 0;
+}
+
+static int fs_collect_sector_extents(struct fs_extent_info *extents, int max_extents, int exclude_node) {
+    int count = 0;
+    int j;
+    struct fs_extent_info key;
+
+    for (int i = 0; i < FS_MAX_NODES; ++i) {
+        if (i == exclude_node ||
+            !g_fs_nodes[i].used ||
+            g_fs_nodes[i].is_dir ||
+            g_fs_nodes[i].storage_kind != FS_NODE_STORAGE_IMAGE ||
+            g_fs_nodes[i].image_sector_count == 0u) {
+            continue;
+        }
+        if (count >= max_extents) {
+            break;
+        }
+        extents[count].lba = g_fs_nodes[i].image_lba;
+        extents[count].sector_count = g_fs_nodes[i].image_sector_count;
+        ++count;
+    }
+
+    for (int i = 1; i < count; ++i) {
+        key = extents[i];
+        j = i - 1;
+        while (j >= 0 && fs_compare_extents(&extents[j], &key) > 0) {
+            extents[j + 1] = extents[j];
+            --j;
+        }
+        extents[j + 1] = key;
+    }
+
+    return count;
+}
+
+static int fs_path_matches_root_prefix(const char *path, const char *prefix) {
+    int i = 0;
+    const char *lhs = path;
+    const char *rhs = prefix;
+
+    if (!lhs || !rhs) {
+        return 0;
+    }
+
+    if (lhs[0] == '/') {
+        ++lhs;
+    }
+    if (rhs[0] == '/') {
+        ++rhs;
+    }
+
+    while (rhs[i] != '\0') {
+        if (lhs[i] != rhs[i]) {
+            return 0;
+        }
+        ++i;
+    }
+
+    return lhs[i] == '\0' || lhs[i] == '/';
+}
+
+static void fs_debug_asset_path(const char *prefix, const char *path) {
+    char msg[96];
+
+    msg[0] = '\0';
+    str_append(msg, prefix, (int)sizeof(msg));
+    str_append(msg, path ? path : "(null)", (int)sizeof(msg));
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
+}
+
+static void fs_maybe_register_boot_assets_for_path(const char *path) {
+    if (fs_path_matches_root_prefix(path, "/DOOM") && !g_fs_doom_assets_scanned) {
+        g_fs_doom_assets_scanned = 1;
+        fs_ensure_doom_wad_registered();
+        g_fs_doom_assets_scanned = 0;
+    }
+
+    if (fs_path_matches_root_prefix(path, "/textures") && !g_fs_texture_assets_scanned) {
+        g_fs_texture_assets_scanned = 1;
+        fs_ensure_craft_textures_registered();
+    }
+
+    if (fs_path_matches_root_prefix(path, "/wallpaper.png") && !g_fs_wallpaper_asset_scanned) {
+        g_fs_wallpaper_asset_scanned = 1;
+        fs_ensure_wallpaper_registered();
+    }
+}
+
+static uint32_t fs_find_free_extent(uint32_t sector_count, int exclude_node) {
+    struct fs_extent_info extents[FS_MAX_NODES];
+    uint32_t cursor = FS_STORAGE_DATA_START_LBA;
+    uint32_t total_sectors = fs_storage_total_sectors();
+    int extent_count;
+
+    if (sector_count == 0u || total_sectors <= cursor) {
+        return 0u;
+    }
+
+    extent_count = fs_collect_sector_extents(extents, FS_MAX_NODES, exclude_node);
+    for (int i = 0; i < extent_count; ++i) {
+        uint32_t extent_end = extents[i].lba + extents[i].sector_count;
+
+        if (cursor + sector_count <= extents[i].lba) {
+            return cursor;
+        }
+        if (cursor < extent_end) {
+            cursor = extent_end;
+        }
+    }
+
+    if (cursor + sector_count <= total_sectors) {
+        return cursor;
+    }
+    return 0u;
+}
+
+static int fs_write_sector_bytes(uint32_t start_lba, const uint8_t *data, int size) {
+    uint8_t sector[FS_SECTOR_SIZE];
+    uint32_t sector_count = fs_sector_count_for_size(size);
+
+    if (sector_count == 0u) {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < sector_count; ++i) {
+        uint32_t offset = i * FS_SECTOR_SIZE;
+        uint32_t chunk = FS_SECTOR_SIZE;
+
+        if ((int)offset + (int)chunk > size) {
+            chunk = (uint32_t)(size - (int)offset);
+        }
+        memset(sector, 0, sizeof(sector));
+        memcpy(sector, data + offset, chunk);
+        if (sys_storage_write_sectors(start_lba + i, sector, 1u) != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static int fs_detect_doom_wad(uint32_t lba, uint32_t *sector_count_out, int *size_out) {
+    uint8_t header[12];
+    uint8_t entry[16];
+    uint32_t numlumps;
+    uint32_t infotableofs;
+    uint32_t max_end;
+    uint32_t dir_end;
+
+    if (!sector_count_out || !size_out) {
+        return -1;
+    }
+    if (fs_read_image_bytes(lba, 0u, header, (uint32_t)sizeof(header)) != 0) {
+        return -1;
+    }
+    if (memcmp(header, "IWAD", 4u) != 0 && memcmp(header, "PWAD", 4u) != 0) {
+        return -1;
+    }
+
+    numlumps = fs_read_u32_le(header + 4);
+    infotableofs = fs_read_u32_le(header + 8);
+    if (numlumps == 0u || numlumps > 65535u || infotableofs < 12u) {
+        return -1;
+    }
+
+    dir_end = infotableofs + (numlumps * 16u);
+    max_end = dir_end;
+    for (uint32_t i = 0; i < numlumps; ++i) {
+        uint32_t filepos;
+        uint32_t lump_size;
+        uint32_t lump_end;
+
+        if (fs_read_image_bytes(lba, infotableofs + (i * 16u), entry, (uint32_t)sizeof(entry)) != 0) {
+            return -1;
+        }
+        filepos = fs_read_u32_le(entry + 0);
+        lump_size = fs_read_u32_le(entry + 4);
+        lump_end = filepos + lump_size;
+        if (lump_end > max_end) {
+            max_end = lump_end;
+        }
+    }
+
+    if (max_end == 0u) {
+        return -1;
+    }
+    *size_out = (int)max_end;
+    *sector_count_out = (max_end + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
+    return 0;
+}
+
+static int fs_detect_png_file(uint32_t lba, uint32_t *sector_count_out, int *size_out) {
+    uint8_t signature[8];
+    uint8_t chunk_header[8];
+    uint32_t offset = 8u;
+    uint32_t total_size = 8u;
+    static const uint8_t png_signature[8] = {137u, 80u, 78u, 71u, 13u, 10u, 26u, 10u};
+
+    if (!sector_count_out || !size_out) {
+        return -1;
+    }
+    if (fs_read_image_bytes(lba, 0u, signature, (uint32_t)sizeof(signature)) != 0) {
+        return -1;
+    }
+    if (memcmp(signature, png_signature, sizeof(png_signature)) != 0) {
+        return -1;
+    }
+
+    for (int i = 0; i < 1024; ++i) {
+        uint32_t chunk_length;
+        uint32_t chunk_size;
+
+        if (fs_read_image_bytes(lba, offset, chunk_header, (uint32_t)sizeof(chunk_header)) != 0) {
+            return -1;
+        }
+        chunk_length = fs_read_u32_be(chunk_header + 0);
+        chunk_size = 12u + chunk_length;
+        if (chunk_size < 12u) {
+            return -1;
+        }
+        total_size += chunk_size;
+        if (memcmp(chunk_header + 4, "IEND", 4u) == 0) {
+            *size_out = (int)total_size;
+            *sector_count_out = (total_size + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
+            return 0;
+        }
+        offset += chunk_size;
+    }
+    return -1;
 }
 
 static int fs_validate_loaded_tree(void) {
@@ -76,6 +410,22 @@ static int fs_validate_loaded_tree(void) {
             }
         }
 
+        if (g_fs_nodes[i].is_dir) {
+            if (g_fs_nodes[i].storage_kind != FS_NODE_STORAGE_INLINE) {
+                return 0;
+            }
+        } else {
+            if (g_fs_nodes[i].storage_kind != FS_NODE_STORAGE_INLINE &&
+                g_fs_nodes[i].storage_kind != FS_NODE_STORAGE_IMAGE) {
+                return 0;
+            }
+            if (g_fs_nodes[i].storage_kind == FS_NODE_STORAGE_IMAGE) {
+                if (g_fs_nodes[i].size < 0 || g_fs_nodes[i].image_sector_count == 0u) {
+                    return 0;
+                }
+            }
+        }
+
         child = g_fs_nodes[i].first_child;
         while (child != -1) {
             if (++guard > FS_MAX_NODES) {
@@ -98,47 +448,86 @@ static int fs_validate_loaded_tree(void) {
 }
 
 static int fs_load_persistent_image(void) {
-    struct fs_persist_image image;
+    struct fs_persist_image *image = &g_fs_persist_image;
     uint32_t checksum;
+    extern void kernel_debug_puts(const char *);
 
-    if (sys_storage_load(&image, (uint32_t)sizeof(image)) != 0) {
+    kernel_debug_puts("fs: sys_storage_load begin\n");
+    if (sys_storage_load(image, (uint32_t)sizeof(*image)) != 0) {
+        kernel_debug_puts("fs: sys_storage_load failed\n");
         return -1;
     }
-    if (image.magic != FS_PERSIST_MAGIC || image.version != FS_PERSIST_VERSION) {
+    kernel_debug_puts("fs: sys_storage_load returned\n");
+    if (image->magic != FS_PERSIST_MAGIC || image->version != FS_PERSIST_VERSION) {
         return -1;
     }
 
-    checksum = image.checksum;
-    image.checksum = 0u;
-    if (checksum != fs_checksum_bytes((const uint8_t *)&image, (int)sizeof(image))) {
+    checksum = image->checksum;
+    image->checksum = 0u;
+    if (checksum != fs_checksum_bytes((const uint8_t *)image, (int)sizeof(*image))) {
         return -1;
     }
+    image->checksum = checksum;
 
     for (int i = 0; i < FS_MAX_NODES; ++i) {
-        g_fs_nodes[i] = image.nodes[i];
+        g_fs_nodes[i] = image->nodes[i];
     }
-    g_fs_root = image.root;
-    g_fs_cwd = image.cwd;
+    g_fs_root = image->root;
+    g_fs_cwd = image->cwd;
     return fs_validate_loaded_tree() ? 0 : -1;
 }
 
-static void fs_sync(void) {
-    struct fs_persist_image image = {0};
+static int fs_sync_now(void) {
+    struct fs_persist_image *image = &g_fs_persist_image;
+    extern void kernel_debug_puts(const char *);
 
     if (g_fs_sync_suspended) {
-        return;
+        return 0;
     }
 
-    image.magic = FS_PERSIST_MAGIC;
-    image.version = FS_PERSIST_VERSION;
-    image.root = g_fs_root;
-    image.cwd = g_fs_cwd;
+    memset(image, 0, sizeof(*image));
+    image->magic = FS_PERSIST_MAGIC;
+    image->version = FS_PERSIST_VERSION;
+    image->root = g_fs_root;
+    image->cwd = g_fs_cwd;
     for (int i = 0; i < FS_MAX_NODES; ++i) {
-        image.nodes[i] = g_fs_nodes[i];
+        image->nodes[i] = g_fs_nodes[i];
     }
-    image.checksum = 0u;
-    image.checksum = fs_checksum_bytes((const uint8_t *)&image, (int)sizeof(image));
-    (void)sys_storage_save(&image, (uint32_t)sizeof(image));
+    image->checksum = 0u;
+    image->checksum = fs_checksum_bytes((const uint8_t *)image, (int)sizeof(*image));
+    kernel_debug_puts("fs: sys_storage_save begin\n");
+    if (sys_storage_save(image, (uint32_t)sizeof(*image)) != 0) {
+        kernel_debug_puts("fs: sys_storage_save failed\n");
+        return -1;
+    }
+    kernel_debug_puts("fs: sys_storage_save returned\n");
+    g_fs_dirty = 0;
+    g_fs_last_sync_tick = sys_ticks();
+    return 0;
+}
+
+static void fs_mark_dirty(void) {
+    g_fs_dirty = 1;
+}
+
+void fs_flush(void) {
+    if (!g_fs_dirty) {
+        return;
+    }
+    (void)fs_sync_now();
+}
+
+void fs_tick(void) {
+    uint32_t now;
+
+    if (g_fs_sync_suspended || !g_fs_dirty) {
+        return;
+    }
+    now = sys_ticks();
+    if ((uint32_t)(now - g_fs_last_sync_tick) < FS_SYNC_PERIOD_TICKS) {
+        return;
+    }
+    (void)fs_sync_now();
 }
 
 static int fs_alloc_node(void) {
@@ -154,6 +543,7 @@ static int fs_alloc_node(void) {
 static int fs_find_child(int parent, const char *name) {
     int child = g_fs_nodes[parent].first_child;
     int guard = 0;
+    int ci_match = -1;
 
     while (child != -1) {
         if (++guard > FS_MAX_NODES) {
@@ -162,10 +552,15 @@ static int fs_find_child(int parent, const char *name) {
         if (g_fs_nodes[child].used && str_eq(g_fs_nodes[child].name, name)) {
             return child;
         }
+        if (ci_match < 0 &&
+            g_fs_nodes[child].used &&
+            str_eq_ci(g_fs_nodes[child].name, name)) {
+            ci_match = child;
+        }
         child = g_fs_nodes[child].next_sibling;
     }
 
-    return -1;
+    return ci_match;
 }
 
 static void fs_link_child(int parent, int child) {
@@ -234,7 +629,10 @@ static int fs_new_node(const char *name, int is_dir, int parent) {
     g_fs_nodes[idx].parent = parent;
     g_fs_nodes[idx].first_child = -1;
     g_fs_nodes[idx].next_sibling = -1;
+    g_fs_nodes[idx].storage_kind = FS_NODE_STORAGE_INLINE;
     g_fs_nodes[idx].size = 0;
+    g_fs_nodes[idx].image_lba = 0u;
+    g_fs_nodes[idx].image_sector_count = 0u;
     g_fs_nodes[idx].data[0] = '\0';
     str_copy_limited(g_fs_nodes[idx].name, name, FS_NAME_MAX + 1);
 
@@ -294,6 +692,8 @@ int fs_resolve(const char *path) {
         return g_fs_cwd;
     }
 
+    fs_maybe_register_boot_assets_for_path(path);
+
     count = fs_split_path(path, seg, &is_abs);
     if (count < 0) {
         return -1;
@@ -329,6 +729,42 @@ int fs_resolve(const char *path) {
     }
 
     return cur;
+}
+
+int fs_read_node_bytes(int node, int offset, void *dst, int size) {
+    if (node < 0 || node >= FS_MAX_NODES || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir ||
+        !dst || size < 0 || offset < 0) {
+        return -1;
+    }
+    if (offset >= g_fs_nodes[node].size) {
+        return 0;
+    }
+    if (offset + size > g_fs_nodes[node].size) {
+        size = g_fs_nodes[node].size - offset;
+    }
+    if (size <= 0) {
+        return 0;
+    }
+
+    if (g_fs_nodes[node].storage_kind == FS_NODE_STORAGE_INLINE) {
+        memcpy(dst, g_fs_nodes[node].data + offset, (size_t)size);
+        return size;
+    }
+    if (g_fs_nodes[node].storage_kind == FS_NODE_STORAGE_IMAGE) {
+        if (fs_read_image_bytes(g_fs_nodes[node].image_lba, (uint32_t)offset, dst, (uint32_t)size) != 0) {
+            return -1;
+        }
+        return size;
+    }
+    return -1;
+}
+
+int fs_read_file_bytes(const char *path, int offset, void *dst, int size) {
+    int node = fs_resolve(path);
+    if (node < 0) {
+        return -1;
+    }
+    return fs_read_node_bytes(node, offset, dst, size);
 }
 
 static int fs_resolve_parent(const char *path, int *parent_out, char *name_out) {
@@ -400,7 +836,7 @@ int fs_create(const char *path, int is_dir) {
     if (created < 0) {
         return -3;
     }
-    fs_sync();
+    fs_mark_dirty();
     return 0;
 }
 
@@ -419,7 +855,7 @@ int fs_remove(const char *path) {
     parent = g_fs_nodes[idx].parent;
     fs_unlink_child(parent, idx);
     fs_reset_node(idx);
-    fs_sync();
+    fs_mark_dirty();
     return 0;
 }
 
@@ -441,7 +877,63 @@ int fs_rename_node(int node, const char *new_name) {
     }
 
     str_copy_limited(g_fs_nodes[node].name, new_name, FS_NAME_MAX + 1);
-    fs_sync();
+    fs_mark_dirty();
+    return 0;
+}
+
+int fs_move_node(int node, int new_parent, const char *new_name) {
+    int old_parent;
+    int existing;
+    int cursor;
+    int guard = 0;
+
+    if (node < 0 || node >= FS_MAX_NODES || !g_fs_nodes[node].used || node == g_fs_root) {
+        return -1;
+    }
+    if (new_parent < 0 || new_parent >= FS_MAX_NODES ||
+        !g_fs_nodes[new_parent].used || !g_fs_nodes[new_parent].is_dir) {
+        return -2;
+    }
+    if (!fs_name_is_valid(new_name)) {
+        return -3;
+    }
+    if (node == new_parent) {
+        return -4;
+    }
+
+    if (g_fs_nodes[node].is_dir) {
+        cursor = new_parent;
+        while (++guard <= FS_MAX_NODES) {
+            if (cursor == node) {
+                return -5;
+            }
+            if (cursor == g_fs_root) {
+                break;
+            }
+            cursor = g_fs_nodes[cursor].parent;
+            if (cursor < 0 || cursor >= FS_MAX_NODES || !g_fs_nodes[cursor].used) {
+                return -5;
+            }
+        }
+        if (guard > FS_MAX_NODES) {
+            return -5;
+        }
+    }
+
+    existing = fs_find_child(new_parent, new_name);
+    if (existing >= 0 && existing != node) {
+        return -6;
+    }
+
+    old_parent = g_fs_nodes[node].parent;
+    if (old_parent == new_parent && str_eq(g_fs_nodes[node].name, new_name)) {
+        return 0;
+    }
+
+    fs_unlink_child(old_parent, node);
+    str_copy_limited(g_fs_nodes[node].name, new_name, FS_NAME_MAX + 1);
+    fs_link_child(new_parent, node);
+    fs_mark_dirty();
     return 0;
 }
 
@@ -462,6 +954,9 @@ int fs_write_file(const char *path, const char *text, int append) {
     if (g_fs_nodes[idx].is_dir) {
         return -2;
     }
+    if (g_fs_nodes[idx].storage_kind != FS_NODE_STORAGE_INLINE) {
+        return -3;
+    }
 
     if (!append) {
         g_fs_nodes[idx].size = 0;
@@ -474,15 +969,16 @@ int fs_write_file(const char *path, const char *text, int append) {
     }
     g_fs_nodes[idx].data[i] = '\0';
     g_fs_nodes[idx].size = i;
-    fs_sync();
+    fs_mark_dirty();
     return 0;
 }
 
 int fs_write_bytes(const char *path, const uint8_t *data, int size) {
     int idx = fs_resolve(path);
-    int i;
+    uint32_t sector_count;
+    uint32_t start_lba;
 
-    if (size < 0 || size > FS_FILE_MAX) {
+    if (size < 0 || (size > 0 && !data)) {
         return -3;
     }
 
@@ -500,15 +996,169 @@ int fs_write_bytes(const char *path, const uint8_t *data, int size) {
         return -2;
     }
 
-    for (i = 0; i < size; ++i) {
-        g_fs_nodes[idx].data[i] = (char)data[i];
-    }
-    g_fs_nodes[idx].size = size;
     if (size <= FS_FILE_MAX) {
-        g_fs_nodes[idx].data[size] = '\0';
+        fs_clear_node_storage(idx);
+        for (int i = 0; i < size; ++i) {
+            g_fs_nodes[idx].data[i] = (char)data[i];
+        }
+        g_fs_nodes[idx].size = size;
+        if (size <= FS_FILE_MAX) {
+            g_fs_nodes[idx].data[size] = '\0';
+        }
+        fs_mark_dirty();
+        return 0;
     }
-    fs_sync();
+
+    sector_count = fs_sector_count_for_size(size);
+    start_lba = fs_find_free_extent(sector_count, idx);
+    if (start_lba == 0u) {
+        return -4;
+    }
+    if (fs_write_sector_bytes(start_lba, data, size) != 0) {
+        return -5;
+    }
+
+    g_fs_nodes[idx].storage_kind = FS_NODE_STORAGE_IMAGE;
+    g_fs_nodes[idx].size = size;
+    g_fs_nodes[idx].image_lba = start_lba;
+    g_fs_nodes[idx].image_sector_count = sector_count;
+    g_fs_nodes[idx].data[0] = '\0';
+    fs_mark_dirty();
     return 0;
+}
+
+int fs_register_image_file(const char *path, uint32_t lba, uint32_t sector_count, int size) {
+    int idx = fs_resolve(path);
+
+    if (size < 0 || sector_count == 0u) {
+        return -3;
+    }
+
+    if (idx < 0) {
+        if (fs_create(path, 0) != 0) {
+            return -1;
+        }
+        idx = fs_resolve(path);
+        if (idx < 0) {
+            return -1;
+        }
+    }
+
+    if (g_fs_nodes[idx].is_dir) {
+        return -2;
+    }
+
+    g_fs_nodes[idx].storage_kind = FS_NODE_STORAGE_IMAGE;
+    g_fs_nodes[idx].size = size;
+    g_fs_nodes[idx].image_lba = lba;
+    g_fs_nodes[idx].image_sector_count = sector_count;
+    g_fs_nodes[idx].data[0] = '\0';
+    fs_mark_dirty();
+    return 0;
+}
+
+int fs_copy_node_to_path(int src_node, const char *dst_path) {
+    int dst_node;
+
+    if (src_node < 0 || src_node >= FS_MAX_NODES || !g_fs_nodes[src_node].used ||
+        g_fs_nodes[src_node].is_dir || !dst_path) {
+        return -1;
+    }
+
+    if (g_fs_nodes[src_node].storage_kind == FS_NODE_STORAGE_INLINE) {
+        return fs_write_bytes(dst_path, (const uint8_t *)g_fs_nodes[src_node].data, g_fs_nodes[src_node].size);
+    }
+
+    if (fs_resolve(dst_path) < 0) {
+        if (fs_create(dst_path, 0) != 0) {
+            return -1;
+        }
+    }
+    dst_node = fs_resolve(dst_path);
+    if (dst_node < 0 || g_fs_nodes[dst_node].is_dir) {
+        return -1;
+    }
+
+    {
+        uint32_t sector_count = g_fs_nodes[src_node].image_sector_count;
+        uint32_t start_lba = fs_find_free_extent(sector_count, dst_node);
+        uint8_t sector[FS_SECTOR_SIZE];
+
+        if (start_lba == 0u) {
+            return -2;
+        }
+        for (uint32_t i = 0; i < sector_count; ++i) {
+            if (sys_storage_read_sectors(g_fs_nodes[src_node].image_lba + i, sector, 1u) != 0 ||
+                sys_storage_write_sectors(start_lba + i, sector, 1u) != 0) {
+                return -3;
+            }
+        }
+
+        g_fs_nodes[dst_node].storage_kind = FS_NODE_STORAGE_IMAGE;
+        g_fs_nodes[dst_node].size = g_fs_nodes[src_node].size;
+        g_fs_nodes[dst_node].image_lba = start_lba;
+        g_fs_nodes[dst_node].image_sector_count = sector_count;
+        g_fs_nodes[dst_node].data[0] = '\0';
+    }
+
+    fs_mark_dirty();
+    return 0;
+}
+
+static void fs_ensure_doom_wad_registered(void) {
+    uint32_t doom_wad_sectors = 0u;
+    int doom_wad_size = 0;
+
+    if (g_fs_root < 0) {
+        return;
+    }
+
+    if (fs_resolve("/DOOM") < 0) {
+        (void)fs_create("/DOOM", 1);
+    }
+
+    if (fs_detect_doom_wad(DOOM_WAD_IMAGE_LBA,
+                           &doom_wad_sectors,
+                           &doom_wad_size) == 0) {
+        (void)fs_register_image_file("/DOOM/DOOM.WAD",
+                                     DOOM_WAD_IMAGE_LBA,
+                                     doom_wad_sectors,
+                                     doom_wad_size);
+        fs_debug_asset_path("fs: asset file ", "/DOOM/DOOM.WAD");
+    }
+}
+
+static void fs_register_png_asset(const char *path, uint32_t lba) {
+    uint32_t sectors = 0u;
+    int size = 0;
+
+    if (fs_detect_png_file(lba, &sectors, &size) == 0) {
+        (void)fs_register_image_file(path, lba, sectors, size);
+        fs_debug_asset_path("fs: asset file ", path);
+    }
+}
+
+static void fs_ensure_craft_textures_registered(void) {
+    if (g_fs_root < 0) {
+        return;
+    }
+
+    if (fs_resolve("/textures") < 0) {
+        (void)fs_create("/textures", 1);
+    }
+
+    fs_register_png_asset("/textures/texture.png", CRAFT_TEXTURE_IMAGE_LBA);
+    fs_register_png_asset("/textures/font.png", CRAFT_FONT_IMAGE_LBA);
+    fs_register_png_asset("/textures/sky.png", CRAFT_SKY_IMAGE_LBA);
+    fs_register_png_asset("/textures/sign.png", CRAFT_SIGN_IMAGE_LBA);
+}
+
+static void fs_ensure_wallpaper_registered(void) {
+    if (g_fs_root < 0) {
+        return;
+    }
+
+    fs_register_png_asset("/wallpaper.png", WALLPAPER_IMAGE_LBA);
 }
 
 void fs_build_path(int node, char *out, int max_len) {
@@ -548,37 +1198,12 @@ void fs_build_path(int node, char *out, int max_len) {
 
 void fs_init(void) {
     int i;
-    static const char *compat_exec_stubs[] = {
-        "/bin/hello",
-        "/bin/js",
-        "/bin/ruby",
-        "/bin/python",
-        "/bin/head",
-        "/bin/tail",
-        "/bin/grep",
-        "/bin/loadkeys",
-        "/bin/pwd",
-        "/bin/sleep",
-        "/bin/rmdir",
-        "/usr/bin/head",
-        "/usr/bin/tail",
-        "/usr/bin/grep",
-        "/usr/bin/pwd",
-        "/usr/bin/sleep",
-        "/usr/bin/rmdir",
-        "/compat/bin/echo",
-        "/compat/bin/cat",
-        "/compat/bin/wc",
-        "/compat/bin/pwd",
-        "/compat/bin/head",
-        "/compat/bin/sleep",
-        "/compat/bin/rmdir",
-        "/compat/bin/tail",
-        "/compat/bin/grep",
-        "/compat/bin/loadkeys"
-    };
+    extern void kernel_debug_puts(const char *);
 
     g_fs_sync_suspended = 1;
+    g_fs_doom_assets_scanned = 0;
+    g_fs_texture_assets_scanned = 0;
+    g_fs_wallpaper_asset_scanned = 0;
     for (i = 0; i < FS_MAX_NODES; ++i) {
         fs_reset_node(i);
     }
@@ -587,9 +1212,16 @@ void fs_init(void) {
     g_fs_cwd = -1;
 
     if (fs_load_persistent_image() == 0) {
+        kernel_debug_puts("fs: persistent image valid\n");
+        kernel_debug_puts("fs: asset scans deferred\n");
         g_fs_sync_suspended = 0;
+        g_fs_dirty = 1;
+        g_fs_last_sync_tick = 0u;
+        kernel_debug_puts("fs: initial sync deferred\n");
         return;
     }
+
+    kernel_debug_puts("fs: persistent image invalid, rebuilding\n");
 
     g_fs_root = fs_new_node("", 1, -1);
     g_fs_nodes[g_fs_root].parent = g_fs_root;
@@ -605,9 +1237,11 @@ void fs_init(void) {
     (void)fs_create("/home/user", 1);
     (void)fs_create("/tmp", 1);
     (void)fs_create("/dev", 1);
-    (void)fs_create("/doom", 1);
+    (void)fs_create("/DOOM", 1);
+    (void)fs_create("/textures", 1);
     (void)fs_create("/docs", 1);
     (void)fs_create("/config", 1);
+    (void)fs_create("/trash", 1);
     (void)fs_write_file("/README", "SISTEMA DE ARQUIVOS VFS", 0);
     (void)fs_write_file("/teste.lua",
                         "print(\"hello from lua\")\n"
@@ -619,9 +1253,14 @@ void fs_init(void) {
                         "  print(\"hello from sectorc\");\n"
                         "}\n",
                         0);
-    for (i = 0; i < (int)(sizeof(compat_exec_stubs) / sizeof(compat_exec_stubs[0])); ++i) {
-        (void)fs_write_file(compat_exec_stubs[i], "", 0);
+    kernel_debug_puts("fs: base tree created\n");
+    for (i = 0; i < (int)G_APP_CATALOG_STUB_PATHS_COUNT; ++i) {
+        (void)fs_write_file(g_app_catalog_stub_paths[i], "", 0);
     }
+    kernel_debug_puts("fs: compat stubs created\n");
+    kernel_debug_puts("fs: asset scans deferred\n");
     g_fs_sync_suspended = 0;
-    fs_sync();
+    g_fs_dirty = 1;
+    g_fs_last_sync_tick = 0u;
+    kernel_debug_puts("fs: initial sync deferred\n");
 }

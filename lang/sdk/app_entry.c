@@ -12,6 +12,25 @@ extern uint8_t __app_load_start[];
 extern uint8_t __app_image_end[];
 extern uint8_t __app_bss_end[];
 
+static void vibe_app_boot_debug(const char *text) {
+    __asm__ volatile("push %%eax\n\t"
+                     "push %%ebx\n\t"
+                     "push %%ecx\n\t"
+                     "push %%edx\n\t"
+                     "push %%esi\n\t"
+                     "push %%edi\n\t"
+                     "int $0x80\n\t"
+                     "pop %%edi\n\t"
+                     "pop %%esi\n\t"
+                     "pop %%edx\n\t"
+                     "pop %%ecx\n\t"
+                     "pop %%ebx\n\t"
+                     "pop %%eax"
+                     :
+                     : "a"(11), "b"((int)(uintptr_t)text), "c"(0), "d"(0), "S"(0), "D"(0)
+                     : "memory", "cc");
+}
+
 /*
  * Keep the external app ABI entrypoint mechanically simple.
  * Tail-call optimization here makes the stack discipline harder to reason
@@ -21,8 +40,13 @@ __attribute__((noinline, optimize("O0")))
 int vibe_app_entry(const struct vibe_app_context *ctx, int argc, char **argv) {
     int rc;
 
+    vibe_app_boot_debug("app: entry begin\n");
     vibe_app_runtime_init(ctx);
+    vibe_app_boot_debug("app: runtime init ok\n");
     rc = vibe_app_main(argc, argv);
+    vibe_app_boot_debug("app: main returned\n");
+    vibe_app_run_atexit();
+    vibe_app_boot_debug("app: atexit done\n");
     return rc;
 }
 
@@ -31,6 +55,7 @@ const struct vibe_app_header g_vibe_app_header = {
     VIBE_APP_MAGIC,
     VIBE_APP_ABI_VERSION,
     (uint16_t)sizeof(struct vibe_app_header),
+    0u,
     0u,
     0u,
     0u,

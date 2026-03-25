@@ -40,6 +40,8 @@
 #include "extern.h"
 #include "player.h"
 
+extern int vibe_sail_single_process;
+
 void
 pl_main(void)
 {
@@ -174,8 +176,8 @@ reprint:
 		case 0:
 			longjmp(restart, MODE_DRIVER);
 		case -1:
-			perror("fork");
-			leave(LEAVE_FORK);
+			vibe_sail_single_process = 1;
+			hasdriver = 1;
 			break;
 		default:
 			hasdriver++;
