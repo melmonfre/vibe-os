@@ -7,6 +7,7 @@
 int doom_port_run_full(void);
 const char *doom_port_last_error(void);
 int doom_port_iwad_available(void);
+const char *doom_port_debug_line(int index);
 
 static const struct rect DEFAULT_WINDOW = {40, 20, 400, 300};
 
@@ -24,25 +25,7 @@ static void doom_debug(const char *message) {
 
 static int doom_iwad_available(void) {
     static const char *candidates[] = {
-        "doom1.wad",
-        "doom.wad",
-        "doomu.wad",
-        "doom2.wad",
-        "plutonia.wad",
-        "tnt.wad",
         "/DOOM/DOOM.WAD",
-        "/doom1.wad",
-        "/doom.wad",
-        "/doom/DOOM.WAD",
-        "/doom/doom.wad",
-        "/doomu.wad",
-        "/doom2.wad",
-        "/plutonia.wad",
-        "/tnt.wad",
-        "userland/applications/games/DOOM/doom1.wad",
-        "userland/applications/games/DOOM/doom.wad",
-        "userland/applications/games/DOOM/doomu.wad",
-        "userland/applications/games/DOOM/doom2.wad",
         0
     };
 
@@ -122,8 +105,12 @@ void doom_draw_window(struct doom_state *s, int active,
     sys_text(body.x + 8, body.y + 22, t->text, "Engine original + camada I_* para VibeOS");
     sys_text(body.x + 8, body.y + 36, t->text, "Teclado/mouse, render e loop reais");
     sys_text(body.x + 8, body.y + 56, t->text, s->status);
-    sys_text(body.x + 8, body.y + 76, t->text, "Checagem do WAD agora so acontece no Enter");
-    sys_text(body.x + 8, body.y + 90, t->text, "Assim a janela nao toca storage/logo no boot");
+    sys_text(body.x + 8, body.y + 76, t->text,
+             doom_port_debug_line(0)[0] ? doom_port_debug_line(0) : "Checagem do WAD agora so acontece no Enter");
+    sys_text(body.x + 8, body.y + 90, t->text,
+             doom_port_debug_line(1)[0] ? doom_port_debug_line(1) : "Assim a janela nao toca storage/logo no boot");
+    sys_text(body.x + 8, body.y + 104, t->text, doom_port_debug_line(2));
+    sys_text(body.x + 8, body.y + 118, t->text, doom_port_debug_line(3));
 
     ui_draw_button(&cta, "Enter/Click: iniciar DOOM", UI_BUTTON_PRIMARY, 0);
 }

@@ -19,6 +19,8 @@ int sys_gfx_set_mode(uint32_t width, uint32_t height);
 int sys_gfx_set_palette(const uint8_t *rgb_triplets);
 int sys_gfx_get_palette(uint8_t *rgb_triplets);
 void sys_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale);
+void sys_gfx_blit8_stretch(const uint8_t *src, int src_w, int src_h,
+                           int dst_x, int dst_y, int dst_w, int dst_h);
 int sys_storage_load(void *dst, uint32_t size);
 int sys_storage_save(const void *src, uint32_t size);
 int sys_storage_read_sectors(uint32_t lba, void *dst, uint32_t sector_count);

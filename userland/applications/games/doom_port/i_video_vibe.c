@@ -12,6 +12,8 @@
 static int g_scale = 2;
 static int g_off_x = 0;
 static int g_off_y = 0;
+static int g_dst_w = SCREENWIDTH;
+static int g_dst_h = SCREENHEIGHT;
 static int g_inited = 0;
 static int g_mouse_ready = 0;
 static int g_mouse_prev_x = 0;
@@ -20,6 +22,36 @@ static uint8_t g_mouse_prev_buttons = 0;
 static uint8_t g_key_hold[512];
 
 #define DOOM_KEY_HOLD_TICS 4
+
+static void doom_video_refresh_layout(void) {
+    struct video_mode mode;
+
+    if (sys_gfx_info(&mode) == 0) {
+        int max_w = (int)mode.width / SCREENWIDTH;
+        int max_h = (int)mode.height / SCREENHEIGHT;
+
+        g_scale = max_w < max_h ? max_w : max_h;
+        if (g_scale < 1) {
+            g_scale = 1;
+        }
+        g_off_x = ((int)mode.width - (SCREENWIDTH * g_scale)) / 2;
+        g_off_y = ((int)mode.height - (SCREENHEIGHT * g_scale)) / 2;
+        if (g_off_x < 0) {
+            g_off_x = 0;
+        }
+        if (g_off_y < 0) {
+            g_off_y = 0;
+        }
+        g_dst_w = (int)mode.width;
+        g_dst_h = (int)mode.height;
+    } else {
+        g_scale = 1;
+        g_off_x = 0;
+        g_off_y = 0;
+        g_dst_w = SCREENWIDTH;
+        g_dst_h = SCREENHEIGHT;
+    }
+}
 
 static int map_key(int key) {
     if (key == KEY_ARROW_UP) return KEY_UPARROW;
@@ -91,8 +123,8 @@ void I_StartTic(void) {
             g_mouse_ready = 1;
         }
 
-        mouse_dx += m.x - g_mouse_prev_x;
-        mouse_dy += g_mouse_prev_y - m.y;
+        mouse_dx += m.dx;
+        mouse_dy += m.dy;
         mouse_buttons = m.buttons & 0x07u;
         mouse_changed = 1;
         g_mouse_prev_x = m.x;
@@ -111,7 +143,6 @@ void I_StartTic(void) {
 }
 
 void I_InitGraphics(void) {
-    struct video_mode mode;
     if (g_inited) {
         return;
     }
@@ -123,23 +154,7 @@ void I_InitGraphics(void) {
     g_mouse_prev_buttons = 0;
 
     doom_port_capture_palette();
-
-    if (sys_gfx_info(&mode) == 0) {
-        int max_w = (int)mode.width / SCREENWIDTH;
-        int max_h = (int)mode.height / SCREENHEIGHT;
-
-        g_scale = max_w < max_h ? max_w : max_h;
-        if (g_scale < 1) g_scale = 1;
-        if (g_scale > 3) g_scale = 3;
-        g_off_x = ((int)mode.width - (SCREENWIDTH * g_scale)) / 2;
-        g_off_y = ((int)mode.height - (SCREENHEIGHT * g_scale)) / 2;
-        if (g_off_x < 0) g_off_x = 0;
-        if (g_off_y < 0) g_off_y = 0;
-    } else {
-        g_scale = 2;
-        g_off_x = 0;
-        g_off_y = 0;
-    }
+    doom_video_refresh_layout();
 
     g_inited = 1;
 }
@@ -149,7 +164,8 @@ void I_UpdateNoBlit(void) {
 
 void I_FinishUpdate(void) {
     byte *src = screens[0];
-    sys_gfx_blit8(src, SCREENWIDTH, SCREENHEIGHT, g_off_x, g_off_y, g_scale);
+    doom_video_refresh_layout();
+    sys_gfx_blit8_stretch(src, SCREENWIDTH, SCREENHEIGHT, 0, 0, g_dst_w, g_dst_h);
     sys_present();
 }
 

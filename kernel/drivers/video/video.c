@@ -665,6 +665,54 @@ void kernel_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int d
     }
 }
 
+void kernel_gfx_blit8_stretch(const uint8_t *src, int src_w, int src_h,
+                              int dst_x, int dst_y, int dst_w, int dst_h) {
+    struct video_mode *mode;
+    uint8_t *bb;
+
+    kernel_video_enter_graphics();
+    if (src == NULL || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
+        return;
+    }
+
+    mode = kernel_video_get_mode();
+    bb = kernel_video_get_backbuffer();
+    if (mode == NULL || bb == NULL) {
+        return;
+    }
+
+    for (int dy = 0; dy < dst_h; ++dy) {
+        int py = dst_y + dy;
+        int sy;
+
+        if (py < 0 || py >= (int)mode->height) {
+            continue;
+        }
+        sy = (dy * src_h) / dst_h;
+        if (sy < 0) {
+            sy = 0;
+        } else if (sy >= src_h) {
+            sy = src_h - 1;
+        }
+
+        for (int dx = 0; dx < dst_w; ++dx) {
+            int px = dst_x + dx;
+            int sx;
+
+            if (px < 0 || px >= (int)mode->width) {
+                continue;
+            }
+            sx = (dx * src_w) / dst_w;
+            if (sx < 0) {
+                sx = 0;
+            } else if (sx >= src_w) {
+                sx = src_w - 1;
+            }
+            bb[(py * mode->pitch) + px] = src[(sy * src_w) + sx];
+        }
+    }
+}
+
 int kernel_video_set_palette(const uint8_t *rgb_triplets) {
     if (rgb_triplets == NULL || !kernel_video_has_graphics_mode()) {
         return -1;

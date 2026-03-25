@@ -11,6 +11,7 @@ static int g_quit = 0;
 static int g_code = 0;
 static int g_run_active = 0;
 static char g_error[96] = "";
+static char g_debug_lines[4][96];
 static uint8_t g_saved_palette[256 * 3];
 static int g_saved_palette_valid = 0;
 static jmp_buf g_run_jmp;
@@ -46,6 +47,25 @@ int doom_port_last_code(void) {
     return g_code;
 }
 
+void doom_port_debug_note(const char *message) {
+    int i;
+
+    if (!message || message[0] == '\0') {
+        return;
+    }
+    for (i = 0; i < 3; ++i) {
+        str_copy_limited(g_debug_lines[i], g_debug_lines[i + 1], (int)sizeof(g_debug_lines[i]));
+    }
+    str_copy_limited(g_debug_lines[3], message, (int)sizeof(g_debug_lines[3]));
+}
+
+const char *doom_port_debug_line(int index) {
+    if (index < 0 || index >= 4) {
+        return "";
+    }
+    return g_debug_lines[index];
+}
+
 void doom_port_capture_palette(void) {
     if (!g_saved_palette_valid && sys_gfx_get_palette(g_saved_palette) == 0) {
         g_saved_palette_valid = 1;
@@ -77,6 +97,9 @@ int doom_port_run_full(void) {
     g_quit = 0;
     g_code = 0;
     g_error[0] = '\0';
+    for (int i = 0; i < 4; ++i) {
+        g_debug_lines[i][0] = '\0';
+    }
     myargc = 2;
     myargv = argv;
     g_run_active = 1;

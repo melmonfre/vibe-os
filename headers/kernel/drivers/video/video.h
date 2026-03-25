@@ -39,6 +39,8 @@ void kernel_gfx_rect(int x, int y, int w, int h, uint8_t color);
 void kernel_gfx_clear(uint8_t color);
 void kernel_gfx_draw_text(int x, int y, const char *text, uint8_t color);
 void kernel_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale);
+void kernel_gfx_blit8_stretch(const uint8_t *src, int src_w, int src_h,
+                              int dst_x, int dst_y, int dst_w, int dst_h);
 
 /* VGA Text mode helpers */
 void kernel_text_init(void);

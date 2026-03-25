@@ -225,6 +225,7 @@ static void fs_maybe_register_boot_assets_for_path(const char *path) {
     if (fs_path_matches_root_prefix(path, "/DOOM") && !g_fs_doom_assets_scanned) {
         g_fs_doom_assets_scanned = 1;
         fs_ensure_doom_wad_registered();
+        g_fs_doom_assets_scanned = 0;
     }
 
     if (fs_path_matches_root_prefix(path, "/textures") && !g_fs_texture_assets_scanned) {

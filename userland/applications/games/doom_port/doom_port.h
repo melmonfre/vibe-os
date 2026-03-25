@@ -8,6 +8,8 @@ void doom_port_request_quit(const char *reason, int code);
 void doom_port_abort_run(const char *reason, int code) __attribute__((noreturn));
 const char *doom_port_last_error(void);
 int doom_port_last_code(void);
+void doom_port_debug_note(const char *message);
+const char *doom_port_debug_line(int index);
 void doom_port_capture_palette(void);
 void doom_port_restore_palette(void);
 void doom_port_set_palette(const uint8_t *pal);

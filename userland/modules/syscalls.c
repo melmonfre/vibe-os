@@ -59,6 +59,18 @@ void sys_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_
                    scale);
 }
 
+void sys_gfx_blit8_stretch(const uint8_t *src, int src_w, int src_h,
+                           int dst_x, int dst_y, int dst_w, int dst_h) {
+    int packed_src_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
+    int packed_dst_wh = ((dst_h & 0xFFFF) << 16) | (dst_w & 0xFFFF);
+    (void)syscall5(SYSCALL_GFX_BLIT8_STRETCH,
+                   (int)(uintptr_t)src,
+                   packed_src_wh,
+                   dst_x,
+                   dst_y,
+                   packed_dst_wh);
+}
+
 int sys_storage_load(void *dst, uint32_t size) {
     return syscall5(SYSCALL_STORAGE_LOAD, (int)(uintptr_t)dst, (int)size, 0, 0, 0);
 }

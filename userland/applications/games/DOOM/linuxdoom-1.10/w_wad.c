@@ -42,6 +42,7 @@ rcsid[] = "$Id: w_wad.c,v 1.5 1997/02/03 16:47:57 b1 Exp $";
 #include "m_swap.h"
 #include "i_system.h"
 #include "z_zone.h"
+#include <userland/applications/games/doom_port/doom_port.h>
 
 #ifdef __GNUG__
 #pragma implementation "w_wad.h"
@@ -136,6 +137,8 @@ ExtractFileBase
 
 int			reloadlump;
 char*			reloadname;
+static char             g_primary_wad_path[128];
+static int              g_primary_wad_handle = -1;
 
 
 void W_AddFile (char *filename)
@@ -181,6 +184,9 @@ void W_AddFile (char *filename)
     else 
     {
 	// WAD file
+	strncpy(g_primary_wad_path, filename, sizeof(g_primary_wad_path) - 1);
+	g_primary_wad_path[sizeof(g_primary_wad_path) - 1] = '\0';
+	g_primary_wad_handle = handle;
 	read (handle, &header, sizeof(header));
 	if (strncmp(header.identification,"IWAD",4))
 	{
@@ -427,11 +433,14 @@ W_ReadLump
     int		c;
     lumpinfo_t*	l;
     int		handle;
+    int         opened_temp;
+    char        debug_msg[96];
 	
     if (lump >= numlumps)
 	I_Error ("W_ReadLump: %i >= numlumps",lump);
 
     l = lumpinfo+lump;
+    opened_temp = 0;
 	
     // ??? I_BeginRead ();
 	
@@ -443,15 +452,47 @@ W_ReadLump
     }
     else
 	handle = l->handle;
+
+    if (handle >= 0 && handle <= 2 && g_primary_wad_handle > 2)
+    {
+	handle = g_primary_wad_handle;
+	l->handle = handle;
+	snprintf(debug_msg, sizeof(debug_msg),
+		 "wad fixup h=%d lump=%d",
+		 handle, lump);
+	doom_port_debug_note(debug_msg);
+    }
+    else if (handle >= 0 && handle <= 2 && g_primary_wad_path[0] != '\0')
+    {
+	handle = open(g_primary_wad_path, O_RDONLY | O_BINARY);
+	opened_temp = (handle >= 0);
+	snprintf(debug_msg, sizeof(debug_msg),
+		 "wad fallback h=%d lump=%d",
+		 handle, lump);
+	doom_port_debug_note(debug_msg);
+	if (handle < 0)
+	    I_Error ("W_ReadLump: fallback open failed %s", g_primary_wad_path);
+    }
+
+    snprintf(debug_msg, sizeof(debug_msg),
+             "wad lump=%d h=%d p=%d s=%d",
+             lump, handle, l->position, l->size);
+    doom_port_debug_note(debug_msg);
 		
     lseek (handle, l->position, SEEK_SET);
     c = read (handle, dest, l->size);
 
     if (c < l->size)
+    {
+	snprintf(debug_msg, sizeof(debug_msg),
+		 "wad read=%d want=%d lump=%d",
+		 c, l->size, lump);
+	doom_port_debug_note(debug_msg);
 	I_Error ("W_ReadLump: only read %i of %i on lump %i",
 		 c,l->size,lump);	
+    }
 
-    if (l->handle == -1)
+    if (opened_temp || l->handle == -1)
 	close (handle);
 		
     // ??? I_EndRead ();
