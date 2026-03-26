@@ -16,6 +16,7 @@
 #include <kernel/drivers/video/video.h>
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/drivers/timer/timer.h>
+#include <kernel/drivers/usb/usb_host.h>
 #include <kernel/drivers/input/input.h>
 #include <kernel/microkernel.h>
 #include <kernel/userland.h>
@@ -462,6 +463,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_text_puts("Initializing scheduler/driver manager...\n");
     scheduler_init();
     driver_manager_init(); /* second call to debug init performs HW setup */
+    kernel_usb_host_init();
     kernel_text_puts("Scheduler OK\n");
 
     if (kernel_cpu_is_smp_capable() && local_apic_enabled()) {

@@ -65,6 +65,8 @@ static void soundctl_usage(void) {
 
 static const char *soundctl_backend_name(int backend_kind) {
     switch (backend_kind) {
+    case 3:
+        return "pcspkr";
     case 2:
         return "compat-azalia";
     case 1:

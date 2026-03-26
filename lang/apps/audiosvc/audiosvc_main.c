@@ -20,6 +20,8 @@ static void audiosvc_debug(const char *text) {
 
 static const char *audiosvc_backend_name(int backend_kind) {
     switch (backend_kind) {
+    case 3:
+        return "pcspkr";
     case 2:
         return "compat-azalia";
     case 1:

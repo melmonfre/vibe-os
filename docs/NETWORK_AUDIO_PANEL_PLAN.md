@@ -76,6 +76,9 @@ Conseguimos planejar isso de forma realista e com bastante reuso, mas os dois it
 - [X] backend `compat-auich` faz bring-up basico de AC97/mixer/sample-rate
 - [X] backend `compat-auich` possui caminho MVP de PCM out via DMA
 - [X] telemetria de runtime de audio foi exposta para status/task manager
+- [X] existe matriz explicita de backends de audio (`compat-azalia`, `compat-auich`, `pcspkr`)
+- [X] fallback universal audivel via `pcspkr`/buzzer existe quando nenhum driver PCI utilizavel sobe
+- [ ] backend `compat-uaudio` para USB Audio Class foi portado
 - [ ] port honesto dos drivers necessarios presentes em `compat`
 - [X] audio audivel real foi validado em runtime no QEMU com AC97
 - [X] backend de audio tem IRQ/underrun handling robusto o suficiente para considerar o driver fechado
@@ -183,7 +186,92 @@ Estado atual:
 - [X] a validacao HDA ficou endurecida tambem no diagnostico de hardware: `validate-audio-hda-playback` agora exige no serial os markers `pci=`, `codec=` e `route=` emitidos por `audiosvc`/`soundctl`, e o fluxo voltou a passar no QEMU `intel-hda`
 - [X] o diagnostico do `audioplayer` ficou mais acionavel em maquina real: o detalhe da ultima falha agora tambem inclui PCI ID da controladora, codec HDA e rota `pin/dac`, e a linha de status do app foi ampliada para caber esse contexto
 - [X] o `compat-azalia` agora nao programa so pin/EAPD: durante a selecao da rota de playback ele tambem tenta desmutar e aplicar ganho basico nos amplificadores de saida/entrada ao longo do caminho HDA escolhido (pin/mixer/selector/DAC), ativa defensivamente os demais pins fisicos de saida detectados, sobe o function group e os widgets da rota para power state `D0` e passa a logar a rota `pin/dac` escolhida; `validate-audio-hda-playback` continuou verde depois desse endurecimento
-- [~] a compatibilidade HDA em notebook real ainda esta em fechamento: o `compat-azalia` agora escolhe o primeiro stream de saída a partir de `ISS/OSS` do `GCAP`, mas essa frente ainda precisa de revalidacao fora do QEMU para confirmar que o erro de playback no player foi resolvido em hardware Intel HDA real
+- [~] a compatibilidade HDA em notebook real ainda esta em fechamento: o `compat-azalia` deixou de depender de um unico output stream fixo e agora varre/rota candidatos de playback a partir de `ISS`/`OSS`/`BSS` do `GCAP`, reprogride o codec para o novo stream quando o stream inicial falha e tolera topologias reais em que a selecao formal de rota pin->DAC nao fecha exatamente como no QEMU; ainda falta revalidacao fora do QEMU para confirmar que o erro de playback no player foi resolvido em hardware Intel HDA real
+- [X] o fallback final de audio deixou de ser sempre silencioso: quando HDA/AC97 nao ficam utilizaveis, o servico agora sobe um backend `pcspkr` baseado no PIT/channel 2 e no speaker legacy (`porta 0x61`), aparecendo em `audiosvc`/`soundctl` como backend proprio em vez de ficar so em `softmix`
+- [~] o backend `pcspkr` ja garante um fallback audivel praticamente universal em desktops/notebooks x86, inclusive para `soundctl tone` e para WAV/PCM em modo degradado; a qualidade ainda e propositalmente rudimentar, com reducao do PCM para blocos curtos de tom no buzzer
+- [ ] o terceiro backend amplo planejado agora e `compat-uaudio` para USB Audio Class; o repo ja tem a base `compat/sys/dev/usb/uaudio.c`, mas o VibeOS ainda precisa hospedar/controlar uma stack USB nativa suficiente para enumerar controladoras/dispositivos e dar substrate real para esse port
+- [~] o groundwork de USB para destravar `compat-uaudio` ja comecou no kernel: o VibeOS agora descobre host controllers USB PCI (`UHCI`/`OHCI`/`EHCI`/`XHCI`) durante o boot, habilita o dispositivo PCI, inventaria BAR/IRQ/tipo/portas estimadas, le o estado bruto das portas do root hub, infere speed hint (`low/full/high/super`) para portas ocupadas e loga um sumario proprio; ainda falta attach de bus/root hub e enumeracao real de dispositivos/interfaces/endpoints
+- [X] o fallback de audio agora tambem diferencia o caso "sem audio PCI, mas com host USB presente": quando isso acontece, `device.config` passa a indicar `pcspkr-fallback-usb-host-present`, deixando explicito no diagnostico que o proximo backend natural ali e `compat-uaudio`
+- [X] o fallback de audio agora tambem diferencia o caso "ha algo plugado em USB": quando nenhuma placa de audio PCI sobe e o root hub ja reporta porta ocupada, `device.config` passa a indicar `pcspkr-fallback-usb-device-present`, deixando explicito no diagnostico que falta exatamente o backend/enum de `uaudio`
+- [X] o fallback de audio agora tambem diferencia um candidato USB mais plausivel para A/V: quando nao existe audio PCI e o root hub ve porta ocupada em `high/super speed`, `device.config` passa a indicar `pcspkr-fallback-usb-av-candidate`, ajudando a priorizar a frente `compat-uaudio`
+- [X] o groundwork USB agora tambem materializa um inventario minimo de dispositivos vistos diretamente no root hub, com `controller/port/speed/flags`, e contabiliza `audio-candidates` plausiveis para o diagnostico do audio antes mesmo de existir enumeracao completa de descritores
+- [X] o fallback de audio agora tambem diferencia o caso "ja existe candidato plausivel para audio USB": quando nenhuma placa PCI sobe e o inventario do root hub ve dispositivo em velocidade/estado compativeis com a proxima fase do `uaudio`, `device.config` passa a indicar `pcspkr-fallback-usb-audio-candidate`
+- [X] o substrate USB agora tambem cria `device slots` minimos acima do root hub, com `address/controller/port/speed/state/flags`, para deixar a proxima fase de enumeracao partir de "dispositivo anexado" em vez de apenas "porta ocupada"
+- [X] o fallback de audio agora tambem diferencia quando ja existe dispositivo USB pronto para a proxima fase de enumeracao: `pcspkr-fallback-usb-enum-ready` e `pcspkr-fallback-usb-enum-ready-audio`
+- [X] o substrate USB agora tambem separa melhor os estados do primeiro passo de enumeracao: `ready-for-control` quando o host/porta ja parecem aptos ao futuro control path minimo, e `needs-companion` quando um device atras de `EHCI` ainda depende de handoff para companion controller
+- [X] o fallback de audio agora tambem diferencia esses dois estados mais proximos do `GET_DESCRIPTOR`: `pcspkr-fallback-usb-control-ready`, `pcspkr-fallback-usb-control-ready-audio` e `pcspkr-fallback-usb-needs-companion-audio`
+- [X] o substrate USB agora tambem tenta resolver companions provaveis de `EHCI` para `UHCI/OHCI` no mesmo slot PCI e propaga isso para os `device slots`, aproximando o diagnostico do primeiro handoff real
+- [X] o fallback de audio agora tambem diferencia quando o problema ja nao e "faltou companion", e sim "falta implementar o handoff/control path": `pcspkr-fallback-usb-companion-available-audio`
+- [X] o substrate USB agora tambem calcula um `effective controller` por `device slot` e marca o estado `handoff-ready` quando ja existe caminho plausivel de migracao de `EHCI` para companion
+- [X] o fallback de audio agora tambem diferencia esse estagio intermediario mais proximo da enumeracao real: `pcspkr-fallback-usb-handoff-ready-audio`
+- [X] o substrate USB agora tambem agrega os casos `control-ready` e `handoff-ready` em um estado unico de `control-path-ready`, deixando a proxima etapa de descriptor/control transfer partir de um inventario ja resolvido por device
+- [X] o fallback de audio agora tambem diferencia quando ja existe caminho plausivel completo ate o primeiro control path: `pcspkr-fallback-usb-control-path-audio`
+- [X] o substrate USB agora tambem seleciona `probe targets` a partir dos `device slots` `control-path-ready`, inclusive com filtro para candidatos de audio, preparando a futura leitura de descriptors por ordem estavel
+- [X] o substrate USB agora tambem materializa um `probe plan` minimo por alvo, começando pelo primeiro `GET_DESCRIPTOR` curto do `device descriptor` (8 bytes), para a futura etapa de control request nao precisar inventar esse encaixe depois
+- [X] o fallback de audio agora tambem diferencia quando ja existe alvo direto para essa primeira probe USB de audio: `pcspkr-fallback-usb-descriptor-probe-audio`
+- [X] o substrate USB agora tambem materializa uma fila/snapshot estavel dessas probes minimas no boot, com status `planned`, para a futura etapa de transfer/control request consumir entradas prontas
+- [X] o fallback de audio agora tambem diferencia quando essa fila de probe para audio ja existe: `pcspkr-fallback-usb-probe-queue-audio`
+- [X] o substrate USB agora tambem classifica quais entradas dessa fila ja estao `dispatch-ready` para uma futura execucao imediata e quais ainda ficariam `deferred-no-transport`
+- [X] o fallback de audio agora tambem diferencia quando ja existe probe USB de audio pronta para despacho: `pcspkr-fallback-usb-probe-dispatch-audio`
+- [X] o substrate USB agora tambem tem um pequeno despachante para selecionar a proxima probe `dispatch-ready`, avancando um cursor estavel sem ter de recalcular a fila toda quando a etapa de transfer for ligada
+- [X] o despachante agora tambem monta um `dispatch context` completo por probe, carregando snapshot + controlador efetivo + status da porta efetiva, para a futura etapa de transfer/control request consumir isso direto
+- [X] o substrate USB agora tambem tem a primeira API de "tentativa de execucao" dessa probe; por enquanto ela ainda termina honestamente em `no transport`, mas ja fixa o fluxo `dispatch -> execution result` e atualiza o status da probe para `exec-no-transport`
+- [X] o `dispatch context` agora tambem resolve qual backend de transporte deveria executar a probe (`UHCI`/`OHCI`/`EHCI`/`XHCI`) e a tentativa de execucao ja retorna um resultado especifico por transporte indisponivel, em vez de um `no transport` totalmente generico
+- [X] o substrate USB agora tambem executa um primeiro preflight real para probes em `UHCI` e `OHCI`: valida o transporte efetivo, limpa/mascara status/interrupts do host controller de forma minima e marca a probe como `exec-ready` quando esse caminho basico esta vivo; `EHCI` e `XHCI` continuam honestamente como indisponiveis nessa fase
+- [X] o fallback de audio agora tambem diferencia quando esse primeiro degrau do transporte USB ja ficou realmente pronto para um futuro control transfer de audio: `pcspkr-fallback-usb-probe-exec-audio`
+- [X] o substrate USB agora faz a leitura curta e tambem a leitura completa do `configuration descriptor` em `UHCI` e `OHCI`: depois do `device descriptor` completo e do primeiro `SET_ADDRESS`, a probe ja busca os 9 bytes iniciais da configuracao, usa `wTotalLength` para puxar o blob inteiro e guarda `bConfigurationValue`/`wTotalLength` no snapshot
+- [X] a promocao para `descriptor-ready` agora ficou defensiva tambem no descriptor completo: o snapshot so sobe quando o prefixo e o `device descriptor` inteiro fazem sentido, incluindo `bLength`, `bDescriptorType`, `bMaxPacketSize0` e `bNumConfigurations`
+- [X] o fallback de audio agora tambem diferencia quando essa primeira leitura curta do `device descriptor` ja aconteceu em um candidato USB de audio: `pcspkr-fallback-usb-descriptor-read-audio`
+- [X] o substrate USB agora tambem varre `configuration/interface/endpoint` no descriptor completo e ja marca probes onde a classe USB de audio (`AudioControl`/`AudioStreaming`) foi detectada
+- [X] o fallback de audio agora tambem diferencia quando a enumeracao USB ja encontrou uma probe com `USB Audio Class`: `pcspkr-fallback-usb-audio-class-detected`
+
+### Matriz de backends de audio
+
+- `compat-azalia`
+  - alvo: HDA/Intel HD Audio, principal caminho moderno para notebooks e desktops PCI/PCIe
+  - status: playback real no QEMU, telemetria rica, fallback de rota e rotacao de stream implementados; revalidacao em hardware real ainda em andamento
+- `compat-auich`
+  - alvo: AC97/PCI legado e familias compativeis Intel/AMD/ATI/NVIDIA/SiS/ALI/VIA
+  - status: playback real no QEMU e captura DMA MVP; cobertura de IDs/quirks ja esta ampla
+- `pcspkr`
+  - alvo: fallback universal quando nenhum backend PCI sobe
+  - status: implementado; usa PIT + speaker legacy/buzzer e garante audio rudimentar em praticamente qualquer notebook/desktop x86
+- `compat-uaudio`
+  - alvo: USB Audio Class, equivalente mais forte de "funciona em muito hardware" no mundo de audio atual
+  - status: planejado; depende de substrate USB host real no kernel do VibeOS para deixar de ser so codigo importado em `compat`
+
+### Proxima fase do audio universal
+
+Prioridades imediatas:
+
+1. plugar um `compat-uaudio` minimo para attach/probe usando a enumeracao USB ja existente
+2. ligar a primeira fase de `SET_CONFIGURATION` e attach basico antes de tentar playback
+3. expandir o transporte real para `EHCI` e depois `XHCI`
+4. validar em hardware real com headset/adaptador USB audio class simples
+
+- manter a ordem de preferencia:
+  - `compat-azalia` -> `compat-auich` -> `compat-uaudio` -> `pcspkr` -> `softmix`
+- fechar a matriz de hardware real:
+  - testar pelo menos HDA Intel real, AC97 legado real/emulado, e notebook sem driver PCI usando `pcspkr`
+- preparar substrate USB minimo para `uaudio`:
+  - enumeracao de host controllers suportados
+  - attach basico de bus/root hub
+  - inventario minimo de dispositivos conectados ao root hub, para deixar de depender so de contadores agregados
+  - slots/logica de device attach com estado "ready for enum" por porta
+  - distinguir ports/devices que ja parecem aptos a control path minimo dos que ainda dependem de companion handoff
+  - mapear companions provaveis de `EHCI` para `UHCI/OHCI` e usar isso para preparar o futuro handoff
+  - fixar o `effective controller` por device e usar isso como entrada do primeiro control path
+  - consolidar um inventario `control-path-ready` para alimentar a futura leitura de descriptors
+  - escolher `probe targets` estaveis para a primeira leitura de descriptor/control request
+  - materializar o primeiro `probe plan` (`GET_DESCRIPTOR` curto do device descriptor) por alvo
+  - materializar uma fila/snapshot dessas probes para a futura execucao sequencial
+  - classificar a fila em `dispatch-ready` vs `deferred-no-transport` para a futura etapa de transferencia real
+  - despachar a proxima probe elegivel a partir dessa fila, com cursor estavel
+  - montar um `dispatch context` completo para a futura transferencia USB nao precisar remontar controlador/porta
+  - ligar `SET_CONFIGURATION` e attach minimo no device ja enderecado
+  - caminho minimo para enumerar dispositivo/interface/endpoint isocronico
+  - so depois encaixar `compat/sys/dev/usb/uaudio.c` como backend proprio do `audio`
+- [~] compat plan: pronto para smoke test em hardware real do substrate USB (`UHCI`/`OHCI` + `device/config descriptor` + deteccao de `USB Audio Class`); ainda nao pronto para playback USB real
 
 ### Rede
 
