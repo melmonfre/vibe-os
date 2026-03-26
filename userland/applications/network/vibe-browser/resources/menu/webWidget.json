@@ -1,0 +1,465 @@
+{
+	"actions":
+	[
+		{
+			"type": "include",
+			"includeIn": "standard",
+			"actions":
+			[
+				"GoBack",
+				"GoForward",
+				"Rewind",
+				"FastForward",
+				"separator",
+				"ReloadOrStop",
+				{
+					"type": "menu",
+					"title": "Reload Every",
+					"actions":
+					[
+						{
+							"type": "action",
+							"identifier": "ScheduleReload",
+							"group": "scheduleReload",
+							"title": "1 Minute",
+							"parameters":
+							{
+								"time": 60
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "ScheduleReload",
+							"group": "scheduleReload",
+							"title": "30 Minutes",
+							"parameters":
+							{
+								"time": 1800
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "ScheduleReload",
+							"group": "scheduleReload",
+							"title": "1 Hour",
+							"parameters":
+							{
+								"time": 3600
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "ScheduleReload",
+							"group": "scheduleReload",
+							"title": "2 Hours",
+							"parameters":
+							{
+								"time": 7200
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "ScheduleReload",
+							"group": "scheduleReload",
+							"title": "6 Hours",
+							"parameters":
+							{
+								"time": 21600
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "ScheduleReload",
+							"group": "scheduleReload",
+							"title": "Never",
+							"parameters":
+							{
+								"time": 0
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "ScheduleReload",
+							"group": "scheduleReload",
+							"title": "Custom…",
+							"parameters":
+							{
+								"time": "custom"
+							}
+						},
+						"separator",
+						{
+							"type": "action",
+							"identifier": "ScheduleReload",
+							"group": "scheduleReload",
+							"title": "Page Default",
+							"parameters":
+							{
+								"time": -1
+							}
+						}
+					]
+				},
+				"separator",
+				"BookmarkPage",
+				"CopyAddress",
+				"Print",
+				"separator",
+				{
+					"type": "action",
+					"identifier": "CreateSearch",
+					"includeIn": "form"
+				},
+				"InspectElement",
+				"ViewSource",
+				"ValidateMenu",
+				"separator",
+				{
+					"type": "menu",
+					"includeIn": "frame",
+					"title": "Frame",
+					"actions":
+					[
+						{
+							"type": "action",
+							"identifier": "OpenFrame",
+							"parameters":
+							{
+								"hints": [
+									"CurrentTab"
+								]
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "OpenFrame",
+							"parameters":
+							{
+								"hints": [
+									"NewTab"
+								]
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "OpenFrame",
+							"parameters":
+							{
+								"hints": [
+									"NewTab",
+									"Background"
+								]
+							}
+						},
+						"separator",
+						"ViewFrameSource",
+						"ReloadFrame",
+						"CopyFrameLinkToClipboard"
+					]
+				},
+				"separator",
+				"ContentBlocking",
+				"WebsitePreferences",
+				"separator",
+				"FullScreen"
+			]
+		},
+		{
+			"type": "include",
+			"includeIn": "edit",
+			"actions":
+			[
+				{
+					"type": "menu",
+					"identifier": "NotesMenu",
+					"excludeFrom": "source"
+				},
+				"separator",
+				"Undo",
+				"Redo",
+				"separator",
+				"Cut",
+				"Copy",
+				"Paste",
+				"Delete",
+				"separator",
+				{
+					"type": "action",
+					"identifier": "CopyToNote",
+					"excludeFrom": "source"
+				},
+				"separator",
+				"SelectAll",
+				"ClearAll",
+				{
+					"type": "include",
+					"includeIn": "selection",
+					"actions":
+					[
+						"separator",
+						"Search",
+						"SearchMenu",
+						"separator",
+						{
+							"type": "action",
+							"identifier": "OpenSelectionAsLink",
+							"excludeFrom": "link"
+						}
+					]
+				},
+				"separator",
+				{
+					"type": "include",
+					"includeIn": "form",
+					"actions":
+					[
+						"CreateSearch",
+						"separator"
+					]
+				},
+				{
+					"type": "include",
+					"excludeFrom":
+					[
+						"link",
+						"source"
+					],
+					"actions":
+					[
+						"InspectElement",
+						"separator"
+					]
+				},
+				{
+					"type": "include",
+					"excludeFrom": "source",
+					"actions":
+					[
+						"CheckSpelling",
+						"DictionariesMenu",
+						"separator"
+					]
+				}
+			]
+		},
+		{
+			"type": "include",
+			"excludeFrom": "edit",
+			"includeIn": "selection",
+			"actions":
+			[
+				"Search",
+				"SearchMenu",
+				"separator",
+				"Copy",
+				"CopyToNote",
+				"separator",
+				{
+					"type": "include",
+					"excludeFrom": "link",
+					"actions":
+					[
+						"OpenSelectionAsLink",
+						"separator"
+					]
+				}
+			]
+		},
+		{
+			"type": "include",
+			"includeIn": "mail",
+			"actions":
+			[
+				"OpenLink",
+				"separator",
+				"CopyLinkToClipboard",
+				"ShowLinkAsQuickResponseCode",
+				"separator",
+				"InspectElement",
+				"separator"
+			]
+		},
+		{
+			"type": "include",
+			"includeIn": "link",
+			"actions":
+			[
+				"OpenLink",
+				{
+					"type": "action",
+					"identifier": "OpenLink",
+					"parameters":
+					{
+						"hints": [
+							"NewTab"
+						]
+					}
+				},
+				{
+					"type": "action",
+					"identifier": "OpenLink",
+					"parameters":
+					{
+						"hints": [
+							"NewTab",
+							"Background"
+						]
+					}
+				},
+				"separator",
+				{
+					"type": "action",
+					"identifier": "OpenLink",
+					"parameters":
+					{
+						"hints": [
+							"NewWindow"
+						]
+					}
+				},
+				{
+					"type": "action",
+					"identifier": "OpenLink",
+					"parameters":
+					{
+						"hints": [
+							"NewWindow",
+							"Background"
+						]
+					}
+				},
+				"separator",
+				"BookmarkLink",
+				"CopyLinkToClipboard",
+				"ShowLinkAsQuickResponseCode",
+				"separator",
+				"SaveLinkToDisk",
+				"SaveLinkToDownloads",
+				"separator",
+				"InspectElement",
+				"separator"
+			]
+		},
+		{
+			"type": "include",
+			"includeIn": "image",
+			"actions":
+			[
+				{
+					"type": "action",
+					"identifier": "OpenImage",
+					"parameters":
+					{
+						"hints": [
+							"NewTab"
+						]
+					}
+				},
+				{
+					"type": "action",
+					"identifier": "OpenImage",
+					"parameters":
+					{
+						"hints": [
+							"NewTab",
+							"Background"
+						]
+					}
+				},
+				"ReloadImage",
+				"CopyImageUrlToClipboard",
+				"separator",
+				"SaveImageToDisk",
+				"CopyImageToClipboard",
+				"separator",
+				"InspectElement",
+				"ImageProperties",
+				"separator"
+			]
+		},
+		{
+			"type": "include",
+			"includeIn": "media",
+			"actions":
+			[
+				"CopyMediaUrlToClipboard",
+				"SaveMediaToDisk",
+				"separator",
+				"MediaPlayPause",
+				"MediaMute",
+				"MediaLoop",
+				"MediaControls",
+				{
+					"type": "menu",
+					"title": "Playback Rate",
+					"actions":
+					[
+						{
+							"type": "action",
+							"identifier": "MediaPlaybackRate",
+							"group": "playbackRate",
+							"title": "0.5x",
+							"parameters":
+							{
+								"rate": 0.5
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "MediaPlaybackRate",
+							"group": "playbackRate",
+							"title": "1x",
+							"parameters":
+							{
+								"rate": 1
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "MediaPlaybackRate",
+							"group": "playbackRate",
+							"title": "1.12x",
+							"parameters":
+							{
+								"rate": 1.12
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "MediaPlaybackRate",
+							"group": "playbackRate",
+							"title": "1.25x",
+							"parameters":
+							{
+								"rate": 1.25
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "MediaPlaybackRate",
+							"group": "playbackRate",
+							"title": "1.5x",
+							"parameters":
+							{
+								"rate": 1.5
+							}
+						},
+						{
+							"type": "action",
+							"identifier": "MediaPlaybackRate",
+							"group": "playbackRate",
+							"title": "2x",
+							"parameters":
+							{
+								"rate": 2
+							}
+						}
+					]
+				},
+				"separator",
+				"InspectElement",
+				"separator"
+			]
+		}
+	]
+}

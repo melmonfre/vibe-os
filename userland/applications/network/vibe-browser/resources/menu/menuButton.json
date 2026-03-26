@@ -1,0 +1,162 @@
+{
+	"identifier": "MainMenu",
+	"type": "menu",
+	"title": "Menu",
+	"actions":
+	[
+		{
+			"identifier": "TabsAndWindowsMenu",
+			"type": "menu",
+			"title": "Tabs and Windows",
+			"actions":
+			[
+				"NewTab",
+				"NewTabPrivate",
+				"NewWindow",
+				"NewWindowPrivate",
+				"separator",
+				{
+					"identifier": "ClosedWindowsMenu",
+					"type": "menu",
+					"title": "Closed Tabs and Windows"
+				},
+				{
+					"identifier": "SessionsMenu",
+					"type": "menu",
+					"title": "Sessions"
+				}
+			]
+		},
+		{
+			"identifier": "PageMenu",
+			"type": "menu",
+			"title": "Page",
+			"actions":
+			[
+				"Undo",
+				"Redo",
+				"separator",
+				"Cut",
+				"Copy",
+				"Paste",
+				"Delete",
+				"separator",
+				"SelectAll",
+				"Find",
+				"separator",
+				"Open",
+				"Save",
+				"separator",
+				"Reload",
+				"Stop",
+				"separator",
+				"ZoomIn",
+				"ZoomOut",
+				"ZoomOriginal",
+				"separator",
+				"FullScreen",
+				"separator",
+				"ViewSource",
+				"InspectPage",
+				{
+					"identifier": "UserAgentMenu",
+					"type": "menu",
+					"title": "User Agent"
+				},
+				"separator",
+				{
+					"identifier": "StyleSheetsMenu",
+					"type": "menu",
+					"title": "Style"
+				},
+				{
+					"identifier": "CharacterEncodingMenu",
+					"type": "menu",
+					"title": "Character Encoding"
+				}
+			]
+		},
+		{
+			"identifier": "PrintMenu",
+			"type": "menu",
+			"title": "Print",
+			"actions":
+			[
+				"Print",
+				"PrintPreview"
+			]
+		},
+		"separator",
+		{
+			"identifier": "BookmarksMenu",
+			"type": "menu",
+			"title": "Bookmarks",
+			"actions":
+			[
+				"BookmarkPage",
+				"Bookmarks",
+				"separator"
+			]
+		},
+		{
+			"identifier": "FeedsMenu",
+			"type": "menu",
+			"title": "Feeds"
+		},
+		"separator",
+		"History",
+		"Addons",
+		"Transfers",
+		"Notes",
+		"Passwords",
+		"separator",
+		{
+			"identifier": "ToolBarsMenu",
+			"type": "menu",
+			"title": "Toolbars"
+		},
+		{
+			"identifier": "SettingsMenu",
+			"type": "menu",
+			"title": "Settings",
+			"actions":
+			[
+				"Preferences",
+				"separator",
+				"WorkOffline",
+				"ClearHistory",
+				"separator",
+				{
+					"identifier": "ImportExportMenu",
+					"type": "menu",
+					"title": "Import and Export"
+				}
+			]
+		},
+		{
+			"identifier": "HelpMenu",
+			"type": "menu",
+			"title": "Help",
+			"actions":
+			[
+				"SwitchApplicationLanguage",
+				"CheckForUpdates",
+				"separator",
+				"DiagnosticReport",
+				"AboutApplication",
+				"AboutQt"
+			]
+		},
+		{
+			"identifier": "ShowToolBar",
+			"type": "action",
+			"title": "Show Menubar",
+			"parameters":
+			{
+				"toolBar": "MenuBar"
+			}
+		},
+		"separator",
+		"Exit"
+	]
+}

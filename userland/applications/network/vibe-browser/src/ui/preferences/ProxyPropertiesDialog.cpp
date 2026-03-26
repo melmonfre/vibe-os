@@ -1,0 +1,240 @@
+/**************************************************************************
+* Otter Browser: Web browser controlled by the user, not vice-versa.
+* Copyright (C) 2017 - 2024 Michal Dutkiewicz aka Emdek <michal@emdek.pl>
+*
+* This program is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program. If not, see <http://www.gnu.org/licenses/>.
+*
+**************************************************************************/
+
+#include "ProxyPropertiesDialog.h"
+
+#include "ui_ProxyPropertiesDialog.h"
+
+namespace Otter
+{
+
+ProxyPropertiesDialog::ProxyPropertiesDialog(const ProxyDefinition &proxy, QWidget *parent) : Dialog(parent),
+	m_proxy(proxy),
+	m_ui(new Ui::ProxyPropertiesDialog)
+{
+	m_ui->setupUi(this);
+	m_ui->titleLineEditWidget->setText(proxy.getTitle());
+	m_ui->automaticConfigurationFilePathWidget->setFilters({tr("PAC files (*.pac)")});
+
+	if (proxy.type == ProxyDefinition::AutomaticProxy)
+	{
+		m_ui->automaticConfigurationCheckBox->setChecked(true);
+		m_ui->automaticConfigurationFilePathWidget->setPath(proxy.path);
+	}
+	else
+	{
+		m_ui->manualConfigurationCheckBox->setChecked(true);
+
+		if (proxy.servers.contains(ProxyDefinition::AnyProtocol))
+		{
+			const ProxyDefinition::ProxyServer server(proxy.servers[ProxyDefinition::AnyProtocol]);
+
+			m_ui->allCheckBox->setChecked(true);
+			m_ui->allServersLineEditWidget->setText(server.hostName);
+			m_ui->allPortSpinBox->setValue(server.port);
+		}
+		else
+		{
+			if (proxy.servers.contains(ProxyDefinition::HttpProtocol))
+			{
+				const ProxyDefinition::ProxyServer server(proxy.servers[ProxyDefinition::HttpProtocol]);
+
+				m_ui->httpCheckBox->setChecked(true);
+				m_ui->httpServersLineEditWidget->setText(server.hostName);
+				m_ui->httpPortSpinBox->setValue(server.port);
+			}
+
+			if (proxy.servers.contains(ProxyDefinition::HttpsProtocol))
+			{
+				const ProxyDefinition::ProxyServer server(proxy.servers[ProxyDefinition::HttpsProtocol]);
+
+				m_ui->httpsCheckBox->setChecked(true);
+				m_ui->httpsServersLineEditWidget->setText(server.hostName);
+				m_ui->httpsPortSpinBox->setValue(server.port);
+			}
+
+			if (proxy.servers.contains(ProxyDefinition::FtpProtocol))
+			{
+				const ProxyDefinition::ProxyServer server(proxy.servers[ProxyDefinition::FtpProtocol]);
+
+				m_ui->ftpCheckBox->setChecked(true);
+				m_ui->ftpServersLineEditWidget->setText(server.hostName);
+				m_ui->ftpPortSpinBox->setValue(server.port);
+			}
+
+			if (proxy.servers.contains(ProxyDefinition::SocksProtocol))
+			{
+				const ProxyDefinition::ProxyServer server(proxy.servers[ProxyDefinition::SocksProtocol]);
+
+				m_ui->socksCheckBox->setChecked(true);
+				m_ui->socksServersLineEditWidget->setText(server.hostName);
+				m_ui->socksPortSpinBox->setValue(server.port);
+			}
+		}
+	}
+
+	m_ui->usesSystemAuthenticationCheckBox->setChecked(proxy.usesSystemAuthentication);
+
+	QStandardItemModel *exceptionsModel(new QStandardItemModel(this));
+
+	for (int i = 0; i < proxy.exceptions.count(); ++i)
+	{
+		exceptionsModel->appendRow(new QStandardItem(proxy.exceptions.at(i)));
+	}
+
+	m_ui->exceptionsItemViewWidget->setModel(exceptionsModel);
+
+	updateProxyType();
+	setWindowTitle(proxy.isValid() ? tr ("Edit Proxy") : tr("Add Proxy"));
+
+	connect(m_ui->buttonGroup, static_cast<void(QButtonGroup::*)(QAbstractButton*)>(&QButtonGroup::buttonClicked), this, &ProxyPropertiesDialog::updateProxyType);
+	connect(m_ui->allCheckBox, &QCheckBox::clicked, this, &ProxyPropertiesDialog::updateProxyType);
+	connect(m_ui->exceptionsItemViewWidget, &ItemViewWidget::needsActionsUpdate, this, &ProxyPropertiesDialog::updateExceptionsActions);
+	connect(m_ui->addExceptionButton, &QPushButton::clicked, this, [&]()
+	{
+		m_ui->exceptionsItemViewWidget->insertRow();
+
+		editException();
+	});
+	connect(m_ui->editExceptionButton, &QPushButton::clicked, this, &ProxyPropertiesDialog::editException);
+	connect(m_ui->removeExceptionButton, &QPushButton::clicked, this, [&]()
+	{
+		m_ui->exceptionsItemViewWidget->removeRow();
+		m_ui->exceptionsItemViewWidget->setFocus();
+
+		updateExceptionsActions();
+	});
+}
+
+ProxyPropertiesDialog::~ProxyPropertiesDialog()
+{
+	delete m_ui;
+}
+
+void ProxyPropertiesDialog::changeEvent(QEvent *event)
+{
+	QDialog::changeEvent(event);
+
+	if (event->type() == QEvent::LanguageChange)
+	{
+		m_ui->retranslateUi(this);
+		m_ui->automaticConfigurationFilePathWidget->setFilters({tr("PAC files (*.pac)")});
+	}
+}
+
+void ProxyPropertiesDialog::editException()
+{
+	m_ui->exceptionsItemViewWidget->edit(m_ui->exceptionsItemViewWidget->getIndex(m_ui->exceptionsItemViewWidget->getCurrentRow()));
+}
+
+void ProxyPropertiesDialog::updateExceptionsActions()
+{
+	const bool isEditable(m_ui->exceptionsItemViewWidget->getCurrentRow() >= 0);
+
+	m_ui->editExceptionButton->setEnabled(isEditable);
+	m_ui->removeExceptionButton->setEnabled(isEditable);
+}
+
+void ProxyPropertiesDialog::updateProxyType()
+{
+	if (m_ui->manualConfigurationCheckBox->isChecked())
+	{
+		const bool hasSeparateServers(!m_ui->allCheckBox->isChecked());
+
+		m_ui->manualConfigurationWidget->setEnabled(true);
+		m_ui->automaticConfigurationWidget->setEnabled(false);
+		m_ui->httpCheckBox->setEnabled(hasSeparateServers);
+		m_ui->httpServersLineEditWidget->setEnabled(hasSeparateServers);
+		m_ui->httpPortSpinBox->setEnabled(hasSeparateServers);
+		m_ui->httpsCheckBox->setEnabled(hasSeparateServers);
+		m_ui->httpsServersLineEditWidget->setEnabled(hasSeparateServers);
+		m_ui->httpsPortSpinBox->setEnabled(hasSeparateServers);
+		m_ui->ftpCheckBox->setEnabled(hasSeparateServers);
+		m_ui->ftpServersLineEditWidget->setEnabled(hasSeparateServers);
+		m_ui->ftpPortSpinBox->setEnabled(hasSeparateServers);
+		m_ui->socksCheckBox->setEnabled(hasSeparateServers);
+		m_ui->socksServersLineEditWidget->setEnabled(hasSeparateServers);
+		m_ui->socksPortSpinBox->setEnabled(hasSeparateServers);
+	}
+	else
+	{
+		m_ui->manualConfigurationWidget->setEnabled(false);
+		m_ui->automaticConfigurationWidget->setEnabled(true);
+	}
+}
+
+ProxyDefinition ProxyPropertiesDialog::getProxy() const
+{
+	ProxyDefinition proxy(m_proxy);
+	proxy.title = m_ui->titleLineEditWidget->text();
+	proxy.usesSystemAuthentication = m_ui->usesSystemAuthenticationCheckBox->isChecked();
+	proxy.exceptions.clear();
+	proxy.servers.clear();
+
+	if (m_ui->automaticConfigurationCheckBox->isChecked())
+	{
+		proxy.type = ProxyDefinition::AutomaticProxy;
+		proxy.path = m_ui->automaticConfigurationFilePathWidget->getPath();
+	}
+	else
+	{
+		proxy.type = ProxyDefinition::ManualProxy;
+
+		if (m_ui->allCheckBox->isChecked())
+		{
+			proxy.servers[ProxyDefinition::AnyProtocol] = ProxyDefinition::ProxyServer(m_ui->allServersLineEditWidget->text(), static_cast<quint16>(m_ui->allPortSpinBox->value()));
+		}
+		else
+		{
+			if (m_ui->httpCheckBox->isChecked())
+			{
+				proxy.servers[ProxyDefinition::HttpProtocol] = ProxyDefinition::ProxyServer(m_ui->httpServersLineEditWidget->text(), static_cast<quint16>(m_ui->httpPortSpinBox->value()));
+			}
+
+			if (m_ui->httpsCheckBox->isChecked())
+			{
+				proxy.servers[ProxyDefinition::HttpsProtocol] = ProxyDefinition::ProxyServer(m_ui->httpsServersLineEditWidget->text(), static_cast<quint16>(m_ui->httpsPortSpinBox->value()));
+			}
+
+			if (m_ui->ftpCheckBox->isChecked())
+			{
+				proxy.servers[ProxyDefinition::FtpProtocol] = ProxyDefinition::ProxyServer(m_ui->ftpServersLineEditWidget->text(), static_cast<quint16>(m_ui->ftpPortSpinBox->value()));
+			}
+
+			if (m_ui->socksCheckBox->isChecked())
+			{
+				proxy.servers[ProxyDefinition::SocksProtocol] = ProxyDefinition::ProxyServer(m_ui->socksServersLineEditWidget->text(), static_cast<quint16>(m_ui->socksPortSpinBox->value()));
+			}
+		}
+	}
+
+	for (int i = 0; i < m_ui->exceptionsItemViewWidget->getRowCount(); ++i)
+	{
+		const QString exception(m_ui->exceptionsItemViewWidget->getIndex(i).data(Qt::DisplayRole).toString().simplified());
+
+		if (!exception.isEmpty())
+		{
+			proxy.exceptions.append(exception);
+		}
+	}
+
+	return proxy;
+}
+
+}

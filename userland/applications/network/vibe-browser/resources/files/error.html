@@ -1,0 +1,122 @@
+<!DOCTYPE HTML>
+<html dir="{dir}">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style type="text/css">
+*
+{
+	margin:0;
+	padding:0;
+}
+html
+{
+	padding:30px;
+	color:#012956;
+	background:#EDF7FC linear-gradient(to bottom, #D4EEF9 0%, #EDF7FC 100%) top repeat-x;
+	cursor:default;
+}
+body
+{
+	max-width:500px;
+	margin:auto;
+	padding:20px 30px;
+	border:1px solid #94C6FF;
+	border-radius:15px;
+	font-family:sans-serif;
+	background:#FFF linear-gradient(to bottom, #FAFAFA 0%, #FCFCFC 53%, #FFF 100%) top repeat-x;
+	box-shadow:0 0 15px 15px rgba(211, 238, 251, 0.5);
+}
+body > nav
+{
+	margin:20px 0 0 0;
+	overflow:auto;
+}
+button
+{
+	padding:5px 7px;
+	border:1px solid #AAA;
+	border-radius:3px;
+	background:#FAFAFA;
+	color:#012956;
+}
+body > nav button
+{
+	float:right;
+}
+body > nav button[autofocus]
+{
+	padding-left:40px;
+	padding-right:40px;
+	float:left;
+	background:#0095DD;
+	color:#FFF;
+}
+a
+{
+	text-decoration:none;
+	color:#0082D9;
+}
+a:hover
+{
+	opacity:0.7;
+}
+h1
+{
+	margin:0 0 10px 0;
+}
+p, li
+{
+	margin:15px 0;
+}
+ul
+{
+	margin:30px 0 0 20px;
+}
+.description
+{
+	display:none;
+}
+
+@media (max-width:500px)
+{
+	html
+	{
+		padding:0;
+		background:#FFF linear-gradient(to bottom, #FAFAFA 0%, #FCFCFC 53%, #FFF 100%) top repeat-x;
+	}
+	body
+	{
+		padding:10px;
+		border:none;
+		border-radius:0;
+		box-shadow:none;
+	}
+	body > nav
+	{
+		text-align:center;
+	}
+	body > nav button, body > nav button[autofocus]
+	{
+		margin:5px;
+		float:none;
+	}
+}
+</style>
+</head>
+<body>
+<h1>{header}</h1>
+<p class="introduction">{introduction}</p>
+<!--hints:begin--><ul>
+<!--hint:begin--><li>{hint}</li>
+<!--hint:end--></ul>
+<!--hints:end--><!--basicActions:begin--><nav>
+<!--action:begin--><button class="{action}"{attributes}>{text}</button>
+<!--action:end--></nav>
+<!--basicActions:end--><!--description:begin--><div class="description">
+<p>{description}</p>
+<!--advancedActions:begin--><nav>
+{advancedActions}</nav>
+<!--advancedActions:end--></div>
+<!--description:end--></body>
+</html>

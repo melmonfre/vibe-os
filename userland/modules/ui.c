@@ -34,6 +34,10 @@ static struct {
 #define START_MENU_ITEM_W 188
 #define START_MENU_ITEM_H 30
 #define START_MENU_ITEM_STEP 34
+#define TASKBAR_APPLET_W 18
+#define TASKBAR_APPLET_H 16
+#define TASKBAR_APPLET_GAP 4
+#define TASKBAR_TRAY_PADDING 6
 #define UI_SETTINGS_PATH "/config/ui.cfg"
 
 static void ui_save_settings(void);
@@ -602,6 +606,38 @@ struct rect ui_taskbar_start_button_rect(void) {
     return r;
 }
 
+struct rect ui_taskbar_tray_rect(void) {
+    struct rect r = {
+        (int)SCREEN_WIDTH - (TASKBAR_TRAY_PADDING * 2) - (TASKBAR_APPLET_W * 2) - TASKBAR_APPLET_GAP,
+        (int)SCREEN_HEIGHT - TASKBAR_HEIGHT + 3,
+        (TASKBAR_TRAY_PADDING * 2) + (TASKBAR_APPLET_W * 2) + TASKBAR_APPLET_GAP,
+        TASKBAR_APPLET_H
+    };
+    return r;
+}
+
+struct rect ui_taskbar_network_applet_rect(void) {
+    struct rect tray = ui_taskbar_tray_rect();
+    struct rect r = {
+        tray.x + TASKBAR_TRAY_PADDING,
+        tray.y,
+        TASKBAR_APPLET_W,
+        TASKBAR_APPLET_H
+    };
+    return r;
+}
+
+struct rect ui_taskbar_sound_applet_rect(void) {
+    struct rect tray = ui_taskbar_tray_rect();
+    struct rect r = {
+        tray.x + tray.w - TASKBAR_TRAY_PADDING - TASKBAR_APPLET_W,
+        tray.y,
+        TASKBAR_APPLET_W,
+        TASKBAR_APPLET_H
+    };
+    return r;
+}
+
 struct rect ui_start_menu_rect(void) {
     struct rect r = {2, (int)SCREEN_HEIGHT - TASKBAR_HEIGHT - START_MENU_HEIGHT,
                      START_MENU_WIDTH, START_MENU_HEIGHT};
@@ -790,6 +826,7 @@ void draw_window_frame(const struct rect *w, const char *title,
 static void draw_taskbar(const struct window *wins, int win_count, int focused, int start_hover) {
     const int taskbar_y = (int)SCREEN_HEIGHT - TASKBAR_HEIGHT;
     struct rect start_button = ui_taskbar_start_button_rect();
+    struct rect tray = ui_taskbar_tray_rect();
     int x = 66;
 
     sys_rect(0, taskbar_y, (int)SCREEN_WIDTH, 22, g_theme.taskbar);
@@ -811,7 +848,7 @@ static void draw_taskbar(const struct window *wins, int win_count, int focused, 
         button.y = taskbar_y + 3;
         button.w = 68;
         button.h = 16;
-        if (button.x + button.w > (int)SCREEN_WIDTH - 4) {
+        if (button.x + button.w > tray.x - 4) {
             break;
         }
         ui_draw_button(&button,

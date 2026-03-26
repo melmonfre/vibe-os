@@ -1,0 +1,13 @@
+*~
+build
+GeneratedFiles
+release
+Win32
+debug
+*.suo
+*vcxproj*
+*.sln
+*.sdf
+*.user
+.kde4
+*.kde4

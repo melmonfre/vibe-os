@@ -1,0 +1,1399 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Otter::AdvancedPreferencesPage</class>
+ <widget class="QWidget" name="Otter::AdvancedPreferencesPage">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>600</width>
+    <height>500</height>
+   </rect>
+  </property>
+  <layout class="QHBoxLayout" name="horizontalLayout">
+   <item>
+    <widget class="Otter::ItemViewWidget" name="advancedViewWidget">
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Minimum" vsizetype="Expanding">
+       <horstretch>0</horstretch>
+       <verstretch>0</verstretch>
+      </sizepolicy>
+     </property>
+     <property name="minimumSize">
+      <size>
+       <width>100</width>
+       <height>0</height>
+      </size>
+     </property>
+     <property name="editTriggers">
+      <set>QAbstractItemView::NoEditTriggers</set>
+     </property>
+     <property name="textElideMode">
+      <enum>Qt::ElideNone</enum>
+     </property>
+     <attribute name="headerVisible">
+      <bool>false</bool>
+     </attribute>
+    </widget>
+   </item>
+   <item>
+    <widget class="QStackedWidget" name="advancedStackedWidget">
+     <property name="currentIndex">
+      <number>0</number>
+     </property>
+     <widget class="QWidget" name="browsingPage">
+      <layout class="QVBoxLayout" name="browsingPageLayout">
+       <item>
+        <widget class="QLabel" name="browsingGeneralHeaderLabel">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>General</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="browsingEnableSmoothScrollingCheckBox">
+         <property name="text">
+          <string>Smooth scrolling</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="browsingEnableSpellCheckCheckBox">
+         <property name="text">
+          <string>Check spelling</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="browsingSuggestionsHeaderLabel">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>Address Field Suggestions</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QVBoxLayout" name="browsingSuggestionsLayout">
+         <item>
+          <widget class="QCheckBox" name="browsingSuggestBookmarksCheckBox">
+           <property name="text">
+            <string>Suggest bookmarks</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="browsingSuggestHistoryCheckBox">
+           <property name="text">
+            <string>Suggest history</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="browsingSuggestSearchCheckBox">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="text">
+            <string>Suggest search results</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="browsingSuggestLocalPathsCheckBox">
+           <property name="text">
+            <string>Suggest local paths</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QLabel" name="browsingCompletionHeaderLabel">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>Address Completion</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QVBoxLayout" name="browsingCompletionLayout">
+         <item>
+          <widget class="QLabel" name="browsingDisplayModeLabel">
+           <property name="text">
+            <string>Display mode:</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <layout class="QHBoxLayout" name="browsingDisplayModeHorizontalLayout">
+           <item>
+            <spacer name="browsingDisplayModeSpacer">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <property name="sizeType">
+              <enum>QSizePolicy::Fixed</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>0</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+           <item>
+            <layout class="QVBoxLayout" name="browsingDisplayModeVerticalLayout">
+             <item>
+              <widget class="QRadioButton" name="browsingDisplayModeCompactRadioButton">
+               <property name="text">
+                <string>Compact</string>
+               </property>
+               <attribute name="buttonGroup">
+                <string notr="true">browsingDisplayModeButtonGroup</string>
+               </attribute>
+              </widget>
+             </item>
+             <item>
+              <widget class="QRadioButton" name="browsingDisplayModeColumnsRadioButton">
+               <property name="text">
+                <string>Columns</string>
+               </property>
+               <attribute name="buttonGroup">
+                <string notr="true">browsingDisplayModeButtonGroup</string>
+               </attribute>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="browsingCategoriesCheckBox">
+           <property name="text">
+            <string>Show category headers</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <spacer name="browsingBrowsingSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="notificationsPage">
+      <layout class="QVBoxLayout" name="notificationsPageLayout" stretch="0,0,0,0,0,1">
+       <item>
+        <widget class="QLabel" name="notificationsEventsHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>Events</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="Otter::ItemViewWidget" name="notificationsItemView">
+         <property name="contextMenuPolicy">
+          <enum>Qt::NoContextMenu</enum>
+         </property>
+         <property name="editTriggers">
+          <set>QAbstractItemView::NoEditTriggers</set>
+         </property>
+         <property name="alternatingRowColors">
+          <bool>true</bool>
+         </property>
+         <attribute name="headerDefaultSectionSize">
+          <number>250</number>
+         </attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="QWidget" name="notificationOptionsWidget" native="true">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <layout class="QVBoxLayout" name="notificationOptionsLayout">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <layout class="QHBoxLayout" name="notificationsPlaySoundLayout">
+            <item>
+             <widget class="QLabel" name="notificationsPlaySoundLabel">
+              <property name="text">
+               <string>Play sound:</string>
+              </property>
+              <property name="buddy">
+               <cstring>notificationsPlaySoundFilePathWidget</cstring>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QToolButton" name="notificationsPlaySoundButton"/>
+            </item>
+            <item>
+             <widget class="Otter::FilePathWidget" name="notificationsPlaySoundFilePathWidget" native="true"/>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="notificationsShowNotificationCheckBox">
+            <property name="text">
+             <string>Show notification</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="notificationsShowAlertCheckBox">
+            <property name="text">
+             <string>Mark taskbar entry</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="notificationsOptionsHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>Options</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="preferNativeNotificationsCheckBox">
+         <property name="text">
+          <string>Prefer native notifications</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="notificationsSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="appearancePage">
+      <layout class="QVBoxLayout" name="appearancePageLayout" stretch="0,0,0,0,1">
+       <item>
+        <widget class="QLabel" name="appearranceStyleHader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>Style</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QFormLayout" name="appearranceStyleLayout">
+         <item row="0" column="0">
+          <widget class="QLabel" name="appearranceWidgetStyleLabel">
+           <property name="text">
+            <string>Widget style:</string>
+           </property>
+           <property name="buddy">
+            <cstring>appearranceWidgetStyleComboBox</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="appearranceStyleSheetLabel">
+           <property name="text">
+            <string>Interface style sheet:</string>
+           </property>
+           <property name="buddy">
+            <cstring>appearranceStyleSheetFilePathWidget</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="Otter::FilePathWidget" name="appearranceStyleSheetFilePathWidget" native="true"/>
+         </item>
+         <item row="0" column="1">
+          <widget class="QComboBox" name="appearranceWidgetStyleComboBox"/>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QLabel" name="appearranceOtherHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>Other</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="enableTrayIconCheckBox">
+         <property name="text">
+          <string>Show tray icon</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="appearranceVerticalSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="mimeTypesPage">
+      <layout class="QVBoxLayout" name="mimeTypesPageLayout" stretch="0,0,0,1">
+       <item>
+        <widget class="QLabel" name="mimeTypesMimeTypesHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>MIME Types</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="mimeTypesLayout">
+         <item>
+          <widget class="Otter::ItemViewWidget" name="mimeTypesItemView">
+           <property name="contextMenuPolicy">
+            <enum>Qt::NoContextMenu</enum>
+           </property>
+           <property name="editTriggers">
+            <set>QAbstractItemView::NoEditTriggers</set>
+           </property>
+           <property name="alternatingRowColors">
+            <bool>true</bool>
+           </property>
+           <attribute name="headerDefaultSectionSize">
+            <number>250</number>
+           </attribute>
+          </widget>
+         </item>
+         <item>
+          <layout class="QVBoxLayout" name="mimeTypesButtonsLayout" stretch="0,0,1">
+           <item>
+            <widget class="QPushButton" name="mimeTypesAddMimeTypeButton">
+             <property name="text">
+              <string>Add</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="mimeTypesRemoveMimeTypeButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Remove</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="mimeTypesButtonsSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QWidget" name="mimeTypesOptionsWidget" native="true">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <layout class="QVBoxLayout" name="mimeTypesOptionsLayout">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="QRadioButton" name="mimeTypesAskButton">
+            <property name="text">
+             <string>Show download dialog</string>
+            </property>
+            <attribute name="buttonGroup">
+             <string notr="true">mimeTypesButtonGroup</string>
+            </attribute>
+           </widget>
+          </item>
+          <item>
+           <widget class="QRadioButton" name="mimeTypesSaveButton">
+            <property name="text">
+             <string>Save to disk</string>
+            </property>
+            <attribute name="buttonGroup">
+             <string notr="true">mimeTypesButtonGroup</string>
+            </attribute>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="mimeTypesSaveHorizontalLayout">
+            <item>
+             <spacer name="mimeTypesSaveSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeType">
+               <enum>QSizePolicy::Fixed</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>20</width>
+                <height>0</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QWidget" name="mimeTypesSaveOptionsWidget" native="true">
+              <layout class="QVBoxLayout" name="mimeTypesSaveVerticalLayout">
+               <property name="leftMargin">
+                <number>0</number>
+               </property>
+               <property name="topMargin">
+                <number>0</number>
+               </property>
+               <property name="rightMargin">
+                <number>0</number>
+               </property>
+               <property name="bottomMargin">
+                <number>0</number>
+               </property>
+               <item>
+                <widget class="QCheckBox" name="mimeTypesSaveDirectlyCheckBox">
+                 <property name="text">
+                  <string>Do not ask for folder, save directly to</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="Otter::FilePathWidget" name="mimeTypesFilePathWidget" native="true"/>
+               </item>
+              </layout>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QRadioButton" name="mimeTypesOpenButton">
+            <property name="text">
+             <string>Open with application</string>
+            </property>
+            <attribute name="buttonGroup">
+             <string notr="true">mimeTypesButtonGroup</string>
+            </attribute>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="mimeTypesOpenHorizontalLayout">
+            <item>
+             <spacer name="mimeTypesOpenSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeType">
+               <enum>QSizePolicy::Fixed</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>20</width>
+                <height>0</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QWidget" name="mimeTypesOpenOptionsWidget" native="true">
+              <layout class="QVBoxLayout" name="mimeTypesOpenVerticalLayout">
+               <property name="leftMargin">
+                <number>0</number>
+               </property>
+               <property name="topMargin">
+                <number>0</number>
+               </property>
+               <property name="rightMargin">
+                <number>0</number>
+               </property>
+               <property name="bottomMargin">
+                <number>0</number>
+               </property>
+               <item>
+                <widget class="QCheckBox" name="mimeTypesPassUrlCheckBox">
+                 <property name="enabled">
+                  <bool>false</bool>
+                 </property>
+                 <property name="text">
+                  <string>Pass web address directly to application</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="Otter::ApplicationComboBoxWidget" name="mimeTypesApplicationComboBoxWidget"/>
+               </item>
+              </layout>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <spacer name="mimeTypesSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="programsPage">
+      <layout class="QVBoxLayout" name="programsPageLayout">
+       <item>
+        <widget class="QLabel" name="programsProtocolsHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>Protocols</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="protocolsLayout">
+         <item>
+          <widget class="Otter::ItemViewWidget" name="protocolsItemView">
+           <property name="contextMenuPolicy">
+            <enum>Qt::NoContextMenu</enum>
+           </property>
+           <property name="editTriggers">
+            <set>QAbstractItemView::NoEditTriggers</set>
+           </property>
+           <property name="alternatingRowColors">
+            <bool>true</bool>
+           </property>
+           <attribute name="headerDefaultSectionSize">
+            <number>250</number>
+           </attribute>
+          </widget>
+         </item>
+         <item>
+          <layout class="QVBoxLayout" name="protocolsButtonsLayout" stretch="0,0,1">
+           <item>
+            <widget class="QPushButton" name="protocolsAddProtocolButton">
+             <property name="text">
+              <string>Add</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="protocolsRemoveProtocolButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Remove</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="protocolsButtonsSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="historyPage"/>
+     <widget class="QWidget" name="networkPage">
+      <layout class="QVBoxLayout" name="networkPagePageLayout" stretch="0,0,0,1,0,1,0">
+       <item>
+        <widget class="QLabel" name="advancedGeneralHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>General</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="sendReferrerCheckBox">
+         <property name="text">
+          <string>Send referrer information</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="advancedUserAgentHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>User Agent</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="userAgentsLayout">
+         <item>
+          <widget class="Otter::ItemViewWidget" name="userAgentsViewWidget">
+           <property name="editTriggers">
+            <set>QAbstractItemView::NoEditTriggers</set>
+           </property>
+           <property name="dragEnabled">
+            <bool>true</bool>
+           </property>
+           <property name="dragDropMode">
+            <enum>QAbstractItemView::DragDrop</enum>
+           </property>
+           <property name="defaultDropAction">
+            <enum>Qt::MoveAction</enum>
+           </property>
+           <property name="alternatingRowColors">
+            <bool>true</bool>
+           </property>
+           <attribute name="headerDefaultSectionSize">
+            <number>250</number>
+           </attribute>
+          </widget>
+         </item>
+         <item>
+          <layout class="QVBoxLayout" name="userAgentsButtonsLayout">
+           <item>
+            <widget class="QPushButton" name="userAgentsAddButton">
+             <property name="text">
+              <string>Add</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="userAgentsEditButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Edit…</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="userAgentsRemoveButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Remove</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="userAgentsSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QLabel" name="proxyHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>Proxy</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="proxiesLayout">
+         <item>
+          <widget class="Otter::ItemViewWidget" name="proxiesViewWidget">
+           <property name="editTriggers">
+            <set>QAbstractItemView::NoEditTriggers</set>
+           </property>
+           <property name="dragEnabled">
+            <bool>true</bool>
+           </property>
+           <property name="dragDropMode">
+            <enum>QAbstractItemView::DragDrop</enum>
+           </property>
+           <property name="defaultDropAction">
+            <enum>Qt::MoveAction</enum>
+           </property>
+           <property name="alternatingRowColors">
+            <bool>true</bool>
+           </property>
+           <attribute name="headerDefaultSectionSize">
+            <number>250</number>
+           </attribute>
+          </widget>
+         </item>
+         <item>
+          <layout class="QVBoxLayout" name="proxiesButtonsLayout">
+           <item>
+            <widget class="QPushButton" name="proxiesAddButton">
+             <property name="text">
+              <string>Add</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="proxiesEditButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Edit…</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="proxiesRemoveButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Remove</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="proxiesSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <spacer name="networkPageSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="scriptingPage">
+      <layout class="QVBoxLayout" name="scriptingPageLayout">
+       <item>
+        <widget class="QLabel" name="scriptingHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>JavaScript</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="enableJavaScriptCheckBox">
+         <property name="text">
+          <string>Enable JavaScript</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="javaScriptLayout">
+         <item>
+          <spacer name="javaScriptSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QWidget" name="javaScriptWidget" native="true">
+           <layout class="QVBoxLayout" name="javaScriptWidgetLayout">
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+            <property name="topMargin">
+             <number>0</number>
+            </property>
+            <property name="rightMargin">
+             <number>0</number>
+            </property>
+            <property name="bottomMargin">
+             <number>0</number>
+            </property>
+            <item>
+             <widget class="QCheckBox" name="scriptsCanChangeWindowGeometryCheckBox">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="text">
+               <string>Allow moving and resizing of windows</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="scriptsCanShowStatusMessagesCheckBox">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="text">
+               <string>Allow changing of status field</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="scriptsCanHideAddressBarCheckBox">
+              <property name="enabled">
+               <bool>false</bool>
+              </property>
+              <property name="text">
+               <string>Allow script to hide address bar</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="scriptsCanAccessClipboardCheckBox">
+              <property name="text">
+               <string>Allow access to clipboard</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="scriptsCanReceiveRightClicksCheckBox">
+              <property name="text">
+               <string>Allow to receive right mouse button clicks</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <layout class="QFormLayout" name="formLayout">
+              <item row="0" column="0">
+               <widget class="QLabel" name="scriptsCanCloseWindowsLabel">
+                <property name="text">
+                 <string>Allow to close windows:</string>
+                </property>
+                <property name="buddy">
+                 <cstring>scriptsCanCloseWindowsComboBox</cstring>
+                </property>
+               </widget>
+              </item>
+              <item row="0" column="1">
+               <widget class="QComboBox" name="scriptsCanCloseWindowsComboBox"/>
+              </item>
+              <item row="1" column="1">
+               <widget class="QComboBox" name="enableFullScreenComboBox"/>
+              </item>
+              <item row="1" column="0">
+               <widget class="QLabel" name="enableFullScreenLabel">
+                <property name="text">
+                 <string>Allow to enter full screen mode:</string>
+                </property>
+                <property name="buddy">
+                 <cstring>enableFullScreenComboBox</cstring>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+           </layout>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <spacer name="scriptingSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="securityPage">
+      <layout class="QVBoxLayout" name="securityPageLayout">
+       <item>
+        <widget class="QLabel" name="ciphersHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>SSL Ciphers</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="ciphersLayout" stretch="1,0">
+         <item>
+          <widget class="Otter::ItemViewWidget" name="ciphersViewWidget">
+           <property name="editTriggers">
+            <set>QAbstractItemView::NoEditTriggers</set>
+           </property>
+           <property name="dragEnabled">
+            <bool>true</bool>
+           </property>
+           <property name="dragDropOverwriteMode">
+            <bool>false</bool>
+           </property>
+           <property name="dragDropMode">
+            <enum>QAbstractItemView::InternalMove</enum>
+           </property>
+           <property name="defaultDropAction">
+            <enum>Qt::MoveAction</enum>
+           </property>
+           <property name="alternatingRowColors">
+            <bool>true</bool>
+           </property>
+           <property name="selectionMode">
+            <enum>QAbstractItemView::SingleSelection</enum>
+           </property>
+           <property name="selectionBehavior">
+            <enum>QAbstractItemView::SelectRows</enum>
+           </property>
+           <attribute name="headerVisible">
+            <bool>false</bool>
+           </attribute>
+          </widget>
+         </item>
+         <item>
+          <layout class="QVBoxLayout" name="ciphersButtonsLayout" stretch="0,0,0,0">
+           <item>
+            <widget class="QPushButton" name="ciphersAddButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Add</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="ciphersRemoveButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Remove</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="ciphersSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+            </spacer>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="ciphersMoveButtonsLayout" stretch="0,1,0">
+             <item>
+              <widget class="QToolButton" name="ciphersMoveUpButton">
+               <property name="enabled">
+                <bool>false</bool>
+               </property>
+               <property name="toolTip">
+                <string>Move Up</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="ciphersMoveButtonsSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeType">
+                <enum>QSizePolicy::Minimum</enum>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QToolButton" name="ciphersMoveDownButton">
+               <property name="enabled">
+                <bool>false</bool>
+               </property>
+               <property name="toolTip">
+                <string>Move Down</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="updatesPage">
+      <layout class="QVBoxLayout" name="updatesPageLayout" stretch="0,0,0,0,1">
+       <item>
+        <widget class="QLabel" name="updatesHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>Updates</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="updatesDescriptionLabel">
+         <property name="text">
+          <string>Select channels from which you want to receive updates:</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="Otter::ItemViewWidget" name="updateChannelsItemView">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="contextMenuPolicy">
+          <enum>Qt::NoContextMenu</enum>
+         </property>
+         <property name="editTriggers">
+          <set>QAbstractItemView::NoEditTriggers</set>
+         </property>
+         <property name="showDropIndicator" stdset="0">
+          <bool>false</bool>
+         </property>
+         <property name="selectionMode">
+          <enum>QAbstractItemView::NoSelection</enum>
+         </property>
+         <property name="headerHidden">
+          <bool>true</bool>
+         </property>
+         <property name="isWrapping" stdset="0">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QVBoxLayout" name="updatesVerticalLayout">
+         <item>
+          <layout class="QHBoxLayout" name="updatesHorizontalLayout">
+           <item>
+            <widget class="QLabel" name="intervalLabel">
+             <property name="text">
+              <string>Check for updates every</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QSpinBox" name="intervalSpinBox"/>
+           </item>
+           <item>
+            <widget class="QLabel" name="intervalDaysLabel">
+             <property name="text">
+              <string>day(s)</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="autoInstallCheckBox">
+           <property name="text">
+            <string>Install updates automatically</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <spacer name="updatesVerticalSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="mousePage">
+      <layout class="QVBoxLayout" name="mousePageLayout">
+       <item>
+        <widget class="QLabel" name="mouseHeader">
+         <property name="font">
+          <font>
+           <weight>75</weight>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="text">
+          <string>Mouse Actions and Gestures</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="mouseProfilesLayout" stretch="1,0">
+         <item>
+          <widget class="Otter::ItemViewWidget" name="mouseViewWidget">
+           <property name="dragEnabled">
+            <bool>true</bool>
+           </property>
+           <property name="dragDropOverwriteMode">
+            <bool>false</bool>
+           </property>
+           <property name="dragDropMode">
+            <enum>QAbstractItemView::InternalMove</enum>
+           </property>
+           <property name="defaultDropAction">
+            <enum>Qt::MoveAction</enum>
+           </property>
+           <property name="alternatingRowColors">
+            <bool>true</bool>
+           </property>
+           <property name="selectionMode">
+            <enum>QAbstractItemView::SingleSelection</enum>
+           </property>
+           <property name="selectionBehavior">
+            <enum>QAbstractItemView::SelectRows</enum>
+           </property>
+           <attribute name="headerVisible">
+            <bool>false</bool>
+           </attribute>
+          </widget>
+         </item>
+         <item>
+          <layout class="QVBoxLayout" name="mouseButtonsLayout" stretch="0,0,0,0,1,0">
+           <item>
+            <widget class="QPushButton" name="mouseAddButton">
+             <property name="text">
+              <string>Add</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="mouseEditButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Edit…</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="mouseCloneButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Clone</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="mouseRemoveButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Remove</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="mouseSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+            </spacer>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="mouseMoveButtonsLayout" stretch="0,1,0">
+             <item>
+              <widget class="QToolButton" name="mouseMoveUpButton">
+               <property name="enabled">
+                <bool>false</bool>
+               </property>
+               <property name="toolTip">
+                <string>Move Up</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <spacer name="mouseMoveButtonsSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeType">
+                <enum>QSizePolicy::Minimum</enum>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QToolButton" name="mouseMoveDownButton">
+               <property name="enabled">
+                <bool>false</bool>
+               </property>
+               <property name="toolTip">
+                <string>Move Down</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="mouseEnableGesturesCheckBox">
+         <property name="text">
+          <string>Enable mouse gestures</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>Otter::ApplicationComboBoxWidget</class>
+   <extends>QComboBox</extends>
+   <header>src/ui/ApplicationComboBoxWidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>Otter::FilePathWidget</class>
+   <extends>QWidget</extends>
+   <header>src/ui/FilePathWidget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>Otter::ItemViewWidget</class>
+   <extends>QTreeView</extends>
+   <header>src/ui/ItemViewWidget.h</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+ <buttongroups>
+  <buttongroup name="browsingDisplayModeButtonGroup"/>
+  <buttongroup name="mimeTypesButtonGroup"/>
+ </buttongroups>
+</ui>

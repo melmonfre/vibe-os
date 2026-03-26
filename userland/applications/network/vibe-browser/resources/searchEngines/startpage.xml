@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+	<Shortcut>s</Shortcut>
+	<ShortName>StartPage</ShortName>
+	<Description>StartPage Search</Description>
+	<InputEncoding>UTF-8</InputEncoding>
+	<Image width="16" height="16" type="image/png">data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAEXRFWHRfcV9pY29PcmlnRGVwdGgAOBpBob4AAACUSURBVCiR7Y89DsIwDIXtVmGBAXECVg4CG7coF4BTsnCT0r8kTRPFxkEZEBISXRFPb3iW/Fl+eLowzBH+gW+A6pwBxOSiyOFVRMCcLAGvN96sebXEhQKloCwz8waIY4TJAzIzEdnRDYNp2r6u23vTSe56rY3IaWOdm8Q+BO8DHo7Vc8PKHOVI+i3pY4ftbj+v9A8AD2P6YBI0wRSgAAAAAElFTkSuQmCC</Image>
+	<Url rel="results" type="text/html" method="get" template="https://startpage.com/do/search?query={searchTerms}&amp;sourceid=otter" />
+	<Url rel="suggestions" type="application/x-suggestions+json" method="get" template="https://www.startpage.com/cgi-bin/csuggest?query={searchTerms}&amp;limit=10&amp;lang=english&amp;format=json" />
+	<Url rel="self" type="application/opensearchdescription+xml" template="https://www.startpage.com/en/opensearch.xml" />
+</OpenSearchDescription>

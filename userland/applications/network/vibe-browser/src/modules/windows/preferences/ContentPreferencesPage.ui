@@ -1,0 +1,351 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Otter::ContentPreferencesPage</class>
+ <widget class="QWidget" name="Otter::ContentPreferencesPage">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>400</width>
+    <height>629</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="Otter::HeaderWidget" name="contentGeneralHeaderWidget">
+     <property name="text">
+      <string>General</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QFormLayout" name="contentGeneralLayout">
+     <item row="0" column="0">
+      <widget class="QLabel" name="userStyleSheetWidget">
+       <property name="text">
+        <string>User style sheet:</string>
+       </property>
+       <property name="buddy">
+        <cstring>userStyleSheetFilePathWidget</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="Otter::FilePathWidget" name="userStyleSheetFilePathWidget" native="true"/>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="enableImagesLabel">
+       <property name="text">
+        <string>Images:</string>
+       </property>
+       <property name="buddy">
+        <cstring>enableImagesComboBox</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="QComboBox" name="enableImagesComboBox"/>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="enablePluginsLabel">
+       <property name="text">
+        <string>Plugins:</string>
+       </property>
+       <property name="buddy">
+        <cstring>enablePluginsComboBox</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QComboBox" name="enablePluginsComboBox"/>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="Otter::HeaderWidget" name="blockingHeaderWidget">
+     <property name="text">
+      <string>Blocking</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QFormLayout" name="blockingLayout">
+     <property name="fieldGrowthPolicy">
+      <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+     </property>
+     <item row="0" column="0">
+      <widget class="QLabel" name="popupsLabel">
+       <property name="text">
+        <string>Pop-ups:</string>
+       </property>
+       <property name="buddy">
+        <cstring>popupsComboBox</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QComboBox" name="popupsComboBox"/>
+     </item>
+     <item row="1" column="0">
+      <widget class="QCheckBox" name="enableContentBlockingCheckBox">
+       <property name="text">
+        <string>Enable content blocking</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <layout class="QHBoxLayout" name="enableContentBlockingLayout">
+       <item>
+        <spacer name="enableContentBlockinglSpacer">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+        </spacer>
+       </item>
+       <item>
+        <widget class="QPushButton" name="manageContentBlockingButton">
+         <property name="text">
+          <string>Manage…</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="Otter::HeaderWidget" name="zoomHeaderWidget">
+     <property name="text">
+      <string>Zoom</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QFormLayout" name="zoomLayout">
+     <property name="fieldGrowthPolicy">
+      <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+     </property>
+     <item row="0" column="0">
+      <widget class="QLabel" name="defaultZoomLabel">
+       <property name="text">
+        <string>Default zoom:</string>
+       </property>
+       <property name="buddy">
+        <cstring>defaultZoomSpinBox</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QSpinBox" name="defaultZoomSpinBox">
+       <property name="suffix">
+        <string>%</string>
+       </property>
+       <property name="minimum">
+        <number>10</number>
+       </property>
+       <property name="maximum">
+        <number>1000</number>
+       </property>
+       <property name="value">
+        <number>100</number>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QCheckBox" name="zoomTextOnlyCheckBox">
+     <property name="text">
+      <string>Zoom text only</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="Otter::HeaderWidget" name="fontsHeaderWidget">
+     <property name="text">
+      <string>Fonts</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="Otter::ItemViewWidget" name="fontsViewWidget">
+     <property name="contextMenuPolicy">
+      <enum>Qt::NoContextMenu</enum>
+     </property>
+     <property name="autoScroll">
+      <bool>false</bool>
+     </property>
+     <property name="editTriggers">
+      <set>QAbstractItemView::NoEditTriggers</set>
+     </property>
+     <property name="alternatingRowColors">
+      <bool>true</bool>
+     </property>
+     <property name="selectionMode">
+      <enum>QAbstractItemView::SingleSelection</enum>
+     </property>
+     <property name="selectionBehavior">
+      <enum>QAbstractItemView::SelectRows</enum>
+     </property>
+     <property name="wordWrap">
+      <bool>false</bool>
+     </property>
+     <attribute name="headerDefaultSectionSize">
+      <number>200</number>
+     </attribute>
+    </widget>
+   </item>
+   <item>
+    <layout class="QFormLayout" name="fontsLayout">
+     <item row="0" column="0">
+      <widget class="QLabel" name="proportionalFontSizeLabel">
+       <property name="text">
+        <string>Default proportional font size:</string>
+       </property>
+       <property name="buddy">
+        <cstring>proportionalFontSizeSpinBox</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QSpinBox" name="proportionalFontSizeSpinBox">
+       <property name="suffix">
+        <string> px</string>
+       </property>
+       <property name="minimum">
+        <number>9</number>
+       </property>
+       <property name="maximum">
+        <number>72</number>
+       </property>
+       <property name="value">
+        <number>16</number>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="fixedFontSizeLabel">
+       <property name="text">
+        <string>Default fixed-width font size:</string>
+       </property>
+       <property name="buddy">
+        <cstring>fixedFontSizeSpinBox</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QSpinBox" name="fixedFontSizeSpinBox">
+       <property name="suffix">
+        <string> px</string>
+       </property>
+       <property name="minimum">
+        <number>9</number>
+       </property>
+       <property name="maximum">
+        <number>72</number>
+       </property>
+       <property name="value">
+        <number>16</number>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="minimumFontSizeLabel">
+       <property name="text">
+        <string>Minimum font size:</string>
+       </property>
+       <property name="buddy">
+        <cstring>minimumFontSizeSpinBox</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="QSpinBox" name="minimumFontSizeSpinBox">
+       <property name="specialValueText">
+        <string>None</string>
+       </property>
+       <property name="suffix">
+        <string> px</string>
+       </property>
+       <property name="minimum">
+        <number>-1</number>
+       </property>
+       <property name="maximum">
+        <number>72</number>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="Otter::HeaderWidget" name="colorsHeaderWidget">
+     <property name="text">
+      <string>Colors</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="Otter::ItemViewWidget" name="colorsViewWidget">
+     <property name="contextMenuPolicy">
+      <enum>Qt::NoContextMenu</enum>
+     </property>
+     <property name="editTriggers">
+      <set>QAbstractItemView::NoEditTriggers</set>
+     </property>
+     <property name="alternatingRowColors">
+      <bool>true</bool>
+     </property>
+     <property name="selectionMode">
+      <enum>QAbstractItemView::SingleSelection</enum>
+     </property>
+     <property name="selectionBehavior">
+      <enum>QAbstractItemView::SelectRows</enum>
+     </property>
+     <property name="wordWrap">
+      <bool>false</bool>
+     </property>
+     <attribute name="headerDefaultSectionSize">
+      <number>200</number>
+     </attribute>
+    </widget>
+   </item>
+   <item>
+    <spacer name="contentlSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>Otter::FilePathWidget</class>
+   <extends>QWidget</extends>
+   <header>src/ui/FilePathWidget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>Otter::HeaderWidget</class>
+   <extends>QLabel</extends>
+   <header>src/ui/HeaderWidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>Otter::ItemViewWidget</class>
+   <extends>QTreeView</extends>
+   <header>src/ui/ItemViewWidget.h</header>
+  </customwidget>
+ </customwidgets>
+ <tabstops>
+  <tabstop>popupsComboBox</tabstop>
+  <tabstop>defaultZoomSpinBox</tabstop>
+  <tabstop>zoomTextOnlyCheckBox</tabstop>
+  <tabstop>fontsViewWidget</tabstop>
+  <tabstop>proportionalFontSizeSpinBox</tabstop>
+  <tabstop>fixedFontSizeSpinBox</tabstop>
+  <tabstop>minimumFontSizeSpinBox</tabstop>
+  <tabstop>colorsViewWidget</tabstop>
+ </tabstops>
+ <resources/>
+ <connections/>
+</ui>

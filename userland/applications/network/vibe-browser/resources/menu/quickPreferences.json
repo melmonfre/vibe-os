@@ -1,0 +1,55 @@
+{
+	"actions":
+	[
+		{
+			"type": "menu",
+			"options":
+			{
+				"option": "Permissions/ScriptsCanOpenWindows"
+			}
+		},
+		{
+			"type": "menu",
+			"options":
+			{
+				"option": "Permissions/EnableImages"
+			}
+		},
+		{
+			"type": "menu",
+			"options":
+			{
+				"option": "Permissions/EnablePlugins"
+			}
+		},
+		"EnableJavaScript",
+		"separator",
+		{
+			"type": "menu",
+			"options":
+			{
+				"option": "Network/CookiesPolicy"
+			}
+		},
+		{
+			"type": "menu",
+			"options":
+			{
+				"option": "Network/ThirdPartyCookiesPolicy"
+			}
+		},
+		{
+			"type": "menu",
+			"options":
+			{
+				"option": "Network/CookiesKeepMode"
+			}
+		},
+		"ProxyMenu",
+		"EnableReferrer",
+		"separator",
+		"ResetQuickPreferences",
+		"separator",
+		"WebsitePreferences"
+	]
+}

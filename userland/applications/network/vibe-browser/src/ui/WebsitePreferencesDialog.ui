@@ -1,0 +1,973 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Otter::WebsitePreferencesDialog</class>
+ <widget class="QDialog" name="Otter::WebsitePreferencesDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>650</width>
+    <height>500</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Website Preferences</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <layout class="QFormLayout" name="generalLayout">
+     <property name="fieldGrowthPolicy">
+      <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+     </property>
+     <item row="0" column="0">
+      <widget class="QLabel" name="websiteLabel">
+       <property name="text">
+        <string>Website:</string>
+       </property>
+       <property name="buddy">
+        <cstring>websiteLineEditWidget</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="Otter::LineEditWidget" name="websiteLineEditWidget"/>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QTabWidget" name="tabWidget">
+     <property name="currentIndex">
+      <number>0</number>
+     </property>
+     <widget class="QWidget" name="contentTab">
+      <attribute name="title">
+       <string>Content</string>
+      </attribute>
+      <layout class="QGridLayout" name="contentLayout">
+       <item row="1" column="2">
+        <widget class="QComboBox" name="encodingComboBox"/>
+       </item>
+       <item row="4" column="2">
+        <widget class="QComboBox" name="enablePluginsComboBox"/>
+       </item>
+       <item row="0" column="0">
+        <widget class="QLabel" name="contentOverrideLabel">
+         <property name="text">
+          <string>Override</string>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="2">
+        <widget class="Otter::FilePathWidget" name="userStyleSheetFilePathWidget" native="true"/>
+       </item>
+       <item row="2" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="popupsPolicyOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QLabel" name="enablePluginsLabel">
+         <property name="text">
+          <string>Plugins:</string>
+         </property>
+         <property name="buddy">
+          <cstring>enablePluginsComboBox</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="userStyleSheetOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QLabel" name="encodingLabel">
+         <property name="text">
+          <string>Encoding:</string>
+         </property>
+         <property name="buddy">
+          <cstring>encodingComboBox</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="enablePluginsOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="2">
+        <widget class="QComboBox" name="popupsPolicyComboBox"/>
+       </item>
+       <item row="5" column="1">
+        <widget class="QLabel" name="userStyleSheetLabel">
+         <property name="text">
+          <string>User style sheet:</string>
+         </property>
+         <property name="buddy">
+          <cstring>userStyleSheetFilePathWidget</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="2">
+        <widget class="QComboBox" name="enableImagesComboBox"/>
+       </item>
+       <item row="7" column="2">
+        <spacer name="contentHorizontalSpacer">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>0</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item row="6" column="2">
+        <spacer name="contentSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </spacer>
+       </item>
+       <item row="1" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="encodingOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QLabel" name="enableImagesLabel">
+         <property name="text">
+          <string>Images:</string>
+         </property>
+         <property name="buddy">
+          <cstring>enableImagesComboBox</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="enableImagesOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QLabel" name="popupsPolicyLabel">
+         <property name="text">
+          <string>Pop-ups:</string>
+         </property>
+         <property name="buddy">
+          <cstring>popupsPolicyComboBox</cstring>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="privacyTab">
+      <attribute name="title">
+       <string>Privacy</string>
+      </attribute>
+      <layout class="QGridLayout" name="privacyLayout">
+       <item row="7" column="1">
+        <layout class="QHBoxLayout" name="keepCookiesModeLayout">
+         <item>
+          <spacer name="keepCookiesModeSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="keepCookiesModeLabel">
+           <property name="text">
+            <string>Keep until:</string>
+           </property>
+           <property name="buddy">
+            <cstring>keepCookiesModeComboBox</cstring>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="2" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="doNotTrackOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="cookiesPolicyOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="8" column="2">
+        <widget class="QComboBox" name="thirdPartyCookiesPolicyComboBox"/>
+       </item>
+       <item row="3" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="rememberBrowsingHistoryOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="2">
+        <widget class="QComboBox" name="doNotTrackComboBox">
+         <property name="currentIndex">
+          <number>-1</number>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QCheckBox" name="rememberBrowsingHistoryCheckBox">
+         <property name="text">
+          <string>Remember browsing history</string>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="keepCookiesModeOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="0">
+        <widget class="QLabel" name="privacyOverrideLabel">
+         <property name="text">
+          <string>Override</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QCheckBox" name="enableCookiesCheckBox">
+         <property name="text">
+          <string>Enable cookies</string>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="1">
+        <layout class="QHBoxLayout" name="cookiesPolicyLayout">
+         <item>
+          <spacer name="cookiesPolicySpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="cookiesPolicyLabel">
+           <property name="text">
+            <string>Accept cookies:</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="2" column="1">
+        <widget class="QLabel" name="doNotTrackLabel">
+         <property name="text">
+          <string>Do Not Track:</string>
+         </property>
+         <property name="buddy">
+          <cstring>doNotTrackComboBox</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="2">
+        <widget class="QComboBox" name="keepCookiesModeComboBox"/>
+       </item>
+       <item row="4" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="enableCookiesOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="9" column="0" colspan="3">
+        <widget class="QLabel" name="cookiesLabel">
+         <property name="text">
+          <string>Cookies:</string>
+         </property>
+         <property name="buddy">
+          <cstring>cookiesViewWidget</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="10" column="0" colspan="3">
+        <layout class="QHBoxLayout" name="cookiesViewLayout">
+         <item>
+          <widget class="Otter::ItemViewWidget" name="cookiesViewWidget">
+           <property name="editTriggers">
+            <set>QAbstractItemView::NoEditTriggers</set>
+           </property>
+           <property name="alternatingRowColors">
+            <bool>true</bool>
+           </property>
+           <property name="selectionBehavior">
+            <enum>QAbstractItemView::SelectRows</enum>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <layout class="QVBoxLayout" name="cookiesButtonsLayout">
+           <item>
+            <widget class="QPushButton" name="cookiesAddButton">
+             <property name="text">
+              <string>Add…</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="cookiesPropertiesButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Properties…</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="cookiesDeleteButton">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="text">
+              <string>Delete</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="cookiesSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </item>
+       <item row="8" column="1">
+        <layout class="QHBoxLayout" name="thirdPartyCookiesPolicyLayout">
+         <item>
+          <spacer name="thirdPartyCookiesPolicySpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="thirdPartyCookiesPolicyLabel">
+           <property name="text">
+            <string>Accept third-party cookies:</string>
+           </property>
+           <property name="buddy">
+            <cstring>thirdPartyCookiesPolicyComboBox</cstring>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="11" column="2">
+        <spacer name="privacyHorizontalSpacer">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>0</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item row="8" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="thirdPartyCookiesPolicyOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="2">
+        <widget class="QComboBox" name="cookiesPolicyComboBox"/>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="scriptingTab">
+      <attribute name="title">
+       <string>Scripting</string>
+      </attribute>
+      <layout class="QGridLayout" name="scriptingLayout" columnstretch="0,0,0">
+       <item row="3" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="canShowStatusMessagesOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="canChangeWindowGeometryOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="6" column="1">
+        <layout class="QHBoxLayout" name="canReceiveRightClicksLayout">
+         <item>
+          <spacer name="canReceiveRightClicksSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="canReceiveRightClicksCheckBox">
+           <property name="text">
+            <string>Allow to receive right mouse button clicks</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="5" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="canAccessClipboardOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <layout class="QHBoxLayout" name="canShowStatusMessagesLayout">
+         <item>
+          <spacer name="canShowStatusMessagesSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="canShowStatusMessagesCheckBox">
+           <property name="text">
+            <string>Allow changing of status field</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="9" column="1">
+        <spacer name="scriptingHorizontalSpacer">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>0</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item row="6" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="canReceiveRightClicksOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="1">
+        <layout class="QHBoxLayout" name="canCloseWindowsLayout">
+         <item>
+          <spacer name="canCloseWindowsSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="canCloseWindowsLabel">
+           <property name="text">
+            <string>Allow to close windows:</string>
+           </property>
+           <property name="buddy">
+            <cstring>canCloseWindowsComboBox</cstring>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="4" column="1">
+        <layout class="QHBoxLayout" name="canHideAddressBarLayout">
+         <item>
+          <spacer name="canHideAddressBarSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="canHideAddressBarCheckBox">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="text">
+            <string>Allow script to hide address bar</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="2" column="1">
+        <layout class="QHBoxLayout" name="canChangeWindowGeometryLayout">
+         <item>
+          <spacer name="canChangeWindowGeometrySpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="canChangeWindowGeometryCheckBox">
+           <property name="text">
+            <string>Allow moving and resizing of windows</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="4" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="canHideAddressBarOverrideCheckBox">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="0">
+        <widget class="QLabel" name="scriptingOverrideLabel">
+         <property name="text">
+          <string>Override</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="enableJavaScriptOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QCheckBox" name="enableJavaScriptCheckBox">
+         <property name="text">
+          <string>Enable JavaScript</string>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="2">
+        <widget class="QComboBox" name="canCloseWindowsComboBox"/>
+       </item>
+       <item row="7" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="canCloseWindowsOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="8" column="2">
+        <widget class="QComboBox" name="enableFullScreenComboBox"/>
+       </item>
+       <item row="5" column="1">
+        <layout class="QHBoxLayout" name="canAccessClipboardLayout">
+         <item>
+          <spacer name="canAccessClipboardSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="canAccessClipboardCheckBox">
+           <property name="text">
+            <string>Allow access to clipboard</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="10" column="1">
+        <spacer name="scriptingSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </spacer>
+       </item>
+       <item row="8" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="enableFullScreenOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="8" column="1">
+        <layout class="QHBoxLayout" name="enableFullScreenLayout">
+         <item>
+          <spacer name="enableFullScreenSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeType">
+            <enum>QSizePolicy::Fixed</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>20</width>
+             <height>0</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="enableFullScreenLabel">
+           <property name="text">
+            <string>Allow to enter full screen mode:</string>
+           </property>
+           <property name="buddy">
+            <cstring>enableFullScreenComboBox</cstring>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="networkTab">
+      <attribute name="title">
+       <string>Network</string>
+      </attribute>
+      <layout class="QGridLayout" name="networkLayout">
+       <item row="3" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="proxyOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="3">
+        <spacer name="networkSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </spacer>
+       </item>
+       <item row="2" column="3">
+        <widget class="Otter::ComboBoxWidget" name="userAgentComboBox"/>
+       </item>
+       <item row="1" column="1" colspan="2">
+        <widget class="QCheckBox" name="sendReferrerCheckBox">
+         <property name="text">
+          <string>Send referrer information</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="0">
+        <widget class="QLabel" name="networkOverrideLabel">
+         <property name="text">
+          <string>Override</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QLabel" name="proxyLabel">
+         <property name="text">
+          <string>Proxy:</string>
+         </property>
+         <property name="buddy">
+          <cstring>proxyComboBox</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QLabel" name="userAgentLabel">
+         <property name="text">
+          <string>User Agent:</string>
+         </property>
+         <property name="buddy">
+          <cstring>userAgentComboBox</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="userAgentOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="5" column="3">
+        <spacer name="networkHorizontalSpacer">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>0</width>
+           <height>0</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item row="1" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="sendReferrerOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="3">
+        <widget class="Otter::ComboBoxWidget" name="proxyComboBox"/>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="contentBlockingTab">
+      <attribute name="title">
+       <string>Content Blocking</string>
+      </attribute>
+      <layout class="QGridLayout" name="gridLayout">
+       <item row="2" column="1">
+        <widget class="QLabel" name="contentBlockingProfilesLabel">
+         <property name="text">
+          <string>Profiles:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="Otter::ContentFiltersViewWidget" name="contentBlockingProfilesViewWidget">
+         <property name="sizeAdjustPolicy">
+          <enum>QAbstractScrollArea::AdjustIgnored</enum>
+         </property>
+         <property name="alternatingRowColors">
+          <bool>true</bool>
+         </property>
+         <property name="selectionMode">
+          <enum>QAbstractItemView::SingleSelection</enum>
+         </property>
+         <property name="selectionBehavior">
+          <enum>QAbstractItemView::SelectRows</enum>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="0">
+        <widget class="QLabel" name="contentBlockingOverrideLabel">
+         <property name="text">
+          <string>Override</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="0" alignment="Qt::AlignHCenter">
+        <widget class="QCheckBox" name="contentBlockingProfilesOverrideCheckBox">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok|QDialogButtonBox::RestoreDefaults</set>
+     </property>
+     <property name="centerButtons">
+      <bool>false</bool>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>Otter::ComboBoxWidget</class>
+   <extends>QComboBox</extends>
+   <header>src/ui/ComboBoxWidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>Otter::ContentFiltersViewWidget</class>
+   <extends>QTreeView</extends>
+   <header>src/ui/ContentFiltersViewWidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>Otter::FilePathWidget</class>
+   <extends>QWidget</extends>
+   <header>src/ui/FilePathWidget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>Otter::ItemViewWidget</class>
+   <extends>QTreeView</extends>
+   <header>src/ui/ItemViewWidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>Otter::LineEditWidget</class>
+   <extends>QLineEdit</extends>
+   <header>src/ui/LineEditWidget.h</header>
+  </customwidget>
+ </customwidgets>
+ <tabstops>
+  <tabstop>websiteLineEditWidget</tabstop>
+  <tabstop>tabWidget</tabstop>
+  <tabstop>encodingOverrideCheckBox</tabstop>
+  <tabstop>encodingComboBox</tabstop>
+  <tabstop>popupsPolicyOverrideCheckBox</tabstop>
+  <tabstop>popupsPolicyComboBox</tabstop>
+  <tabstop>enableImagesOverrideCheckBox</tabstop>
+  <tabstop>enableImagesComboBox</tabstop>
+  <tabstop>enablePluginsOverrideCheckBox</tabstop>
+  <tabstop>enablePluginsComboBox</tabstop>
+  <tabstop>userStyleSheetOverrideCheckBox</tabstop>
+  <tabstop>doNotTrackOverrideCheckBox</tabstop>
+  <tabstop>doNotTrackComboBox</tabstop>
+  <tabstop>rememberBrowsingHistoryOverrideCheckBox</tabstop>
+  <tabstop>rememberBrowsingHistoryCheckBox</tabstop>
+  <tabstop>enableCookiesOverrideCheckBox</tabstop>
+  <tabstop>enableCookiesCheckBox</tabstop>
+  <tabstop>cookiesPolicyOverrideCheckBox</tabstop>
+  <tabstop>cookiesPolicyComboBox</tabstop>
+  <tabstop>keepCookiesModeOverrideCheckBox</tabstop>
+  <tabstop>keepCookiesModeComboBox</tabstop>
+  <tabstop>thirdPartyCookiesPolicyOverrideCheckBox</tabstop>
+  <tabstop>thirdPartyCookiesPolicyComboBox</tabstop>
+  <tabstop>cookiesViewWidget</tabstop>
+  <tabstop>cookiesAddButton</tabstop>
+  <tabstop>cookiesPropertiesButton</tabstop>
+  <tabstop>cookiesDeleteButton</tabstop>
+  <tabstop>enableJavaScriptOverrideCheckBox</tabstop>
+  <tabstop>enableJavaScriptCheckBox</tabstop>
+  <tabstop>canChangeWindowGeometryOverrideCheckBox</tabstop>
+  <tabstop>canChangeWindowGeometryCheckBox</tabstop>
+  <tabstop>canShowStatusMessagesOverrideCheckBox</tabstop>
+  <tabstop>canShowStatusMessagesCheckBox</tabstop>
+  <tabstop>canHideAddressBarOverrideCheckBox</tabstop>
+  <tabstop>canHideAddressBarCheckBox</tabstop>
+  <tabstop>canAccessClipboardOverrideCheckBox</tabstop>
+  <tabstop>canAccessClipboardCheckBox</tabstop>
+  <tabstop>canReceiveRightClicksOverrideCheckBox</tabstop>
+  <tabstop>canReceiveRightClicksCheckBox</tabstop>
+  <tabstop>canCloseWindowsOverrideCheckBox</tabstop>
+  <tabstop>canCloseWindowsComboBox</tabstop>
+  <tabstop>enableFullScreenOverrideCheckBox</tabstop>
+  <tabstop>enableFullScreenComboBox</tabstop>
+  <tabstop>sendReferrerOverrideCheckBox</tabstop>
+  <tabstop>sendReferrerCheckBox</tabstop>
+  <tabstop>userAgentOverrideCheckBox</tabstop>
+  <tabstop>userAgentComboBox</tabstop>
+  <tabstop>proxyOverrideCheckBox</tabstop>
+  <tabstop>proxyComboBox</tabstop>
+  <tabstop>contentBlockingProfilesOverrideCheckBox</tabstop>
+  <tabstop>contentBlockingProfilesViewWidget</tabstop>
+ </tabstops>
+ <resources/>
+ <connections/>
+</ui>

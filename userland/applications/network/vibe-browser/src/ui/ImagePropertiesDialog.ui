@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Otter::ImagePropertiesDialog</class>
+ <widget class="QDialog" name="Otter::ImagePropertiesDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>400</width>
+    <height>197</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Image Properties</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <layout class="QFormLayout" name="formLayout">
+     <item row="0" column="0">
+      <widget class="QLabel" name="sizeLabel">
+       <property name="text">
+        <string>Size:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="typeLabel">
+       <property name="text">
+        <string>Type:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="fileSizeLabel">
+       <property name="text">
+        <string>File size:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="3" column="0">
+      <widget class="QLabel" name="addressLabel">
+       <property name="text">
+        <string>Address:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="0">
+      <widget class="QLabel" name="alternativeTextLabel">
+       <property name="text">
+        <string>Alternative text:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="5" column="0">
+      <widget class="QLabel" name="longDescriptionLabel">
+       <property name="text">
+        <string>Long description:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="Otter::TextLabelWidget" name="sizeLabelWidget" native="true"/>
+     </item>
+     <item row="1" column="1">
+      <widget class="Otter::TextLabelWidget" name="typeLabelWidget" native="true"/>
+     </item>
+     <item row="2" column="1">
+      <widget class="Otter::TextLabelWidget" name="fileSizeLabelWidget" native="true"/>
+     </item>
+     <item row="4" column="1">
+      <widget class="Otter::TextLabelWidget" name="alternativeTextLabelWidget" native="true"/>
+     </item>
+     <item row="3" column="1">
+      <widget class="Otter::TextLabelWidget" name="addressLabelWidget" native="true"/>
+     </item>
+     <item row="5" column="1">
+      <widget class="Otter::TextLabelWidget" name="longDescriptionLabelWidget" native="true"/>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Close</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>Otter::TextLabelWidget</class>
+   <extends>QWidget</extends>
+   <header>src/ui/TextLabelWidget.h</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>accepted()</signal>
+   <receiver>Otter::ImagePropertiesDialog</receiver>
+   <slot>accept()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>248</x>
+     <y>254</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>157</x>
+     <y>274</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>rejected()</signal>
+   <receiver>Otter::ImagePropertiesDialog</receiver>
+   <slot>reject()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>316</x>
+     <y>260</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>286</x>
+     <y>274</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
+</ui>

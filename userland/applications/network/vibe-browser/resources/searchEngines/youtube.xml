@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+	<Shortcut>yt</Shortcut>
+	<ShortName>YouTube</ShortName>
+	<Description>Search for videos on YouTube</Description>
+	<InputEncoding>UTF-8</InputEncoding>
+	<Image width="16" height="16" type="image/png">data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAAEnRFWHRfcV9pY29PcmlnRGVwdGgAMzLV4rjsAAAAnklEQVQ4jcWS3Q2DMAyEP6IOkA3ICB6BFdiAEdkARmCEsEE2SB/AqD9xUMsDJ1mx4/NZtgx3o1EngwdkDzuDP+/v0kA6fjMMGfKPNmix/FGsJg4IF1Yg7mXub8QInbUOAIKr6rctTBOMI4RQpNQFFN6bqbrAukLfb2PEWKQ8gMUUEIGUzDQQHVCWhrNijuZXDsk6ZWGLPzFr57dTvhVPer9uIUXI/DIAAAAASUVORK5CYII=</Image>
+	<Url rel="results" type="text/html" method="get" template="https://www.youtube.com/results?search_query={searchTerms}&amp;sourceid=otter" />
+	<Url rel="self" type="application/opensearchdescription+xml" template="https://www.youtube.com/opensearch" />
+</OpenSearchDescription>

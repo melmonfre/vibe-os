@@ -1,0 +1,99 @@
+{
+	"AdblockPlus":
+	{
+		"Header":
+		{
+			"foreground": "#539FA3",
+			"fontStyle": "normal",
+			"fontWeight": "bold",
+			"isUnderlined": false
+		},
+		"Anchor":
+		{
+			"foreground": "#4EB380",
+			"fontStyle": "normal",
+			"fontWeight": "bold",
+			"isUnderlined": false
+		},
+		"Exception":
+		{
+			"foreground": "#DD0000",
+			"fontStyle": "normal",
+			"fontWeight": "normal",
+			"isUnderlined": false
+		},
+		"Option":
+		{
+			"foreground": "#FF5500",
+			"fontStyle": "normal",
+			"fontWeight": "normal",
+			"isUnderlined": false
+		},
+		"Separator":
+		{
+			"foreground": "#C4B15F",
+			"fontStyle": "normal",
+			"fontWeight": "bold",
+			"isUnderlined": false
+		},
+		"Wildcard":
+		{
+			"foreground": "#DD0000",
+			"fontStyle": "normal",
+			"fontWeight": "bold",
+			"isUnderlined": false
+		},
+		"Comment":
+		{
+			"foreground": "#4C5174",
+			"fontStyle": "normal",
+			"fontWeight": "normal",
+			"isUnderlined": false
+		}
+	},
+	"Html":
+	{
+		"Doctype":
+		{
+			"foreground": "#539FA3",
+			"fontStyle": "normal",
+			"fontWeight": "bold",
+			"isUnderlined": false
+		},
+		"Keyword":
+		{
+			"foreground": "#000",
+			"fontStyle": "normal",
+			"fontWeight": "bold",
+			"isUnderlined": false
+		},
+		"Attribute":
+		{
+			"foreground": "#4EB380",
+			"fontStyle": "normal",
+			"fontWeight": "normal",
+			"isUnderlined": false
+		},
+		"Entity":
+		{
+			"foreground": "#C4B15F",
+			"fontStyle": "normal",
+			"fontWeight": "normal",
+			"isUnderlined": false
+		},
+		"Value":
+		{
+			"foreground": "#AA0000",
+			"fontStyle": "normal",
+			"fontWeight": "normal",
+			"isUnderlined": false
+		},
+		"Comment":
+		{
+			"foreground": "#4C5174",
+			"fontStyle": "normal",
+			"fontWeight": "normal",
+			"isUnderlined": false
+		}
+	}
+}

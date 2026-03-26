@@ -1,0 +1,337 @@
+1.0.03 (2022-02-22):
+- updated QtWebEngine to (silently) breaking upstream changes;
+- updated translations;
+- some other backports.
+
+1.0.02 (2020-12-21):
+- optimized handling of large images for Start Page backgrounds;
+- improved validation of content blocking profile checksum;
+- updated translations;
+- some other fixes.
+
+1.0.01 (2019-01-01):
+- some enhancements in experimental backend for QtWebEngine (Blink):
+-- download dialog is now shown for tab that initiated it;
+-- added support for handling requests to print page;
+- many other fixes.
+
+0.9.99 RC 12 (2018-09-01):
+- QtWebEngine backend no longer uses locks for fetching feeds, links or search engines;
+- some other fixes.
+
+0.9.99 RC 11 (2018-08-01):
+- reworked handling of custom icons for toolbar entries;
+- some other fixes.
+
+0.9.99 RC 10 (2018-07-01):
+- added importer for OPML files;
+- added support for abp: protocol for adding new content filtering profiles;
+- added ability to open selection as link if it matches URL format;
+- various fixes and minor improvements for Feeds reader.
+
+0.9.99 RC 9 (2018-06-01):
+- initial version of Feeds Reader:
+-- Atom and RSS 2.0 parsers;
+-- support for categories;
+-- ability to preview feeds before subscribing using view-feed: protocol;
+- added action to take page screenshot;
+- some minor optimizations.
+
+0.9.98 RC 8 (2018-05-01):
+- several enhancements in experimental backend for QtWebEngine (Blink):
+-- initial work on global history support;
+-- added support for alternative stylesheets;
+-- added support for fetching lists of search engines, feeds and links;
+- initial work on Feeds Reader;
+- several bug fixes and some minor optimizations.
+
+0.9.97 RC 7 (2018-04-01):
+- added initial version of Links panel;
+- some minor optimizations.
+
+0.9.96 RC 6 (2018-03-01):
+- added initial version of Tab History panel;
+- some minor optimizations.
+
+0.9.95 RC 5 (2018-02-01):
+- added initial version of toolbar widget for viewing downloads from current session;
+- added some new keyboard shortcuts;
+- some minor fixes.
+
+0.9.94 RC 4 (2018-01-01):
+- added new default style for Start Page by Kamil Nęcek;
+- added interface allowing to manage list of hosts using customized website overrides;
+- several bug fixes and some optimizations.
+
+0.9.93 RC 3 (2017-12-01):
+- added Page Information panel;
+- added support for external icons for User Scripts;
+- some minor fixes and optimizations.
+
+0.9.92 RC 2 (2017-11-01):
+- improved support for styling tab bar text;
+- added support for deleting User Scripts in Addons Manager;
+- restored inline URLs completion;
+- added action for peeking tab contents;
+- multiple bug fixes and stability improvements.
+
+0.9.91 RC 1 (2017-10-01):
+- reworked toolbars:
+-- added support for visibility toggle button (collapsing contents);
+-- fixed unified toolbar and titlebar style under macOS;
+-- toolbar visibility and location is now stored per main window;
+- improved sidebar(s):
+-- added ability to add new sidebars;
+-- allow to change their location by drag and drop;
+- vastly improved error pages:
+-- special error pages are now used instead of SSL warning dialogs;
+-- blocked content triggers dedicated error pages;
+- improved User Agents configuration;
+- added support for managing multiple proxy configurations and setting them per page or host;
+- reworked internal actions handling system allows to specify parameters for actions trigerred by keyboard shortcuts and mouse gestures;
+- vastly decreased import time for large bookmark files;
+- added module for listing opened windows and tabs;
+- improved styling under Windows, Unity and macOS;
+- added new default icon theme by Kamil Nęcek;
+- item views can now allocate extra space to predefined column other than last one;
+- added action to set, reset or toggle an option;
+- global editing actions now apply to focused single and multi line text edit widgets too;
+- added ability to drop URLs onto bookmark bars;
+- spell checking is now available in other multi line text edit widgets;
+- added action to control multimedia playback rate;
+- keyboard shortcuts are now validated while editing;
+- added support for customizing F12 menu;
+- implemented "Validate Using" menu;
+- added support for configurable Fast Forward rules;
+- lots of various fixes.
+
+0.9.12 Beta 12 (2017-01-01):
+- greatly improved tab bar:
+-- allow to detach tabs by dragging them away;
+-- allow to drop URLs and tabs from other windows;
+-- added option to show embedded tab thumbnails;
+-- improved handling of visibility of close button;
+-- tabs demanding attention are drawn using bold font;
+-- improved RTL support;
+-- decreased default tab padding;
+-- tab text is no longer centered horizontally;
+-- fixed status tip messages while rearranging tabs;
+- improved KDE5 and Unity integration:
+-- added support for progress information;
+-- added support for desktop actions;
+- several macOS specific fixes and improvements:
+-- improved rendering of platform style;
+-- added dock icon menu;
+-- added support for listing applications associated with given MIME type;
+- added support for Windows jump list;
+- added fullscreen support for QtWebKit backend;
+- open file path is saved;
+- improved RTL support in address and search fields;
+- many other fixes and improvements.
+
+0.9.11 Beta 11 (2016-10-01):
+- added initial support for storing passwords:
+-- support for multiple credential sets per host;
+-- basic passwords management;
+-- disabled by default (no encryption yet);
+- added crash reporter;
+- added support for muting tab media;
+- F12 menu now exposes all modes for Images visibility (including new option to show cached images only) and Plugins;
+- QtWebEngine backend is now capable of saving pages in MIME HTML format and as complete set of files;
+- added new toolbar visibility settings for full screen mode;
+- added new widget for showing content blocking details;
+- added ability to customize progress bar;
+- added ability to add loading progress information widgets to any toolbar;
+- various improvements in handling of content blocking profiles:
+-- added new definitions and updated existing;
+-- added option to add custom blocking rules;
+-- profiles are now grouped by type;
+- various minor fixes and improvements.
+
+0.9.10 Beta 10 (2016-05-01):
+- added initial support for User Scripts;
+- added Addons Manager;
+- added alternative display mode and support for optional headers for URL completion in address field;
+- many enhancements in experimental backend for QtWebEngine (Blink):
+-- added support for entering full screen mode;
+-- added support for content blocking;
+-- added support for several missing actions;
+- several fixes and improvements in content blocking;
+- improved CMake build system (also now it is the only officially supported);
+- added new backend for storing browsing history;
+- many other fixes and improvements.
+
+0.9.09 Beta 9 (2016-01-01):
+- added initial support for spell checking;
+- added support for selecting allowed and rejected domains for third-party cookies;
+- added support for customizing visible columns and their order in most of views;
+- added support for customizing text and icon of toolbar entries;
+- added support for adding arbitrary menus to toolbars;
+- some other fixes and minor improvements.
+
+0.9.08 Beta 8 (2015-12-01):
+- enhanced URL completion in address field:
+-- suggest bookmarks by URL and keyword;
+-- suggest URLs from history;
+-- suggest searching for given string using default search engine;
+-- allow to use popup with list of suggestions;
+- added new extremely flexible mouse gestures system;
+- added icons for badge in address field;
+- added FTP listing support to QtWebKit backend;
+- added SSL certificate viewer;
+- added Website Information dialog;
+- added configuration module for downloads handlers;
+- added configuration module for mouse gestures;
+- added command line option to print out diagnostic report (--report);
+- added support for configuring policy for popup windows;
+- updated style of error pages and directory listings;
+- many other fixes and improvements.
+
+0.9.07 Beta 7 (2015-09-01):
+- added support for customizing context menu;
+- added Opera notes import;
+- added initial support for auto updates;
+- added dialog allowing to decide what to do with downloaded file;
+- MDI actions are now enabled by default;
+- multiple fixes and improvements for macOS;
+- allow to specify default arguments using arguments.txt;
+- various minor fixes and improvements.
+
+0.9.06 Beta 6 (2015-06-01):
+- multiple enhancements in experimental backend for QtWebEngine (Blink):
+-- added support for restoring tab history;
+-- added support for storing cookies;
+-- added support for fetching favicons;
+-- added option to overwrite User Agent;
+-- added support for cache;
+-- added support for private mode;
+-- added support for downloading files;
+- added start page (speed dial);
+- added MDI mode (disabled by default);
+- added source viewer;
+- added dropdown with list of recently typed URLs;
+- added option to disable single key shortcuts;
+- added support for freedesktop.org notifications;
+- lots of other fixes and improvements.
+
+0.9.05 Beta 5 (2015-04-01):
+- experimental backend for QtWebEngine (Blink), disabled by default;
+- added advanced options for cookies;
+- added interface for configuring toolbars;
+- added support for bookmark bars;
+- added Ctrl+Tab tab switcher;
+- added support for taking notes;
+- added interface to deny or grant permission to use geolocation etc. (set of available permissions depends on what is supported by backend);
+- restore tab position when restoring closed tab;
+- tabs are now drawn horizontally in vertical toolbars;
+- many other fixes and improvements.
+
+0.9.04 Beta 4 (2015-01-01):
+- added support for mouse gestures;
+- added initial support for customizing toolbars;
+- allow to load plugins on demand;
+- more actions (over 150 in total);
+- added Go to Page dialog (F2);
+- allow to customize menu button (JSON file);
+- lots of other fixes and improvements.
+
+0.9.03 Beta 3 (2014-11-01):
+- initial version of sidebar;
+- added possibility to set Otter Browser as default under Windows;
+- added initial versions of Website Preferences and Quick Preferences (F12);
+- added Trash to Bookmarks Manager;
+- added Ctrl+Tab tabs switching;
+- added option to set user style sheet;
+- added tray icon;
+- allow to customize menu bar (JSON file);
+- various minor fixes and improvements.
+
+0.9.02 Beta 2 (2014-08-01):
+- added initial support for content blocking (Adblock Plus compatible);
+- added Opera and HTML (Netscape) bookmarks import;
+- added rocker navigation;
+- added more keyboard shortcuts;
+- allow to stop page loading by pressing Esc;
+- no need for manual tweaking to get working binary for Windows XP (requires Qt 5.3);
+- translation related improvements;
+- some other fixes and minor improvements.
+
+0.9.01 Beta 1 (2014-06-01):
+- added application icon by Walerian Walawski;
+- added error console;
+- added support for additional attributes for bookmarks;
+- added support for bookmark keyword;
+- allow to load translations (18 languages available);
+- allow to configure SSL ciphers priorities;
+- allow to compile using Qt stack available in Ubuntu (outdated QtWebKit);
+- various minor fixes and improvements.
+
+0.5.01 (2014-05-01):
+- added startup / crash recovery dialog;
+- implemented "Reload Image" action;
+- improved handling of bookmarklets;
+- some other fixes and minor improvements.
+
+0.4.01 (2014-04-01):
+- added basic full screen mode support;
+- User Agents configuration;
+- various tab bar related fixes;
+- some other fixes and changes.
+
+0.3.01 (2014-03-01):
+- added option to set custom User Agent (for single tab or whole application);
+- added support for proxy auto-config (PAC);
+- added option to decide if JavaScript should be able to show status messages;
+- implemented "Reuse Current Tab" option;
+- various small fixes.
+
+0.2.01 (2014-02-01):
+- added support for profiles defining keyboard shortcuts and action macros;
+- added support for proxy configuration;
+- added quick go to or search of clipboard contents on middle click on address field;
+- added option to delay loading of tab contents until selected;
+- added option to disable referrer;
+- modified appearance of search widget;
+- minor improvements in cache viewer;
+- some other fixes and minor improvements.
+
+0.1.01 (2014-01-01):
+- added dedicated context menu for media content (AUDIO and VIDEO tags);
+- added global history with manager;
+- added dialog to clear history (browsing, cookies, caches etc.);
+- added cache viewer (about:cache);
+- implemented tab detaching;
+- overhauled about: pages;
+- some optimizations and other changes.
+
+0.0.02 (2013-12-22):
+- added warning in case of SSL errors;
+- added web search capabilities;
+- added advanced configuration page (about:config);
+- added preferences dialog (not all options are implemented yet);
+- added CMake project file;
+- added bookmarks manager;
+- implemented dialogs that are model only for single tab instead of whole window (used by JavaScript pop-ups (alert confirm, prompt), authentication and image properties dialogs);
+- implemented quick search menu for text selection;
+- implemented more missing context menu actions;
+- implemented adding search engines from scratch or web page FORM;
+- implemented restoring of tab history from previous session;
+- many other changes.
+
+0.0.01 (2013-12-11):
+- initial release;
+- added basic MDI+TDI interface;
+- added private browsing capabilities;
+- added basic support for bookmarks (XBEL format);
+- added basic support for saving, restoring and manually deleting cookies;
+- added transfers manager;
+- added basic sessions management;
+- added detailed progress bar;
+- implemented backends for layout engines (for now only QtWebKit)
+- implemented restoring of closed tabs and windows;
+- implemented find in page actions;
+- specified custom context menus;
+- fine-tuned tab bar to be more robust (smart resizing, cloning, pinning, rearranging, previews, changing location / orientation etc.);
+- enabled printing;
+- force single application instance per profile (but allow multiple windows);
+- lots of other things.

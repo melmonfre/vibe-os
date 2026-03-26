@@ -1,0 +1,28 @@
+#include <windows.h>
+
+IDI_ICON1 ICON DISCARDABLE "resources/icons/otter-browser.ico"
+IDI_ICON2 ICON DISCARDABLE "resources/icons/otter-browser-file-type.ico"
+
+VS_VERSION_INFO VERSIONINFO
+	FILEVERSION 1,0,8,1
+	PRODUCTVERSION 1,0,8,1
+BEGIN
+	BLOCK "StringFileInfo"
+	BEGIN
+		BLOCK "040904E4"
+		BEGIN
+			VALUE "CompanyName", "Otter Browser Team"
+			VALUE "FileDescription", "Otter Browser"
+			VALUE "FileVersion", "1.0.81"
+			VALUE "InternalName", "otter-browser"
+			VALUE "LegalCopyright", "Copyright (C) 2013-2025 Otter Browser Team"
+			VALUE "OriginalFilename", "otter-browser.exe"
+			VALUE "ProductName", "Otter Browser"
+			VALUE "ProductVersion", "1.0.81"
+		END
+	END
+	BLOCK "VarFileInfo"
+	BEGIN
+		VALUE "Translation", 0x409, 1252
+	END
+END

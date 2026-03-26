@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2014 Martin Gansser <martinkg@fedoraproject.org> -->
+<component>
+  <id>org.otter_browser.Otter_Browser</id>
+  <launchable type="desktop-id">otter-browser.desktop</launchable>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Otter Browser</name>
+  <summary>Web browser controlled by the user, not vice-versa</summary>
+  <description>
+    <p>
+      Otter Browser aims to recreate the best aspects of the classic Opera (12.x) UI using Qt5.
+    </p>
+  </description>
+  <kudos>
+    <kudo>HiDpiIcon</kudo>
+    <kudo>ModernToolkit</kudo>
+  </kudos>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://otter-browser.org/screenshots/1.png</image>
+    </screenshot>
+    <screenshot>
+      <image>https://otter-browser.org/screenshots/8.png</image>
+    </screenshot>
+    <screenshot>
+      <image>https://otter-browser.org/screenshots/9.png</image>
+    </screenshot>
+    <screenshot>
+      <image>https://otter-browser.org/screenshots/5.png</image>
+    </screenshot>
+    <screenshot>
+      <image>https://otter-browser.org/screenshots/16.png</image>
+    </screenshot>
+    <screenshot>
+      <image>https://otter-browser.org/screenshots/17.png</image>
+    </screenshot>
+    <screenshot>
+      <image>https://otter-browser.org/screenshots/18.png</image>
+    </screenshot>
+    <screenshot>
+      <image>https://otter-browser.org/screenshots/19.png</image>
+    </screenshot>
+  </screenshots>
+  <url type="homepage">https://otter-browser.org/</url>
+  <url type="bugtracker">https://github.com/OtterBrowser/otter-browser/issues</url>
+  <url type="faq">https://otter-browser.org/#faq</url>
+  <url type="translate">https://www.transifex.com/otter-browser/otter-browser/</url>
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+  <update_contact>martinkg@fedoraproject.org</update_contact>
+</component>

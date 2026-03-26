@@ -1,0 +1,18 @@
+List of major planned features
+
+1.1:
+- tabs grouping (stacking and panorama mode)
+- helper for mouse gestures
+- fine-tune UI (sizes, margins and other details)
+
+2.0:
+- Opera Link like solution
+- shared contacts database
+- mail client (as module)
+- extensions (Chrome APIs support)
+
+Later / unspecified:
+- form auto completion
+- support for Opera skins (through custom QStyle)
+- IM client module (at least IRC, possibly libpurple based)
+- BitTorrent module

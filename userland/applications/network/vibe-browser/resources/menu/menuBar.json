@@ -1,0 +1,176 @@
+[
+	{
+		"identifier": "FileMenu",
+		"type": "menu",
+		"title": "File",
+		"actions":
+		[
+			"NewTab",
+			"NewTabPrivate",
+			"NewWindow",
+			"NewWindowPrivate",
+			"separator",
+			"Open",
+			"Save",
+			"CloseTab",
+			"separator",
+			{
+				"identifier": "SessionsMenu",
+				"type": "menu",
+				"title": "Sessions"
+			},
+			{
+				"identifier": "ImportExportMenu",
+				"type": "menu",
+				"title": "Import and Export"
+			},
+			"separator",
+			"Print",
+			"PrintPreview",
+			"separator",
+			"WorkOffline",
+			"separator",
+			{
+				"identifier": "ShowToolBar",
+				"type": "action",
+				"title": "Show Menubar",
+				"parameters":
+				{
+					"toolBar": "MenuBar"
+				}
+			},
+			"separator",
+			"Exit"
+		]
+	},
+	{
+		"identifier": "EditMenu",
+		"type": "menu",
+		"title": "Edit",
+		"actions":
+		[
+			"Undo",
+			"Redo",
+			"separator",
+			"Cut",
+			"Copy",
+			"Paste",
+			"Delete",
+			"separator",
+			"SelectAll",
+			"separator",
+			"Find",
+			"FindNext",
+			"FindPrevious"
+		]
+	},
+	{
+		"identifier": "ViewMenu",
+		"type": "menu",
+		"title": "View",
+		"actions":
+		[
+			{
+				"identifier": "ToolBarsMenu",
+				"type": "menu",
+				"title": "Toolbars"
+			},
+			"separator",
+			"Reload",
+			"Stop",
+			"separator",
+			"ZoomIn",
+			"ZoomOut",
+			"ZoomOriginal",
+			"separator",
+			"FullScreen",
+			"separator",
+			"ViewSource",
+			"InspectPage",
+			{
+				"identifier": "UserAgentMenu",
+				"type": "menu",
+				"title": "User Agent"
+			},
+			"separator",
+			{
+				"identifier": "StyleSheetsMenu",
+				"type": "menu",
+				"title": "Style"
+			},
+			{
+				"identifier": "CharacterEncodingMenu",
+				"type": "menu",
+				"title": "Character Encoding"
+			}
+		]
+	},
+	{
+		"identifier": "MenuHistory",
+		"type": "menu",
+		"title": "History",
+		"actions":
+		[
+			"GoBack",
+			"GoForward",
+			"Rewind",
+			"FastForward",
+			"separator",
+			{
+				"identifier": "ClosedWindowsMenu",
+				"type": "menu",
+				"title": "Closed Tabs and Windows"
+			},
+			"separator",
+			"History",
+			"separator",
+			"ClearHistory"
+		]
+	},
+	{
+		"identifier": "BookmarksMenu",
+		"type": "menu",
+		"title": "Bookmarks",
+		"actions":
+		[
+			"BookmarkPage",
+			"Bookmarks",
+			"separator"
+		]
+	},
+	{
+		"identifier": "FeedsMenu",
+		"type": "menu",
+		"title": "Feeds"
+	},
+	{
+		"identifier": "ToolsMenu",
+		"type": "menu",
+		"title": "Tools",
+		"actions":
+		[
+			"Addons",
+			"Transfers",
+			"Notes",
+			"Cookies",
+			"Passwords",
+			"ContentBlocking",
+			"separator",
+			"Preferences"
+		]
+	},
+	{
+		"identifier": "HelpMenu",
+		"type": "menu",
+		"title": "Help",
+		"actions":
+		[
+			"SwitchApplicationLanguage",
+			"CheckForUpdates",
+			"separator",
+			"DiagnosticReport",
+			"AboutApplication",
+			"AboutQt"
+		]
+	}
+]

@@ -1,0 +1,112 @@
+[
+	{
+		"identifier": "MenuBar",
+		"title": "Menu Bar",
+		"iconSize": 20,
+		"actions":
+		[
+ 			"MenuBarWidget"
+		]
+	},
+	{
+		"identifier": "BookmarksBar",
+		"title": "Bookmarks Bar",
+		"location": "top",
+		"normalVisibility": "hidden",
+		"buttonStyle": "textBesideIcon",
+		"bookmarksPath": "/"
+	},
+	{
+		"identifier": "TabBar",
+		"title": "Tab Bar",
+		"location": "top",
+		"fullScreenVisibility": "hover",
+		"actions":
+		[
+			"MenuButtonWidget",
+			"PrivateWindowIndicatorWidget",
+			"TabBarWidget",
+			"NewTabAction",
+			"spacer",
+			"ClosedWindowsMenu"
+		]
+	},
+	{
+		"identifier": "AddressBar",
+		"title": "Address Bar",
+		"actions":
+		[
+			"GoBackAction",
+			"GoForwardAction",
+			"ReloadOrStopAction",
+			"AddressWidget",
+			"SearchWidget"
+		]
+	},
+	{
+		"identifier": "ProgressBar",
+		"title": "Progress Bar",
+		"fullScreenVisibility": "auto",
+		"normalVisibility": "auto",
+		"actions":
+		[
+			"ProgressInformationDocumentProgressWidget",
+			"ProgressInformationTotalSizeWidget",
+			"ProgressInformationElementsWidget",
+			"ProgressInformationSpeedWidget",
+			"ProgressInformationElapsedTimeWidget",
+			"ProgressInformationMessageWidget"
+		]
+	},
+	{
+		"identifier": "SideBar",
+		"title": "Sidebar",
+		"location": "left",
+		"normalVisibility": "hidden",
+		"currentPanel": "",
+		"panels":
+		[
+			"bookmarks",
+			"history",
+			"notes",
+			"passwords",
+			"transfers",
+			"pageInformation"
+		]
+	},
+	{
+		"identifier": "StatusBar",
+		"title": "Status Bar",
+		"iconSize": 20,
+		"actions":
+		[
+			{
+				"identifier": "ShowToolBarAction",
+				"options":
+				{
+					"icon": "sidebar-show"
+				},
+				"parameters":
+				{
+					"toolBar": "SideBar"
+				}
+			},
+			"StatusMessageWidget",
+			"ZoomOutAction",
+			"ZoomWidget",
+			"ZoomInAction",
+			"ContentBlockingInformationWidget",
+			"TransfersWidget"
+		]
+	},
+	{
+		"identifier": "ErrorConsoleBar",
+		"title": "Error Console",
+		"location": "bottom",
+		"normalVisibility": "hidden",
+		"actions":
+		[
+			"ErrorConsoleWidget"
+		]
+	}
+]

@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Otter::FeedPropertiesDialog</class>
+ <widget class="QDialog" name="Otter::FeedPropertiesDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>400</width>
+    <height>200</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Edit Feed</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <layout class="QFormLayout" name="formLayout">
+     <item row="0" column="0">
+      <widget class="QLabel" name="folderLabel">
+       <property name="text">
+        <string>Folder:</string>
+       </property>
+       <property name="buddy">
+        <cstring>folderComboBox</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <layout class="QHBoxLayout" name="folderLayout">
+       <item>
+        <widget class="Otter::FeedsComboBoxWidget" name="folderComboBox">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="newFolderButton">
+         <property name="text">
+          <string>New…</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="titleLabel">
+       <property name="text">
+        <string>Title:</string>
+       </property>
+       <property name="buddy">
+        <cstring>titleLineEditWidget</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <layout class="QHBoxLayout" name="horizontalLayout">
+       <item>
+        <widget class="Otter::LineEditWidget" name="titleLineEditWidget"/>
+       </item>
+       <item>
+        <widget class="Otter::IconWidget" name="iconButton">
+         <property name="minimumSize">
+          <size>
+           <width>36</width>
+           <height>36</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>36</width>
+           <height>36</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Change Icon…</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="urlLabel">
+       <property name="text">
+        <string>Address:</string>
+       </property>
+       <property name="buddy">
+        <cstring>urlLineEditWidget</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="Otter::LineEditWidget" name="urlLineEditWidget"/>
+     </item>
+     <item row="3" column="0">
+      <widget class="QLabel" name="updateIntervalLabel">
+       <property name="text">
+        <string>Update interval:</string>
+       </property>
+       <property name="buddy">
+        <cstring>updateIntervalSpinBox</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="3" column="1">
+      <widget class="QSpinBox" name="updateIntervalSpinBox">
+       <property name="specialValueText">
+        <string>Never</string>
+       </property>
+       <property name="suffix">
+        <string> minutes</string>
+       </property>
+       <property name="maximum">
+        <number>10080</number>
+       </property>
+       <property name="value">
+        <number>60</number>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>Otter::FeedsComboBoxWidget</class>
+   <extends>QComboBox</extends>
+   <header>src/ui/FeedsComboBoxWidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>Otter::IconWidget</class>
+   <extends>QToolButton</extends>
+   <header>src/ui/IconWidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>Otter::LineEditWidget</class>
+   <extends>QLineEdit</extends>
+   <header>src/ui/LineEditWidget.h</header>
+  </customwidget>
+ </customwidgets>
+ <tabstops>
+  <tabstop>folderComboBox</tabstop>
+  <tabstop>newFolderButton</tabstop>
+  <tabstop>titleLineEditWidget</tabstop>
+  <tabstop>iconButton</tabstop>
+  <tabstop>urlLineEditWidget</tabstop>
+  <tabstop>updateIntervalSpinBox</tabstop>
+ </tabstops>
+ <resources/>
+ <connections/>
+</ui>

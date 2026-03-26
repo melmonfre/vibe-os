@@ -1,0 +1,430 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Otter::SearchEnginePropertiesDialog</class>
+ <widget class="QDialog" name="Otter::SearchEnginePropertiesDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>600</width>
+    <height>460</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Edit Search Engine</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout" stretch="0,0,0,0">
+   <item>
+    <layout class="QFormLayout" name="formLayout">
+     <item row="1" column="0">
+      <widget class="QLabel" name="titleLabel">
+       <property name="text">
+        <string>Title:</string>
+       </property>
+       <property name="buddy">
+        <cstring>titleLineEditWidget</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <layout class="QHBoxLayout" name="horizontalLayout">
+       <item>
+        <widget class="Otter::LineEditWidget" name="titleLineEditWidget"/>
+       </item>
+       <item>
+        <widget class="Otter::IconWidget" name="iconButton">
+         <property name="minimumSize">
+          <size>
+           <width>36</width>
+           <height>36</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>36</width>
+           <height>36</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Change Icon…</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="descriptionLabel">
+       <property name="text">
+        <string>Description:</string>
+       </property>
+       <property name="buddy">
+        <cstring>descriptionLineEditWidget</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="Otter::LineEditWidget" name="descriptionLineEditWidget"/>
+     </item>
+     <item row="3" column="0">
+      <widget class="QLabel" name="keywordLabel">
+       <property name="text">
+        <string>Keyword:</string>
+       </property>
+       <property name="buddy">
+        <cstring>keywordLineEditWidget</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="3" column="1">
+      <widget class="Otter::LineEditWidget" name="keywordLineEditWidget"/>
+     </item>
+     <item row="4" column="0">
+      <widget class="QLabel" name="encodingLabel">
+       <property name="text">
+        <string>Encoding:</string>
+       </property>
+       <property name="buddy">
+        <cstring>encodingLineEditWidget</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="1">
+      <widget class="Otter::LineEditWidget" name="encodingLineEditWidget">
+       <property name="readOnly">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item row="5" column="0">
+      <widget class="QLabel" name="formAddressLabel">
+       <property name="text">
+        <string>Form address:</string>
+       </property>
+       <property name="buddy">
+        <cstring>formAddressLineEditWidget</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="5" column="1">
+      <widget class="Otter::LineEditWidget" name="formAddressLineEditWidget"/>
+     </item>
+     <item row="6" column="1">
+      <widget class="Otter::LineEditWidget" name="updateAddressLineEditWidget"/>
+     </item>
+     <item row="6" column="0">
+      <widget class="QLabel" name="updateAddressLabel">
+       <property name="text">
+        <string>Update address:</string>
+       </property>
+       <property name="buddy">
+        <cstring>updateAddressLineEditWidget</cstring>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QTabWidget" name="tabWidget">
+     <property name="currentIndex">
+      <number>0</number>
+     </property>
+     <widget class="QWidget" name="resultsTab">
+      <attribute name="title">
+       <string>Results Query</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="resultsLayout">
+       <item>
+        <layout class="QFormLayout" name="resultsFormLayout">
+         <item row="0" column="0">
+          <widget class="QLabel" name="resultsAddressLabel">
+           <property name="text">
+            <string>Address:</string>
+           </property>
+           <property name="buddy">
+            <cstring>resultsAddressLineEditWidget</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="Otter::LineEditWidget" name="resultsAddressLineEditWidget"/>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="reultsQueryLabel">
+           <property name="text">
+            <string>Query:</string>
+           </property>
+           <property name="buddy">
+            <cstring>resultsQueryLineEditWidget</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="Otter::LineEditWidget" name="resultsQueryLineEditWidget"/>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="resultsPostMethodCheckBox">
+         <property name="text">
+          <string>POST method</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QWidget" name="resultsPostWidget" native="true">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <layout class="QHBoxLayout" name="resultsPostLayout">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <spacer name="resultsEnctypeSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Fixed</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>20</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QLabel" name="resultsEnctypeLabel">
+            <property name="text">
+             <string>Data encoding (enctype):</string>
+            </property>
+            <property name="buddy">
+             <cstring>resultsEnctypeComboBox</cstring>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="resultsEnctypeComboBox">
+            <item>
+             <property name="text">
+              <string notr="true">application/x-www-form-urlencoded</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string notr="true">multipart/form-data</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="suggestionsTab">
+      <attribute name="title">
+       <string>Suggestions Query</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="suggestionsLayout">
+       <item>
+        <layout class="QFormLayout" name="suggestionsFormLayout">
+         <property name="fieldGrowthPolicy">
+          <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+         </property>
+         <item row="0" column="0">
+          <widget class="QLabel" name="suggestionsAddressLabel">
+           <property name="text">
+            <string>Address:</string>
+           </property>
+           <property name="buddy">
+            <cstring>suggestionsAddressLineEditWidget</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="Otter::LineEditWidget" name="suggestionsAddressLineEditWidget"/>
+         </item>
+         <item row="1" column="1">
+          <widget class="Otter::LineEditWidget" name="suggestionsQueryLineEditWidget"/>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="suggestionsQueryLabel">
+           <property name="text">
+            <string>Query:</string>
+           </property>
+           <property name="buddy">
+            <cstring>suggestionsQueryLineEditWidget</cstring>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="suggestionsPostMethodCheckBox">
+         <property name="text">
+          <string>POST method</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QWidget" name="suggestionsPostWidget" native="true">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <layout class="QHBoxLayout" name="suggestionsPostLayout">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <spacer name="suggestionsEnctypeSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeType">
+             <enum>QSizePolicy::Fixed</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>20</width>
+              <height>0</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QLabel" name="suggestionsEnctypeLabel">
+            <property name="text">
+             <string>Data encoding (enctype):</string>
+            </property>
+            <property name="buddy">
+             <cstring>suggestionsEnctypeComboBox</cstring>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="suggestionsEnctypeComboBox">
+            <item>
+             <property name="text">
+              <string notr="true">application/x-www-form-urlencoded</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string notr="true">multipart/form-data</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>Otter::IconWidget</class>
+   <extends>QToolButton</extends>
+   <header>src/ui/IconWidget.h</header>
+  </customwidget>
+  <customwidget>
+   <class>Otter::LineEditWidget</class>
+   <extends>QLineEdit</extends>
+   <header>src/ui/LineEditWidget.h</header>
+  </customwidget>
+ </customwidgets>
+ <tabstops>
+  <tabstop>titleLineEditWidget</tabstop>
+  <tabstop>iconButton</tabstop>
+  <tabstop>descriptionLineEditWidget</tabstop>
+  <tabstop>keywordLineEditWidget</tabstop>
+  <tabstop>encodingLineEditWidget</tabstop>
+  <tabstop>formAddressLineEditWidget</tabstop>
+  <tabstop>updateAddressLineEditWidget</tabstop>
+  <tabstop>tabWidget</tabstop>
+  <tabstop>resultsAddressLineEditWidget</tabstop>
+  <tabstop>resultsQueryLineEditWidget</tabstop>
+  <tabstop>resultsPostMethodCheckBox</tabstop>
+  <tabstop>resultsEnctypeComboBox</tabstop>
+  <tabstop>suggestionsAddressLineEditWidget</tabstop>
+  <tabstop>suggestionsQueryLineEditWidget</tabstop>
+  <tabstop>suggestionsPostMethodCheckBox</tabstop>
+  <tabstop>suggestionsEnctypeComboBox</tabstop>
+ </tabstops>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>accepted()</signal>
+   <receiver>Otter::SearchEnginePropertiesDialog</receiver>
+   <slot>accept()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>266</x>
+     <y>440</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>157</x>
+     <y>274</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>rejected()</signal>
+   <receiver>Otter::SearchEnginePropertiesDialog</receiver>
+   <slot>reject()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>334</x>
+     <y>440</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>286</x>
+     <y>274</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
+</ui>

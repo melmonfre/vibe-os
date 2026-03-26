@@ -1,0 +1,143 @@
+<!DOCTYPE HTML>
+<html dir="{dir}">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style type="text/css">
+*
+{
+	margin:0;
+	padding:0;
+}
+html
+{
+	padding:30px;
+	color:#012956;
+	background:#EDF7FC linear-gradient(to bottom, #D4EEF9 0%, #EDF7FC 100%) top repeat-x;
+	cursor:default;
+}
+body
+{
+	max-width:1000px;
+	margin:auto;
+	padding:20px 30px;
+	border:1px solid #94C6FF;
+	border-radius:15px;
+	font-family:sans-serif;
+	background:#FFF linear-gradient(to bottom, #FAFAFA 0%, #FCFCFC 53%, #FFF 100%) top repeat-x;
+	box-shadow:0 0 15px 15px rgba(211, 238, 251, 0.5);
+}
+a
+{
+	text-decoration:none;
+	color:#0082D9;
+}
+a:hover
+{
+	opacity:0.7;
+}
+h1
+{
+	margin:0 0 10px 0;
+}
+table
+{
+	width:100%;
+	margin:20px auto 0;
+	border-collapse:collapse;
+}
+table a
+{
+	color:#0071BC;
+}
+td, th
+{
+	padding:4px 8px;
+	line-height:24px;
+	text-align:left;
+}
+td.link a
+{
+	font-style:italic;
+}
+tr td:first-child
+{
+	padding:2px 8px 2px 30px;
+	border-radius:6px 0 0 6px;
+	background-position:8px center;
+	background-repeat:no-repeat;
+	background-size:16px 16px;
+}
+{style}tr td:last-child
+{
+	border-radius:0 6px 6px 0;
+}
+tbody tr:nth-child(odd)
+{
+	background:rgba(225, 225, 225, 0.5);
+}
+
+@media (max-width:800px)
+{
+	tr td:nth-child(3), tr th:nth-child(3)
+	{
+		display:none;
+	}
+}
+
+@media (max-width:700px)
+{
+	tr td:nth-child(2), tr th:nth-child(2)
+	{
+		display:none;
+	}
+}
+
+@media (max-width:600px)
+{
+	tr td:nth-child(4), tr th:nth-child(4)
+	{
+		display:none;
+	}
+}
+
+@media (max-width:500px)
+{
+	html
+	{
+		padding:0;
+		background:#FFF linear-gradient(to bottom, #FAFAFA 0%, #FCFCFC 53%, #FFF 100%) top repeat-x;
+	}
+	body
+	{
+		padding:10px;
+		border:none;
+		border-radius:0;
+		box-shadow:none;
+	}
+}
+</style>
+</head>
+<body>
+<h1>{description}</h1>
+<h2>{navigation}</h2>
+<table>
+<thead>
+<tr>
+<th>{headerName}</th>
+<th>{headerType}</th>
+<th>{headerSize}</th>
+<th>{headerDate}</th>
+</tr>
+</thead>
+<tbody>
+<!--entry:begin--><tr>
+<td class="{class}"><a href="{url}" title="{mimeType}">{name}</a></td>
+<td>{comment}</td>
+<td>{size}</td>
+<td>{lastModified}</td>
+</tr>
+<!--entry:end--></tbody>
+</table>
+</body>
+</html>

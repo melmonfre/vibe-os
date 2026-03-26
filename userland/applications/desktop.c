@@ -79,6 +79,49 @@ static int g_pers_used = 0;
 static struct trash_state g_trash;
 static int g_trash_used = 0;
 
+enum network_applet_state_kind {
+    NETWORK_APPLET_DISCONNECTED = 0,
+    NETWORK_APPLET_CONNECTING,
+    NETWORK_APPLET_CONNECTED
+};
+
+struct sound_applet_state {
+    int popup_open;
+    int output_volume;
+    int input_volume;
+    int output_muted;
+    int input_muted;
+    int selected_output;
+    int selected_input;
+};
+
+struct network_applet_state {
+    int popup_open;
+    int selected_network;
+    int password_focus;
+    int password_len;
+    char password[33];
+    enum network_applet_state_kind state;
+};
+
+static struct sound_applet_state g_sound_applet = {0, 72, 58, 0, 0, 0, 0};
+static struct network_applet_state g_network_applet = {0, 0, 0, 0, "", NETWORK_APPLET_DISCONNECTED};
+
+static const char *g_sound_outputs[] = {"Alto-falantes", "Fones"};
+static const char *g_sound_inputs[] = {"Microfone", "Linha"};
+
+struct network_candidate {
+    const char *ssid;
+    int signal;
+    int secured;
+};
+
+static const struct network_candidate g_network_candidates[] = {
+    {"VibeNet", 4, 1},
+    {"Laboratorio", 3, 1},
+    {"Visitantes", 2, 0}
+};
+
 static const uint8_t g_color_palette_256[] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
@@ -97,6 +140,10 @@ static const uint8_t g_color_palette_256[] = {
     224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
     240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255
 };
+
+#define PANEL_APPLET_POPUP_W 212
+#define PANEL_SOUND_POPUP_H 156
+#define PANEL_NETWORK_POPUP_H 188
 
 #define TASKBAR_HEIGHT 22
 #define WINDOW_MIN_W 400
@@ -2320,12 +2367,16 @@ static struct rect window_title_bar(const struct rect *w) {
 static struct rect taskbar_button_rect_for_window(int win_index) {
     struct rect r = {0, 0, 0, 0};
     int x = 66;
+    struct rect tray = ui_taskbar_tray_rect();
 
     for (int i = 0; i < MAX_WINDOWS; ++i) {
         if (!g_windows[i].active) {
             continue;
         }
         if (i == win_index) {
+            if (x + 68 > tray.x - 4) {
+                return r;
+            }
             r.x = x;
             r.y = (int)SCREEN_HEIGHT - TASKBAR_HEIGHT + 3;
             r.w = 68;
@@ -2335,6 +2386,248 @@ static struct rect taskbar_button_rect_for_window(int win_index) {
         x += 72;
     }
     return r;
+}
+
+static struct rect sound_applet_popup_rect(void) {
+    struct rect anchor = ui_taskbar_sound_applet_rect();
+    struct rect r = {anchor.x + anchor.w - PANEL_APPLET_POPUP_W,
+                     anchor.y - PANEL_SOUND_POPUP_H - 6,
+                     PANEL_APPLET_POPUP_W,
+                     PANEL_SOUND_POPUP_H};
+    if (r.x < 4) {
+        r.x = 4;
+    }
+    if (r.y < 4) {
+        r.y = 4;
+    }
+    return r;
+}
+
+static struct rect network_applet_popup_rect(void) {
+    struct rect anchor = ui_taskbar_network_applet_rect();
+    struct rect r = {anchor.x,
+                     anchor.y - PANEL_NETWORK_POPUP_H - 6,
+                     PANEL_APPLET_POPUP_W,
+                     PANEL_NETWORK_POPUP_H};
+    if (r.x + r.w > (int)SCREEN_WIDTH - 4) {
+        r.x = (int)SCREEN_WIDTH - r.w - 4;
+    }
+    if (r.x < 4) {
+        r.x = 4;
+    }
+    if (r.y < 4) {
+        r.y = 4;
+    }
+    return r;
+}
+
+static struct rect sound_output_row_rect(const struct rect *popup, int index) {
+    struct rect r = {popup->x + 8, popup->y + 26 + (index * 18), popup->w - 16, 16};
+    return r;
+}
+
+static struct rect sound_input_row_rect(const struct rect *popup, int index) {
+    struct rect r = {popup->x + 8, popup->y + 90 + (index * 18), popup->w - 16, 16};
+    return r;
+}
+
+static struct rect sound_output_slider_rect(const struct rect *popup) {
+    struct rect r = {popup->x + 86, popup->y + 63, popup->w - 118, 10};
+    return r;
+}
+
+static struct rect sound_input_slider_rect(const struct rect *popup) {
+    struct rect r = {popup->x + 86, popup->y + 127, popup->w - 118, 10};
+    return r;
+}
+
+static struct rect sound_output_mute_rect(const struct rect *popup) {
+    struct rect r = {popup->x + popup->w - 42, popup->y + 58, 30, 18};
+    return r;
+}
+
+static struct rect sound_input_mute_rect(const struct rect *popup) {
+    struct rect r = {popup->x + popup->w - 42, popup->y + 122, 30, 18};
+    return r;
+}
+
+static struct rect network_status_rect(const struct rect *popup) {
+    struct rect r = {popup->x + 8, popup->y + 24, popup->w - 16, 18};
+    return r;
+}
+
+static struct rect network_row_rect(const struct rect *popup, int index) {
+    struct rect r = {popup->x + 8, popup->y + 52 + (index * 22), popup->w - 16, 18};
+    return r;
+}
+
+static struct rect network_password_rect(const struct rect *popup) {
+    struct rect r = {popup->x + 8, popup->y + 122, popup->w - 16, 18};
+    return r;
+}
+
+static struct rect network_connect_rect(const struct rect *popup) {
+    struct rect r = {popup->x + 8, popup->y + popup->h - 28, 92, 18};
+    return r;
+}
+
+static struct rect network_disconnect_rect(const struct rect *popup) {
+    struct rect r = {popup->x + popup->w - 100, popup->y + popup->h - 28, 92, 18};
+    return r;
+}
+
+static int sound_slider_value_from_x(const struct rect *slider, int x) {
+    int relative;
+
+    if (!slider || slider->w <= 0) {
+        return 0;
+    }
+    relative = x - slider->x;
+    if (relative < 0) {
+        relative = 0;
+    }
+    if (relative > slider->w) {
+        relative = slider->w;
+    }
+    return (relative * 100) / slider->w;
+}
+
+static const char *network_applet_status_text(void) {
+    switch (g_network_applet.state) {
+    case NETWORK_APPLET_CONNECTING:
+        return "Conectando a rede Wi-Fi";
+    case NETWORK_APPLET_CONNECTED:
+        return "Conectado: wlan0 192.168.1.24";
+    default:
+        return "Sem rede ativa";
+    }
+}
+
+static void draw_sound_applet(const struct mouse_state *mouse) {
+    const struct desktop_theme *theme = ui_theme_get();
+    struct rect button = ui_taskbar_sound_applet_rect();
+    int hover = point_in_rect(&button, mouse->x, mouse->y);
+    const char *icon = g_sound_applet.output_muted ? "M" :
+                       (g_sound_applet.output_volume >= 70 ? "S" :
+                        (g_sound_applet.output_volume >= 35 ? "s" : "."));
+
+    ui_draw_button(&button,
+                   icon,
+                   g_sound_applet.popup_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                   hover);
+
+    if (g_sound_applet.popup_open) {
+        struct rect popup = sound_applet_popup_rect();
+        struct rect out_slider = sound_output_slider_rect(&popup);
+        struct rect in_slider = sound_input_slider_rect(&popup);
+        struct rect out_mute = sound_output_mute_rect(&popup);
+        struct rect in_mute = sound_input_mute_rect(&popup);
+        struct rect out_knob = {out_slider.x + ((out_slider.w * g_sound_applet.output_volume) / 100) - 2,
+                                out_slider.y - 2, 4, out_slider.h + 4};
+        struct rect in_knob = {in_slider.x + ((in_slider.w * g_sound_applet.input_volume) / 100) - 2,
+                               in_slider.y - 2, 4, in_slider.h + 4};
+
+        ui_draw_surface(&popup, ui_color_window_bg());
+        sys_text(popup.x + 8, popup.y + 8, theme->text, "Som");
+        sys_text(popup.x + 8, popup.y + 16, theme->text, "Saidas");
+        for (int i = 0; i < 2; ++i) {
+            struct rect row = sound_output_row_rect(&popup, i);
+            ui_draw_button(&row,
+                           g_sound_outputs[i],
+                           i == g_sound_applet.selected_output ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                           point_in_rect(&row, mouse->x, mouse->y));
+        }
+        sys_text(popup.x + 8, popup.y + 62, theme->text, "Vol");
+        sys_rect(out_slider.x, out_slider.y, out_slider.w, out_slider.h, ui_color_muted());
+        sys_rect(out_slider.x, out_slider.y,
+                 (out_slider.w * g_sound_applet.output_volume) / 100,
+                 out_slider.h,
+                 theme->window);
+        sys_rect(out_knob.x, out_knob.y, out_knob.w, out_knob.h, theme->text);
+        ui_draw_button(&out_mute,
+                       g_sound_applet.output_muted ? "On" : "Off",
+                       g_sound_applet.output_muted ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                       point_in_rect(&out_mute, mouse->x, mouse->y));
+
+        sys_text(popup.x + 8, popup.y + 80, theme->text, "Entradas");
+        for (int i = 0; i < 2; ++i) {
+            struct rect row = sound_input_row_rect(&popup, i);
+            ui_draw_button(&row,
+                           g_sound_inputs[i],
+                           i == g_sound_applet.selected_input ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                           point_in_rect(&row, mouse->x, mouse->y));
+        }
+        sys_text(popup.x + 8, popup.y + 126, theme->text, "Mic");
+        sys_rect(in_slider.x, in_slider.y, in_slider.w, in_slider.h, ui_color_muted());
+        sys_rect(in_slider.x, in_slider.y,
+                 (in_slider.w * g_sound_applet.input_volume) / 100,
+                 in_slider.h,
+                 theme->window);
+        sys_rect(in_knob.x, in_knob.y, in_knob.w, in_knob.h, theme->text);
+        ui_draw_button(&in_mute,
+                       g_sound_applet.input_muted ? "On" : "Off",
+                       g_sound_applet.input_muted ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                       point_in_rect(&in_mute, mouse->x, mouse->y));
+    }
+}
+
+static void draw_network_applet(const struct mouse_state *mouse) {
+    const struct desktop_theme *theme = ui_theme_get();
+    struct rect button = ui_taskbar_network_applet_rect();
+    int hover = point_in_rect(&button, mouse->x, mouse->y);
+    const char *icon = g_network_applet.state == NETWORK_APPLET_CONNECTED ? "W" :
+                       (g_network_applet.state == NETWORK_APPLET_CONNECTING ? "~" : "N");
+
+    ui_draw_button(&button,
+                   icon,
+                   g_network_applet.popup_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                   hover);
+
+    if (g_network_applet.popup_open) {
+        struct rect popup = network_applet_popup_rect();
+        struct rect status = network_status_rect(&popup);
+        struct rect password = network_password_rect(&popup);
+        struct rect connect_button = network_connect_rect(&popup);
+        struct rect disconnect_button = network_disconnect_rect(&popup);
+        struct network_candidate selected = g_network_candidates[g_network_applet.selected_network];
+        char password_text[48] = "";
+
+        ui_draw_surface(&popup, ui_color_window_bg());
+        ui_draw_status(&status, network_applet_status_text());
+        sys_text(popup.x + 8, popup.y + 46, theme->text, "Redes Wi-Fi");
+        for (int i = 0; i < 3; ++i) {
+            struct rect row = network_row_rect(&popup, i);
+            char label[48] = "";
+
+            str_copy_limited(label, g_network_candidates[i].ssid, (int)sizeof(label));
+            str_append(label, g_network_candidates[i].secured ? " *" : " aberto", (int)sizeof(label));
+            ui_draw_button(&row,
+                           label,
+                           i == g_network_applet.selected_network ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                           point_in_rect(&row, mouse->x, mouse->y));
+        }
+
+        sys_text(popup.x + 8, popup.y + 114, theme->text, "Senha");
+        ui_draw_inset(&password, ui_color_window_bg());
+        for (int i = 0; i < g_network_applet.password_len && i < 30; ++i) {
+            password_text[i] = '*';
+        }
+        password_text[g_network_applet.password_len] = '\0';
+        sys_text(password.x + 4, password.y + 5, theme->text,
+                 g_network_applet.password_len > 0 ? password_text :
+                 (selected.secured ? "digite a senha" : "rede aberta"));
+        if (g_network_applet.password_focus) {
+            sys_rect(password.x + password.w - 8, password.y + 4, 2, 10, theme->text);
+        }
+        ui_draw_button(&connect_button,
+                       g_network_applet.state == NETWORK_APPLET_CONNECTING ? "Conectando" : "Conectar",
+                       UI_BUTTON_PRIMARY,
+                       point_in_rect(&connect_button, mouse->x, mouse->y));
+        ui_draw_button(&disconnect_button,
+                       "Desconectar",
+                       UI_BUTTON_NORMAL,
+                       point_in_rect(&disconnect_button, mouse->x, mouse->y));
+    }
 }
 
 static struct rect desktop_context_menu_rect(int x, int y) {
@@ -3080,6 +3373,7 @@ void desktop_main(void) {
     int resize_anchor_x = 0;
     int resize_anchor_y = 0;
     int running = 1;
+    uint32_t network_connect_start_tick = 0u;
 
     ui_init();
     (void)sys_gfx_set_present_policy(VIDEO_PRESENT_POLICY_DESKTOP);
@@ -3681,8 +3975,110 @@ void desktop_main(void) {
                 struct rect files_icon = ui_desktop_files_icon_rect();
                 struct rect craft_icon = ui_desktop_craft_icon_rect();
                 struct rect trash_icon = ui_desktop_trash_icon_rect();
+                struct rect network_button = ui_taskbar_network_applet_rect();
+                struct rect sound_button = ui_taskbar_sound_applet_rect();
 
-                if (point_in_rect(&files_icon, click_x, click_y)) {
+                if (point_in_rect(&network_button, click_x, click_y)) {
+                    g_network_applet.popup_open = !g_network_applet.popup_open;
+                    if (g_network_applet.popup_open) {
+                        g_sound_applet.popup_open = 0;
+                    }
+                    g_network_applet.password_focus = 0;
+                    menu_open = 0;
+                    context_open = 0;
+                    fm_context_open = 0;
+                    app_context.open = 0;
+                    dirty = 1;
+                    handled = 1;
+                } else if (point_in_rect(&sound_button, click_x, click_y)) {
+                    g_sound_applet.popup_open = !g_sound_applet.popup_open;
+                    if (g_sound_applet.popup_open) {
+                        g_network_applet.popup_open = 0;
+                    }
+                    menu_open = 0;
+                    context_open = 0;
+                    fm_context_open = 0;
+                    app_context.open = 0;
+                    dirty = 1;
+                    handled = 1;
+                } else if (g_network_applet.popup_open &&
+                           point_in_rect(&(struct rect){network_applet_popup_rect().x,
+                                                        network_applet_popup_rect().y,
+                                                        network_applet_popup_rect().w,
+                                                        network_applet_popup_rect().h},
+                                         click_x, click_y)) {
+                    struct rect popup = network_applet_popup_rect();
+                    struct rect password = network_password_rect(&popup);
+                    struct rect connect_button = network_connect_rect(&popup);
+                    struct rect disconnect_button = network_disconnect_rect(&popup);
+
+                    g_network_applet.password_focus = point_in_rect(&password, click_x, click_y);
+                    for (int i = 0; i < 3; ++i) {
+                        struct rect row = network_row_rect(&popup, i);
+                        if (point_in_rect(&row, click_x, click_y)) {
+                            g_network_applet.selected_network = i;
+                            if (!g_network_candidates[i].secured) {
+                                g_network_applet.password_len = 0;
+                                g_network_applet.password[0] = '\0';
+                            }
+                            dirty = 1;
+                        }
+                    }
+                    if (point_in_rect(&connect_button, click_x, click_y)) {
+                        if (!g_network_candidates[g_network_applet.selected_network].secured ||
+                            g_network_applet.password_len > 0) {
+                            g_network_applet.state = NETWORK_APPLET_CONNECTING;
+                            network_connect_start_tick = ticks;
+                            dirty = 1;
+                        }
+                    } else if (point_in_rect(&disconnect_button, click_x, click_y)) {
+                        g_network_applet.state = NETWORK_APPLET_DISCONNECTED;
+                        network_connect_start_tick = 0u;
+                        dirty = 1;
+                    }
+                    handled = 1;
+                } else if (g_sound_applet.popup_open &&
+                           point_in_rect(&(struct rect){sound_applet_popup_rect().x,
+                                                        sound_applet_popup_rect().y,
+                                                        sound_applet_popup_rect().w,
+                                                        sound_applet_popup_rect().h},
+                                         click_x, click_y)) {
+                    struct rect popup = sound_applet_popup_rect();
+                    struct rect out_slider = sound_output_slider_rect(&popup);
+                    struct rect in_slider = sound_input_slider_rect(&popup);
+                    struct rect out_mute = sound_output_mute_rect(&popup);
+                    struct rect in_mute = sound_input_mute_rect(&popup);
+
+                    for (int i = 0; i < 2; ++i) {
+                        struct rect out_row = sound_output_row_rect(&popup, i);
+                        struct rect in_row = sound_input_row_rect(&popup, i);
+
+                        if (point_in_rect(&out_row, click_x, click_y)) {
+                            g_sound_applet.selected_output = i;
+                            dirty = 1;
+                        }
+                        if (point_in_rect(&in_row, click_x, click_y)) {
+                            g_sound_applet.selected_input = i;
+                            dirty = 1;
+                        }
+                    }
+                    if (point_in_rect(&out_slider, click_x, click_y)) {
+                        g_sound_applet.output_volume = sound_slider_value_from_x(&out_slider, click_x);
+                        g_sound_applet.output_muted = (g_sound_applet.output_volume == 0);
+                        dirty = 1;
+                    } else if (point_in_rect(&in_slider, click_x, click_y)) {
+                        g_sound_applet.input_volume = sound_slider_value_from_x(&in_slider, click_x);
+                        g_sound_applet.input_muted = (g_sound_applet.input_volume == 0);
+                        dirty = 1;
+                    } else if (point_in_rect(&out_mute, click_x, click_y)) {
+                        g_sound_applet.output_muted = !g_sound_applet.output_muted;
+                        dirty = 1;
+                    } else if (point_in_rect(&in_mute, click_x, click_y)) {
+                        g_sound_applet.input_muted = !g_sound_applet.input_muted;
+                        dirty = 1;
+                    }
+                    handled = 1;
+                } else if (point_in_rect(&files_icon, click_x, click_y)) {
                     if (open_window_or_focus_existing(APP_FILEMANAGER, &focused) >= 0) {
                         dirty = 1;
                     }
@@ -3806,6 +4202,24 @@ void desktop_main(void) {
                 }
 
                 if (!handled) {
+                struct rect network_popup = network_applet_popup_rect();
+                struct rect sound_popup = sound_applet_popup_rect();
+                struct rect network_button = ui_taskbar_network_applet_rect();
+                struct rect sound_button = ui_taskbar_sound_applet_rect();
+
+                if (g_network_applet.popup_open &&
+                    !point_in_rect(&network_popup, click_x, click_y) &&
+                    !point_in_rect(&network_button, click_x, click_y)) {
+                    g_network_applet.popup_open = 0;
+                    g_network_applet.password_focus = 0;
+                    dirty = 1;
+                }
+                if (g_sound_applet.popup_open &&
+                    !point_in_rect(&sound_popup, click_x, click_y) &&
+                    !point_in_rect(&sound_button, click_x, click_y)) {
+                    g_sound_applet.popup_open = 0;
+                    dirty = 1;
+                }
                 if (context_open && !point_in_rect(&context_menu, click_x, click_y)) {
                     context_open = 0;
                     dirty = 1;
@@ -4167,6 +4581,37 @@ void desktop_main(void) {
         }
 
         while ((key = sys_poll_key()) != 0) {
+            if (g_network_applet.popup_open && g_network_applet.password_focus) {
+                if (key == '\b' || key == 127) {
+                    if (g_network_applet.password_len > 0) {
+                        g_network_applet.password_len -= 1;
+                        g_network_applet.password[g_network_applet.password_len] = '\0';
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key == '\n') {
+                    if (!g_network_candidates[g_network_applet.selected_network].secured ||
+                        g_network_applet.password_len > 0) {
+                        g_network_applet.state = NETWORK_APPLET_CONNECTING;
+                        network_connect_start_tick = ticks;
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key == 27) {
+                    g_network_applet.password_focus = 0;
+                    dirty = 1;
+                    continue;
+                }
+                if (key >= 32 && key <= 126 &&
+                    g_network_applet.password_len < (int)sizeof(g_network_applet.password) - 1) {
+                    g_network_applet.password[g_network_applet.password_len++] = (char)key;
+                    g_network_applet.password[g_network_applet.password_len] = '\0';
+                    dirty = 1;
+                    continue;
+                }
+            }
             if (file_dialog.active) {
                 if (key == '\b' || key == 127) {
                     file_dialog_backspace(&file_dialog);
@@ -4386,6 +4831,14 @@ void desktop_main(void) {
             }
         }
 
+        if (g_network_applet.state == NETWORK_APPLET_CONNECTING &&
+            network_connect_start_tick != 0u &&
+            (ticks - network_connect_start_tick) >= 120u) {
+            g_network_applet.state = NETWORK_APPLET_CONNECTED;
+            network_connect_start_tick = 0u;
+            dirty = 1;
+        }
+
         if (dirty) {
             draw_desktop(&mouse, menu_open, start_hover,
                          menu_hover, g_windows, MAX_WINDOWS, focused);
@@ -4494,6 +4947,9 @@ void desktop_main(void) {
                     break;
                 }
             }
+
+            draw_network_applet(&mouse);
+            draw_sound_applet(&mouse);
 
             if (menu_open) {
                 draw_start_menu_with_tab(start_menu_tab,

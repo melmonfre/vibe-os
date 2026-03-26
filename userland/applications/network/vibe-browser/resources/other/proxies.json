@@ -1,0 +1,10 @@
+[
+	{
+		"identifier": "noProxy",
+		"type": "noProxy"
+	},
+	{
+		"identifier": "system",
+		"type": "systemProxy"
+	}
+]
