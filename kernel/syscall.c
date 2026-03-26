@@ -23,7 +23,7 @@
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 64
+#define MAX_SYSCALLS 76
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
 
@@ -261,6 +261,18 @@ static uint32_t sys_input_mouse(uint32_t state_ptr, uint32_t b, uint32_t c,
     return (uint32_t)mk_input_service_poll_mouse((struct mouse_state *)(uintptr_t)state_ptr);
 }
 
+static uint32_t sys_network_listen(uint32_t handle, uint32_t backlog, uint32_t c,
+                                   uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    return (uint32_t)mk_network_service_listen((int)handle, (int)backlog);
+}
+
+static uint32_t sys_network_accept(uint32_t handle, uint32_t b, uint32_t c,
+                                   uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    return (uint32_t)mk_network_service_accept((int)handle);
+}
+
 static uint32_t sys_getpid(uint32_t a, uint32_t b, uint32_t c,
                            uint32_t d, uint32_t e) {
     (void)a; (void)b; (void)c; (void)d; (void)e;
@@ -392,6 +404,214 @@ static uint32_t sys_gfx_bench(uint32_t out_ptr, uint32_t b, uint32_t c,
     out = (struct video_bench_info *)(uintptr_t)out_ptr;
     kernel_video_get_benchmarks(out);
     return 0u;
+}
+
+static uint32_t sys_audio_get_info(uint32_t out_ptr, uint32_t b, uint32_t c,
+                                   uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (out_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_audio_service_get_info((struct mk_audio_info *)(uintptr_t)out_ptr);
+}
+
+static uint32_t sys_audio_get_status(uint32_t out_ptr, uint32_t b, uint32_t c,
+                                     uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (out_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_audio_service_get_status((struct audio_status *)(uintptr_t)out_ptr);
+}
+
+static uint32_t sys_audio_set_params(uint32_t params_ptr, uint32_t b, uint32_t c,
+                                     uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (params_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_audio_service_set_params((const struct audio_swpar *)(uintptr_t)params_ptr);
+}
+
+static uint32_t sys_audio_start(uint32_t a, uint32_t b, uint32_t c,
+                                uint32_t d, uint32_t e) {
+    (void)a; (void)b; (void)c; (void)d; (void)e;
+    return (uint32_t)mk_audio_service_start();
+}
+
+static uint32_t sys_audio_stop(uint32_t a, uint32_t b, uint32_t c,
+                               uint32_t d, uint32_t e) {
+    (void)a; (void)b; (void)c; (void)d; (void)e;
+    return (uint32_t)mk_audio_service_stop();
+}
+
+static uint32_t sys_audio_write(uint32_t data_ptr, uint32_t size, uint32_t c,
+                                uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (data_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    kernel_debug_puts("audio: syscall write enter\n");
+    return (uint32_t)mk_audio_service_write((const void *)(uintptr_t)data_ptr, size);
+}
+
+static uint32_t sys_audio_read(uint32_t data_ptr, uint32_t size, uint32_t c,
+                               uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (data_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_audio_service_read((void *)(uintptr_t)data_ptr, size);
+}
+
+static uint32_t sys_audio_control_info(uint32_t index, uint32_t out_ptr, uint32_t c,
+                                       uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (out_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_audio_service_get_control_info(index,
+                                                       (struct mk_audio_control_info *)(uintptr_t)out_ptr);
+}
+
+static uint32_t sys_audio_mixer_read(uint32_t control_ptr, uint32_t b, uint32_t c,
+                                     uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (control_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_audio_service_mixer_read((mixer_ctrl_t *)(uintptr_t)control_ptr);
+}
+
+static uint32_t sys_audio_mixer_write(uint32_t control_ptr, uint32_t b, uint32_t c,
+                                      uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (control_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_audio_service_mixer_write((const mixer_ctrl_t *)(uintptr_t)control_ptr);
+}
+
+static uint32_t sys_network_get_info(uint32_t out_ptr, uint32_t b, uint32_t c,
+                                     uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (out_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_get_info((struct mk_network_info *)(uintptr_t)out_ptr);
+}
+
+static uint32_t sys_network_get_status(uint32_t out_ptr, uint32_t b, uint32_t c,
+                                       uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (out_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_get_status((struct mk_network_status *)(uintptr_t)out_ptr);
+}
+
+static uint32_t sys_network_scan(uint32_t index, uint32_t out_ptr, uint32_t c,
+                                 uint32_t d, uint32_t e) {
+    (void)c; (void)d; (void)e;
+    if (out_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_get_scan(index,
+                                                 (struct mk_network_scan_info *)(uintptr_t)out_ptr);
+}
+
+static uint32_t sys_network_connect_wifi(uint32_t request_ptr, uint32_t b, uint32_t c,
+                                         uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (request_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_connect_wifi(
+        (const struct mk_network_connect_request *)(uintptr_t)request_ptr);
+}
+
+static uint32_t sys_network_disconnect(uint32_t if_name_ptr, uint32_t b, uint32_t c,
+                                       uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (if_name_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_disconnect((const char *)(uintptr_t)if_name_ptr);
+}
+
+static uint32_t sys_network_connect_ethernet(uint32_t if_name_ptr, uint32_t b, uint32_t c,
+                                             uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (if_name_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_connect_ethernet((const char *)(uintptr_t)if_name_ptr);
+}
+
+static uint32_t sys_network_configure_ethernet(uint32_t config_ptr, uint32_t b, uint32_t c,
+                                               uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (config_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_configure_ethernet(
+        (const struct mk_network_ethernet_config *)(uintptr_t)config_ptr);
+}
+
+static uint32_t sys_network_socket(uint32_t domain, uint32_t type, uint32_t protocol,
+                                   uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    return (uint32_t)mk_network_service_socket(domain, type, protocol);
+}
+
+static uint32_t sys_network_bind(uint32_t handle, uint32_t address_ptr, uint32_t address_length,
+                                 uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (address_ptr == 0u || address_length == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_bind((int)handle,
+                                             (const struct sockaddr *)(uintptr_t)address_ptr,
+                                             address_length);
+}
+
+static uint32_t sys_network_socket_connect(uint32_t handle, uint32_t address_ptr, uint32_t address_length,
+                                           uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (address_ptr == 0u || address_length == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_socket_connect((int)handle,
+                                                       (const struct sockaddr *)(uintptr_t)address_ptr,
+                                                       address_length);
+}
+
+static uint32_t sys_network_send(uint32_t handle, uint32_t data_ptr, uint32_t size,
+                                 uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (data_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_send((int)handle,
+                                             (const void *)(uintptr_t)data_ptr,
+                                             size);
+}
+
+static uint32_t sys_network_recv(uint32_t handle, uint32_t buffer_ptr, uint32_t size,
+                                 uint32_t d, uint32_t e) {
+    (void)d; (void)e;
+    if (buffer_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_network_service_recv((int)handle,
+                                             (void *)(uintptr_t)buffer_ptr,
+                                             size);
+}
+
+static uint32_t sys_network_close(uint32_t handle, uint32_t b, uint32_t c,
+                                  uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    return (uint32_t)mk_network_service_close((int)handle);
 }
 
 static uint32_t sys_keyboard_set_layout(uint32_t name_ptr, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
@@ -589,6 +809,31 @@ void syscall_init(void) {
     syscall_table[SYSCALL_GFX_INFO] = sys_gfx_info;
     syscall_table[SYSCALL_GFX_CAPS] = sys_gfx_caps;
     syscall_table[SYSCALL_GFX_BENCH] = sys_gfx_bench;
+    syscall_table[SYSCALL_AUDIO_GETINFO] = sys_audio_get_info;
+    syscall_table[SYSCALL_AUDIO_GET_STATUS] = sys_audio_get_status;
+    syscall_table[SYSCALL_AUDIO_SET_PARAMS] = sys_audio_set_params;
+    syscall_table[SYSCALL_AUDIO_START] = sys_audio_start;
+    syscall_table[SYSCALL_AUDIO_STOP] = sys_audio_stop;
+    syscall_table[SYSCALL_AUDIO_WRITE] = sys_audio_write;
+    syscall_table[SYSCALL_AUDIO_READ] = sys_audio_read;
+    syscall_table[SYSCALL_AUDIO_CONTROL_INFO] = sys_audio_control_info;
+    syscall_table[SYSCALL_AUDIO_MIXER_READ] = sys_audio_mixer_read;
+    syscall_table[SYSCALL_AUDIO_MIXER_WRITE] = sys_audio_mixer_write;
+    syscall_table[SYSCALL_NETWORK_GETINFO] = sys_network_get_info;
+    syscall_table[SYSCALL_NETWORK_GET_STATUS] = sys_network_get_status;
+    syscall_table[SYSCALL_NETWORK_SCAN] = sys_network_scan;
+    syscall_table[SYSCALL_NETWORK_CONNECT_WIFI] = sys_network_connect_wifi;
+    syscall_table[SYSCALL_NETWORK_DISCONNECT] = sys_network_disconnect;
+    syscall_table[SYSCALL_NETWORK_CONNECT_ETHERNET] = sys_network_connect_ethernet;
+    syscall_table[SYSCALL_NETWORK_CONFIGURE_ETHERNET] = sys_network_configure_ethernet;
+    syscall_table[SYSCALL_NETWORK_SOCKET] = sys_network_socket;
+    syscall_table[SYSCALL_NETWORK_BIND] = sys_network_bind;
+    syscall_table[SYSCALL_NETWORK_CONNECT] = sys_network_socket_connect;
+    syscall_table[SYSCALL_NETWORK_SEND] = sys_network_send;
+    syscall_table[SYSCALL_NETWORK_RECV] = sys_network_recv;
+    syscall_table[SYSCALL_NETWORK_CLOSE] = sys_network_close;
+    syscall_table[SYSCALL_NETWORK_LISTEN] = sys_network_listen;
+    syscall_table[SYSCALL_NETWORK_ACCEPT] = sys_network_accept;
     syscall_table[SYSCALL_GETPID] = sys_getpid;
     syscall_table[SYSCALL_LAUNCH_INFO] = sys_launch_info;
     syscall_table[SYSCALL_YIELD] = sys_yield;

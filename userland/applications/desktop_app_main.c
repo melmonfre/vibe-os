@@ -2,6 +2,7 @@
 #include <userland/modules/include/fs.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/ui.h>
+#include <userland/modules/include/utils.h>
 
 void kernel_debug_puts(const char *msg) {
     (void)msg;
@@ -61,6 +62,9 @@ static enum app_type desktop_app_type(const char *app_name) {
     }
     if (str_eq(app_name, "imageviewer")) {
         return APP_IMAGEVIEWER;
+    }
+    if (str_eq(app_name, "audioplayer")) {
+        return APP_AUDIO_PLAYER;
     }
     if (str_eq(app_name, "personalize")) {
         return APP_PERSONALIZE;

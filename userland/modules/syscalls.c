@@ -205,6 +205,126 @@ int sys_gfx_bench(struct video_bench_info *bench) {
     return syscall5(SYSCALL_GFX_BENCH, (int)(uintptr_t)bench, 0, 0, 0, 0);
 }
 
+int sys_audio_get_info(struct mk_audio_info *info) {
+    return syscall5(SYSCALL_AUDIO_GETINFO, (int)(uintptr_t)info, 0, 0, 0, 0);
+}
+
+int sys_audio_get_status(struct audio_status *status) {
+    return syscall5(SYSCALL_AUDIO_GET_STATUS, (int)(uintptr_t)status, 0, 0, 0, 0);
+}
+
+int sys_audio_set_params(const struct audio_swpar *params) {
+    return syscall5(SYSCALL_AUDIO_SET_PARAMS, (int)(uintptr_t)params, 0, 0, 0, 0);
+}
+
+int sys_audio_start(void) {
+    return syscall5(SYSCALL_AUDIO_START, 0, 0, 0, 0, 0);
+}
+
+int sys_audio_stop(void) {
+    return syscall5(SYSCALL_AUDIO_STOP, 0, 0, 0, 0, 0);
+}
+
+int sys_audio_write(const void *data, uint32_t size) {
+    return syscall5(SYSCALL_AUDIO_WRITE, (int)(uintptr_t)data, (int)size, 0, 0, 0);
+}
+
+int sys_audio_read(void *data, uint32_t size) {
+    return syscall5(SYSCALL_AUDIO_READ, (int)(uintptr_t)data, (int)size, 0, 0, 0);
+}
+
+int sys_audio_control_info(uint32_t index, struct mk_audio_control_info *info) {
+    return syscall5(SYSCALL_AUDIO_CONTROL_INFO, (int)index, (int)(uintptr_t)info, 0, 0, 0);
+}
+
+int sys_audio_mixer_read(mixer_ctrl_t *control) {
+    return syscall5(SYSCALL_AUDIO_MIXER_READ, (int)(uintptr_t)control, 0, 0, 0, 0);
+}
+
+int sys_audio_mixer_write(const mixer_ctrl_t *control) {
+    return syscall5(SYSCALL_AUDIO_MIXER_WRITE, (int)(uintptr_t)control, 0, 0, 0, 0);
+}
+
+int sys_network_get_info(struct mk_network_info *info) {
+    return syscall5(SYSCALL_NETWORK_GETINFO, (int)(uintptr_t)info, 0, 0, 0, 0);
+}
+
+int sys_network_get_status(struct mk_network_status *status) {
+    return syscall5(SYSCALL_NETWORK_GET_STATUS, (int)(uintptr_t)status, 0, 0, 0, 0);
+}
+
+int sys_network_scan(uint32_t index, struct mk_network_scan_info *info) {
+    return syscall5(SYSCALL_NETWORK_SCAN, (int)index, (int)(uintptr_t)info, 0, 0, 0);
+}
+
+int sys_network_connect_wifi(const struct mk_network_connect_request *request) {
+    return syscall5(SYSCALL_NETWORK_CONNECT_WIFI, (int)(uintptr_t)request, 0, 0, 0, 0);
+}
+
+int sys_network_connect_ethernet(const char *if_name) {
+    return syscall5(SYSCALL_NETWORK_CONNECT_ETHERNET, (int)(uintptr_t)if_name, 0, 0, 0, 0);
+}
+
+int sys_network_configure_ethernet(const struct mk_network_ethernet_config *config) {
+    return syscall5(SYSCALL_NETWORK_CONFIGURE_ETHERNET, (int)(uintptr_t)config, 0, 0, 0, 0);
+}
+
+int sys_network_disconnect(const char *if_name) {
+    return syscall5(SYSCALL_NETWORK_DISCONNECT, (int)(uintptr_t)if_name, 0, 0, 0, 0);
+}
+
+int sys_network_socket(uint32_t domain, uint32_t type, uint32_t protocol) {
+    return syscall5(SYSCALL_NETWORK_SOCKET, (int)domain, (int)type, (int)protocol, 0, 0);
+}
+
+int sys_network_bind(int handle, const struct sockaddr *address, uint32_t address_length) {
+    return syscall5(SYSCALL_NETWORK_BIND,
+                    handle,
+                    (int)(uintptr_t)address,
+                    (int)address_length,
+                    0,
+                    0);
+}
+
+int sys_network_socket_connect(int handle, const struct sockaddr *address, uint32_t address_length) {
+    return syscall5(SYSCALL_NETWORK_CONNECT,
+                    handle,
+                    (int)(uintptr_t)address,
+                    (int)address_length,
+                    0,
+                    0);
+}
+
+int sys_network_send(int handle, const void *data, uint32_t size) {
+    return syscall5(SYSCALL_NETWORK_SEND,
+                    handle,
+                    (int)(uintptr_t)data,
+                    (int)size,
+                    0,
+                    0);
+}
+
+int sys_network_recv(int handle, void *buffer, uint32_t size) {
+    return syscall5(SYSCALL_NETWORK_RECV,
+                    handle,
+                    (int)(uintptr_t)buffer,
+                    (int)size,
+                    0,
+                    0);
+}
+
+int sys_network_close(int handle) {
+    return syscall5(SYSCALL_NETWORK_CLOSE, handle, 0, 0, 0, 0);
+}
+
+int sys_network_listen(int handle, int backlog) {
+    return syscall5(SYSCALL_NETWORK_LISTEN, handle, backlog, 0, 0, 0);
+}
+
+int sys_network_accept(int handle) {
+    return syscall5(SYSCALL_NETWORK_ACCEPT, handle, 0, 0, 0, 0);
+}
+
 int sys_getpid(void) {
     return syscall5(SYSCALL_GETPID, 0, 0, 0, 0, 0);
 }

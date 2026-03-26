@@ -9,6 +9,7 @@
 #include <userland/applications/include/taskmgr.h>
 #include <userland/applications/include/calculator.h>
 #include <userland/applications/include/imageviewer.h>
+#include <userland/applications/include/audioplayer.h>
 #include <userland/applications/include/sketchpad.h>
 #include <userland/applications/include/games/snake.h>
 #include <userland/applications/include/games/tetris.h>
@@ -21,8 +22,15 @@
 #include <userland/applications/include/games/doom.h>
 #include <userland/applications/include/games/craft.h>
 #include <userland/modules/include/image.h>
+#include <userland/modules/include/lang_loader.h>
 #include <userland/modules/include/utils.h>
 #include <userland/modules/include/fs.h>
+#include <kernel/microkernel/audio.h>
+#include <kernel/microkernel/network.h>
+#include <sys/audioio.h>
+
+#define DESKTOP_NETWORK_PROFILE_MAX 4
+#define DESKTOP_STARTUP_SOUND_DELAY_TICKS 80u
 
 static struct window g_windows[MAX_WINDOWS];
 static struct terminal_state g_terms[MAX_TERMINALS];
@@ -39,6 +47,8 @@ static struct calculator_state g_calcs[MAX_CALCULATORS];
 static int g_calc_used[MAX_CALCULATORS];
 static struct imageviewer_state g_imageviewers[MAX_IMAGEVIEWERS];
 static int g_imageviewer_used[MAX_IMAGEVIEWERS];
+static struct audioplayer_state g_audioplayers[MAX_AUDIO_PLAYERS];
+static int g_audioplayer_used[MAX_AUDIO_PLAYERS];
 static struct sketchpad_state g_sketches[MAX_SKETCHPADS];
 static int g_sketch_used[MAX_SKETCHPADS];
 static struct snake_state g_snakes[MAX_SNAKES];
@@ -91,8 +101,12 @@ struct sound_applet_state {
     int input_volume;
     int output_muted;
     int input_muted;
+    int backend_kind;
+    int output_count;
+    int input_count;
     int selected_output;
     int selected_input;
+    unsigned output_mask;
 };
 
 struct network_applet_state {
@@ -101,26 +115,165 @@ struct network_applet_state {
     int password_focus;
     int password_len;
     char password[33];
+    char selected_saved_ssid[MK_NETWORK_SSID_MAX + 1];
     enum network_applet_state_kind state;
 };
 
-static struct sound_applet_state g_sound_applet = {0, 72, 58, 0, 0, 0, 0};
-static struct network_applet_state g_network_applet = {0, 0, 0, 0, "", NETWORK_APPLET_DISCONNECTED};
+struct network_profile {
+    int used;
+    char ssid[MK_NETWORK_SSID_MAX + 1];
+    char psk[MK_NETWORK_PSK_MAX + 1];
+};
 
-static const char *g_sound_outputs[] = {"Alto-falantes", "Fones"};
+struct network_applet_cache {
+    int status_valid;
+    int scan_count;
+    struct mk_network_status status;
+    struct mk_network_scan_info scans[4];
+};
+
+static struct sound_applet_state g_sound_applet = {0, 75, 62, 0, 0, 0, 2, 2, 0, 0, 0x1u};
+static struct network_applet_state g_network_applet = {0, 0, 0, 0, "", "", NETWORK_APPLET_DISCONNECTED};
+static struct network_applet_cache g_network_applet_cache = {0, 0, {0}, {{0}}};
+static struct network_profile g_network_profiles[DESKTOP_NETWORK_PROFILE_MAX];
+static char g_network_auto_ssid[MK_NETWORK_SSID_MAX + 1];
+static uint32_t g_sound_applet_last_sync_ticks = 0u;
+static uint32_t g_network_applet_last_sync_ticks = 0u;
+static uint32_t g_network_autoconnect_last_attempt_ticks = 0u;
+
+static const char *g_sound_outputs[] = {"Alto-falantes", "Fones", "Surround", "Centro/LFE"};
+static const char *g_sound_outputs_hda[] = {"Alto-falante", "Fones", "Line-out", "Digital"};
 static const char *g_sound_inputs[] = {"Microfone", "Linha"};
+static const char *g_sound_inputs_hda[] = {"Microfone", "Line-in"};
 
-struct network_candidate {
-    const char *ssid;
-    int signal;
-    int secured;
-};
+static void desktop_try_play_startup_sound(uint32_t *armed_ticks,
+                                           int *pending,
+                                           struct audio_async_playback *playback,
+                                           uint32_t ticks) {
+    if (armed_ticks == 0 || pending == 0 || playback == 0) {
+        return;
+    }
+    if (*pending != 0) {
+        if ((uint32_t)(ticks - *armed_ticks) < DESKTOP_STARTUP_SOUND_DELAY_TICKS) {
+            return;
+        }
 
-static const struct network_candidate g_network_candidates[] = {
-    {"VibeNet", 4, 1},
-    {"Laboratorio", 3, 1},
-    {"Visitantes", 2, 0}
-};
+        *pending = 0;
+        sys_write_debug("desktop: startup sound begin\n");
+        if (audio_play_wav_async_start(playback, "/assets/vibe_os_desktop.wav", "desktop-session") != 0) {
+            sys_write_debug("desktop: startup sound returned\n");
+        }
+        return;
+    }
+    if (playback->active == 0) {
+        return;
+    }
+    if (audio_play_wav_async_poll(playback) <= 0) {
+        sys_write_debug("desktop: startup sound returned\n");
+    }
+}
+
+static int sound_applet_output_count_from_info(const struct mk_audio_info *info) {
+    if (info == 0) {
+        return 1;
+    }
+    if ((int)info->parameters._spare[1] > 0) {
+        return (int)info->parameters._spare[1];
+    }
+    return 1;
+}
+
+static int sound_applet_input_count_from_info(const struct mk_audio_info *info) {
+    if (info == 0) {
+        return 0;
+    }
+    return (int)info->parameters._spare[2];
+}
+
+static unsigned sound_applet_output_mask_from_info(const struct mk_audio_info *info) {
+    if (info == 0) {
+        return 0x1u;
+    }
+    return info->parameters._spare[3] != 0u ? info->parameters._spare[3] : 0x1u;
+}
+
+static const char *sound_applet_output_label(int index) {
+    unsigned mask = g_sound_applet.output_mask != 0u ? g_sound_applet.output_mask : 0x1u;
+    const char **labels = g_sound_applet.backend_kind == 2 ? g_sound_outputs_hda : g_sound_outputs;
+    int seen = 0;
+
+    for (int bit = 0; bit < 4; ++bit) {
+        if ((mask & (1u << bit)) == 0u) {
+            continue;
+        }
+        if (seen == index) {
+            return labels[bit];
+        }
+        ++seen;
+    }
+    return labels[0];
+}
+
+static const char *sound_applet_input_label(int index) {
+    const char **labels = g_sound_applet.backend_kind == 2 ? g_sound_inputs_hda : g_sound_inputs;
+    if (index == 1) {
+        return labels[1];
+    }
+    return labels[0];
+}
+
+static int desktop_starts_with(const char *text, const char *prefix) {
+    while (*prefix != '\0') {
+        if (*text != *prefix) {
+            return 0;
+        }
+        ++text;
+        ++prefix;
+    }
+    return 1;
+}
+
+static int desktop_parse_uint(const char *text, int *value_out) {
+    int value = 0;
+
+    if (text == 0 || *text == '\0' || value_out == 0) {
+        return 0;
+    }
+    while (*text != '\0') {
+        if (*text < '0' || *text > '9') {
+            return 0;
+        }
+        value = (value * 10) + (*text - '0');
+        ++text;
+    }
+    *value_out = value;
+    return 1;
+}
+
+static void desktop_append_uint(char *buf, int value, int max_len) {
+    char digits[12];
+    int pos = 0;
+    int len = str_len(buf);
+
+    if (value < 0) {
+        value = 0;
+    }
+    if (len >= max_len - 1) {
+        return;
+    }
+    if (value == 0) {
+        digits[pos++] = '0';
+    } else {
+        while (value > 0 && pos < (int)sizeof(digits)) {
+            digits[pos++] = (char)('0' + (value % 10));
+            value /= 10;
+        }
+    }
+    while (pos > 0 && len < max_len - 1) {
+        buf[len++] = digits[--pos];
+    }
+    buf[len] = '\0';
+}
 
 static const uint8_t g_color_palette_256[] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -143,7 +296,7 @@ static const uint8_t g_color_palette_256[] = {
 
 #define PANEL_APPLET_POPUP_W 212
 #define PANEL_SOUND_POPUP_H 156
-#define PANEL_NETWORK_POPUP_H 188
+#define PANEL_NETWORK_POPUP_H 248
 
 #define TASKBAR_HEIGHT 22
 #define WINDOW_MIN_W 400
@@ -152,6 +305,8 @@ static const uint8_t g_color_palette_256[] = {
 #define TRASH_ENTRY_BASE "trash"
 #define TRASH_META_NAME "__origin"
 #define TRASH_ITEM_NAME "__item"
+#define DESKTOP_AUDIO_SETTINGS_PATH "/config/audio.cfg"
+#define DESKTOP_NETWORK_SETTINGS_PATH "/config/network.cfg"
 
 enum {
     FMENU_OPEN = 0,
@@ -165,10 +320,12 @@ enum {
     FMENU_COUNT
 };
 enum {
-    START_MENU_ENTRY_COUNT = 60,
+    START_MENU_ENTRY_COUNT = 63,
     START_MENU_SEARCH_MAX = 24,
     START_MENU_SCROLLBAR_W = 10
 };
+static const uint32_t APPLET_BACKEND_REFRESH_TICKS = 25u;
+static const uint32_t APPLET_AUTOCONNECT_RETRY_TICKS = 300u;
 enum {
     APPCTX_PRIMARY = 0,
     APPCTX_SAVE_AS,
@@ -321,8 +478,11 @@ static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT
     {"Arquivos", "Sistema", APP_FILEMANAGER, START_MENU_TAB_APPS, 0},
     {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS, 0},
     {"Tasks", "Sistema", APP_TASKMANAGER, START_MENU_TAB_APPS, 0},
+    {"Rede", "netmgrd status", APP_TERMINAL, START_MENU_TAB_APPS, "netmgrd status"},
+    {"Som", "soundctl status", APP_TERMINAL, START_MENU_TAB_APPS, "soundctl status"},
     {"Calculadora", "Acessorios", APP_CALCULATOR, START_MENU_TAB_APPS, 0},
     {"Imagens", "Midia", APP_IMAGEVIEWER, START_MENU_TAB_APPS, 0},
+    {"Audio Player", "Midia", APP_AUDIO_PLAYER, START_MENU_TAB_APPS, 0},
     {"Sketchpad", "Criacao", APP_SKETCHPAD, START_MENU_TAB_APPS, 0},
     {"Personalizar", "Desktop", APP_PERSONALIZE, START_MENU_TAB_APPS, 0},
     {"Snake", "Classicos", APP_SNAKE, START_MENU_TAB_GAMES, 0},
@@ -383,10 +543,16 @@ static int alloc_window(enum app_type type);
 static int find_window_by_type(enum app_type type);
 static int raise_window_to_front(int widx, int *focused);
 static int open_imageviewer_window_for_node(int node, int *focused);
+static int open_audioplayer_window_for_node(int node, int *focused);
 static int open_window_or_focus_existing(enum app_type type, int *focused);
 static int launch_start_menu_entry(const struct start_menu_entry *entry, int *focused);
 static int desktop_process_app_cycle(int *focused, uint32_t ticks);
 static int desktop_process_drag_stress(int *focused, uint32_t ticks);
+static const struct mk_network_scan_info *network_applet_selected_scan(void);
+static void network_applet_invalidate_backend_cache(void);
+static void network_applet_sync_backend(int force);
+static void network_applet_export_manager_state(void);
+static void sound_applet_export_service_state(void);
 static void free_window(int widx);
 static void clamp_window_rect(struct rect *r);
 static void append_uint_limited(char *buf, unsigned value, int max_len);
@@ -406,6 +572,7 @@ static int window_instance_valid(enum app_type type, int instance) {
     case APP_TASKMANAGER: return instance >= 0 && instance < MAX_TASKMGRS;
     case APP_CALCULATOR: return instance >= 0 && instance < MAX_CALCULATORS;
     case APP_IMAGEVIEWER: return instance >= 0 && instance < MAX_IMAGEVIEWERS;
+    case APP_AUDIO_PLAYER: return instance >= 0 && instance < MAX_AUDIO_PLAYERS;
     case APP_SKETCHPAD: return instance >= 0 && instance < MAX_SKETCHPADS;
     case APP_SNAKE: return instance >= 0 && instance < MAX_SNAKES;
     case APP_TETRIS: return instance >= 0 && instance < MAX_TETRIS;
@@ -431,6 +598,7 @@ static int sanitize_windows(int *focused) {
     int tm_used[MAX_TASKMGRS] = {0};
     int calc_used[MAX_CALCULATORS] = {0};
     int imageviewer_used[MAX_IMAGEVIEWERS] = {0};
+    int audioplayer_used[MAX_AUDIO_PLAYERS] = {0};
     int sketch_used[MAX_SKETCHPADS] = {0};
     int snake_used[MAX_SNAKES] = {0};
     int tetris_used[MAX_TETRIS] = {0};
@@ -491,6 +659,10 @@ static int sanitize_windows(int *focused) {
         case APP_IMAGEVIEWER:
             duplicate = imageviewer_used[g_windows[i].instance];
             imageviewer_used[g_windows[i].instance] = 1;
+            break;
+        case APP_AUDIO_PLAYER:
+            duplicate = audioplayer_used[g_windows[i].instance];
+            audioplayer_used[g_windows[i].instance] = 1;
             break;
         case APP_SKETCHPAD:
             duplicate = sketch_used[g_windows[i].instance];
@@ -566,6 +738,7 @@ static int sanitize_windows(int *focused) {
     for (int i = 0; i < MAX_TASKMGRS; ++i) g_tm_used[i] = tm_used[i];
     for (int i = 0; i < MAX_CALCULATORS; ++i) g_calc_used[i] = calc_used[i];
     for (int i = 0; i < MAX_IMAGEVIEWERS; ++i) g_imageviewer_used[i] = imageviewer_used[i];
+    for (int i = 0; i < MAX_AUDIO_PLAYERS; ++i) g_audioplayer_used[i] = audioplayer_used[i];
     for (int i = 0; i < MAX_SKETCHPADS; ++i) g_sketch_used[i] = sketch_used[i];
     for (int i = 0; i < MAX_SNAKES; ++i) g_snake_used[i] = snake_used[i];
     for (int i = 0; i < MAX_TETRIS; ++i) g_tetris_used[i] = tetris_used[i];
@@ -1069,6 +1242,7 @@ static int node_is_wallpaper_candidate(int node) {
 static int find_wallpaper_nodes(int *out_nodes, int max_nodes) {
     int count = 0;
 
+    (void)fs_resolve("/assets/wallpaper.png");
     (void)fs_resolve("/wallpaper.png");
     for (int i = 0; i < FS_MAX_NODES && count < max_nodes; ++i) {
         if (node_is_wallpaper_candidate(i)) {
@@ -1318,7 +1492,7 @@ static void file_dialog_open_rename(struct file_dialog_state *dialog, int window
                              dialog->name, (int)sizeof(dialog->name),
                              dialog->ext, (int)sizeof(dialog->ext));
     }
-    set_dialog_status(dialog, "O nome final deve caber em 15 chars");
+    set_dialog_status(dialog, "O nome final deve caber em 31 chars");
 }
 
 static void file_dialog_open_wallpaper(struct file_dialog_state *dialog, int window_index) {
@@ -1335,7 +1509,7 @@ static void file_dialog_open_wallpaper(struct file_dialog_state *dialog, int win
     if (node >= 0 && g_fs_nodes[node].used) {
         fs_build_path(node, dialog->path, (int)sizeof(dialog->path));
     } else {
-        str_copy_limited(dialog->path, "/wallpaper.png", (int)sizeof(dialog->path));
+        str_copy_limited(dialog->path, "/assets/wallpaper.png", (int)sizeof(dialog->path));
     }
     set_dialog_status(dialog, "Digite um caminho .bmp ou .png");
 }
@@ -1589,6 +1763,17 @@ static int alloc_imageviewer(void) {
         if (!g_imageviewer_used[i]) {
             g_imageviewer_used[i] = 1;
             imageviewer_init_state(&g_imageviewers[i]);
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int alloc_audioplayer(void) {
+    for (int i = 0; i < MAX_AUDIO_PLAYERS; ++i) {
+        if (!g_audioplayer_used[i]) {
+            g_audioplayer_used[i] = 1;
+            audioplayer_init_state(&g_audioplayers[i]);
             return i;
         }
     }
@@ -1871,6 +2056,7 @@ static int desktop_process_drag_stress(int *focused, uint32_t ticks) {
         APP_TASKMANAGER,
         APP_CALCULATOR,
         APP_IMAGEVIEWER,
+        APP_AUDIO_PLAYER,
         APP_SKETCHPAD,
         APP_DOOM,
         APP_CRAFT,
@@ -1986,6 +2172,9 @@ static void sync_window_instance_rect(int widx) {
         break;
     case APP_IMAGEVIEWER:
         g_imageviewers[g_windows[widx].instance].window = g_windows[widx].rect;
+        break;
+    case APP_AUDIO_PLAYER:
+        g_audioplayers[g_windows[widx].instance].window = g_windows[widx].rect;
         break;
     case APP_SKETCHPAD:
         g_sketches[g_windows[widx].instance].window = g_windows[widx].rect;
@@ -2113,6 +2302,12 @@ static int alloc_window(enum app_type type) {
                 if (idx < 0) return -1;
                 instance = idx;
                 rect = g_imageviewers[idx].window;
+            } break;
+            case APP_AUDIO_PLAYER: {
+                int idx = alloc_audioplayer();
+                if (idx < 0) return -1;
+                instance = idx;
+                rect = g_audioplayers[idx].window;
             } break;
             case APP_SKETCHPAD: {
                 int idx = alloc_sketch();
@@ -2274,6 +2469,29 @@ static int open_imageviewer_window_for_node(int node, int *focused) {
     return *focused;
 }
 
+static int open_audioplayer_window_for_node(int node, int *focused) {
+    int idx = find_window_by_type(APP_AUDIO_PLAYER);
+
+    if (idx < 0) {
+        idx = alloc_window(APP_AUDIO_PLAYER);
+        if (idx < 0) {
+            return -1;
+        }
+    }
+
+    if (node >= 0) {
+        (void)audioplayer_open_node(&g_audioplayers[g_windows[idx].instance], node);
+    }
+
+    if (g_windows[idx].minimized) {
+        g_windows[idx].minimized = 0;
+    }
+
+    *focused = raise_window_to_front(idx, focused);
+    debug_window_event(" open-audio", *focused, g_windows[*focused].type, g_windows[*focused].instance);
+    return *focused;
+}
+
 static void free_window(int widx) {
     struct window *w = &g_windows[widx];
 
@@ -2289,6 +2507,9 @@ static void free_window(int widx) {
     case APP_IMAGEVIEWER:
         imageviewer_shutdown_state(&g_imageviewers[w->instance]);
         g_imageviewer_used[w->instance] = 0;
+        break;
+    case APP_AUDIO_PLAYER:
+        g_audioplayer_used[w->instance] = 0;
         break;
     case APP_SKETCHPAD: g_sketch_used[w->instance] = 0; break;
     case APP_SNAKE: g_snake_used[w->instance] = 0; break;
@@ -2457,12 +2678,37 @@ static struct rect network_status_rect(const struct rect *popup) {
 }
 
 static struct rect network_row_rect(const struct rect *popup, int index) {
-    struct rect r = {popup->x + 8, popup->y + 52 + (index * 22), popup->w - 16, 18};
+    struct rect r = {popup->x + 8, popup->y + 70 + (index * 22), popup->w - 16, 18};
+    return r;
+}
+
+static struct rect network_saved_row_rect(const struct rect *popup, int index) {
+    struct rect r = {popup->x + 8, popup->y + 152 + (index * 18), popup->w - 16, 16};
     return r;
 }
 
 static struct rect network_password_rect(const struct rect *popup) {
-    struct rect r = {popup->x + 8, popup->y + 122, popup->w - 16, 18};
+    struct rect r = {popup->x + 8, popup->y + 194, popup->w - 16, 18};
+    return r;
+}
+
+static struct rect network_auto_rect(const struct rect *popup) {
+    struct rect r = {popup->x + 8, popup->y + 172, 68, 16};
+    return r;
+}
+
+static struct rect network_forget_rect(const struct rect *popup) {
+    struct rect r = {popup->x + 84, popup->y + 172, 84, 16};
+    return r;
+}
+
+static struct rect network_ethernet_connect_rect(const struct rect *popup) {
+    struct rect r = {popup->x + 8, popup->y + 192, 84, 16};
+    return r;
+}
+
+static struct rect network_ethernet_disconnect_rect(const struct rect *popup) {
+    struct rect r = {popup->x + 100, popup->y + 192, 84, 16};
     return r;
 }
 
@@ -2492,29 +2738,689 @@ static int sound_slider_value_from_x(const struct rect *slider, int x) {
     return (relative * 100) / slider->w;
 }
 
+static int sound_applet_read_level(int control_id, int *value_out) {
+    mixer_ctrl_t control = {0};
+
+    control.dev = control_id;
+    control.type = AUDIO_MIXER_VALUE;
+
+    if (value_out == 0) {
+        return -1;
+    }
+    if (sys_audio_mixer_read(&control) != 0) {
+        return -1;
+    }
+    if (control.type != AUDIO_MIXER_VALUE || control.un.value.num_channels <= 0) {
+        return -1;
+    }
+
+    *value_out = control.un.value.level[0];
+    return 0;
+}
+
+static int sound_applet_read_mute(int control_id, int *muted_out) {
+    mixer_ctrl_t control = {0};
+
+    control.dev = control_id;
+    control.type = AUDIO_MIXER_ENUM;
+
+    if (muted_out == 0) {
+        return -1;
+    }
+    if (sys_audio_mixer_read(&control) != 0) {
+        return -1;
+    }
+    if (control.type != AUDIO_MIXER_ENUM) {
+        return -1;
+    }
+
+    *muted_out = control.un.ord != 0;
+    return 0;
+}
+
+static int sound_applet_read_enum(int control_id, int *value_out) {
+    mixer_ctrl_t control = {0};
+
+    control.dev = control_id;
+    control.type = AUDIO_MIXER_ENUM;
+
+    if (value_out == 0) {
+        return -1;
+    }
+    if (sys_audio_mixer_read(&control) != 0) {
+        return -1;
+    }
+    if (control.type != AUDIO_MIXER_ENUM) {
+        return -1;
+    }
+
+    *value_out = control.un.ord;
+    return 0;
+}
+
+static void sound_applet_invalidate_backend_cache(void) {
+    g_sound_applet_last_sync_ticks = 0u;
+}
+
+static void sound_applet_sync_backend(int force) {
+    struct mk_audio_info info;
+    int value;
+    uint32_t now = sys_ticks();
+
+    if (!force &&
+        g_sound_applet_last_sync_ticks != 0u &&
+        (uint32_t)(now - g_sound_applet_last_sync_ticks) < APPLET_BACKEND_REFRESH_TICKS) {
+        return;
+    }
+    g_sound_applet_last_sync_ticks = now;
+
+    if (sys_audio_get_info(&info) == 0) {
+        g_sound_applet.backend_kind = info.status._spare[0] & 0xff;
+        g_sound_applet.output_count = sound_applet_output_count_from_info(&info);
+        g_sound_applet.input_count = sound_applet_input_count_from_info(&info);
+        g_sound_applet.output_mask = sound_applet_output_mask_from_info(&info);
+        if (g_sound_applet.output_count < 1) {
+            g_sound_applet.output_count = 1;
+        }
+        if (g_sound_applet.input_count < 0) {
+            g_sound_applet.input_count = 0;
+        }
+        if (g_sound_applet.selected_output >= g_sound_applet.output_count) {
+            g_sound_applet.selected_output = 0;
+        }
+        if (g_sound_applet.input_count == 0) {
+            g_sound_applet.selected_input = 0;
+        } else if (g_sound_applet.selected_input >= g_sound_applet.input_count) {
+            g_sound_applet.selected_input = 0;
+        }
+    }
+
+    if (sound_applet_read_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, &value) == 0) {
+        g_sound_applet.output_volume = (value * 100) / AUDIO_MAX_GAIN;
+    }
+    if (sound_applet_read_level(MK_AUDIO_MIXER_INPUT_LEVEL, &value) == 0) {
+        g_sound_applet.input_volume = (value * 100) / AUDIO_MAX_GAIN;
+    }
+    if (sound_applet_read_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, &value) == 0) {
+        g_sound_applet.output_muted = value;
+    }
+    if (sound_applet_read_mute(MK_AUDIO_MIXER_INPUT_MUTE, &value) == 0) {
+        g_sound_applet.input_muted = value;
+    }
+    if (sound_applet_read_enum(MK_AUDIO_MIXER_OUTPUT_DEFAULT, &value) == 0 &&
+        value >= 0 &&
+        value < g_sound_applet.output_count) {
+        g_sound_applet.selected_output = value;
+    }
+    if (g_sound_applet.input_count > 0 &&
+        sound_applet_read_enum(MK_AUDIO_MIXER_INPUT_DEFAULT, &value) == 0 &&
+        value >= 0 &&
+        value < g_sound_applet.input_count) {
+        g_sound_applet.selected_input = value;
+    }
+}
+
+static void sound_applet_write_level(int control_id, int percent) {
+    mixer_ctrl_t control = {0};
+    int gain = (percent * AUDIO_MAX_GAIN) / 100;
+
+    control.dev = control_id;
+    control.type = AUDIO_MIXER_VALUE;
+
+    if (gain < AUDIO_MIN_GAIN) {
+        gain = AUDIO_MIN_GAIN;
+    }
+    if (gain > AUDIO_MAX_GAIN) {
+        gain = AUDIO_MAX_GAIN;
+    }
+
+    control.un.value.num_channels = 2;
+    control.un.value.level[AUDIO_MIXER_LEVEL_LEFT] = (uint8_t)gain;
+    control.un.value.level[AUDIO_MIXER_LEVEL_RIGHT] = (uint8_t)gain;
+    (void)sys_audio_mixer_write(&control);
+}
+
+static void sound_applet_write_mute(int control_id, int muted) {
+    mixer_ctrl_t control = {0};
+
+    control.dev = control_id;
+    control.type = AUDIO_MIXER_ENUM;
+
+    control.un.ord = muted ? 1 : 0;
+    (void)sys_audio_mixer_write(&control);
+}
+
+static void sound_applet_write_enum(int control_id, int value) {
+    mixer_ctrl_t control = {0};
+
+    control.dev = control_id;
+    control.type = AUDIO_MIXER_ENUM;
+    control.un.ord = value;
+    (void)sys_audio_mixer_write(&control);
+}
+
+static void sound_applet_apply_backend(void) {
+    sound_applet_write_enum(MK_AUDIO_MIXER_OUTPUT_DEFAULT, g_sound_applet.selected_output);
+    if (g_sound_applet.input_count > 0) {
+        sound_applet_write_enum(MK_AUDIO_MIXER_INPUT_DEFAULT, g_sound_applet.selected_input);
+    }
+    sound_applet_write_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, g_sound_applet.output_volume);
+    sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
+    if (g_sound_applet.input_count > 0) {
+        sound_applet_write_level(MK_AUDIO_MIXER_INPUT_LEVEL, g_sound_applet.input_volume);
+        sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
+    }
+    sound_applet_invalidate_backend_cache();
+}
+
+static void sound_applet_save_settings(void) {
+    char text[160];
+
+    if (fs_resolve("/config") < 0) {
+        (void)fs_create("/config", 1);
+    }
+
+    text[0] = '\0';
+    str_append(text, "output_volume=", (int)sizeof(text));
+    desktop_append_uint(text, g_sound_applet.output_volume, (int)sizeof(text));
+    str_append(text, "\ninput_volume=", (int)sizeof(text));
+    desktop_append_uint(text, g_sound_applet.input_volume, (int)sizeof(text));
+    str_append(text, "\noutput_muted=", (int)sizeof(text));
+    desktop_append_uint(text, g_sound_applet.output_muted ? 1 : 0, (int)sizeof(text));
+    str_append(text, "\ninput_muted=", (int)sizeof(text));
+    desktop_append_uint(text, g_sound_applet.input_muted ? 1 : 0, (int)sizeof(text));
+    str_append(text, "\ndefault_output=", (int)sizeof(text));
+    desktop_append_uint(text, g_sound_applet.selected_output, (int)sizeof(text));
+    str_append(text, "\ndefault_input=", (int)sizeof(text));
+    desktop_append_uint(text, g_sound_applet.selected_input, (int)sizeof(text));
+    str_append(text, "\n", (int)sizeof(text));
+    (void)fs_write_file(DESKTOP_AUDIO_SETTINGS_PATH, text, 0);
+}
+
+static void sound_applet_export_service_state(void) {
+    char *export_argv[3];
+
+    export_argv[0] = "audiosvc";
+    export_argv[1] = "export-state";
+    export_argv[2] = 0;
+    (void)lang_try_run(2, export_argv);
+}
+
+static void sound_applet_load_settings(void) {
+    int node = fs_resolve(DESKTOP_AUDIO_SETTINGS_PATH);
+    char text[160];
+
+    if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir || g_fs_nodes[node].size <= 0) {
+        return;
+    }
+
+    str_copy_limited(text, g_fs_nodes[node].data, (int)sizeof(text));
+    for (char *line = text; *line != '\0'; ) {
+        char *next = line;
+        int value = 0;
+
+        while (*next != '\0' && *next != '\n') {
+            ++next;
+        }
+        if (*next == '\n') {
+            *next = '\0';
+            ++next;
+        }
+
+        if (desktop_starts_with(line, "output_volume=") && desktop_parse_uint(line + 14, &value)) {
+            if (value >= 0 && value <= 100) {
+                g_sound_applet.output_volume = value;
+            }
+        } else if (desktop_starts_with(line, "input_volume=") && desktop_parse_uint(line + 13, &value)) {
+            if (value >= 0 && value <= 100) {
+                g_sound_applet.input_volume = value;
+            }
+        } else if (desktop_starts_with(line, "output_muted=") && desktop_parse_uint(line + 13, &value)) {
+            g_sound_applet.output_muted = value != 0;
+        } else if (desktop_starts_with(line, "input_muted=") && desktop_parse_uint(line + 12, &value)) {
+            g_sound_applet.input_muted = value != 0;
+        } else if (desktop_starts_with(line, "default_output=") && desktop_parse_uint(line + 15, &value)) {
+            if (value >= 0 && value < g_sound_applet.output_count) {
+                g_sound_applet.selected_output = value;
+            }
+        } else if (desktop_starts_with(line, "default_input=") && desktop_parse_uint(line + 14, &value)) {
+            if (value >= 0 && value < g_sound_applet.input_count) {
+                g_sound_applet.selected_input = value;
+            }
+        }
+
+        line = next;
+    }
+}
+
+static struct network_profile *network_profile_find(const char *ssid) {
+    if (ssid == 0 || *ssid == '\0') {
+        return 0;
+    }
+
+    for (int i = 0; i < DESKTOP_NETWORK_PROFILE_MAX; ++i) {
+        if (g_network_profiles[i].used && str_eq(g_network_profiles[i].ssid, ssid)) {
+            return &g_network_profiles[i];
+        }
+    }
+    return 0;
+}
+
+static int network_profile_count(void) {
+    int count = 0;
+
+    for (int i = 0; i < DESKTOP_NETWORK_PROFILE_MAX; ++i) {
+        if (g_network_profiles[i].used) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+static struct network_profile *network_profile_at_visible_index(int index) {
+    int visible = 0;
+
+    if (index < 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < DESKTOP_NETWORK_PROFILE_MAX; ++i) {
+        if (!g_network_profiles[i].used) {
+            continue;
+        }
+        if (visible == index) {
+            return &g_network_profiles[i];
+        }
+        visible += 1;
+    }
+    return 0;
+}
+
+static struct network_profile *network_applet_selected_profile(void) {
+    const struct mk_network_scan_info *selected_scan = network_applet_selected_scan();
+    struct network_profile *profile = 0;
+
+    if (selected_scan != 0) {
+        profile = network_profile_find(selected_scan->ssid);
+        if (profile != 0) {
+            return profile;
+        }
+    }
+
+    if (g_network_applet.selected_saved_ssid[0] != '\0') {
+        return network_profile_find(g_network_applet.selected_saved_ssid);
+    }
+
+    return 0;
+}
+
+static void network_applet_apply_saved_password_for_selected(void) {
+    const struct mk_network_scan_info *selected = network_applet_selected_scan();
+    struct network_profile *profile;
+
+    if (selected == 0) {
+        return;
+    }
+    if (selected->security == MK_NETWORK_SECURITY_OPEN) {
+        g_network_applet.password_len = 0;
+        g_network_applet.password[0] = '\0';
+        return;
+    }
+
+    profile = network_profile_find(selected->ssid);
+    if (profile == 0 || !profile->used) {
+        return;
+    }
+
+    str_copy_limited(g_network_applet.selected_saved_ssid,
+                     profile->ssid,
+                     (int)sizeof(g_network_applet.selected_saved_ssid));
+
+    str_copy_limited(g_network_applet.password, profile->psk, (int)sizeof(g_network_applet.password));
+    g_network_applet.password_len = str_len(g_network_applet.password);
+}
+
+static void network_applet_load_settings(void) {
+    int node = fs_resolve(DESKTOP_NETWORK_SETTINGS_PATH);
+    char text[512];
+    char previous_auto_ssid[MK_NETWORK_SSID_MAX + 1];
+    char previous_selected_saved_ssid[MK_NETWORK_SSID_MAX + 1];
+
+    str_copy_limited(previous_auto_ssid,
+                     g_network_auto_ssid,
+                     (int)sizeof(previous_auto_ssid));
+    str_copy_limited(previous_selected_saved_ssid,
+                     g_network_applet.selected_saved_ssid,
+                     (int)sizeof(previous_selected_saved_ssid));
+    memset(g_network_profiles, 0, sizeof(g_network_profiles));
+    g_network_auto_ssid[0] = '\0';
+    g_network_applet.selected_saved_ssid[0] = '\0';
+
+    if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir || g_fs_nodes[node].size <= 0) {
+        return;
+    }
+
+    str_copy_limited(text, g_fs_nodes[node].data, (int)sizeof(text));
+    for (char *line = text; *line != '\0'; ) {
+        char *next = line;
+
+        while (*next != '\0' && *next != '\n') {
+            ++next;
+        }
+        if (*next == '\n') {
+            *next = '\0';
+            ++next;
+        }
+
+        if (desktop_starts_with(line, "auto_ssid=")) {
+            str_copy_limited(g_network_auto_ssid, line + 10, (int)sizeof(g_network_auto_ssid));
+        } else if (desktop_starts_with(line, "profile")) {
+            int index = -1;
+            char *cursor = line + 7;
+
+            while (*cursor >= '0' && *cursor <= '9') {
+                if (index < 0) {
+                    index = 0;
+                }
+                index = (index * 10) + (*cursor - '0');
+                ++cursor;
+            }
+            if (index >= 0 && index < DESKTOP_NETWORK_PROFILE_MAX) {
+                if (desktop_starts_with(cursor, "_ssid=")) {
+                    g_network_profiles[index].used = 1;
+                    str_copy_limited(g_network_profiles[index].ssid,
+                                     cursor + 6,
+                                     (int)sizeof(g_network_profiles[index].ssid));
+                } else if (desktop_starts_with(cursor, "_psk=")) {
+                    g_network_profiles[index].used = 1;
+                    str_copy_limited(g_network_profiles[index].psk,
+                                     cursor + 5,
+                                     (int)sizeof(g_network_profiles[index].psk));
+                }
+            }
+        }
+
+        line = next;
+    }
+
+    if (previous_selected_saved_ssid[0] != '\0' &&
+        network_profile_find(previous_selected_saved_ssid) != 0) {
+        str_copy_limited(g_network_applet.selected_saved_ssid,
+                         previous_selected_saved_ssid,
+                         (int)sizeof(g_network_applet.selected_saved_ssid));
+    }
+
+    if (!str_eq(previous_auto_ssid, g_network_auto_ssid) || g_network_auto_ssid[0] == '\0') {
+        g_network_autoconnect_last_attempt_ticks = 0u;
+    }
+}
+
+static void network_applet_set_autoconnect(const char *ssid) {
+    char *autoconnect_argv[4];
+    const char *target = "off";
+
+    if (ssid != 0 && *ssid != '\0' && network_profile_find(ssid) != 0 && !str_eq(g_network_auto_ssid, ssid)) {
+        target = ssid;
+    }
+
+    autoconnect_argv[0] = "netmgrd";
+    autoconnect_argv[1] = "autoconnect";
+    autoconnect_argv[2] = (char *)target;
+    autoconnect_argv[3] = 0;
+    if (lang_try_run(3, autoconnect_argv) == 0) {
+        network_applet_load_settings();
+    }
+}
+
+static void network_applet_forget_profile(const char *ssid) {
+    char *forget_argv[4];
+
+    if (ssid == 0 || *ssid == '\0') {
+        return;
+    }
+
+    forget_argv[0] = "netmgrd";
+    forget_argv[1] = "forget";
+    forget_argv[2] = (char *)ssid;
+    forget_argv[3] = 0;
+    if (lang_try_run(3, forget_argv) == 0) {
+        network_applet_load_settings();
+        if (str_eq(g_network_applet.selected_saved_ssid, ssid)) {
+            g_network_applet.selected_saved_ssid[0] = '\0';
+        }
+        if (g_network_applet.selected_network >= 0 &&
+            g_network_applet.selected_network < g_network_applet_cache.scan_count &&
+            str_eq(g_network_applet_cache.scans[g_network_applet.selected_network].ssid, ssid)) {
+            g_network_applet.password_len = 0;
+            g_network_applet.password[0] = '\0';
+        }
+    }
+}
+
+static int network_applet_run_reconcile(void) {
+    char *reconcile_argv[3];
+
+    reconcile_argv[0] = "netmgrd";
+    reconcile_argv[1] = "reconcile";
+    reconcile_argv[2] = 0;
+    if (lang_try_run(2, reconcile_argv) != 0) {
+        return -1;
+    }
+
+    network_applet_invalidate_backend_cache();
+    network_applet_sync_backend(1);
+    network_applet_export_manager_state();
+    return 0;
+}
+
+static void network_applet_try_autoconnect(void) {
+    uint32_t now = sys_ticks();
+
+    if (g_network_auto_ssid[0] == '\0') {
+        return;
+    }
+
+    if (!g_network_applet_cache.status_valid ||
+        g_network_applet_cache.status.link_state == MK_NETWORK_LINK_CONNECTING) {
+        return;
+    }
+    if (g_network_applet_cache.status.link_state == MK_NETWORK_LINK_CONNECTED &&
+        g_network_applet_cache.status.active_kind == MK_NETWORK_IF_WIFI &&
+        str_eq(g_network_applet_cache.status.current_ssid, g_network_auto_ssid)) {
+        g_network_autoconnect_last_attempt_ticks = 0u;
+        return;
+    }
+    if (g_network_autoconnect_last_attempt_ticks != 0u &&
+        (uint32_t)(now - g_network_autoconnect_last_attempt_ticks) < APPLET_AUTOCONNECT_RETRY_TICKS) {
+        return;
+    }
+
+    g_network_autoconnect_last_attempt_ticks = now;
+    if (network_applet_run_reconcile() == 0 &&
+        g_network_applet_cache.status_valid &&
+        g_network_applet_cache.status.link_state == MK_NETWORK_LINK_CONNECTED &&
+        g_network_applet_cache.status.active_kind == MK_NETWORK_IF_WIFI &&
+        str_eq(g_network_applet_cache.status.current_ssid, g_network_auto_ssid)) {
+        g_network_autoconnect_last_attempt_ticks = 0u;
+    }
+}
+
+static void network_applet_export_manager_state(void) {
+    char *export_argv[3];
+
+    export_argv[0] = "netmgrd";
+    export_argv[1] = "export-state";
+    export_argv[2] = 0;
+    (void)lang_try_run(2, export_argv);
+}
+
+static void network_applet_invalidate_backend_cache(void) {
+    g_network_applet_last_sync_ticks = 0u;
+}
+
+static void network_applet_sync_backend(int force) {
+    struct mk_network_scan_info scan_info;
+    int count = 0;
+    uint32_t now = sys_ticks();
+
+    if (!force &&
+        g_network_applet_last_sync_ticks != 0u &&
+        (uint32_t)(now - g_network_applet_last_sync_ticks) < APPLET_BACKEND_REFRESH_TICKS) {
+        return;
+    }
+    g_network_applet_last_sync_ticks = now;
+
+    g_network_applet_cache.status_valid = (sys_network_get_status(&g_network_applet_cache.status) == 0);
+    if (g_network_applet_cache.status_valid) {
+        switch (g_network_applet_cache.status.link_state) {
+        case MK_NETWORK_LINK_CONNECTED:
+            g_network_applet.state = NETWORK_APPLET_CONNECTED;
+            break;
+        case MK_NETWORK_LINK_CONNECTING:
+            g_network_applet.state = NETWORK_APPLET_CONNECTING;
+            break;
+        default:
+            g_network_applet.state = NETWORK_APPLET_DISCONNECTED;
+            break;
+        }
+    } else {
+        g_network_applet.state = NETWORK_APPLET_DISCONNECTED;
+    }
+
+    for (int i = 0; i < (int)(sizeof(g_network_applet_cache.scans) / sizeof(g_network_applet_cache.scans[0])); ++i) {
+        if (sys_network_scan((uint32_t)i, &scan_info) != 0) {
+            break;
+        }
+        g_network_applet_cache.scans[count++] = scan_info;
+    }
+    g_network_applet_cache.scan_count = count;
+    if (g_network_applet.selected_network >= g_network_applet_cache.scan_count) {
+        g_network_applet.selected_network = g_network_applet_cache.scan_count > 0 ? 0 : -1;
+    }
+    if (g_network_applet.selected_network < 0 && g_network_applet_cache.scan_count > 0) {
+        g_network_applet.selected_network = 0;
+    }
+    network_applet_apply_saved_password_for_selected();
+}
+
+static const struct mk_network_scan_info *network_applet_selected_scan(void) {
+    if (g_network_applet.selected_network < 0 ||
+        g_network_applet.selected_network >= g_network_applet_cache.scan_count) {
+        return 0;
+    }
+    return &g_network_applet_cache.scans[g_network_applet.selected_network];
+}
+
 static const char *network_applet_status_text(void) {
-    switch (g_network_applet.state) {
-    case NETWORK_APPLET_CONNECTING:
-        return "Conectando a rede Wi-Fi";
-    case NETWORK_APPLET_CONNECTED:
-        return "Conectado: wlan0 192.168.1.24";
+    static char status_text[96];
+
+    if (!g_network_applet_cache.status_valid) {
+        return "Servico de rede indisponivel";
+    }
+
+    status_text[0] = '\0';
+    switch (g_network_applet_cache.status.link_state) {
+    case MK_NETWORK_LINK_CONNECTED:
+        if (g_network_applet_cache.status.active_kind == MK_NETWORK_IF_WIFI &&
+            g_network_applet_cache.status.current_ssid[0] != '\0') {
+            str_copy_limited(status_text, g_network_applet_cache.status.current_ssid, (int)sizeof(status_text));
+            str_append(status_text, " ", (int)sizeof(status_text));
+        } else {
+            str_copy_limited(status_text, g_network_applet_cache.status.active_if, (int)sizeof(status_text));
+            str_append(status_text, " ", (int)sizeof(status_text));
+        }
+        str_append(status_text, g_network_applet_cache.status.ip_address, (int)sizeof(status_text));
+        return status_text;
+    case MK_NETWORK_LINK_CONNECTING:
+        if (g_network_applet_cache.status.active_kind == MK_NETWORK_IF_ETHERNET &&
+            g_network_applet_cache.status.active_if[0] != '\0') {
+            return "Adquirindo lease em0";
+        }
+        return "Conectando a rede";
     default:
         return "Sem rede ativa";
     }
+}
+
+static void draw_sound_applet_icon(const struct rect *button, uint8_t color) {
+    int base_x;
+    int base_y;
+
+    if (button == 0) {
+        return;
+    }
+
+    base_x = button->x + 6;
+    base_y = button->y + 3;
+    sys_rect(base_x, base_y + 4, 3, 4, color);
+    sys_rect(base_x + 3, base_y + 3, 2, 6, color);
+    sys_rect(base_x + 5, base_y + 2, 1, 8, color);
+
+    if (g_sound_applet.output_muted) {
+        sys_rect(base_x + 8, base_y + 2, 1, 1, color);
+        sys_rect(base_x + 9, base_y + 3, 1, 1, color);
+        sys_rect(base_x + 10, base_y + 4, 1, 1, color);
+        sys_rect(base_x + 10, base_y + 2, 1, 1, color);
+        sys_rect(base_x + 9, base_y + 3, 1, 1, color);
+        sys_rect(base_x + 8, base_y + 4, 1, 1, color);
+        sys_rect(base_x + 7, base_y + 5, 1, 1, color);
+    } else if (g_sound_applet.output_volume >= 70) {
+        sys_rect(base_x + 8, base_y + 2, 1, 8, color);
+        sys_rect(base_x + 10, base_y + 1, 1, 10, color);
+    } else if (g_sound_applet.output_volume >= 35) {
+        sys_rect(base_x + 8, base_y + 3, 1, 6, color);
+    } else if (g_sound_applet.output_volume > 0) {
+        sys_rect(base_x + 8, base_y + 4, 1, 4, color);
+    }
+}
+
+static void draw_network_applet_icon(const struct rect *button, uint8_t color) {
+    int base_x;
+    int base_y;
+
+    if (button == 0) {
+        return;
+    }
+
+    base_x = button->x + 6;
+    base_y = button->y + 4;
+
+    if (g_network_applet.state == NETWORK_APPLET_CONNECTED) {
+        sys_rect(base_x, base_y + 6, 2, 2, color);
+        sys_rect(base_x + 3, base_y + 4, 2, 4, color);
+        sys_rect(base_x + 6, base_y + 2, 2, 6, color);
+        sys_rect(base_x + 9, base_y, 2, 8, color);
+        return;
+    }
+
+    if (g_network_applet.state == NETWORK_APPLET_CONNECTING) {
+        sys_rect(base_x, base_y + 6, 2, 2, color);
+        sys_rect(base_x + 3, base_y + 4, 2, 4, color);
+        sys_rect(base_x + 6, base_y + 2, 2, 6, color);
+        sys_rect(base_x + 9, base_y, 2, 4, color);
+        return;
+    }
+
+    sys_rect(base_x, base_y + 6, 2, 2, color);
+    sys_rect(base_x + 3, base_y + 6, 2, 2, color);
+    sys_rect(base_x + 6, base_y + 6, 2, 2, color);
+    sys_rect(base_x + 9, base_y + 6, 2, 2, color);
+    sys_rect(base_x + 1, base_y + 3, 8, 1, color);
+    sys_rect(base_x + 5, base_y + 2, 1, 4, color);
 }
 
 static void draw_sound_applet(const struct mouse_state *mouse) {
     const struct desktop_theme *theme = ui_theme_get();
     struct rect button = ui_taskbar_sound_applet_rect();
     int hover = point_in_rect(&button, mouse->x, mouse->y);
-    const char *icon = g_sound_applet.output_muted ? "M" :
-                       (g_sound_applet.output_volume >= 70 ? "S" :
-                        (g_sound_applet.output_volume >= 35 ? "s" : "."));
+
+    sound_applet_sync_backend(0);
 
     ui_draw_button(&button,
-                   icon,
+                   "",
                    g_sound_applet.popup_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                    hover);
+    draw_sound_applet_icon(&button, theme->text);
 
     if (g_sound_applet.popup_open) {
         struct rect popup = sound_applet_popup_rect();
@@ -2530,10 +3436,10 @@ static void draw_sound_applet(const struct mouse_state *mouse) {
         ui_draw_surface(&popup, ui_color_window_bg());
         sys_text(popup.x + 8, popup.y + 8, theme->text, "Som");
         sys_text(popup.x + 8, popup.y + 16, theme->text, "Saidas");
-        for (int i = 0; i < 2; ++i) {
+        for (int i = 0; i < g_sound_applet.output_count; ++i) {
             struct rect row = sound_output_row_rect(&popup, i);
             ui_draw_button(&row,
-                           g_sound_outputs[i],
+                           sound_applet_output_label(i),
                            i == g_sound_applet.selected_output ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                            point_in_rect(&row, mouse->x, mouse->y));
         }
@@ -2550,24 +3456,31 @@ static void draw_sound_applet(const struct mouse_state *mouse) {
                        point_in_rect(&out_mute, mouse->x, mouse->y));
 
         sys_text(popup.x + 8, popup.y + 80, theme->text, "Entradas");
-        for (int i = 0; i < 2; ++i) {
-            struct rect row = sound_input_row_rect(&popup, i);
-            ui_draw_button(&row,
-                           g_sound_inputs[i],
-                           i == g_sound_applet.selected_input ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
-                           point_in_rect(&row, mouse->x, mouse->y));
+        if (g_sound_applet.input_count > 0) {
+            for (int i = 0; i < g_sound_applet.input_count; ++i) {
+                struct rect row = sound_input_row_rect(&popup, i);
+                ui_draw_button(&row,
+                               sound_applet_input_label(i),
+                               i == g_sound_applet.selected_input ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                               point_in_rect(&row, mouse->x, mouse->y));
+            }
+            sys_text(popup.x + 8,
+                     popup.y + 126,
+                     theme->text,
+                     sound_applet_input_label(g_sound_applet.selected_input));
+            sys_rect(in_slider.x, in_slider.y, in_slider.w, in_slider.h, ui_color_muted());
+            sys_rect(in_slider.x, in_slider.y,
+                     (in_slider.w * g_sound_applet.input_volume) / 100,
+                     in_slider.h,
+                     theme->window);
+            sys_rect(in_knob.x, in_knob.y, in_knob.w, in_knob.h, theme->text);
+            ui_draw_button(&in_mute,
+                           g_sound_applet.input_muted ? "On" : "Off",
+                           g_sound_applet.input_muted ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                           point_in_rect(&in_mute, mouse->x, mouse->y));
+        } else {
+            sys_text(popup.x + 8, popup.y + 98, ui_color_muted(), "Sem captura neste backend");
         }
-        sys_text(popup.x + 8, popup.y + 126, theme->text, "Mic");
-        sys_rect(in_slider.x, in_slider.y, in_slider.w, in_slider.h, ui_color_muted());
-        sys_rect(in_slider.x, in_slider.y,
-                 (in_slider.w * g_sound_applet.input_volume) / 100,
-                 in_slider.h,
-                 theme->window);
-        sys_rect(in_knob.x, in_knob.y, in_knob.w, in_knob.h, theme->text);
-        ui_draw_button(&in_mute,
-                       g_sound_applet.input_muted ? "On" : "Off",
-                       g_sound_applet.input_muted ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
-                       point_in_rect(&in_mute, mouse->x, mouse->y));
     }
 }
 
@@ -2575,39 +3488,130 @@ static void draw_network_applet(const struct mouse_state *mouse) {
     const struct desktop_theme *theme = ui_theme_get();
     struct rect button = ui_taskbar_network_applet_rect();
     int hover = point_in_rect(&button, mouse->x, mouse->y);
-    const char *icon = g_network_applet.state == NETWORK_APPLET_CONNECTED ? "W" :
-                       (g_network_applet.state == NETWORK_APPLET_CONNECTING ? "~" : "N");
+
+    network_applet_sync_backend(0);
 
     ui_draw_button(&button,
-                   icon,
+                   "",
                    g_network_applet.popup_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                    hover);
+    draw_network_applet_icon(&button, theme->text);
 
     if (g_network_applet.popup_open) {
         struct rect popup = network_applet_popup_rect();
         struct rect status = network_status_rect(&popup);
+        struct rect auto_button = network_auto_rect(&popup);
+        struct rect forget_button = network_forget_rect(&popup);
+        struct rect ethernet_connect_button = network_ethernet_connect_rect(&popup);
+        struct rect ethernet_disconnect_button = network_ethernet_disconnect_rect(&popup);
         struct rect password = network_password_rect(&popup);
         struct rect connect_button = network_connect_rect(&popup);
         struct rect disconnect_button = network_disconnect_rect(&popup);
-        struct network_candidate selected = g_network_candidates[g_network_applet.selected_network];
+        const struct mk_network_scan_info *selected = network_applet_selected_scan();
+        struct network_profile *selected_profile = network_applet_selected_profile();
+        int saved_count = network_profile_count();
         char password_text[48] = "";
 
         ui_draw_surface(&popup, ui_color_window_bg());
         ui_draw_status(&status, network_applet_status_text());
-        sys_text(popup.x + 8, popup.y + 46, theme->text, "Redes Wi-Fi");
-        for (int i = 0; i < 3; ++i) {
+        if (g_network_applet_cache.status_valid) {
+            char line[64] = "";
+
+            str_copy_limited(line, "IF ", (int)sizeof(line));
+            str_append(line,
+                       g_network_applet_cache.status.active_if[0] != '\0' ?
+                       g_network_applet_cache.status.active_if : "-",
+                       (int)sizeof(line));
+            str_append(line, "  GW ", (int)sizeof(line));
+            str_append(line,
+                       g_network_applet_cache.status.gateway[0] != '\0' ?
+                       g_network_applet_cache.status.gateway : "-",
+                       (int)sizeof(line));
+            sys_text(popup.x + 8, popup.y + 46, ui_color_muted(), line);
+
+            line[0] = '\0';
+            str_copy_limited(line, "DNS ", (int)sizeof(line));
+            str_append(line,
+                       g_network_applet_cache.status.dns_server[0] != '\0' ?
+                       g_network_applet_cache.status.dns_server : "-",
+                       (int)sizeof(line));
+            sys_text(popup.x + 8, popup.y + 56, ui_color_muted(), line);
+        }
+
+        sys_text(popup.x + 8, popup.y + 60, theme->text, "Redes Wi-Fi");
+        for (int i = 0; i < g_network_applet_cache.scan_count && i < 3; ++i) {
             struct rect row = network_row_rect(&popup, i);
             char label[48] = "";
+            struct network_profile *profile = network_profile_find(g_network_applet_cache.scans[i].ssid);
 
-            str_copy_limited(label, g_network_candidates[i].ssid, (int)sizeof(label));
-            str_append(label, g_network_candidates[i].secured ? " *" : " aberto", (int)sizeof(label));
+            str_copy_limited(label, g_network_applet_cache.scans[i].ssid, (int)sizeof(label));
+            str_append(label,
+                       g_network_applet_cache.scans[i].security == MK_NETWORK_SECURITY_OPEN ? " aberto" : " *",
+                       (int)sizeof(label));
+            if (profile != 0) {
+                str_append(label, " salva", (int)sizeof(label));
+            }
             ui_draw_button(&row,
                            label,
                            i == g_network_applet.selected_network ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                            point_in_rect(&row, mouse->x, mouse->y));
         }
 
-        sys_text(popup.x + 8, popup.y + 114, theme->text, "Senha");
+        sys_text(popup.x + 8, popup.y + 136, theme->text, "Redes salvas");
+        if (saved_count == 0) {
+            sys_text(popup.x + 8, popup.y + 146, ui_color_muted(), "nenhum perfil salvo");
+        } else {
+            for (int i = 0; i < saved_count && i < 2; ++i) {
+                struct network_profile *profile = network_profile_at_visible_index(i);
+                struct rect row = network_saved_row_rect(&popup, i);
+                char label[48] = "";
+
+                if (profile == 0) {
+                    continue;
+                }
+                str_copy_limited(label, profile->ssid, (int)sizeof(label));
+                if (str_eq(profile->ssid, g_network_auto_ssid)) {
+                    str_append(label, " auto", (int)sizeof(label));
+                }
+                ui_draw_button(&row,
+                               label,
+                               str_eq(g_network_applet.selected_saved_ssid, profile->ssid)
+                                   ? UI_BUTTON_ACTIVE
+                                   : UI_BUTTON_NORMAL,
+                               point_in_rect(&row, mouse->x, mouse->y));
+            }
+        }
+
+        ui_draw_button(&auto_button,
+                       selected_profile != 0 && str_eq(selected_profile->ssid, g_network_auto_ssid) ? "Auto on" : "Auto",
+                       selected_profile != 0 && str_eq(selected_profile->ssid, g_network_auto_ssid)
+                           ? UI_BUTTON_ACTIVE
+                           : UI_BUTTON_NORMAL,
+                       point_in_rect(&auto_button, mouse->x, mouse->y));
+        ui_draw_button(&forget_button,
+                       "Esquecer",
+                       selected_profile != 0 ? UI_BUTTON_DANGER : UI_BUTTON_NORMAL,
+                       point_in_rect(&forget_button, mouse->x, mouse->y));
+
+        sys_text(popup.x + 8, popup.y + 186, theme->text, "Ethernet");
+        ui_draw_button(&ethernet_connect_button,
+                       "Subir em0",
+                       g_network_applet_cache.status_valid &&
+                               g_network_applet_cache.status.link_state == MK_NETWORK_LINK_CONNECTED &&
+                               g_network_applet_cache.status.active_kind == MK_NETWORK_IF_ETHERNET
+                           ? UI_BUTTON_ACTIVE
+                           : UI_BUTTON_NORMAL,
+                       point_in_rect(&ethernet_connect_button, mouse->x, mouse->y));
+        ui_draw_button(&ethernet_disconnect_button,
+                       "Derrubar",
+                       g_network_applet_cache.status_valid &&
+                               g_network_applet_cache.status.active_if[0] != '\0' &&
+                               str_eq(g_network_applet_cache.status.active_if, "em0")
+                           ? UI_BUTTON_DANGER
+                           : UI_BUTTON_NORMAL,
+                       point_in_rect(&ethernet_disconnect_button, mouse->x, mouse->y));
+
+        sys_text(popup.x + 8, popup.y + 206, theme->text, "Senha");
         ui_draw_inset(&password, ui_color_window_bg());
         for (int i = 0; i < g_network_applet.password_len && i < 30; ++i) {
             password_text[i] = '*';
@@ -2615,12 +3619,13 @@ static void draw_network_applet(const struct mouse_state *mouse) {
         password_text[g_network_applet.password_len] = '\0';
         sys_text(password.x + 4, password.y + 5, theme->text,
                  g_network_applet.password_len > 0 ? password_text :
-                 (selected.secured ? "digite a senha" : "rede aberta"));
+                 (selected != 0 && selected->security != MK_NETWORK_SECURITY_OPEN ?
+                  (selected_profile != 0 ? "senha salva" : "digite a senha") : "rede aberta"));
         if (g_network_applet.password_focus) {
             sys_rect(password.x + password.w - 8, password.y + 4, 2, 10, theme->text);
         }
         ui_draw_button(&connect_button,
-                       g_network_applet.state == NETWORK_APPLET_CONNECTING ? "Conectando" : "Conectar",
+                       "Conectar",
                        UI_BUTTON_PRIMARY,
                        point_in_rect(&connect_button, mouse->x, mouse->y));
         ui_draw_button(&disconnect_button,
@@ -2628,6 +3633,55 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                        UI_BUTTON_NORMAL,
                        point_in_rect(&disconnect_button, mouse->x, mouse->y));
     }
+}
+
+static int network_applet_connect_selected(void) {
+    const struct mk_network_scan_info *selected = network_applet_selected_scan();
+    char *connect_argv[6];
+
+    if (selected == 0) {
+        return -1;
+    }
+    if (selected->security != MK_NETWORK_SECURITY_OPEN && g_network_applet.password_len <= 0) {
+        return -1;
+    }
+
+    connect_argv[0] = "netmgrd";
+    connect_argv[1] = "connect";
+    connect_argv[2] = "wlan0";
+    connect_argv[3] = (char *)selected->ssid;
+    connect_argv[4] = 0;
+    connect_argv[5] = 0;
+    if (selected->security != MK_NETWORK_SECURITY_OPEN) {
+        connect_argv[4] = "--psk";
+        connect_argv[5] = g_network_applet.password;
+    }
+    if (lang_try_run(selected->security != MK_NETWORK_SECURITY_OPEN ? 6 : 4, connect_argv) != 0) {
+        return -1;
+    }
+    network_applet_load_settings();
+    return 0;
+}
+
+static int network_applet_connect_ethernet(void) {
+    char *connect_argv[4];
+
+    connect_argv[0] = "netmgrd";
+    connect_argv[1] = "connect";
+    connect_argv[2] = "em0";
+    connect_argv[3] = 0;
+    return lang_try_run(3, connect_argv);
+}
+
+static int desktop_clamp_percent_step(int value, int delta) {
+    value += delta;
+    if (value < 0) {
+        value = 0;
+    }
+    if (value > 100) {
+        value = 100;
+    }
+    return value;
 }
 
 static struct rect desktop_context_menu_rect(int x, int y) {
@@ -3373,11 +4427,14 @@ void desktop_main(void) {
     int resize_anchor_x = 0;
     int resize_anchor_y = 0;
     int running = 1;
-    uint32_t network_connect_start_tick = 0u;
+    uint32_t desktop_sound_armed_ticks = 0u;
+    int desktop_sound_pending = 1;
+    struct audio_async_playback desktop_sound_playback = {0};
 
     ui_init();
     (void)sys_gfx_set_present_policy(VIDEO_PRESENT_POLICY_DESKTOP);
     sys_write_debug("desktop: session start\n");
+    desktop_sound_armed_ticks = sys_ticks();
     start_button = ui_taskbar_start_button_rect();
     menu_rect = ui_start_menu_rect();
     context_menu = desktop_context_menu_rect(0, 0);
@@ -3386,6 +4443,17 @@ void desktop_main(void) {
     mouse.y = (int)SCREEN_HEIGHT / 2;
     mouse.buttons = 0;
     file_dialog_reset(&file_dialog);
+    sound_applet_load_settings();
+    network_applet_load_settings();
+    sound_applet_apply_backend();
+    sound_applet_sync_backend(1);
+    sound_applet_export_service_state();
+    network_applet_sync_backend(1);
+    (void)network_applet_run_reconcile();
+    network_applet_load_settings();
+    network_applet_sync_backend(1);
+    network_applet_try_autoconnect();
+    network_applet_export_manager_state();
 
     for (int i = 0; i < MAX_WINDOWS; ++i) g_windows[i].active = 0;
     for (int i = 0; i < MAX_TERMINALS; ++i) g_term_used[i] = 0;
@@ -3416,6 +4484,12 @@ void desktop_main(void) {
         uint32_t ticks = sys_ticks();
         dirty |= desktop_process_app_cycle(&focused, ticks);
         dirty |= desktop_process_drag_stress(&focused, ticks);
+        desktop_try_play_startup_sound(&desktop_sound_armed_ticks,
+                                       &desktop_sound_pending,
+                                       &desktop_sound_playback,
+                                       ticks);
+        network_applet_sync_backend(0);
+        network_applet_try_autoconnect();
         int mouse_event = 0;
         int left_pressed = (mouse.buttons & 0x01u) != 0;
         int right_pressed = (mouse.buttons & 0x02u) != 0;
@@ -3892,6 +4966,10 @@ void desktop_main(void) {
                                 if (open_imageviewer_window_for_node(target, &focused) >= 0) {
                                     dirty = 1;
                                 }
+                            } else if (audioplayer_node_is_supported(target)) {
+                                if (open_audioplayer_window_for_node(target, &focused) >= 0) {
+                                    dirty = 1;
+                                }
                             } else if (open_editor_window_for_node(target, &focused) >= 0) {
                                 dirty = 1;
                             }
@@ -3982,6 +5060,7 @@ void desktop_main(void) {
                     g_network_applet.popup_open = !g_network_applet.popup_open;
                     if (g_network_applet.popup_open) {
                         g_sound_applet.popup_open = 0;
+                        network_applet_sync_backend(1);
                     }
                     g_network_applet.password_focus = 0;
                     menu_open = 0;
@@ -4008,33 +5087,106 @@ void desktop_main(void) {
                                                         network_applet_popup_rect().h},
                                          click_x, click_y)) {
                     struct rect popup = network_applet_popup_rect();
+                    struct rect auto_button = network_auto_rect(&popup);
+                    struct rect forget_button = network_forget_rect(&popup);
+                    struct rect ethernet_connect_button = network_ethernet_connect_rect(&popup);
+                    struct rect ethernet_disconnect_button = network_ethernet_disconnect_rect(&popup);
                     struct rect password = network_password_rect(&popup);
                     struct rect connect_button = network_connect_rect(&popup);
                     struct rect disconnect_button = network_disconnect_rect(&popup);
+                    struct network_profile *selected_profile;
 
                     g_network_applet.password_focus = point_in_rect(&password, click_x, click_y);
-                    for (int i = 0; i < 3; ++i) {
+                    for (int i = 0; i < g_network_applet_cache.scan_count && i < 3; ++i) {
                         struct rect row = network_row_rect(&popup, i);
                         if (point_in_rect(&row, click_x, click_y)) {
                             g_network_applet.selected_network = i;
-                            if (!g_network_candidates[i].secured) {
+                            if (g_network_applet_cache.scans[i].security == MK_NETWORK_SECURITY_OPEN) {
                                 g_network_applet.password_len = 0;
                                 g_network_applet.password[0] = '\0';
+                            } else {
+                                network_applet_apply_saved_password_for_selected();
+                            }
+                            if (g_network_applet_cache.scans[i].ssid[0] != '\0') {
+                                str_copy_limited(g_network_applet.selected_saved_ssid,
+                                                 g_network_applet_cache.scans[i].ssid,
+                                                 (int)sizeof(g_network_applet.selected_saved_ssid));
                             }
                             dirty = 1;
                         }
                     }
+                    for (int i = 0; i < network_profile_count() && i < 2; ++i) {
+                        struct network_profile *profile = network_profile_at_visible_index(i);
+                        struct rect row = network_saved_row_rect(&popup, i);
+
+                        if (profile == 0 || !point_in_rect(&row, click_x, click_y)) {
+                            continue;
+                        }
+                        str_copy_limited(g_network_applet.selected_saved_ssid,
+                                         profile->ssid,
+                                         (int)sizeof(g_network_applet.selected_saved_ssid));
+                        for (int j = 0; j < g_network_applet_cache.scan_count; ++j) {
+                            if (str_eq(g_network_applet_cache.scans[j].ssid, profile->ssid)) {
+                                g_network_applet.selected_network = j;
+                                network_applet_apply_saved_password_for_selected();
+                                dirty = 1;
+                                break;
+                            }
+                        }
+                        dirty = 1;
+                    }
+                    selected_profile = network_applet_selected_profile();
+                    if (point_in_rect(&auto_button, click_x, click_y) && selected_profile != 0) {
+                        network_applet_set_autoconnect(selected_profile->ssid);
+                        network_applet_export_manager_state();
+                        dirty = 1;
+                    } else if (point_in_rect(&forget_button, click_x, click_y) && selected_profile != 0) {
+                        network_applet_forget_profile(selected_profile->ssid);
+                        network_applet_export_manager_state();
+                        dirty = 1;
+                    } else if (point_in_rect(&ethernet_connect_button, click_x, click_y)) {
+                        if (network_applet_connect_ethernet() == 0) {
+                            network_applet_invalidate_backend_cache();
+                            network_applet_sync_backend(1);
+                            network_applet_export_manager_state();
+                            dirty = 1;
+                        }
+                    } else if (point_in_rect(&ethernet_disconnect_button, click_x, click_y)) {
+                        char *disconnect_argv[4];
+
+                        disconnect_argv[0] = "netmgrd";
+                        disconnect_argv[1] = "disconnect";
+                        disconnect_argv[2] = "em0";
+                        disconnect_argv[3] = 0;
+                        if (lang_try_run(3, disconnect_argv) == 0) {
+                            network_applet_invalidate_backend_cache();
+                            network_applet_sync_backend(1);
+                            network_applet_export_manager_state();
+                            dirty = 1;
+                        }
+                    }
                     if (point_in_rect(&connect_button, click_x, click_y)) {
-                        if (!g_network_candidates[g_network_applet.selected_network].secured ||
-                            g_network_applet.password_len > 0) {
-                            g_network_applet.state = NETWORK_APPLET_CONNECTING;
-                            network_connect_start_tick = ticks;
+                        if (network_applet_connect_selected() == 0) {
+                            network_applet_invalidate_backend_cache();
+                            network_applet_sync_backend(1);
+                            network_applet_export_manager_state();
                             dirty = 1;
                         }
                     } else if (point_in_rect(&disconnect_button, click_x, click_y)) {
-                        g_network_applet.state = NETWORK_APPLET_DISCONNECTED;
-                        network_connect_start_tick = 0u;
-                        dirty = 1;
+                        char *disconnect_argv[4];
+
+                        disconnect_argv[0] = "netmgrd";
+                        disconnect_argv[1] = "disconnect";
+                        disconnect_argv[2] = g_network_applet_cache.status.active_if[0] != '\0'
+                                                 ? g_network_applet_cache.status.active_if
+                                                 : "wlan0";
+                        disconnect_argv[3] = 0;
+                        if (lang_try_run(3, disconnect_argv) == 0) {
+                            network_applet_invalidate_backend_cache();
+                            network_applet_sync_backend(1);
+                            network_applet_export_manager_state();
+                            dirty = 1;
+                        }
                     }
                     handled = 1;
                 } else if (g_sound_applet.popup_open &&
@@ -4049,32 +5201,61 @@ void desktop_main(void) {
                     struct rect out_mute = sound_output_mute_rect(&popup);
                     struct rect in_mute = sound_input_mute_rect(&popup);
 
-                    for (int i = 0; i < 2; ++i) {
+                    for (int i = 0; i < g_sound_applet.output_count; ++i) {
                         struct rect out_row = sound_output_row_rect(&popup, i);
-                        struct rect in_row = sound_input_row_rect(&popup, i);
 
                         if (point_in_rect(&out_row, click_x, click_y)) {
                             g_sound_applet.selected_output = i;
+                            sound_applet_write_enum(MK_AUDIO_MIXER_OUTPUT_DEFAULT, i);
+                            sound_applet_invalidate_backend_cache();
+                            sound_applet_save_settings();
+                            sound_applet_export_service_state();
                             dirty = 1;
                         }
+                    }
+                    for (int i = 0; i < g_sound_applet.input_count; ++i) {
+                        struct rect in_row = sound_input_row_rect(&popup, i);
+
                         if (point_in_rect(&in_row, click_x, click_y)) {
                             g_sound_applet.selected_input = i;
+                            sound_applet_write_enum(MK_AUDIO_MIXER_INPUT_DEFAULT, i);
+                            sound_applet_invalidate_backend_cache();
+                            sound_applet_save_settings();
+                            sound_applet_export_service_state();
                             dirty = 1;
                         }
                     }
                     if (point_in_rect(&out_slider, click_x, click_y)) {
                         g_sound_applet.output_volume = sound_slider_value_from_x(&out_slider, click_x);
                         g_sound_applet.output_muted = (g_sound_applet.output_volume == 0);
+                        sound_applet_write_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, g_sound_applet.output_volume);
+                        sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
+                        sound_applet_invalidate_backend_cache();
+                        sound_applet_save_settings();
+                        sound_applet_export_service_state();
                         dirty = 1;
-                    } else if (point_in_rect(&in_slider, click_x, click_y)) {
+                    } else if (g_sound_applet.input_count > 0 && point_in_rect(&in_slider, click_x, click_y)) {
                         g_sound_applet.input_volume = sound_slider_value_from_x(&in_slider, click_x);
                         g_sound_applet.input_muted = (g_sound_applet.input_volume == 0);
+                        sound_applet_write_level(MK_AUDIO_MIXER_INPUT_LEVEL, g_sound_applet.input_volume);
+                        sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
+                        sound_applet_invalidate_backend_cache();
+                        sound_applet_save_settings();
+                        sound_applet_export_service_state();
                         dirty = 1;
                     } else if (point_in_rect(&out_mute, click_x, click_y)) {
                         g_sound_applet.output_muted = !g_sound_applet.output_muted;
+                        sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
+                        sound_applet_invalidate_backend_cache();
+                        sound_applet_save_settings();
+                        sound_applet_export_service_state();
                         dirty = 1;
-                    } else if (point_in_rect(&in_mute, click_x, click_y)) {
+                    } else if (g_sound_applet.input_count > 0 && point_in_rect(&in_mute, click_x, click_y)) {
                         g_sound_applet.input_muted = !g_sound_applet.input_muted;
+                        sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
+                        sound_applet_invalidate_backend_cache();
+                        sound_applet_save_settings();
+                        sound_applet_export_service_state();
                         dirty = 1;
                     }
                     handled = 1;
@@ -4391,6 +5572,11 @@ void desktop_main(void) {
                                                          click_x, click_y)) {
                                 dirty = 1;
                             }
+                        } else if (type == APP_AUDIO_PLAYER) {
+                            if (audioplayer_handle_click(&g_audioplayers[g_windows[hit_window].instance],
+                                                         click_x, click_y)) {
+                                dirty = 1;
+                            }
                         } else if (type == APP_TASKMANAGER) {
                             struct taskmgr_action action =
                                 taskmgr_handle_click(&g_tms[g_windows[hit_window].instance],
@@ -4591,10 +5777,10 @@ void desktop_main(void) {
                     continue;
                 }
                 if (key == '\n') {
-                    if (!g_network_candidates[g_network_applet.selected_network].secured ||
-                        g_network_applet.password_len > 0) {
-                        g_network_applet.state = NETWORK_APPLET_CONNECTING;
-                        network_connect_start_tick = ticks;
+                    if (network_applet_connect_selected() == 0) {
+                        network_applet_invalidate_backend_cache();
+                        network_applet_sync_backend(1);
+                        network_applet_export_manager_state();
                         dirty = 1;
                     }
                     continue;
@@ -4608,6 +5794,172 @@ void desktop_main(void) {
                     g_network_applet.password_len < (int)sizeof(g_network_applet.password) - 1) {
                     g_network_applet.password[g_network_applet.password_len++] = (char)key;
                     g_network_applet.password[g_network_applet.password_len] = '\0';
+                    dirty = 1;
+                    continue;
+                }
+            }
+            if (g_network_applet.popup_open) {
+                if (key == 27) {
+                    g_network_applet.popup_open = 0;
+                    g_network_applet.password_focus = 0;
+                    dirty = 1;
+                    continue;
+                }
+                if (key == '\t') {
+                    const struct mk_network_scan_info *selected = network_applet_selected_scan();
+
+                    if (selected != 0 && selected->security != MK_NETWORK_SECURITY_OPEN) {
+                        g_network_applet.password_focus = !g_network_applet.password_focus;
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key == KEY_ARROW_UP || key == 'w' || key == 'W') {
+                    if (g_network_applet.selected_network > 0) {
+                        g_network_applet.selected_network -= 1;
+                        network_applet_apply_saved_password_for_selected();
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key == KEY_ARROW_DOWN || key == 's' || key == 'S') {
+                    if (g_network_applet.selected_network + 1 < g_network_applet_cache.scan_count) {
+                        g_network_applet.selected_network += 1;
+                        network_applet_apply_saved_password_for_selected();
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key == '\n') {
+                    if (network_applet_connect_selected() == 0) {
+                        network_applet_invalidate_backend_cache();
+                        network_applet_sync_backend(1);
+                        network_applet_export_manager_state();
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key == 'a' || key == 'A') {
+                    const struct mk_network_scan_info *selected = network_applet_selected_scan();
+                    struct network_profile *profile = selected != 0 ? network_profile_find(selected->ssid) : 0;
+
+                    if (profile != 0) {
+                        network_applet_set_autoconnect(profile->ssid);
+                        network_applet_export_manager_state();
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key == KEY_DELETE) {
+                    const struct mk_network_scan_info *selected = network_applet_selected_scan();
+                    struct network_profile *profile = selected != 0 ? network_profile_find(selected->ssid) : 0;
+
+                    if (profile != 0) {
+                        network_applet_forget_profile(profile->ssid);
+                        network_applet_export_manager_state();
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key == 'e' || key == 'E') {
+                    if (network_applet_connect_ethernet() == 0) {
+                        network_applet_invalidate_backend_cache();
+                        network_applet_sync_backend(1);
+                        network_applet_export_manager_state();
+                        dirty = 1;
+                    }
+                    continue;
+                }
+                if (key == 'x' || key == 'X') {
+                    char *disconnect_argv[4];
+
+                    disconnect_argv[0] = "netmgrd";
+                    disconnect_argv[1] = "disconnect";
+                    disconnect_argv[2] = "em0";
+                    disconnect_argv[3] = 0;
+                    if (lang_try_run(3, disconnect_argv) == 0) {
+                        network_applet_invalidate_backend_cache();
+                        network_applet_sync_backend(1);
+                        network_applet_export_manager_state();
+                        dirty = 1;
+                    }
+                    continue;
+                }
+            }
+            if (g_sound_applet.popup_open) {
+                if (key == 27) {
+                    g_sound_applet.popup_open = 0;
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_LEFT || key == 'a' || key == 'A') {
+                    g_sound_applet.output_volume = desktop_clamp_percent_step(g_sound_applet.output_volume, -5);
+                    g_sound_applet.output_muted = (g_sound_applet.output_volume == 0);
+                    sound_applet_write_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, g_sound_applet.output_volume);
+                    sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
+                    sound_applet_invalidate_backend_cache();
+                    sound_applet_save_settings();
+                    sound_applet_export_service_state();
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_RIGHT || key == 'd' || key == 'D') {
+                    g_sound_applet.output_volume = desktop_clamp_percent_step(g_sound_applet.output_volume, 5);
+                    g_sound_applet.output_muted = 0;
+                    sound_applet_write_level(MK_AUDIO_MIXER_OUTPUT_LEVEL, g_sound_applet.output_volume);
+                    sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
+                    sound_applet_invalidate_backend_cache();
+                    sound_applet_save_settings();
+                    sound_applet_export_service_state();
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_UP || key == 'w' || key == 'W') {
+                    if (g_sound_applet.input_count <= 0) {
+                        continue;
+                    }
+                    g_sound_applet.input_volume = desktop_clamp_percent_step(g_sound_applet.input_volume, 5);
+                    g_sound_applet.input_muted = 0;
+                    sound_applet_write_level(MK_AUDIO_MIXER_INPUT_LEVEL, g_sound_applet.input_volume);
+                    sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
+                    sound_applet_invalidate_backend_cache();
+                    sound_applet_save_settings();
+                    sound_applet_export_service_state();
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_DOWN || key == 's' || key == 'S') {
+                    if (g_sound_applet.input_count <= 0) {
+                        continue;
+                    }
+                    g_sound_applet.input_volume = desktop_clamp_percent_step(g_sound_applet.input_volume, -5);
+                    g_sound_applet.input_muted = (g_sound_applet.input_volume == 0);
+                    sound_applet_write_level(MK_AUDIO_MIXER_INPUT_LEVEL, g_sound_applet.input_volume);
+                    sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
+                    sound_applet_invalidate_backend_cache();
+                    sound_applet_save_settings();
+                    sound_applet_export_service_state();
+                    dirty = 1;
+                    continue;
+                }
+                if (key == 'm' || key == 'M' || key == '\n') {
+                    g_sound_applet.output_muted = !g_sound_applet.output_muted;
+                    sound_applet_write_mute(MK_AUDIO_MIXER_OUTPUT_MUTE, g_sound_applet.output_muted);
+                    sound_applet_invalidate_backend_cache();
+                    sound_applet_save_settings();
+                    sound_applet_export_service_state();
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_DELETE) {
+                    if (g_sound_applet.input_count <= 0) {
+                        continue;
+                    }
+                    g_sound_applet.input_muted = !g_sound_applet.input_muted;
+                    sound_applet_write_mute(MK_AUDIO_MIXER_INPUT_MUTE, g_sound_applet.input_muted);
+                    sound_applet_invalidate_backend_cache();
+                    sound_applet_save_settings();
+                    sound_applet_export_service_state();
                     dirty = 1;
                     continue;
                 }
@@ -4777,6 +6129,10 @@ void desktop_main(void) {
                     calculator_press_key(calc, (char)key);
                     dirty = 1;
                 }
+            } else if (g_windows[focused].type == APP_AUDIO_PLAYER) {
+                if (audioplayer_handle_key(&g_audioplayers[g_windows[focused].instance], key)) {
+                    dirty = 1;
+                }
             } else if (g_windows[focused].type == APP_SKETCHPAD) {
                 if (key == 'c' || key == 'C') {
                     sketchpad_clear(&g_sketches[g_windows[focused].instance]);
@@ -4831,14 +6187,6 @@ void desktop_main(void) {
             }
         }
 
-        if (g_network_applet.state == NETWORK_APPLET_CONNECTING &&
-            network_connect_start_tick != 0u &&
-            (ticks - network_connect_start_tick) >= 120u) {
-            g_network_applet.state = NETWORK_APPLET_CONNECTED;
-            network_connect_start_tick = 0u;
-            dirty = 1;
-        }
-
         if (dirty) {
             draw_desktop(&mouse, menu_open, start_hover,
                          menu_hover, g_windows, MAX_WINDOWS, focused);
@@ -4891,6 +6239,10 @@ void desktop_main(void) {
                     break;
                 case APP_IMAGEVIEWER:
                     imageviewer_draw_window(&g_imageviewers[g_windows[i].instance], active,
+                                            min_hover, max_hover, close_hover);
+                    break;
+                case APP_AUDIO_PLAYER:
+                    audioplayer_draw_window(&g_audioplayers[g_windows[i].instance], active,
                                             min_hover, max_hover, close_hover);
                     break;
                 case APP_SKETCHPAD:

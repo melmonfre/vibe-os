@@ -311,6 +311,7 @@ static enum app_type shell_app_type_from_name(const char *name) {
     if (strcmp(name, "taskmgr") == 0) return APP_TASKMANAGER;
     if (strcmp(name, "calculator") == 0) return APP_CALCULATOR;
     if (strcmp(name, "imageviewer") == 0) return APP_IMAGEVIEWER;
+    if (strcmp(name, "audioplayer") == 0) return APP_AUDIO_PLAYER;
     if (strcmp(name, "sketchpad") == 0) return APP_SKETCHPAD;
     if (strcmp(name, "snake") == 0) return APP_SNAKE;
     if (strcmp(name, "tetris") == 0) return APP_TETRIS;

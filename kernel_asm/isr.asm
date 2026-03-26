@@ -4,7 +4,20 @@ BITS 32
 
 global irq0_stub
 global irq1_stub
+global irq2_stub
+global irq3_stub
+global irq4_stub
+global irq5_stub
+global irq6_stub
+global irq7_stub
+global irq8_stub
+global irq9_stub
+global irq10_stub
+global irq11_stub
 global irq12_stub
+global irq13_stub
+global irq14_stub
+global irq15_stub
 global syscall_stub
 
 global divide_error_stub
@@ -16,6 +29,7 @@ global double_fault_stub
 extern kernel_timer_irq_handler
 extern kernel_keyboard_irq_handler
 extern kernel_mouse_irq_handler
+extern kernel_irq_dispatch
 extern syscall_dispatch_internal
 
 extern divide_error_handler
@@ -38,12 +52,38 @@ irq1_stub:
     popa
     iretd
 
+%macro IRQ_STUB 2
+irq%1_stub:
+    pusha
+    cld
+    push dword %2
+    call kernel_irq_dispatch
+    add esp, 4
+    popa
+    iretd
+%endmacro
+
+IRQ_STUB 2, 2
+IRQ_STUB 3, 3
+IRQ_STUB 4, 4
+IRQ_STUB 5, 5
+IRQ_STUB 6, 6
+IRQ_STUB 7, 7
+IRQ_STUB 8, 8
+IRQ_STUB 9, 9
+IRQ_STUB 10, 10
+IRQ_STUB 11, 11
+
 irq12_stub:
     pusha
     cld
     call kernel_mouse_irq_handler
     popa
     iretd
+
+IRQ_STUB 13, 13
+IRQ_STUB 14, 14
+IRQ_STUB 15, 15
 
 ; syscall_stub: pass registers as function arguments to syscall_dispatch_internal
 ; syscall_dispatch_internal(uint32_t num, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e)

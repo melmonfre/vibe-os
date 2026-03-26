@@ -3,8 +3,13 @@
 
 #include <stddef.h>
 #include <stdarg.h>
+#include <sys/socket.h>
 
 #include <lang/include/vibe_app.h>
+#include <lang/include/vibe_audio_client.h>
+#include <lang/include/vibe_network_client.h>
+
+struct mk_network_ethernet_config;
 
 const struct vibe_app_context *vibe_app_get_context(void);
 void vibe_app_console_putc(char c);
@@ -32,6 +37,31 @@ int vibe_app_keyboard_set_layout(const char *name);
 int vibe_app_keyboard_get_layout(char *buf, int max_len);
 int vibe_app_keyboard_get_available_layouts(char *buf, int max_len);
 int vibe_app_read_line(char *buf, int max_len, const char *prompt);
+int vibe_app_audio_get_info(struct mk_audio_info *info);
+int vibe_app_audio_get_status(struct audio_status *status);
+int vibe_app_audio_set_params(const struct audio_swpar *params);
+int vibe_app_audio_start(void);
+int vibe_app_audio_stop(void);
+int vibe_app_audio_write(const void *data, uint32_t size);
+int vibe_app_audio_read(void *data, uint32_t size);
+int vibe_app_audio_get_control_info(uint32_t index, struct mk_audio_control_info *info);
+int vibe_app_audio_mixer_read(mixer_ctrl_t *control);
+int vibe_app_audio_mixer_write(const mixer_ctrl_t *control);
+int vibe_app_network_get_info(struct mk_network_info *info);
+int vibe_app_network_get_status(struct mk_network_status *status);
+int vibe_app_network_scan(uint32_t index, struct mk_network_scan_info *info);
+int vibe_app_network_connect_wifi(const struct mk_network_connect_request *request);
+int vibe_app_network_connect_ethernet(const char *if_name);
+int vibe_app_network_configure_ethernet(const struct mk_network_ethernet_config *config);
+int vibe_app_network_disconnect(const char *if_name);
+int vibe_app_network_socket(uint32_t domain, uint32_t type, uint32_t protocol);
+int vibe_app_network_bind(int handle, const struct sockaddr *address, uint32_t address_length);
+int vibe_app_network_socket_connect(int handle, const struct sockaddr *address, uint32_t address_length);
+int vibe_app_network_send(int handle, const void *data, uint32_t size);
+int vibe_app_network_recv(int handle, void *buffer, uint32_t size);
+int vibe_app_network_close(int handle);
+int vibe_app_network_listen(int handle, int backlog);
+int vibe_app_network_accept(int handle);
 
 void *vibe_app_malloc(size_t size);
 void vibe_app_free(void *ptr);

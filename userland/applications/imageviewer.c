@@ -119,7 +119,10 @@ static int imageviewer_wallpaper_node(void) {
         return node;
     }
 
-    node = fs_resolve("/wallpaper.png");
+    node = fs_resolve("/assets/wallpaper.png");
+    if (!image_node_is_supported(node)) {
+        node = fs_resolve("/wallpaper.png");
+    }
     if (image_node_is_supported(node)) {
         return node;
     }

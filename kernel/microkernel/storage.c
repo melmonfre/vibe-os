@@ -208,7 +208,6 @@ int mk_storage_service_write_sectors(uint32_t lba, const void *src, uint32_t sec
     if (src == 0 || sector_count == 0u) {
         return -1;
     }
-    return kernel_storage_write_sectors(lba, src, sector_count);
 
     byte_count = sector_count * KERNEL_PERSIST_SECTOR_SIZE;
     if (mk_transfer_create(mk_storage_current_pid(), byte_count, &transfer_id) != 0) {

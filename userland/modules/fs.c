@@ -6,7 +6,7 @@
 #include <string.h>
 
 #define FS_PERSIST_MAGIC 0x56465331u
-#define FS_PERSIST_VERSION 2u
+#define FS_PERSIST_VERSION 3u
 #define FS_SECTOR_SIZE 512u
 #define FS_STORAGE_RETRY_COUNT 4u
 #define FS_STORAGE_DATA_START_LBA (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT)
@@ -29,13 +29,13 @@ static int g_fs_dirty = 0;
 static uint32_t g_fs_last_sync_tick = 0u;
 static int g_fs_doom_assets_scanned = 0;
 static int g_fs_texture_assets_scanned = 0;
-static int g_fs_wallpaper_asset_scanned = 0;
+static int g_fs_assets_scanned = 0;
 
 #define FS_SYNC_PERIOD_TICKS 1000u
 
 static void fs_ensure_doom_wad_registered(void);
 static void fs_ensure_craft_textures_registered(void);
-static void fs_ensure_wallpaper_registered(void);
+static void fs_ensure_assets_registered(void);
 static uint32_t fs_storage_total_sectors(void);
 
 #define DOOM_WAD_IMAGE_LBA 131728u
@@ -45,6 +45,9 @@ static uint32_t fs_storage_total_sectors(void);
 #define CRAFT_SKY_IMAGE_LBA 156560u
 #define CRAFT_SIGN_IMAGE_LBA 156816u
 #define WALLPAPER_IMAGE_LBA 156944u
+#define VIBE_BOOT_WAV_IMAGE_LBA 157968u
+#define VIBE_DESKTOP_WAV_IMAGE_LBA 158992u
+#define BOOTLOADER_BG_IMAGE_LBA 160016u
 
 static void fs_reset_node(int idx) {
     int i;
@@ -260,10 +263,12 @@ static void fs_maybe_register_boot_assets_for_path(const char *path) {
         g_fs_texture_assets_scanned = 0;
     }
 
-    if (fs_path_matches_root_prefix(path, "/wallpaper.png") && !g_fs_wallpaper_asset_scanned) {
-        g_fs_wallpaper_asset_scanned = 1;
-        fs_ensure_wallpaper_registered();
-        g_fs_wallpaper_asset_scanned = 0;
+    if ((fs_path_matches_root_prefix(path, "/wallpaper.png") ||
+         fs_path_matches_root_prefix(path, "/assets")) &&
+        !g_fs_assets_scanned) {
+        g_fs_assets_scanned = 1;
+        fs_ensure_assets_registered();
+        g_fs_assets_scanned = 0;
     }
 }
 
@@ -313,6 +318,7 @@ static int fs_write_sector_bytes(uint32_t start_lba, const uint8_t *data, int si
         memset(sector, 0, sizeof(sector));
         memcpy(sector, data + offset, chunk);
         if (sys_storage_write_sectors(start_lba + i, sector, 1u) != 0) {
+            sys_write_debug("fs: sector write fail\n");
             return -1;
         }
     }
@@ -425,6 +431,30 @@ static int fs_detect_bmp_file(uint32_t lba, uint32_t *sector_count_out, int *siz
     }
 
     total_size = fs_read_u32_le(header + 2);
+    if (total_size < sizeof(header)) {
+        return -1;
+    }
+
+    *size_out = (int)total_size;
+    *sector_count_out = (total_size + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
+    return 0;
+}
+
+static int fs_detect_wav_file(uint32_t lba, uint32_t *sector_count_out, int *size_out) {
+    uint8_t header[12];
+    uint32_t total_size;
+
+    if (!sector_count_out || !size_out) {
+        return -1;
+    }
+    if (fs_read_image_bytes(lba, 0u, header, (uint32_t)sizeof(header)) != 0) {
+        return -1;
+    }
+    if (memcmp(header, "RIFF", 4u) != 0 || memcmp(header + 8, "WAVE", 4u) != 0) {
+        return -1;
+    }
+
+    total_size = fs_read_u32_le(header + 4) + 8u;
     if (total_size < sizeof(header)) {
         return -1;
     }
@@ -1064,9 +1094,11 @@ int fs_write_bytes(const char *path, const uint8_t *data, int size) {
     sector_count = fs_sector_count_for_size(size);
     start_lba = fs_find_free_extent(sector_count, idx);
     if (start_lba == 0u) {
+        sys_write_debug("fs: no free extent for large write\n");
         return -4;
     }
     if (fs_write_sector_bytes(start_lba, data, size) != 0) {
+        sys_write_debug("fs: large write failed\n");
         return -5;
     }
 
@@ -1185,7 +1217,8 @@ static void fs_register_image_asset(const char *path, uint32_t lba) {
     int size = 0;
 
     if (fs_detect_png_file(lba, &sectors, &size) == 0 ||
-        fs_detect_bmp_file(lba, &sectors, &size) == 0) {
+        fs_detect_bmp_file(lba, &sectors, &size) == 0 ||
+        fs_detect_wav_file(lba, &sectors, &size) == 0) {
         (void)fs_register_image_file(path, lba, sectors, size);
         fs_debug_asset_path("fs: asset file ", path);
     }
@@ -1206,12 +1239,20 @@ static void fs_ensure_craft_textures_registered(void) {
     fs_register_image_asset("/textures/sign.png", CRAFT_SIGN_IMAGE_LBA);
 }
 
-static void fs_ensure_wallpaper_registered(void) {
+static void fs_ensure_assets_registered(void) {
     if (g_fs_root < 0) {
         return;
     }
 
+    if (fs_resolve("/assets") < 0) {
+        (void)fs_create("/assets", 1);
+    }
+
+    fs_register_image_asset("/assets/wallpaper.png", WALLPAPER_IMAGE_LBA);
     fs_register_image_asset("/wallpaper.png", WALLPAPER_IMAGE_LBA);
+    fs_register_image_asset("/assets/vibe_os_boot.wav", VIBE_BOOT_WAV_IMAGE_LBA);
+    fs_register_image_asset("/assets/vibe_os_desktop.wav", VIBE_DESKTOP_WAV_IMAGE_LBA);
+    fs_register_image_asset("/assets/bootloader_background.png", BOOTLOADER_BG_IMAGE_LBA);
 }
 
 void fs_build_path(int node, char *out, int max_len) {
@@ -1256,7 +1297,7 @@ void fs_init(void) {
     g_fs_sync_suspended = 1;
     g_fs_doom_assets_scanned = 0;
     g_fs_texture_assets_scanned = 0;
-    g_fs_wallpaper_asset_scanned = 0;
+    g_fs_assets_scanned = 0;
     for (i = 0; i < FS_MAX_NODES; ++i) {
         fs_reset_node(i);
     }
@@ -1265,6 +1306,7 @@ void fs_init(void) {
     g_fs_cwd = -1;
 
     if (fs_load_persistent_image() == 0) {
+        fs_ensure_assets_registered();
         kernel_debug_puts("fs: persistent image valid\n");
         kernel_debug_puts("fs: asset scans deferred\n");
         g_fs_sync_suspended = 0;
@@ -1292,6 +1334,7 @@ void fs_init(void) {
     (void)fs_create("/dev", 1);
     (void)fs_create("/DOOM", 1);
     (void)fs_create("/textures", 1);
+    (void)fs_create("/assets", 1);
     (void)fs_create("/docs", 1);
     (void)fs_create("/config", 1);
     (void)fs_create("/trash", 1);
@@ -1310,6 +1353,7 @@ void fs_init(void) {
     for (i = 0; i < (int)G_APP_CATALOG_STUB_PATHS_COUNT; ++i) {
         (void)fs_write_file(g_app_catalog_stub_paths[i], "", 0);
     }
+    fs_ensure_assets_registered();
     kernel_debug_puts("fs: compat stubs created\n");
     kernel_debug_puts("fs: asset scans deferred\n");
     g_fs_sync_suspended = 0;

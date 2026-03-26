@@ -1,10 +1,12 @@
-#ifndef KERNEL_MICROKERNEL_NETWORK_H
-#define KERNEL_MICROKERNEL_NETWORK_H
+#ifndef VIBE_LANG_VIBE_NETWORK_CLIENT_H
+#define VIBE_LANG_VIBE_NETWORK_CLIENT_H
 
 #include <stdint.h>
-#include <sys/socket.h>
 
-struct mk_message;
+#define MK_NETWORK_IF_NAME_MAX 16
+#define MK_NETWORK_ADDR_MAX 40
+#define MK_NETWORK_SSID_MAX 32
+#define MK_NETWORK_PSK_MAX 64
 
 enum mk_network_capability_flags {
     MK_NETWORK_CAPS_QUERY_ONLY = 1u << 0,
@@ -29,44 +31,6 @@ enum mk_network_socket_type_bits {
     MK_NETWORK_SOCKET_DGRAM = 1u << 1,
     MK_NETWORK_SOCKET_RAW = 1u << 2
 };
-
-struct mk_network_socket_request {
-    uint32_t domain;
-    uint32_t type;
-    uint32_t protocol;
-};
-
-struct mk_network_name_request {
-    int32_t handle;
-    uint32_t address_length;
-    uint32_t transfer_id;
-};
-
-struct mk_network_io_request {
-    int32_t handle;
-    int32_t flags;
-    uint32_t size;
-    uint32_t transfer_id;
-    uint32_t address_length;
-    uint32_t address_transfer_id;
-};
-
-struct mk_network_option_request {
-    int32_t handle;
-    int32_t level;
-    int32_t option_name;
-    uint32_t value_size;
-    uint32_t transfer_id;
-};
-
-struct mk_network_result {
-    int32_t value;
-};
-
-#define MK_NETWORK_IF_NAME_MAX 16
-#define MK_NETWORK_ADDR_MAX 40
-#define MK_NETWORK_SSID_MAX 32
-#define MK_NETWORK_PSK_MAX 64
 
 enum mk_network_link_state {
     MK_NETWORK_LINK_DISCONNECTED = 0,
@@ -105,11 +69,6 @@ struct mk_network_status {
     char dns_server[MK_NETWORK_ADDR_MAX];
 };
 
-struct mk_network_scan_request {
-    uint32_t index;
-    char if_name[MK_NETWORK_IF_NAME_MAX];
-};
-
 struct mk_network_scan_info {
     uint32_t index;
     uint32_t signal_strength;
@@ -125,34 +84,11 @@ struct mk_network_connect_request {
     char psk[MK_NETWORK_PSK_MAX + 1];
 };
 
-struct mk_network_disconnect_request {
-    char if_name[MK_NETWORK_IF_NAME_MAX];
-};
-
 struct mk_network_ethernet_config {
     char if_name[MK_NETWORK_IF_NAME_MAX];
     char ip_address[MK_NETWORK_ADDR_MAX];
     char gateway[MK_NETWORK_ADDR_MAX];
     char dns_server[MK_NETWORK_ADDR_MAX];
 };
-
-void mk_network_service_init(void);
-int mk_network_service_ready(void);
-int mk_network_service_get_info(struct mk_network_info *info);
-int mk_network_service_get_status(struct mk_network_status *status);
-int mk_network_service_get_scan(uint32_t index, struct mk_network_scan_info *info);
-int mk_network_service_connect_wifi(const struct mk_network_connect_request *request);
-int mk_network_service_connect_ethernet(const char *if_name);
-int mk_network_service_configure_ethernet(const struct mk_network_ethernet_config *config);
-int mk_network_service_disconnect(const char *if_name);
-int mk_network_service_socket(uint32_t domain, uint32_t type, uint32_t protocol);
-int mk_network_service_bind(int handle, const struct sockaddr *address, uint32_t address_length);
-int mk_network_service_socket_connect(int handle, const struct sockaddr *address, uint32_t address_length);
-int mk_network_service_send(int handle, const void *data, uint32_t size);
-int mk_network_service_recv(int handle, void *buffer, uint32_t size);
-int mk_network_service_close(int handle);
-int mk_network_service_listen(int handle, int backlog);
-int mk_network_service_accept(int handle);
-int mk_network_service_last_request(struct mk_message *message);
 
 #endif

@@ -86,6 +86,7 @@ QEMU := qemu-system-i386
 endif
 QEMU_MEMORY_MB ?= 3072
 QEMU_SERIAL_LOG ?= build/qemu-serial.log
+QEMU_AUDIO_CAPTURE_WAV ?= build/qemu-audio.wav
 QEMU_IMAGE_OPTS ?= format=raw,file=$(IMAGE),snapshot=on
 ifeq ($(strip $(PYTHON)),)
 PYTHON := python3
@@ -228,6 +229,8 @@ CRAFT_FONT_SRC := userland/applications/games/craft/upstream/textures/font.png
 CRAFT_SKY_SRC := userland/applications/games/craft/upstream/textures/sky.png
 CRAFT_SIGN_SRC := userland/applications/games/craft/upstream/textures/sign.png
 WALLPAPER_SRC := assets/wallpaper.png
+VIBE_BOOT_WAV_SRC := assets/vibe_os_boot.wav
+VIBE_DESKTOP_WAV_SRC := assets/vibe_os_desktop.wav
 WALLPAPER_RUNTIME_PNG := $(BUILD_DIR)/wallpaper-runtime.png
 WALLPAPER_RUNTIME_W := 1360
 WALLPAPER_RUNTIME_H := 720
@@ -239,7 +242,13 @@ CRAFT_TEXTURE_IMAGE_LBA := $(shell echo $$(( $(DOOM_WAD_IMAGE_LBA) + $(DOOM_WAD_
 CRAFT_FONT_IMAGE_LBA := $(shell echo $$(( $(CRAFT_TEXTURE_IMAGE_LBA) + 128 )))
 CRAFT_SKY_IMAGE_LBA := $(shell echo $$(( $(CRAFT_FONT_IMAGE_LBA) + 128 )))
 CRAFT_SIGN_IMAGE_LBA := $(shell echo $$(( $(CRAFT_SKY_IMAGE_LBA) + 256 )))
+WALLPAPER_RESERVED_SECTORS := 1024
+VIBE_BOOT_WAV_RESERVED_SECTORS := 1024
+VIBE_DESKTOP_WAV_RESERVED_SECTORS := 1024
 WALLPAPER_IMAGE_LBA := $(shell echo $$(( $(CRAFT_SIGN_IMAGE_LBA) + 128 )))
+VIBE_BOOT_WAV_IMAGE_LBA := $(shell echo $$(( $(WALLPAPER_IMAGE_LBA) + $(WALLPAPER_RESERVED_SECTORS) )))
+VIBE_DESKTOP_WAV_IMAGE_LBA := $(shell echo $$(( $(VIBE_BOOT_WAV_IMAGE_LBA) + $(VIBE_BOOT_WAV_RESERVED_SECTORS) )))
+BOOTLOADER_BG_IMAGE_LBA := $(shell echo $$(( $(VIBE_DESKTOP_WAV_IMAGE_LBA) + $(VIBE_DESKTOP_WAV_RESERVED_SECTORS) )))
 IMAGE_ASSET_MANIFEST := $(BUILD_DIR)/image-assets.manifest
 DATA_IMAGE := $(BUILD_DIR)/data-partition.img
 DATA_IMAGE_MANIFEST := $(BUILD_DIR)/data-partition.manifest
@@ -248,6 +257,7 @@ BOOT_POLICY_MANIFEST := $(BUILD_DIR)/boot-policy.txt
 PHASE6_REPORT := $(BUILD_DIR)/phase6-validation.md
 MODULAR_APPS_REPORT := $(BUILD_DIR)/modular-apps-validation.md
 GPU_BACKENDS_REPORT := $(BUILD_DIR)/gpu-backends-report.md
+AUDIO_STACK_REPORT := $(BUILD_DIR)/audio-stack-validation.md
 GPU_BACKENDS_I915_EXPERIMENTAL_REPORT := $(BUILD_DIR)/gpu-backends-i915-experimental-report.md
 GPU_BACKENDS_RECOVERY_REPORT := $(BUILD_DIR)/gpu-backends-recovery-report.md
 CRAFT_UPSTREAM_EXPERIMENTAL ?= 1
@@ -319,6 +329,7 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/applications/taskmgr.c \
 	$(USERLAND_DIR)/applications/calculator.c \
 	$(USERLAND_DIR)/applications/imageviewer.c \
+	$(USERLAND_DIR)/applications/audioplayer.c \
 	$(USERLAND_DIR)/applications/sketchpad.c \
 	$(USERLAND_DIR)/applications/games/snake.c \
 	$(USERLAND_DIR)/applications/games/tetris.c \
@@ -550,6 +561,38 @@ HELLO_APP_OBJS := \
 HELLO_APP_ELF := $(BUILD_DIR)/lang/hello.elf
 HELLO_APP_BIN := $(BUILD_DIR)/lang/hello.app
 
+SOUNDCTL_APP_BUILD_DIR := $(BUILD_DIR)/lang/soundctl
+SOUNDCTL_APP_OBJS := \
+	$(SOUNDCTL_APP_BUILD_DIR)/app_entry.o \
+	$(SOUNDCTL_APP_BUILD_DIR)/app_runtime.o \
+	$(SOUNDCTL_APP_BUILD_DIR)/soundctl_main.o
+SOUNDCTL_APP_ELF := $(BUILD_DIR)/lang/soundctl.elf
+SOUNDCTL_APP_BIN := $(BUILD_DIR)/lang/soundctl.app
+
+AUDIOSVC_APP_BUILD_DIR := $(BUILD_DIR)/lang/audiosvc
+AUDIOSVC_APP_OBJS := \
+	$(AUDIOSVC_APP_BUILD_DIR)/app_entry.o \
+	$(AUDIOSVC_APP_BUILD_DIR)/app_runtime.o \
+	$(AUDIOSVC_APP_BUILD_DIR)/audiosvc_main.o
+AUDIOSVC_APP_ELF := $(BUILD_DIR)/lang/audiosvc.elf
+AUDIOSVC_APP_BIN := $(BUILD_DIR)/lang/audiosvc.app
+
+NETMGRD_APP_BUILD_DIR := $(BUILD_DIR)/lang/netmgrd
+NETMGRD_APP_OBJS := \
+	$(NETMGRD_APP_BUILD_DIR)/app_entry.o \
+	$(NETMGRD_APP_BUILD_DIR)/app_runtime.o \
+	$(NETMGRD_APP_BUILD_DIR)/netmgrd_main.o
+NETMGRD_APP_ELF := $(BUILD_DIR)/lang/netmgrd.elf
+NETMGRD_APP_BIN := $(BUILD_DIR)/lang/netmgrd.app
+
+NETCTL_APP_BUILD_DIR := $(BUILD_DIR)/lang/netctl
+NETCTL_APP_OBJS := \
+	$(NETCTL_APP_BUILD_DIR)/app_entry.o \
+	$(NETCTL_APP_BUILD_DIR)/app_runtime.o \
+	$(NETCTL_APP_BUILD_DIR)/netctl_main.o
+NETCTL_APP_ELF := $(BUILD_DIR)/lang/netctl.elf
+NETCTL_APP_BIN := $(BUILD_DIR)/lang/netctl.app
+
 JS_APP_BUILD_DIR := $(BUILD_DIR)/lang/js
 JS_APP_OBJS := \
 	$(JS_APP_BUILD_DIR)/app_entry.o \
@@ -654,6 +697,7 @@ DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/applications/taskmgr.c \
 	$(USERLAND_DIR)/applications/calculator.c \
 	$(USERLAND_DIR)/applications/imageviewer.c \
+	$(USERLAND_DIR)/applications/audioplayer.c \
 	$(USERLAND_DIR)/applications/sketchpad.c \
 	$(USERLAND_DIR)/applications/games/snake.c \
 	$(USERLAND_DIR)/applications/games/tetris.c \
@@ -980,6 +1024,54 @@ $(HELLO_APP_BUILD_DIR)/hello_main.o: lang/apps/hello/hello_main.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(SOUNDCTL_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"soundctl\" -DVIBE_APP_BUILD_HEAP_SIZE=32768u -c $< -o $@
+
+$(SOUNDCTL_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SOUNDCTL_APP_BUILD_DIR)/soundctl_main.o: lang/apps/soundctl/soundctl_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(AUDIOSVC_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"audiosvc\" -DVIBE_APP_BUILD_HEAP_SIZE=32768u -c $< -o $@
+
+$(AUDIOSVC_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(AUDIOSVC_APP_BUILD_DIR)/audiosvc_main.o: lang/apps/audiosvc/audiosvc_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(NETMGRD_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"netmgrd\" -DVIBE_APP_BUILD_HEAP_SIZE=32768u -c $< -o $@
+
+$(NETMGRD_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(NETMGRD_APP_BUILD_DIR)/netmgrd_main.o: lang/apps/netmgrd/netmgrd_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(NETCTL_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"netctl\" -DVIBE_APP_BUILD_HEAP_SIZE=32768u -c $< -o $@
+
+$(NETCTL_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(NETCTL_APP_BUILD_DIR)/netctl_main.o: lang/apps/netctl/netctl_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(JS_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"js\" -DVIBE_APP_BUILD_HEAP_SIZE=65536u -c $< -o $@
@@ -1083,6 +1175,34 @@ $(HELLO_APP_ELF): $(HELLO_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(HELLO_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(HELLO_APP_BIN): $(HELLO_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(SOUNDCTL_APP_ELF): $(SOUNDCTL_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(SOUNDCTL_APP_OBJS) -o $@ $(LIBGCC_A)
+
+$(SOUNDCTL_APP_BIN): $(SOUNDCTL_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(AUDIOSVC_APP_ELF): $(AUDIOSVC_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(AUDIOSVC_APP_OBJS) -o $@ $(LIBGCC_A)
+
+$(AUDIOSVC_APP_BIN): $(AUDIOSVC_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(NETMGRD_APP_ELF): $(NETMGRD_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(NETMGRD_APP_OBJS) -o $@ $(LIBGCC_A)
+
+$(NETMGRD_APP_BIN): $(NETMGRD_APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+
+$(NETCTL_APP_ELF): $(NETCTL_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(NETCTL_APP_OBJS) -o $@ $(LIBGCC_A)
+
+$(NETCTL_APP_BIN): $(NETCTL_APP_ELF)
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
 
@@ -1212,7 +1332,7 @@ $(WALLPAPER_RUNTIME_PNG): $(WALLPAPER_SRC) tools/build_runtime_png_asset.py Make
 		--width $(WALLPAPER_RUNTIME_W) \
 		--height $(WALLPAPER_RUNTIME_H)
 
-$(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC) $(WALLPAPER_RUNTIME_PNG)
+$(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC) $(WALLPAPER_RUNTIME_PNG) $(VIBE_BOOT_WAV_SRC) $(VIBE_DESKTOP_WAV_SRC) $(BOOTLOADER_BG_SRC)
 	$(PYTHON) tools/build_data_partition.py \
 		--image $@ \
 		--image-total-sectors $(DATA_PARTITION_SECTORS) \
@@ -1227,6 +1347,9 @@ $(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FON
 		--asset "$(CRAFT_SKY_SRC):$(CRAFT_SKY_IMAGE_LBA):sky.png" \
 		--asset "$(CRAFT_SIGN_SRC):$(CRAFT_SIGN_IMAGE_LBA):sign.png" \
 		--asset "$(WALLPAPER_RUNTIME_PNG):$(WALLPAPER_IMAGE_LBA):wallpaper.png" \
+		--asset "$(VIBE_BOOT_WAV_SRC):$(VIBE_BOOT_WAV_IMAGE_LBA):vibe_os_boot.wav" \
+		--asset "$(VIBE_DESKTOP_WAV_SRC):$(VIBE_DESKTOP_WAV_IMAGE_LBA):vibe_os_desktop.wav" \
+		--asset "$(BOOTLOADER_BG_SRC):$(BOOTLOADER_BG_IMAGE_LBA):bootloader_background.png" \
 		$(LANG_APP_BINS)
 	@cp $(DATA_IMAGE_MANIFEST) $(IMAGE_ASSET_MANIFEST)
 
@@ -1316,6 +1439,27 @@ run-headless-debug: $(IMAGE)
 		fi; \
 	fi
 
+run-headless-audio-debug: $(IMAGE)
+	@mkdir -p $(dir $(QEMU_AUDIO_CAPTURE_WAV))
+	@rm -f $(QEMU_AUDIO_CAPTURE_WAV)
+	@echo "QEMU headless audio debug ativo. Captura WAV: $(QEMU_AUDIO_CAPTURE_WAV)"
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c \
+			-display none -serial stdio -monitor none \
+			-audiodev wav,id=snd0,path=$(QEMU_AUDIO_CAPTURE_WAV) \
+			-device AC97,audiodev=snd0; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c \
+				-display none -serial stdio -monitor none \
+				-audiodev wav,id=snd0,path=$(QEMU_AUDIO_CAPTURE_WAV) \
+				-device AC97,audiodev=snd0; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
+
 run-headless-core2duo-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
 		$(QEMU) -cpu core2duo -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
@@ -1397,6 +1541,24 @@ validate-phase6: $(IMAGE)
 
 validate-modular-apps: $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-audio-stack: $(IMAGE)
+	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report $(AUDIO_STACK_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-audio-stack-long: $(IMAGE)
+	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-stack-long-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --record-ms 3000
+
+validate-audio-stack-roundtrip: $(IMAGE)
+	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-stack-roundtrip-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --record-ms 1500 --verify-capture-playback
+
+validate-audio-hda-smoke: $(IMAGE)
+	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-hda-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --audio-device intel-hda --audio-device hda-duplex --expect-backend compat-azalia --skip-capture
+
+validate-audio-hda-playback: $(IMAGE)
+	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-hda-playback-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --audio-device intel-hda --audio-device hda-duplex --expect-backend compat-azalia --skip-capture --verify-playback-path /assets/vibe_os_desktop.wav --require-path-programmed --require-hardware-diag
+
+validate-audio-hda-startup: $(IMAGE)
+	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-hda-startup-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --audio-device intel-hda --audio-device hda-duplex --expect-backend compat-azalia --skip-capture --require-boot-startup-sound --require-desktop-startup-sound
 
 validate-gpu-backends: $(IMAGE)
 	$(PYTHON) tools/validate_gpu_backends.py --image $(IMAGE) --report $(GPU_BACKENDS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)

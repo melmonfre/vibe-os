@@ -160,6 +160,35 @@ static void ui_append_kv_u32(char *buf, const char *key, uint32_t value, int max
     str_append(buf, "\n", max_len);
 }
 
+static const char *ui_path_basename(const char *path) {
+    const char *base = path;
+
+    if (path == 0) {
+        return "";
+    }
+    for (const char *p = path; *p != '\0'; ++p) {
+        if (*p == '/') {
+            base = p + 1;
+        }
+    }
+    return base;
+}
+
+static int ui_wallpaper_path_needs_default_migration(const char *path) {
+    const char *base = ui_path_basename(path);
+
+    if (path == 0 || path[0] == '\0') {
+        return 1;
+    }
+    if (str_eq(path, "/wallpaper.png")) {
+        return 1;
+    }
+    if (str_eq(base, "bootloader_background.png")) {
+        return 1;
+    }
+    return 0;
+}
+
 static void ui_wallpaper_reset(int explicit_none) {
     ui_wallpaper_release_pixels();
     g_wallpaper.source_node = -1;
@@ -212,14 +241,23 @@ static int ui_wallpaper_set_from_node_internal(int node, int persist) {
 }
 
 static int ui_try_set_default_wallpaper(void) {
-    int node = fs_resolve("/wallpaper.png");
+    int node = fs_resolve("/assets/wallpaper.png");
+
+    if (node < 0) {
+        node = fs_resolve("/wallpaper.png");
+    }
 
     if (node < 0) {
         sys_write_debug("ui: default wallpaper not found\n");
         ui_wallpaper_reset(0);
         return -1;
     }
-    return ui_wallpaper_set_from_node_internal(node, 0);
+    if (ui_wallpaper_set_from_node_internal(node, 0) == 0) {
+        return 0;
+    }
+    sys_write_debug("ui: default wallpaper load failed\n");
+    ui_wallpaper_reset(0);
+    return -1;
 }
 
 static void ui_reload_wallpaper_for_current_mode(void) {
@@ -263,6 +301,7 @@ static void ui_save_settings(void) {
     ui_append_kv_u32(text, "text=", g_theme.text, (int)sizeof(text));
     ui_append_kv_u32(text, "width=", SCREEN_WIDTH, (int)sizeof(text));
     ui_append_kv_u32(text, "height=", SCREEN_HEIGHT, (int)sizeof(text));
+    ui_append_kv_u32(text, "wallpaper_explicit_none=", g_wallpaper.explicit_none ? 1u : 0u, (int)sizeof(text));
     str_append(text, "wallpaper=", (int)sizeof(text));
     str_append(text, wallpaper, (int)sizeof(text));
     str_append(text, "\n", (int)sizeof(text));
@@ -277,7 +316,9 @@ static void ui_load_settings(void) {
     struct desktop_theme loaded = g_theme;
     uint32_t width = SCREEN_WIDTH;
     uint32_t height = SCREEN_HEIGHT;
+    uint32_t wallpaper_explicit_none = 0u;
     int clear_wallpaper = 1;
+    int migrate_to_default = 0;
 
     if (idx < 0 || g_fs_nodes[idx].is_dir || g_fs_nodes[idx].size <= 0) {
         return;
@@ -318,6 +359,8 @@ static void ui_load_settings(void) {
             width = value;
         } else if (ui_starts_with(line, "height=") && ui_parse_uint(line + 7, &value)) {
             height = value;
+        } else if (ui_starts_with(line, "wallpaper_explicit_none=") && ui_parse_uint(line + 24, &value)) {
+            wallpaper_explicit_none = value != 0u;
         } else if (ui_starts_with(line, "wallpaper=")) {
             str_copy_limited(wallpaper, line + 10, (int)sizeof(wallpaper));
             clear_wallpaper = wallpaper[0] == '\0';
@@ -334,16 +377,40 @@ static void ui_load_settings(void) {
     if (clear_wallpaper) {
         ui_wallpaper_reset(0);
         (void)ui_try_set_default_wallpaper();
+        migrate_to_default = 1;
     } else if (str_eq(wallpaper, "@none")) {
-        ui_wallpaper_reset(1);
-    } else {
-        int node = fs_resolve(wallpaper);
-        if (node >= 0) {
-            (void)ui_wallpaper_set_from_node_internal(node, 0);
+        if (wallpaper_explicit_none != 0u) {
+            ui_wallpaper_reset(1);
         } else {
             ui_wallpaper_reset(0);
             (void)ui_try_set_default_wallpaper();
+            migrate_to_default = 1;
         }
+    } else {
+        int node;
+
+        if (ui_wallpaper_path_needs_default_migration(wallpaper)) {
+            ui_wallpaper_reset(0);
+            (void)ui_try_set_default_wallpaper();
+            migrate_to_default = 1;
+        } else {
+            node = fs_resolve(wallpaper);
+            if (node >= 0) {
+                if (ui_wallpaper_set_from_node_internal(node, 0) != 0) {
+                    ui_wallpaper_reset(0);
+                    (void)ui_try_set_default_wallpaper();
+                    migrate_to_default = 1;
+                }
+            } else {
+                ui_wallpaper_reset(0);
+                (void)ui_try_set_default_wallpaper();
+                migrate_to_default = 1;
+            }
+        }
+    }
+
+    if (migrate_to_default) {
+        ui_save_settings();
     }
 }
 
@@ -796,6 +863,7 @@ static const char *app_caption(enum app_type type) {
     case APP_DOOM: return "DOOM";
     case APP_CRAFT: return "Craft";
     case APP_IMAGEVIEWER: return "Imagens";
+    case APP_AUDIO_PLAYER: return "Audio";
     case APP_PERSONALIZE: return "Tema";
     case APP_TRASH: return "Lixeira";
     default: return "App";

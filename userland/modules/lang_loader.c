@@ -11,6 +11,8 @@
 static struct vibe_app_context g_app_ctx;
 static struct vibe_appfs_directory g_cached_directory;
 static int g_cached_directory_valid = 0;
+static unsigned char *g_host_read_file_buf = 0;
+static int g_host_read_file_buf_capacity = 0;
 static void lang_debug_vga(int row, const char *text);
 void *malloc(size_t size);
 void *realloc(void *ptr, size_t size);
@@ -234,6 +236,7 @@ static int lang_storage_read_bytes(uint32_t lba_start, void *dst, uint32_t secto
 
 static int host_read_file(const char *path, const char **data_out, int *size_out) {
     int node;
+    unsigned char *new_buf;
 
     if (!path || !data_out || !size_out) {
         return -1;
@@ -242,6 +245,27 @@ static int host_read_file(const char *path, const char **data_out, int *size_out
     node = fs_resolve(path);
     if (node < 0 || g_fs_nodes[node].is_dir) {
         return -1;
+    }
+
+    if (g_fs_nodes[node].storage_kind == FS_NODE_STORAGE_IMAGE) {
+        if (g_fs_nodes[node].size < 0) {
+            return -1;
+        }
+        if (g_fs_nodes[node].size > g_host_read_file_buf_capacity) {
+            new_buf = (unsigned char *)realloc(g_host_read_file_buf, (size_t)g_fs_nodes[node].size);
+            if (!new_buf) {
+                return -1;
+            }
+            g_host_read_file_buf = new_buf;
+            g_host_read_file_buf_capacity = g_fs_nodes[node].size;
+        }
+        if (g_fs_nodes[node].size > 0 &&
+            fs_read_node_bytes(node, 0, g_host_read_file_buf, g_fs_nodes[node].size) != g_fs_nodes[node].size) {
+            return -1;
+        }
+        *data_out = (const char *)g_host_read_file_buf;
+        *size_out = g_fs_nodes[node].size;
+        return 0;
     }
 
     *data_out = g_fs_nodes[node].data;

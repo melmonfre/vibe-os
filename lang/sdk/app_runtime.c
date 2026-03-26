@@ -6,6 +6,31 @@
 #define VIBE_APP_SYSCALL_YIELD 10
 #define VIBE_APP_SYSCALL_WRITE_DEBUG 11
 #define VIBE_APP_SYSCALL_TEXT_PUTC 12
+#define VIBE_APP_SYSCALL_AUDIO_GETINFO 51
+#define VIBE_APP_SYSCALL_AUDIO_MIXER_READ 52
+#define VIBE_APP_SYSCALL_AUDIO_MIXER_WRITE 53
+#define VIBE_APP_SYSCALL_AUDIO_CONTROL_INFO 54
+#define VIBE_APP_SYSCALL_AUDIO_SET_PARAMS 60
+#define VIBE_APP_SYSCALL_AUDIO_START 61
+#define VIBE_APP_SYSCALL_AUDIO_STOP 62
+#define VIBE_APP_SYSCALL_AUDIO_WRITE 63
+#define VIBE_APP_SYSCALL_AUDIO_GET_STATUS 64
+#define VIBE_APP_SYSCALL_AUDIO_READ 75
+#define VIBE_APP_SYSCALL_NETWORK_GETINFO 55
+#define VIBE_APP_SYSCALL_NETWORK_GET_STATUS 56
+#define VIBE_APP_SYSCALL_NETWORK_SCAN 57
+#define VIBE_APP_SYSCALL_NETWORK_CONNECT_WIFI 58
+#define VIBE_APP_SYSCALL_NETWORK_DISCONNECT 59
+#define VIBE_APP_SYSCALL_NETWORK_SOCKET 65
+#define VIBE_APP_SYSCALL_NETWORK_BIND 66
+#define VIBE_APP_SYSCALL_NETWORK_CONNECT 67
+#define VIBE_APP_SYSCALL_NETWORK_SEND 68
+#define VIBE_APP_SYSCALL_NETWORK_RECV 69
+#define VIBE_APP_SYSCALL_NETWORK_CLOSE 70
+#define VIBE_APP_SYSCALL_NETWORK_LISTEN 71
+#define VIBE_APP_SYSCALL_NETWORK_ACCEPT 72
+#define VIBE_APP_SYSCALL_NETWORK_CONNECT_ETHERNET 73
+#define VIBE_APP_SYSCALL_NETWORK_CONFIGURE_ETHERNET 74
 #define EOF (-1)
 #define VIBE_APP_CLOCK_HZ 100u
 
@@ -795,6 +820,263 @@ size_t strlen(const char *text) {
         ++len;
     }
     return len;
+}
+
+int vibe_app_audio_get_info(struct mk_audio_info *info) {
+    if (info == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_GETINFO,
+                             (int)(uintptr_t)info,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_get_status(struct audio_status *status) {
+    if (status == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_GET_STATUS,
+                             (int)(uintptr_t)status,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_set_params(const struct audio_swpar *params) {
+    if (params == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_SET_PARAMS,
+                             (int)(uintptr_t)params,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_start(void) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_START, 0, 0, 0, 0, 0);
+}
+
+int vibe_app_audio_stop(void) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_STOP, 0, 0, 0, 0, 0);
+}
+
+int vibe_app_audio_write(const void *data, uint32_t size) {
+    if (data == 0 || size == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_WRITE,
+                             (int)(uintptr_t)data,
+                             (int)size,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_read(void *data, uint32_t size) {
+    if (data == 0 || size == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_READ,
+                             (int)(uintptr_t)data,
+                             (int)size,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_get_control_info(uint32_t index, struct mk_audio_control_info *info) {
+    if (info == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_CONTROL_INFO,
+                             (int)index,
+                             (int)(uintptr_t)info,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_mixer_read(mixer_ctrl_t *control) {
+    if (control == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_MIXER_READ,
+                             (int)(uintptr_t)control,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_audio_mixer_write(const mixer_ctrl_t *control) {
+    if (control == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_AUDIO_MIXER_WRITE,
+                             (int)(uintptr_t)control,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_get_info(struct mk_network_info *info) {
+    if (info == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_GETINFO,
+                             (int)(uintptr_t)info,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_get_status(struct mk_network_status *status) {
+    if (status == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_GET_STATUS,
+                             (int)(uintptr_t)status,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_scan(uint32_t index, struct mk_network_scan_info *info) {
+    if (info == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_SCAN,
+                             (int)index,
+                             (int)(uintptr_t)info,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_connect_wifi(const struct mk_network_connect_request *request) {
+    if (request == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_CONNECT_WIFI,
+                             (int)(uintptr_t)request,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_connect_ethernet(const char *if_name) {
+    if (if_name == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_CONNECT_ETHERNET,
+                             (int)(uintptr_t)if_name,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_configure_ethernet(const struct mk_network_ethernet_config *config) {
+    if (config == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_CONFIGURE_ETHERNET,
+                             (int)(uintptr_t)config,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_disconnect(const char *if_name) {
+    if (if_name == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_DISCONNECT,
+                             (int)(uintptr_t)if_name,
+                             0,
+                             0,
+                             0,
+                             0);
+}
+
+int vibe_app_network_socket(uint32_t domain, uint32_t type, uint32_t protocol) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_SOCKET,
+                             (int)domain,
+                             (int)type,
+                             (int)protocol,
+                             0,
+                             0);
+}
+
+int vibe_app_network_bind(int handle, const struct sockaddr *address, uint32_t address_length) {
+    if (address == 0 || address_length == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_BIND,
+                             handle,
+                             (int)(uintptr_t)address,
+                             (int)address_length,
+                             0,
+                             0);
+}
+
+int vibe_app_network_socket_connect(int handle, const struct sockaddr *address, uint32_t address_length) {
+    if (address == 0 || address_length == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_CONNECT,
+                             handle,
+                             (int)(uintptr_t)address,
+                             (int)address_length,
+                             0,
+                             0);
+}
+
+int vibe_app_network_send(int handle, const void *data, uint32_t size) {
+    if (data == 0 || size == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_SEND,
+                             handle,
+                             (int)(uintptr_t)data,
+                             (int)size,
+                             0,
+                             0);
+}
+
+int vibe_app_network_recv(int handle, void *buffer, uint32_t size) {
+    if (buffer == 0 || size == 0u) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_RECV,
+                             handle,
+                             (int)(uintptr_t)buffer,
+                             (int)size,
+                             0,
+                             0);
+}
+
+int vibe_app_network_close(int handle) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_CLOSE, handle, 0, 0, 0, 0);
+}
+
+int vibe_app_network_listen(int handle, int backlog) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_LISTEN, handle, backlog, 0, 0, 0);
+}
+
+int vibe_app_network_accept(int handle) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_ACCEPT, handle, 0, 0, 0, 0);
 }
 
 int strcmp(const char *a, const char *b) {

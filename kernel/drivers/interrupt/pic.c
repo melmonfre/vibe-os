@@ -2,6 +2,8 @@
 #include <kernel/interrupt.h>
 #include <kernel/hal/io.h>
 
+static kernel_irq_handler_t g_kernel_irq_handlers[16];
+
 static void pic_remap(void) {
     const uint8_t mask_master = 0xFF;
     const uint8_t mask_slave = 0xFF;
@@ -46,6 +48,37 @@ static void pic_unmask_irq(uint8_t irq_line) {
 
 void kernel_pic_init(void) {
     pic_remap();
+}
+
+void kernel_irq_unmask(uint8_t irq_line) {
+    if (irq_line >= 16u) {
+        return;
+    }
+    pic_unmask_irq(irq_line);
+}
+
+int kernel_irq_register_handler(uint8_t irq_line, kernel_irq_handler_t handler) {
+    if (irq_line >= 16u || handler == 0) {
+        return -1;
+    }
+    g_kernel_irq_handlers[irq_line] = handler;
+    return 0;
+}
+
+void kernel_irq_dispatch(uint8_t irq_line) {
+    kernel_irq_handler_t handler;
+
+    if (irq_line >= 16u) {
+        return;
+    }
+
+    handler = g_kernel_irq_handlers[irq_line];
+    if (handler != 0) {
+        handler();
+        return;
+    }
+
+    kernel_pic_send_eoi(irq_line);
 }
 
 void kernel_irq_enable(void) {

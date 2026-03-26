@@ -13,22 +13,22 @@
 static void bootstrap_print_banner(void) {
     struct userland_launch_info info;
 
-    console_write("VibeOS bootstrap init\n");
-    console_write("kernel pequeno, apps externas via AppFS\n");
-    console_write("userland.app carregada automaticamente no boot\n");
-    console_write("use 'help' para listar comandos e apps modulares\n");
-    console_write("atalhos graficos: startx, edit, nano\n");
+    sys_write_debug("VibeOS bootstrap init\n");
+    sys_write_debug("kernel pequeno, apps externas via AppFS\n");
+    sys_write_debug("userland.app carregada automaticamente no boot\n");
+    sys_write_debug("use 'help' para listar comandos e apps modulares\n");
+    sys_write_debug("atalhos graficos: startx, edit, nano\n");
     if (sys_launch_info(&info) == 0) {
         if ((info.boot_flags & BOOTINFO_FLAG_BOOT_SAFE_MODE) != 0u) {
-            console_write("boot mode: safe mode\n");
+            sys_write_debug("boot mode: safe mode\n");
         } else if ((info.boot_flags & BOOTINFO_FLAG_BOOT_RESCUE_SHELL) != 0u) {
-            console_write("boot mode: rescue shell\n");
+            sys_write_debug("boot mode: rescue shell\n");
         }
         if ((info.boot_flags & BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT) != 0u) {
-            console_write("video: i915 experimental commit enabled\n");
+            sys_write_debug("video: i915 experimental commit enabled\n");
         }
         if ((info.boot_flags & BOOTINFO_FLAG_FORCE_LEGACY_VIDEO) != 0u) {
-            console_write("video: legacy video driver forced\n");
+            sys_write_debug("video: legacy video driver forced\n");
         }
     }
 }
@@ -111,6 +111,11 @@ static void bootstrap_storage_smoke_test(void) {
     kernel_debug_puts("init: storage smoke ok\n");
 }
 
+static void bootstrap_try_play_boot_sound(void) {
+    (void)audio_play_wav_best_effort("/assets/vibe_os_boot.wav", "boot");
+    sys_write_debug("init: boot sound returned\n");
+}
+
 __attribute__((section(".entry"))) void userland_entry(void) {
     extern void kernel_debug_puts(const char *);
     int rc;
@@ -134,6 +139,7 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     fs_init();
     kernel_debug_puts("init: fs_init returned\n");
     bootstrap_storage_smoke_test();
+    bootstrap_try_play_boot_sound();
 
     sys_write_debug("init: appfs launcher ready\n");
     kernel_debug_puts("init: appfs launcher ready\n");

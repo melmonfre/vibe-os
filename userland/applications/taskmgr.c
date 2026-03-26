@@ -1,4 +1,5 @@
 #include <userland/applications/include/taskmgr.h>
+#include <userland/modules/include/fs.h>
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/syscalls.h>
 
@@ -6,6 +7,9 @@ static const struct rect DEFAULT_TASKMGR_WINDOW = {30, 30, 580, 360};
 static const int TASKMGR_ROW_HEIGHT = 18;
 static const int TASKMGR_REFRESH_TICKS = 25;
 static const uint32_t TASKMGR_VIDEO_REFRESH_TICKS = 250u;
+static const uint32_t TASKMGR_SERVICE_REFRESH_TICKS = 250u;
+static const uint32_t TASKMGR_NETMGRD_REFRESH_TICKS = 250u;
+static const char *TASKMGR_NETMGRD_STATUS_PATH = "/runtime/netmgrd-status.txt";
 
 static const char *taskmgr_video_backend_label(uint32_t backend_kind) {
     switch (backend_kind) {
@@ -47,6 +51,148 @@ static const char *taskmgr_video_present_label(uint32_t present_copy_kind) {
     case VIDEO_PRESENT_COPY_BYTE_LOOP:
     default: return "byte loop";
     }
+}
+
+static const char *taskmgr_audio_display_label(const struct mk_audio_info *info) {
+    if (info == 0) {
+        return "indisponivel";
+    }
+    if (info->device.name[0] != '\0') {
+        return info->device.name;
+    }
+    return "desconhecido";
+}
+
+static int taskmgr_audio_output_count(const struct mk_audio_info *info) {
+    if (info == 0) {
+        return 0;
+    }
+    return (int)info->parameters._spare[1];
+}
+
+static int taskmgr_audio_input_count(const struct mk_audio_info *info) {
+    if (info == 0) {
+        return 0;
+    }
+    return (int)info->parameters._spare[2];
+}
+
+static unsigned taskmgr_audio_feature_flags(const struct mk_audio_info *info) {
+    if (info == 0) {
+        return 0u;
+    }
+    return info->parameters._spare[5];
+}
+
+static unsigned taskmgr_audio_irq_count(const struct mk_audio_info *info) {
+    if (info == 0) {
+        return 0u;
+    }
+    return info->parameters._spare[0];
+}
+
+static void taskmgr_append_hex_fixed(char *buf, unsigned value, unsigned digits, int max_len) {
+    static const char hex[] = "0123456789abcdef";
+    char text[9];
+
+    if (digits < 1u) {
+        digits = 1u;
+    }
+    if (digits > 8u) {
+        digits = 8u;
+    }
+    for (unsigned i = 0u; i < digits; ++i) {
+        unsigned shift = (digits - 1u - i) * 4u;
+        text[i] = hex[(value >> shift) & 0xfu];
+    }
+    text[digits] = '\0';
+    str_append(buf, text, max_len);
+}
+
+static const char *taskmgr_audio_config_hint(const audio_device_t *device) {
+    const char *config;
+
+    if (device == 0) {
+        return "";
+    }
+    config = device->config;
+    if (strcmp(config, "hda-no-output-stream") == 0) {
+        return "sem output stream HDA";
+    }
+    if (strcmp(config, "hda-reset-failed") == 0) {
+        return "reset HDA falhou";
+    }
+    if (strcmp(config, "hda-bar-unavailable") == 0) {
+        return "BAR MMIO HDA ausente";
+    }
+    if (strcmp(config, "no-usable-hw-backend") == 0) {
+        return "hw ok, backend nao subiu";
+    }
+    if (strcmp(config, "no-pci-audio") == 0) {
+        return "sem controlador PCI";
+    }
+    if (strcmp(config, "bar-unavailable") == 0) {
+        return "BAR AC97 ausente";
+    }
+    return "";
+}
+
+static const char *taskmgr_network_display_label(const struct mk_network_info *info) {
+    if (info == 0) {
+        return "indisponivel";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_QUERY_ONLY) != 0u) {
+        return "query-only";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_LOOPBACK_READY) != 0u) {
+        return "loopback";
+    }
+    return "ativo";
+}
+
+static const char *taskmgr_network_link_label(const struct mk_network_status *status) {
+    if (status == 0) {
+        return "indisponivel";
+    }
+
+    switch (status->link_state) {
+    case MK_NETWORK_LINK_CONNECTED:
+        if (status->active_kind == MK_NETWORK_IF_WIFI) {
+            return "Wi-Fi conectado";
+        }
+        if (status->active_kind == MK_NETWORK_IF_ETHERNET) {
+            return "Ethernet conectado";
+        }
+        return "Conectado";
+    case MK_NETWORK_LINK_CONNECTING:
+        return "Conectando";
+    default:
+        return "Desconectado";
+    }
+}
+
+static int taskmgr_parse_int(const char *text) {
+    int value = 0;
+
+    if (text == 0) {
+        return 0;
+    }
+    while (*text >= '0' && *text <= '9') {
+        value = (value * 10) + (*text - '0');
+        ++text;
+    }
+    return value;
+}
+
+static void taskmgr_set_netmgrd_text(char *dst, int dst_size, const char *value) {
+    if (dst == 0 || dst_size <= 0) {
+        return;
+    }
+    if (value == 0 || value[0] == '\0' || (value[0] == '-' && value[1] == '\0')) {
+        dst[0] = '\0';
+        return;
+    }
+    str_copy_limited(dst, value, dst_size);
 }
 
 static void append_uint(char *buf, unsigned v, int max_len) {
@@ -152,6 +298,7 @@ static const char *taskmgr_window_label(enum app_type type) {
     case APP_DOOM: return "DOOM";
     case APP_CRAFT: return "Craft";
     case APP_IMAGEVIEWER: return "Imagens";
+    case APP_AUDIO_PLAYER: return "Audio Player";
     case APP_PERSONALIZE: return "Personalizar";
     case APP_TRASH: return "Lixeira";
     default: return "Aplicacao";
@@ -218,14 +365,150 @@ static void taskmgr_refresh_video_bench(struct taskmgr_state *tm, uint32_t ticks
     tm->last_video_refresh_ticks = ticks;
 }
 
+static void taskmgr_refresh_audio_info(struct taskmgr_state *tm, uint32_t ticks) {
+    if (tm == 0) {
+        return;
+    }
+    if (tm->last_audio_refresh_ticks != 0u &&
+        (ticks - tm->last_audio_refresh_ticks) < TASKMGR_SERVICE_REFRESH_TICKS) {
+        return;
+    }
+
+    tm->audio_info_valid = (sys_audio_get_info(&tm->audio_info) == 0);
+    tm->audio_status_valid = (sys_audio_get_status(&tm->audio_status) == 0);
+    tm->last_audio_refresh_ticks = ticks;
+}
+
+static void taskmgr_refresh_network_info(struct taskmgr_state *tm, uint32_t ticks) {
+    char text[512];
+    int size;
+    char *line;
+
+    if (tm == 0) {
+        return;
+    }
+    if (tm->last_network_refresh_ticks != 0u &&
+        (ticks - tm->last_network_refresh_ticks) < TASKMGR_SERVICE_REFRESH_TICKS) {
+        return;
+    }
+
+    tm->network_info_valid = (sys_network_get_info(&tm->network_info) == 0);
+    tm->network_status_valid = (sys_network_get_status(&tm->network_status) == 0);
+    tm->last_network_refresh_ticks = ticks;
+
+    if (tm->last_netmgrd_refresh_ticks != 0u &&
+        (ticks - tm->last_netmgrd_refresh_ticks) < TASKMGR_NETMGRD_REFRESH_TICKS) {
+        return;
+    }
+
+    memset(&tm->netmgrd_status, 0, sizeof(tm->netmgrd_status));
+    size = fs_read_file_bytes(TASKMGR_NETMGRD_STATUS_PATH, 0, text, (int)sizeof(text) - 1);
+    if (size <= 0) {
+        tm->last_netmgrd_refresh_ticks = ticks;
+        return;
+    }
+
+    text[size] = '\0';
+    line = text;
+    while (*line != '\0') {
+        char *next = line;
+        char *sep;
+
+        while (*next != '\0' && *next != '\n') {
+            ++next;
+        }
+        if (*next == '\n') {
+            *next = '\0';
+            ++next;
+        }
+
+        sep = line;
+        while (*sep != '\0' && *sep != '=') {
+            ++sep;
+        }
+        if (*sep == '=') {
+            *sep = '\0';
+            sep += 1;
+            if (strcmp(line, "state") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.state,
+                                         (int)sizeof(tm->netmgrd_status.state),
+                                         sep);
+            } else if (strcmp(line, "active_if") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.active_if,
+                                         (int)sizeof(tm->netmgrd_status.active_if),
+                                         sep);
+            } else if (strcmp(line, "active_kind") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.active_kind,
+                                         (int)sizeof(tm->netmgrd_status.active_kind),
+                                         sep);
+            } else if (strcmp(line, "backend") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.backend,
+                                         (int)sizeof(tm->netmgrd_status.backend),
+                                         sep);
+            } else if (strcmp(line, "dns_mode") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.dns_mode,
+                                         (int)sizeof(tm->netmgrd_status.dns_mode),
+                                         sep);
+            } else if (strcmp(line, "lease_state") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.lease_state,
+                                         (int)sizeof(tm->netmgrd_status.lease_state),
+                                         sep);
+            } else if (strcmp(line, "lease_source") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.lease_source,
+                                         (int)sizeof(tm->netmgrd_status.lease_source),
+                                         sep);
+            } else if (strcmp(line, "manager") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.manager,
+                                         (int)sizeof(tm->netmgrd_status.manager),
+                                         sep);
+            } else if (strcmp(line, "ssid") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.ssid,
+                                         (int)sizeof(tm->netmgrd_status.ssid),
+                                         sep);
+            } else if (strcmp(line, "ip") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.ip,
+                                         (int)sizeof(tm->netmgrd_status.ip),
+                                         sep);
+            } else if (strcmp(line, "gateway") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.gateway,
+                                         (int)sizeof(tm->netmgrd_status.gateway),
+                                         sep);
+            } else if (strcmp(line, "dns") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.dns,
+                                         (int)sizeof(tm->netmgrd_status.dns),
+                                         sep);
+            } else if (strcmp(line, "autoconnect") == 0) {
+                taskmgr_set_netmgrd_text(tm->netmgrd_status.autoconnect,
+                                         (int)sizeof(tm->netmgrd_status.autoconnect),
+                                         sep);
+            } else if (strcmp(line, "saved_profiles") == 0) {
+                tm->netmgrd_status.saved_profiles = taskmgr_parse_int(sep);
+            }
+        }
+
+        line = next;
+    }
+
+    tm->netmgrd_status.valid = 1;
+    tm->last_netmgrd_refresh_ticks = ticks;
+}
+
 void taskmgr_init_state(struct taskmgr_state *tm) {
     tm->window = DEFAULT_TASKMGR_WINDOW;
     tm->selected_tab = TASKMGR_TAB_PROCESSES;
     tm->last_refresh_ticks = 0u;
     tm->last_video_refresh_ticks = 0u;
+    tm->last_audio_refresh_ticks = 0u;
+    tm->last_network_refresh_ticks = 0u;
+    tm->last_netmgrd_refresh_ticks = 0u;
     tm->selected_pid = 0u;
     tm->task_count = 0;
     tm->video_bench_valid = 0;
+    tm->audio_info_valid = 0;
+    tm->audio_status_valid = 0;
+    tm->network_info_valid = 0;
+    tm->network_status_valid = 0;
+    memset(&tm->netmgrd_status, 0, sizeof(tm->netmgrd_status));
 }
 
 static struct rect taskmgr_sidebar_rect(const struct taskmgr_state *tm) {
@@ -354,37 +637,24 @@ static void taskmgr_draw_performance_card(const struct rect *card,
 static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
     const struct desktop_theme *theme = ui_theme_get();
     struct rect content = taskmgr_content_rect(tm);
-    struct rect cards[6];
+    struct rect cards[8];
     char value[64];
     char detail[96];
 
     taskmgr_refresh_video_bench(tm, tm->last_refresh_ticks);
+    taskmgr_refresh_audio_info(tm, tm->last_refresh_ticks);
+    taskmgr_refresh_network_info(tm, tm->last_refresh_ticks);
     taskmgr_draw_header(&content, theme, "Desempenho", "Visao geral do kernel e do escalonador");
 
-    cards[0].x = content.x + 8;
-    cards[0].y = content.y + 44;
-    cards[0].w = (content.w - 20) / 2;
-    cards[0].h = 48;
-    cards[1].x = cards[0].x + cards[0].w + 4;
-    cards[1].y = cards[0].y;
-    cards[1].w = cards[0].w;
-    cards[1].h = cards[0].h;
-    cards[2].x = cards[0].x;
-    cards[2].y = cards[0].y + 54;
-    cards[2].w = cards[0].w;
-    cards[2].h = cards[0].h;
-    cards[3].x = cards[1].x;
-    cards[3].y = cards[2].y;
-    cards[3].w = cards[1].w;
-    cards[3].h = cards[1].h;
-    cards[4].x = cards[0].x;
-    cards[4].y = cards[2].y + 54;
-    cards[4].w = cards[0].w;
-    cards[4].h = cards[0].h;
-    cards[5].x = cards[1].x;
-    cards[5].y = cards[4].y;
-    cards[5].w = cards[1].w;
-    cards[5].h = cards[1].h;
+    for (int i = 0; i < 8; ++i) {
+        int col = i % 2;
+        int row = i / 2;
+
+        cards[i].x = content.x + 8 + (col * (((content.w - 20) / 2) + 4));
+        cards[i].y = content.y + 44 + (row * 54);
+        cards[i].w = (content.w - 20) / 2;
+        cards[i].h = 48;
+    }
 
     value[0] = '\0';
     append_uint(value, tm->summary.cpu_count, (int)sizeof(value));
@@ -454,23 +724,228 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
         taskmgr_draw_performance_card(&cards[5], "Present / Scanout", value, detail);
     }
 
+    if (tm->audio_info_valid) {
+        unsigned audio_features = taskmgr_audio_feature_flags(&tm->audio_info);
+        str_copy_limited(value, taskmgr_audio_display_label(&tm->audio_info), (int)sizeof(value));
+        if (tm->audio_info.device.version[0] != '\0') {
+            str_append(value, " ", (int)sizeof(value));
+            str_append(value, tm->audio_info.device.version, (int)sizeof(value));
+        }
+        detail[0] = '\0';
+        if (tm->audio_info.device.config[0] != '\0') {
+            str_append(detail, tm->audio_info.device.config, (int)sizeof(detail));
+            if (taskmgr_audio_config_hint(&tm->audio_info.device)[0] != '\0') {
+                str_append(detail, " ", (int)sizeof(detail));
+                str_append(detail, taskmgr_audio_config_hint(&tm->audio_info.device), (int)sizeof(detail));
+            }
+        } else {
+            str_append(detail, "config n/d", (int)sizeof(detail));
+        }
+        if ((tm->audio_info.flags & MK_AUDIO_CAPS_MIXER) != 0u) {
+            str_append(detail, "  mixer", (int)sizeof(detail));
+        }
+        if ((tm->audio_info.flags & MK_AUDIO_CAPS_PLAYBACK) != 0u) {
+            str_append(detail, "  play", (int)sizeof(detail));
+        }
+        if ((tm->audio_info.flags & MK_AUDIO_CAPS_CAPTURE) != 0u) {
+            str_append(detail, "  rec", (int)sizeof(detail));
+        }
+        if (taskmgr_audio_output_count(&tm->audio_info) > 0) {
+            str_append(detail, "  out ", (int)sizeof(detail));
+            append_uint(detail, (unsigned)taskmgr_audio_output_count(&tm->audio_info), (int)sizeof(detail));
+        }
+        if (taskmgr_audio_input_count(&tm->audio_info) > 0) {
+            str_append(detail, "  in ", (int)sizeof(detail));
+            append_uint(detail, (unsigned)taskmgr_audio_input_count(&tm->audio_info), (int)sizeof(detail));
+        }
+        if (tm->audio_info.controller_pci_id != 0u) {
+            str_append(detail, "  pci ", (int)sizeof(detail));
+            taskmgr_append_hex_fixed(detail, (tm->audio_info.controller_pci_id >> 16) & 0xffffu, 4u, (int)sizeof(detail));
+            str_append(detail, ":", (int)sizeof(detail));
+            taskmgr_append_hex_fixed(detail, tm->audio_info.controller_pci_id & 0xffffu, 4u, (int)sizeof(detail));
+        }
+        if (tm->audio_info.codec_vendor_id != 0u) {
+            str_append(detail, "  codec ", (int)sizeof(detail));
+            taskmgr_append_hex_fixed(detail, tm->audio_info.codec_vendor_id, 8u, (int)sizeof(detail));
+        }
+        if (tm->audio_info.output_route != 0u) {
+            str_append(detail, "  route ", (int)sizeof(detail));
+            taskmgr_append_hex_fixed(detail, (tm->audio_info.output_route >> 8) & 0xffu, 2u, (int)sizeof(detail));
+            str_append(detail, "/", (int)sizeof(detail));
+            taskmgr_append_hex_fixed(detail, tm->audio_info.output_route & 0xffu, 2u, (int)sizeof(detail));
+        }
+        str_append(detail, (audio_features & 0x2u) != 0u ? "  irq" : "  no-irq", (int)sizeof(detail));
+        str_append(detail, (audio_features & 0x80u) != 0u ? "  mmio" : "  io", (int)sizeof(detail));
+        if ((audio_features & 0x10u) != 0u) {
+            str_append(detail, " seen", (int)sizeof(detail));
+        }
+        if ((audio_features & 0x4u) != 0u) {
+            str_append(detail, " bad-irq", (int)sizeof(detail));
+        }
+        if ((audio_features & 0x20u) != 0u) {
+            str_append(detail, " starve", (int)sizeof(detail));
+        }
+        if ((audio_features & 0x40u) != 0u) {
+            str_append(detail, " underrun", (int)sizeof(detail));
+        }
+        if ((audio_features & 0x100u) != 0u) {
+            str_append(detail, " codec-quirk", (int)sizeof(detail));
+        }
+        if ((audio_features & 0x200u) != 0u) {
+            str_append(detail, " multich", (int)sizeof(detail));
+        }
+        if ((audio_features & 0x400u) != 0u) {
+            str_append(detail, " cap-dma", (int)sizeof(detail));
+        }
+        if ((audio_features & 0x800u) != 0u) {
+            str_append(detail, " corb-rirb", (int)sizeof(detail));
+        }
+        if ((audio_features & 0x1000u) != 0u) {
+            str_append(detail, " codec-ok", (int)sizeof(detail));
+        }
+        if ((audio_features & 0x2000u) != 0u) {
+            str_append(detail, " widgets", (int)sizeof(detail));
+        }
+        if ((audio_features & 0x4000u) != 0u) {
+            str_append(detail, " path-ok", (int)sizeof(detail));
+        }
+        if (tm->audio_status_valid) {
+            str_append(detail, "  ", (int)sizeof(detail));
+            str_append(detail, tm->audio_status.active ? "ativo" : "idle", (int)sizeof(detail));
+            if ((tm->audio_status._spare[0] & 0x00002000) != 0) {
+                str_append(detail, " cap-data", (int)sizeof(detail));
+            }
+            if ((tm->audio_status._spare[0] & 0x00004000) != 0) {
+                str_append(detail, " cap-xrun", (int)sizeof(detail));
+            }
+        }
+        taskmgr_draw_performance_card(&cards[6], "Driver de Audio", value, detail);
+    } else {
+        str_copy_limited(value, "indisponivel", (int)sizeof(value));
+        str_copy_limited(detail, "sys_audio_get_info falhou", (int)sizeof(detail));
+        taskmgr_draw_performance_card(&cards[6], "Driver de Audio", value, detail);
+    }
+
+    if (tm->network_info_valid) {
+        if (tm->network_status_valid) {
+            str_copy_limited(value, taskmgr_network_link_label(&tm->network_status), (int)sizeof(value));
+        } else {
+            str_copy_limited(value, taskmgr_network_display_label(&tm->network_info), (int)sizeof(value));
+        }
+        detail[0] = '\0';
+        if (tm->network_status_valid) {
+            if (tm->network_status.active_if[0] != '\0') {
+                str_append(detail, tm->network_status.active_if, (int)sizeof(detail));
+            } else {
+                str_append(detail, "-", (int)sizeof(detail));
+            }
+            if (tm->network_status.current_ssid[0] != '\0') {
+                str_append(detail, "  ", (int)sizeof(detail));
+                str_append(detail, tm->network_status.current_ssid, (int)sizeof(detail));
+            }
+            if (tm->network_status.ip_address[0] != '\0') {
+                str_append(detail, "  ", (int)sizeof(detail));
+                str_append(detail, tm->network_status.ip_address, (int)sizeof(detail));
+            }
+            if (tm->network_status.dns_server[0] != '\0') {
+                str_append(detail, "  dns ", (int)sizeof(detail));
+                str_append(detail, tm->network_status.dns_server, (int)sizeof(detail));
+            }
+        }
+        if (tm->netmgrd_status.valid) {
+            if (tm->netmgrd_status.saved_profiles > 0) {
+                str_append(detail, detail[0] != '\0' ? "  perfis " : "perfis ", (int)sizeof(detail));
+                append_uint(detail, (unsigned)tm->netmgrd_status.saved_profiles, (int)sizeof(detail));
+            }
+            if (tm->netmgrd_status.autoconnect[0] != '\0') {
+                str_append(detail, detail[0] != '\0' ? "  auto " : "auto ", (int)sizeof(detail));
+                str_append(detail, tm->netmgrd_status.autoconnect, (int)sizeof(detail));
+            }
+            if (tm->netmgrd_status.backend[0] != '\0') {
+                str_append(detail, detail[0] != '\0' ? "  backend " : "backend ", (int)sizeof(detail));
+                str_append(detail, tm->netmgrd_status.backend, (int)sizeof(detail));
+            }
+            if (tm->netmgrd_status.dns_mode[0] != '\0') {
+                str_append(detail, detail[0] != '\0' ? "  dns-mode " : "dns-mode ", (int)sizeof(detail));
+                str_append(detail, tm->netmgrd_status.dns_mode, (int)sizeof(detail));
+            }
+            if (tm->netmgrd_status.lease_state[0] != '\0') {
+                str_append(detail, detail[0] != '\0' ? "  lease " : "lease ", (int)sizeof(detail));
+                str_append(detail, tm->netmgrd_status.lease_state, (int)sizeof(detail));
+            }
+            if (tm->netmgrd_status.lease_source[0] != '\0') {
+                str_append(detail, detail[0] != '\0' ? "  src " : "src ", (int)sizeof(detail));
+                str_append(detail, tm->netmgrd_status.lease_source, (int)sizeof(detail));
+            }
+        }
+        if ((tm->network_info.flags & MK_NETWORK_CAPS_BSD_SOCKET_ABI) != 0u) {
+            str_append(detail, detail[0] != '\0' ? "  socket-bsd" : "socket-bsd", (int)sizeof(detail));
+        }
+        if ((tm->network_info.flags & MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING) != 0u) {
+            str_append(detail, "  drivers pendentes", (int)sizeof(detail));
+        }
+        if ((tm->network_info.supported_families & MK_NETWORK_FAMILY_INET) != 0u) {
+            str_append(detail, "  inet", (int)sizeof(detail));
+        }
+        if ((tm->network_info.supported_families & MK_NETWORK_FAMILY_INET6) != 0u) {
+            str_append(detail, "  inet6", (int)sizeof(detail));
+        }
+        taskmgr_draw_performance_card(&cards[7], "Driver de Rede", value, detail);
+    } else {
+        str_copy_limited(value, "indisponivel", (int)sizeof(value));
+        str_copy_limited(detail, "sys_network_get_info falhou", (int)sizeof(detail));
+        taskmgr_draw_performance_card(&cards[7], "Driver de Rede", value, detail);
+    }
+
     value[0] = '\0';
     str_copy_limited(value, "Tempo ativo ", (int)sizeof(value));
     append_uint(value, tm->summary.uptime_ticks / 100u, (int)sizeof(value));
     str_append(value, "s", (int)sizeof(value));
-    sys_text(content.x + 12, content.y + 214, theme->text, value);
+    sys_text(content.x + 12, content.y + 268, theme->text, value);
 
     detail[0] = '\0';
     str_copy_limited(detail, "PID atual ", (int)sizeof(detail));
     append_uint(detail, tm->summary.current_pid, (int)sizeof(detail));
     str_append(detail, "  bloqueados ", (int)sizeof(detail));
     append_uint(detail, tm->summary.blocked_tasks, (int)sizeof(detail));
+    if (tm->audio_status_valid) {
+        str_append(detail, "  audio pend ", (int)sizeof(detail));
+        append_uint(detail, (unsigned)tm->audio_status._spare[1], (int)sizeof(detail));
+        str_append(detail, " xr ", (int)sizeof(detail));
+        append_uint(detail, (unsigned)tm->audio_status._spare[4], (int)sizeof(detail));
+        if (tm->audio_info_valid) {
+            str_append(detail, " irq ", (int)sizeof(detail));
+            append_uint(detail, taskmgr_audio_irq_count(&tm->audio_info), (int)sizeof(detail));
+        }
+    }
     if (tm->video_bench_valid) {
         str_append(detail, "  frame ", (int)sizeof(detail));
         append_uint(detail, tm->video_bench.frame_ticks, (int)sizeof(detail));
         str_append(detail, "t", (int)sizeof(detail));
     }
-    sys_text(content.x + 12, content.y + 226, ui_color_muted(), detail);
+    if (tm->netmgrd_status.valid) {
+        if (tm->netmgrd_status.state[0] != '\0') {
+            str_append(detail, "  netmgrd ", (int)sizeof(detail));
+            str_append(detail, tm->netmgrd_status.state, (int)sizeof(detail));
+        }
+        if (tm->netmgrd_status.manager[0] != '\0') {
+            str_append(detail, " / ", (int)sizeof(detail));
+            str_append(detail, tm->netmgrd_status.manager, (int)sizeof(detail));
+        }
+        if (tm->netmgrd_status.lease_state[0] != '\0') {
+            str_append(detail, "  lease ", (int)sizeof(detail));
+            str_append(detail, tm->netmgrd_status.lease_state, (int)sizeof(detail));
+        }
+        if (tm->netmgrd_status.lease_source[0] != '\0') {
+            str_append(detail, "  src ", (int)sizeof(detail));
+            str_append(detail, tm->netmgrd_status.lease_source, (int)sizeof(detail));
+        }
+        if (tm->netmgrd_status.autoconnect[0] != '\0') {
+            str_append(detail, " -> ", (int)sizeof(detail));
+            str_append(detail, tm->netmgrd_status.autoconnect, (int)sizeof(detail));
+        }
+    }
+    sys_text(content.x + 12, content.y + 280, ui_color_muted(), detail);
 }
 
 static void taskmgr_draw_details_tab(struct taskmgr_state *tm) {

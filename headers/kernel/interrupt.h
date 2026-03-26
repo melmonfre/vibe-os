@@ -5,9 +5,14 @@
 
 /* Basic IDT/PIC interface exposed to rest of kernel */
 
+typedef void (*kernel_irq_handler_t)(void);
+
 void kernel_idt_init(void);
 void kernel_pic_init(void);
 void kernel_irq_enable(void);
+void kernel_irq_unmask(uint8_t irq_line);
+int kernel_irq_register_handler(uint8_t irq_line, kernel_irq_handler_t handler);
+void kernel_irq_dispatch(uint8_t irq_line);
 uint32_t kernel_irq_save(void);
 void kernel_irq_restore(uint32_t flags);
 void kernel_pic_send_eoi(uint8_t irq_line);

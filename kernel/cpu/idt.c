@@ -5,14 +5,26 @@
 
 #define IDT_ENTRIES 256
 #define IRQ0_VECTOR 0x20
-#define IRQ1_VECTOR 0x21
-#define IRQ12_VECTOR 0x2C
+#define IRQ15_VECTOR 0x2F
 #define SYSCALL_VECTOR 0x80
 
 /* These symbols are provided by the assembly stubs in kernel_asm/isr.asm. */
 extern void irq0_stub(void);
 extern void irq1_stub(void);
+extern void irq2_stub(void);
+extern void irq3_stub(void);
+extern void irq4_stub(void);
+extern void irq5_stub(void);
+extern void irq6_stub(void);
+extern void irq7_stub(void);
+extern void irq8_stub(void);
+extern void irq9_stub(void);
+extern void irq10_stub(void);
+extern void irq11_stub(void);
 extern void irq12_stub(void);
+extern void irq13_stub(void);
+extern void irq14_stub(void);
+extern void irq15_stub(void);
 extern void syscall_stub(void);
 
 extern void divide_error_stub(void);
@@ -62,10 +74,23 @@ void kernel_idt_init(void) {
     idt_set_gate(8,  (uint32_t)double_fault_stub,         0x8E);
 
     /* irq handlers */
-    idt_set_gate(IRQ0_VECTOR, (uint32_t)irq0_stub, 0x8E);
-    idt_set_gate(IRQ1_VECTOR, (uint32_t)irq1_stub, 0x8E);
-    idt_set_gate(IRQ12_VECTOR,(uint32_t)irq12_stub,0x8E);
-    idt_set_gate(SYSCALL_VECTOR,(uint32_t)syscall_stub,0x8F);
+    idt_set_gate(IRQ0_VECTOR + 0,  (uint32_t)irq0_stub,  0x8E);
+    idt_set_gate(IRQ0_VECTOR + 1,  (uint32_t)irq1_stub,  0x8E);
+    idt_set_gate(IRQ0_VECTOR + 2,  (uint32_t)irq2_stub,  0x8E);
+    idt_set_gate(IRQ0_VECTOR + 3,  (uint32_t)irq3_stub,  0x8E);
+    idt_set_gate(IRQ0_VECTOR + 4,  (uint32_t)irq4_stub,  0x8E);
+    idt_set_gate(IRQ0_VECTOR + 5,  (uint32_t)irq5_stub,  0x8E);
+    idt_set_gate(IRQ0_VECTOR + 6,  (uint32_t)irq6_stub,  0x8E);
+    idt_set_gate(IRQ0_VECTOR + 7,  (uint32_t)irq7_stub,  0x8E);
+    idt_set_gate(IRQ0_VECTOR + 8,  (uint32_t)irq8_stub,  0x8E);
+    idt_set_gate(IRQ0_VECTOR + 9,  (uint32_t)irq9_stub,  0x8E);
+    idt_set_gate(IRQ0_VECTOR + 10, (uint32_t)irq10_stub, 0x8E);
+    idt_set_gate(IRQ0_VECTOR + 11, (uint32_t)irq11_stub, 0x8E);
+    idt_set_gate(IRQ0_VECTOR + 12, (uint32_t)irq12_stub, 0x8E);
+    idt_set_gate(IRQ0_VECTOR + 13, (uint32_t)irq13_stub, 0x8E);
+    idt_set_gate(IRQ0_VECTOR + 14, (uint32_t)irq14_stub, 0x8E);
+    idt_set_gate(IRQ15_VECTOR,     (uint32_t)irq15_stub, 0x8E);
+    idt_set_gate(SYSCALL_VECTOR,   (uint32_t)syscall_stub, 0x8F);
 
     g_idt_ptr.limit = (uint16_t)(sizeof(g_idt) - 1u);
     g_idt_ptr.base = (uint32_t)(uintptr_t)&g_idt[0];

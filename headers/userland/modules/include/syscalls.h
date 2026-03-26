@@ -2,11 +2,22 @@
 #define SYSCALLS_H
 
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <stdint.h>
 #include <include/userland_api.h>
 
 struct mk_message;
+struct audio_swpar;
+struct audio_status;
+struct mk_audio_info;
+struct mk_audio_control_info;
+struct mk_network_info;
+struct mk_network_status;
+struct mk_network_scan_info;
+struct mk_network_connect_request;
+struct mk_network_ethernet_config;
+typedef struct mixer_ctrl mixer_ctrl_t;
 
 int sys_poll_mouse(struct mouse_state *state);
 int sys_poll_key(void);
@@ -50,6 +61,31 @@ uint32_t sys_ticks(void);
 int sys_gfx_info(struct video_mode *mode);
 int sys_gfx_caps(struct video_capabilities *caps);
 int sys_gfx_bench(struct video_bench_info *bench);
+int sys_audio_get_info(struct mk_audio_info *info);
+int sys_audio_get_status(struct audio_status *status);
+int sys_audio_set_params(const struct audio_swpar *params);
+int sys_audio_start(void);
+int sys_audio_stop(void);
+int sys_audio_write(const void *data, uint32_t size);
+int sys_audio_read(void *data, uint32_t size);
+int sys_audio_control_info(uint32_t index, struct mk_audio_control_info *info);
+int sys_audio_mixer_read(mixer_ctrl_t *control);
+int sys_audio_mixer_write(const mixer_ctrl_t *control);
+int sys_network_get_info(struct mk_network_info *info);
+int sys_network_get_status(struct mk_network_status *status);
+int sys_network_scan(uint32_t index, struct mk_network_scan_info *info);
+int sys_network_connect_wifi(const struct mk_network_connect_request *request);
+int sys_network_connect_ethernet(const char *if_name);
+int sys_network_configure_ethernet(const struct mk_network_ethernet_config *config);
+int sys_network_disconnect(const char *if_name);
+int sys_network_socket(uint32_t domain, uint32_t type, uint32_t protocol);
+int sys_network_bind(int handle, const struct sockaddr *address, uint32_t address_length);
+int sys_network_socket_connect(int handle, const struct sockaddr *address, uint32_t address_length);
+int sys_network_send(int handle, const void *data, uint32_t size);
+int sys_network_recv(int handle, void *buffer, uint32_t size);
+int sys_network_close(int handle);
+int sys_network_listen(int handle, int backlog);
+int sys_network_accept(int handle);
 int sys_getpid(void);
 void sys_yield(void);
 void sys_write_debug(const char *msg);
