@@ -142,6 +142,22 @@ struct mk_network_virtio_legacy_queue {
     uint16_t last_used_idx;
 };
 
+struct mk_network_virtio_link_state {
+    int rx_posted;
+    int tx_busy;
+    int tx_smoke_sent;
+    int tx_smoke_done;
+    int rx_activity_seen;
+    int rx_arp_reply_seen;
+    int tx_smoke_logged;
+    int rx_activity_logged;
+    int rx_arp_reply_logged;
+    uint32_t tx_frames_submitted;
+    uint32_t tx_frames_completed;
+    uint32_t rx_frames_completed;
+    uint32_t last_tx_frame_bytes;
+};
+
 static uint8_t g_network_virtio_queue_storage[MK_NETWORK_VIRTIO_QUEUE_COUNT][16384]
     __attribute__((aligned(MK_NETWORK_VIRTIO_RING_ALIGN)));
 static struct mk_network_virtio_legacy_queue
@@ -153,14 +169,7 @@ static uint8_t g_network_virtio_rx_payload[MK_NETWORK_VIRTIO_RX_SLOT_COUNT][MK_N
 static struct mk_network_virtio_net_hdr g_network_virtio_tx_hdr __attribute__((aligned(16)));
 static uint8_t g_network_virtio_tx_frame[MK_NETWORK_VIRTIO_TX_FRAME_BYTES] __attribute__((aligned(16)));
 static const uint8_t g_network_virtio_fallback_mac[6] = {0x52u, 0x54u, 0x00u, 0x12u, 0x34u, 0x56u};
-static int g_network_virtio_rx_posted = 0;
-static int g_network_virtio_tx_smoke_sent = 0;
-static int g_network_virtio_tx_smoke_done = 0;
-static int g_network_virtio_rx_activity_seen = 0;
-static int g_network_virtio_rx_arp_reply_seen = 0;
-static int g_network_virtio_tx_smoke_logged = 0;
-static int g_network_virtio_rx_activity_logged = 0;
-static int g_network_virtio_rx_arp_reply_logged = 0;
+static struct mk_network_virtio_link_state g_network_virtio_link;
 
 struct mk_network_service_state {
     struct mk_network_info info;
@@ -346,11 +355,82 @@ static int mk_network_virtio_setup_queue(uint16_t io_base,
     return 0;
 }
 
+static int mk_network_virtio_frame_is_arp_reply(const uint8_t *frame, uint32_t payload_len) {
+    if (frame == 0 || payload_len < 42u) {
+        return 0;
+    }
+    return frame[12] == 0x08u &&
+           frame[13] == 0x06u &&
+           frame[20] == 0x00u &&
+           frame[21] == 0x02u;
+}
+
+static void mk_network_virtio_handle_rx_frame(uint16_t head_desc,
+                                              uint16_t slot,
+                                              uint32_t payload_len) {
+    g_network_virtio_link.rx_activity_seen = 1;
+    g_network_virtio_link.rx_frames_completed += 1u;
+
+    if (!g_network_virtio_link.rx_activity_logged) {
+        kernel_debug_printf("network: virtio rx activity len=%u head=%u\n",
+                            (unsigned int)payload_len,
+                            (unsigned int)head_desc);
+        g_network_virtio_link.rx_activity_logged = 1;
+    }
+
+    if (slot < MK_NETWORK_VIRTIO_RX_SLOT_COUNT &&
+        mk_network_virtio_frame_is_arp_reply(g_network_virtio_rx_payload[slot], payload_len)) {
+        g_network_virtio_link.rx_arp_reply_seen = 1;
+        if (!g_network_virtio_link.rx_arp_reply_logged) {
+            kernel_debug_puts("network: virtio rx arp-reply seen\n");
+            g_network_virtio_link.rx_arp_reply_logged = 1;
+        }
+    }
+}
+
+static int mk_network_virtio_submit_frame(struct mk_network_pci_probe_state *probe,
+                                          const uint8_t *frame,
+                                          uint32_t frame_len) {
+    struct mk_network_virtio_legacy_queue *queue_state;
+
+    if (probe == 0 || frame == 0 || frame_len == 0u || !probe->virtio_queue_ready) {
+        return -1;
+    }
+
+    queue_state = &g_network_virtio_queues[MK_NETWORK_VIRTIO_TX_QUEUE_INDEX];
+    if (queue_state->queue_size < 2u || g_network_virtio_link.tx_busy) {
+        return -1;
+    }
+    if (frame_len > sizeof(g_network_virtio_tx_frame)) {
+        return -1;
+    }
+
+    memset(&g_network_virtio_tx_hdr, 0, sizeof(g_network_virtio_tx_hdr));
+    memset(g_network_virtio_tx_frame, 0, sizeof(g_network_virtio_tx_frame));
+    memcpy(g_network_virtio_tx_frame, frame, frame_len);
+
+    queue_state->desc[0].addr = (uint64_t)(uintptr_t)&g_network_virtio_tx_hdr;
+    queue_state->desc[0].len = MK_NETWORK_VIRTIO_HDR_SIZE;
+    queue_state->desc[0].flags = MK_NETWORK_VIRTIO_DESC_F_NEXT;
+    queue_state->desc[0].next = 1u;
+    queue_state->desc[1].addr = (uint64_t)(uintptr_t)&g_network_virtio_tx_frame[0];
+    queue_state->desc[1].len = frame_len;
+    queue_state->desc[1].flags = 0u;
+    queue_state->desc[1].next = 0u;
+
+    mk_network_virtio_publish_desc_chain(queue_state, 0u);
+    g_network_virtio_link.tx_busy = 1;
+    g_network_virtio_link.tx_frames_submitted += 1u;
+    g_network_virtio_link.last_tx_frame_bytes = frame_len;
+    mk_network_virtio_notify_queue(probe->io_base, MK_NETWORK_VIRTIO_TX_QUEUE_INDEX);
+    return 0;
+}
+
 static void mk_network_virtio_post_rx_buffers(struct mk_network_pci_probe_state *probe) {
     struct mk_network_virtio_legacy_queue *queue_state;
     uint16_t slot;
 
-    if (probe == 0 || !probe->virtio_queue_ready || g_network_virtio_rx_posted) {
+    if (probe == 0 || !probe->virtio_queue_ready || g_network_virtio_link.rx_posted) {
         return;
     }
 
@@ -379,26 +459,17 @@ static void mk_network_virtio_post_rx_buffers(struct mk_network_pci_probe_state 
         mk_network_virtio_publish_desc_chain(queue_state, head_desc);
     }
 
-    g_network_virtio_rx_posted = 1;
+    g_network_virtio_link.rx_posted = 1;
     mk_network_virtio_notify_queue(probe->io_base, MK_NETWORK_VIRTIO_RX_QUEUE_INDEX);
 }
 
 static void mk_network_virtio_send_tx_smoke(struct mk_network_pci_probe_state *probe) {
-    struct mk_network_virtio_legacy_queue *queue_state;
     uint8_t *frame = g_network_virtio_tx_frame;
     const uint8_t *source_mac;
 
-    if (probe == 0 || !probe->virtio_queue_ready || g_network_virtio_tx_smoke_sent) {
+    if (probe == 0 || !probe->virtio_queue_ready || g_network_virtio_link.tx_smoke_sent) {
         return;
     }
-
-    queue_state = &g_network_virtio_queues[MK_NETWORK_VIRTIO_TX_QUEUE_INDEX];
-    if (queue_state->queue_size < 2u) {
-        return;
-    }
-
-    memset(&g_network_virtio_tx_hdr, 0, sizeof(g_network_virtio_tx_hdr));
-    memset(frame, 0, MK_NETWORK_VIRTIO_TX_FRAME_BYTES);
     source_mac = probe->mac_valid ? probe->mac : g_network_virtio_fallback_mac;
 
     memset(frame, 0xff, 6u);
@@ -424,45 +495,44 @@ static void mk_network_virtio_send_tx_smoke(struct mk_network_pci_probe_state *p
     frame[40] = 2u;
     frame[41] = 2u;
 
-    queue_state->desc[0].addr = (uint64_t)(uintptr_t)&g_network_virtio_tx_hdr;
-    queue_state->desc[0].len = MK_NETWORK_VIRTIO_HDR_SIZE;
-    queue_state->desc[0].flags = MK_NETWORK_VIRTIO_DESC_F_NEXT;
-    queue_state->desc[0].next = 1u;
-    queue_state->desc[1].addr = (uint64_t)(uintptr_t)frame;
-    queue_state->desc[1].len = 42u;
-    queue_state->desc[1].flags = 0u;
-    queue_state->desc[1].next = 0u;
-
-    mk_network_virtio_publish_desc_chain(queue_state, 0u);
-    g_network_virtio_tx_smoke_sent = 1;
-    mk_network_virtio_notify_queue(probe->io_base, MK_NETWORK_VIRTIO_TX_QUEUE_INDEX);
+    if (mk_network_virtio_submit_frame(probe, frame, 42u) == 0) {
+        g_network_virtio_link.tx_smoke_sent = 1;
+    }
 }
 
-static void mk_network_virtio_poll_queues(struct mk_network_pci_probe_state *probe) {
-    struct mk_network_virtio_legacy_queue *rx_queue;
+static void mk_network_virtio_drain_tx_queue(struct mk_network_pci_probe_state *probe) {
     struct mk_network_virtio_legacy_queue *tx_queue;
 
     if (probe == 0 || !probe->virtio_queue_ready) {
         return;
     }
 
-    mk_network_virtio_ack_isr(probe->io_base);
-    rx_queue = &g_network_virtio_queues[MK_NETWORK_VIRTIO_RX_QUEUE_INDEX];
     tx_queue = &g_network_virtio_queues[MK_NETWORK_VIRTIO_TX_QUEUE_INDEX];
-
     while (tx_queue->last_used_idx != tx_queue->used->idx) {
         uint16_t used_slot = (uint16_t)(tx_queue->last_used_idx % tx_queue->queue_size);
         struct mk_network_vring_used_elem *elem = &tx_queue->used->ring[used_slot];
 
         tx_queue->last_used_idx = (uint16_t)(tx_queue->last_used_idx + 1u);
+        g_network_virtio_link.tx_busy = 0;
+        g_network_virtio_link.tx_frames_completed += 1u;
         if ((int)elem->id == 0) {
-            g_network_virtio_tx_smoke_done = 1;
-            if (!g_network_virtio_tx_smoke_logged) {
+            g_network_virtio_link.tx_smoke_done = 1;
+            if (!g_network_virtio_link.tx_smoke_logged) {
                 kernel_debug_puts("network: virtio tx smoke consumed\n");
-                g_network_virtio_tx_smoke_logged = 1;
+                g_network_virtio_link.tx_smoke_logged = 1;
             }
         }
     }
+}
+
+static void mk_network_virtio_drain_rx_queue(struct mk_network_pci_probe_state *probe) {
+    struct mk_network_virtio_legacy_queue *rx_queue;
+
+    if (probe == 0 || !probe->virtio_queue_ready) {
+        return;
+    }
+
+    rx_queue = &g_network_virtio_queues[MK_NETWORK_VIRTIO_RX_QUEUE_INDEX];
 
     while (rx_queue->last_used_idx != rx_queue->used->idx) {
         uint16_t used_slot = (uint16_t)(rx_queue->last_used_idx % rx_queue->queue_size);
@@ -473,37 +543,26 @@ static void mk_network_virtio_poll_queues(struct mk_network_pci_probe_state *pro
             (uint32_t)(elem->len - MK_NETWORK_VIRTIO_HDR_SIZE) : 0u;
 
         rx_queue->last_used_idx = (uint16_t)(rx_queue->last_used_idx + 1u);
-        g_network_virtio_rx_activity_seen = 1;
-        if (!g_network_virtio_rx_activity_logged) {
-            kernel_debug_printf("network: virtio rx activity len=%u head=%u\n",
-                                (unsigned int)elem->len,
-                                (unsigned int)head_desc);
-            g_network_virtio_rx_activity_logged = 1;
-        }
-
-        if (slot < MK_NETWORK_VIRTIO_RX_SLOT_COUNT && payload_len >= 42u) {
-            uint8_t *frame = g_network_virtio_rx_payload[slot];
-
-            if (frame[12] == 0x08u &&
-                frame[13] == 0x06u &&
-                frame[20] == 0x00u &&
-                frame[21] == 0x02u) {
-                g_network_virtio_rx_arp_reply_seen = 1;
-                if (!g_network_virtio_rx_arp_reply_logged) {
-                    kernel_debug_puts("network: virtio rx arp-reply seen\n");
-                    g_network_virtio_rx_arp_reply_logged = 1;
-                }
-            }
-        }
+        mk_network_virtio_handle_rx_frame(head_desc, slot, payload_len);
 
         if (slot < MK_NETWORK_VIRTIO_RX_SLOT_COUNT) {
             mk_network_virtio_publish_desc_chain(rx_queue, head_desc);
         }
     }
 
-    if (g_network_virtio_rx_activity_seen) {
+    if (g_network_virtio_link.rx_activity_seen) {
         mk_network_virtio_notify_queue(probe->io_base, MK_NETWORK_VIRTIO_RX_QUEUE_INDEX);
     }
+}
+
+static void mk_network_virtio_poll_queues(struct mk_network_pci_probe_state *probe) {
+    if (probe == 0 || !probe->virtio_queue_ready) {
+        return;
+    }
+
+    mk_network_virtio_ack_isr(probe->io_base);
+    mk_network_virtio_drain_tx_queue(probe);
+    mk_network_virtio_drain_rx_queue(probe);
 }
 
 static void mk_network_virtio_spin_poll(struct mk_network_pci_probe_state *probe, uint32_t iterations) {
@@ -511,8 +570,8 @@ static void mk_network_virtio_spin_poll(struct mk_network_pci_probe_state *probe
 
     for (i = 0u; i < iterations; ++i) {
         mk_network_virtio_poll_queues(probe);
-        if (g_network_virtio_tx_smoke_done &&
-            (g_network_virtio_rx_activity_seen || i >= (iterations / 4u))) {
+        if (g_network_virtio_link.tx_smoke_done &&
+            (g_network_virtio_link.rx_activity_seen || i >= (iterations / 4u))) {
             break;
         }
     }
@@ -522,14 +581,14 @@ static void mk_network_virtio_maybe_activate_runtime(struct mk_network_pci_probe
     if (probe == 0 || !probe->virtio_queue_ready) {
         return;
     }
-    if (!g_network_virtio_rx_posted) {
+    if (!g_network_virtio_link.rx_posted) {
         mk_network_virtio_post_rx_buffers(probe);
     }
-    if (!g_network_virtio_tx_smoke_sent) {
+    if (!g_network_virtio_link.tx_smoke_sent) {
         mk_network_virtio_send_tx_smoke(probe);
     }
-    if (g_network_virtio_tx_smoke_sent &&
-        (!g_network_virtio_tx_smoke_done || !g_network_virtio_rx_activity_seen)) {
+    if (g_network_virtio_link.tx_smoke_sent &&
+        (!g_network_virtio_link.tx_smoke_done || !g_network_virtio_link.rx_activity_seen)) {
         mk_network_virtio_spin_poll(probe, 4096u);
     }
 }
@@ -560,6 +619,7 @@ static void mk_network_probe_virtio_legacy_queues(struct mk_network_pci_probe_st
     outl((uint16_t)(probe->io_base + VIRTIO_CONFIG_GUEST_FEATURES), guest_features);
 
     memset(g_network_virtio_queues, 0, sizeof(g_network_virtio_queues));
+    memset(&g_network_virtio_link, 0, sizeof(g_network_virtio_link));
     for (queue_index = 0u; queue_index < MK_NETWORK_VIRTIO_QUEUE_COUNT; ++queue_index) {
         uint16_t queue_size;
 
@@ -697,7 +757,7 @@ static void mk_network_log_probe(void) {
         return;
     }
     if (g_network_state.pci_probe.virtio_legacy_ready) {
-        kernel_debug_printf("network: pci=%x:%x if=%s backend=%s io=%x q=%d rxq=%d txq=%d txsmoke=%d rxseen=%d arprx=%d link=%d mac=%x:%x:%x:%x:%x:%x\n",
+        kernel_debug_printf("network: pci=%x:%x if=%s backend=%s io=%x q=%d rxq=%d txq=%d txsmoke=%d rxseen=%d arprx=%d txf=%u rxf=%u link=%d mac=%x:%x:%x:%x:%x:%x\n",
                             (unsigned int)g_network_state.pci_probe.vendor_id,
                             (unsigned int)g_network_state.pci_probe.device_id,
                             g_network_state.pci_probe.if_name,
@@ -706,9 +766,11 @@ static void mk_network_log_probe(void) {
                             g_network_state.pci_probe.virtio_queue_ready,
                             (int)g_network_state.pci_probe.queue_size[0],
                             (int)g_network_state.pci_probe.queue_size[1],
-                            g_network_virtio_tx_smoke_done,
-                            g_network_virtio_rx_activity_seen,
-                            g_network_virtio_rx_arp_reply_seen,
+                            g_network_virtio_link.tx_smoke_done,
+                            g_network_virtio_link.rx_activity_seen,
+                            g_network_virtio_link.rx_arp_reply_seen,
+                            (unsigned int)g_network_virtio_link.tx_frames_completed,
+                            (unsigned int)g_network_virtio_link.rx_frames_completed,
                             g_network_state.pci_probe.virtio_status_valid ?
                                 g_network_state.pci_probe.virtio_link_up : 0,
                             (unsigned int)g_network_state.pci_probe.mac[0],
