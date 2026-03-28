@@ -295,6 +295,13 @@ int vibe_app_lseek(int fd, int offset, int whence) {
     return g_app_ctx->host->seek_fd(fd, offset, whence);
 }
 
+int vibe_app_sync(void) {
+    if (!g_app_ctx || !g_app_ctx->host || !g_app_ctx->host->sync_filesystem) {
+        return -1;
+    }
+    return g_app_ctx->host->sync_filesystem();
+}
+
 int vibe_app_stat(const char *path, struct vibe_app_stat *stat_out) {
     if (!path || !stat_out) {
         return -1;

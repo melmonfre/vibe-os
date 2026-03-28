@@ -83,12 +83,7 @@ CFLAGS := -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stac
 INCLUDES := -I. -Iapplications/ported/bsdgames/include -Iapplications/ported/bsdgames -Icompat/include -Ilang/include -Iapplications/ported/include -Iheaders
 LDFLAGS := -m elf_i386 -T linker/app.ld -nostdlib -N --allow-multiple-definition
 
-UNAME_S := $(shell uname -s 2>/dev/null || echo Unknown)
-ifeq ($(UNAME_S),Linux)
 LIBGCC_A := $(shell $(CC) -m32 $(CPU_ARCH_CFLAGS) -print-libgcc-file-name 2>/dev/null)
-else
-LIBGCC_A :=
-endif
 
 APP_ENTRY := lang/sdk/app_entry.c
 APP_RUNTIME := lang/sdk/app_runtime.c
@@ -301,7 +296,9 @@ $$($(1)_ELF): $$($(1)_OBJS) $(BSDGAME_COMMON_OBJ) $(BSDGAME_CURSES_OBJ) $(BSDGAM
 $$($(1)_APP): $$($(1)_ELF)
 	@mkdir -p $$(dir $$@)
 	$(OBJCOPY) -O binary $$< $$@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $$< --bin $$@
+	$(NM) -n $$< > $$<.sym
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --symbols $$<.sym --bin $$@
+	rm -f $$<.sym
 	@echo "✓ BSD game app: $$@"
 
 bsdgame-$(1): $$($(1)_APP)

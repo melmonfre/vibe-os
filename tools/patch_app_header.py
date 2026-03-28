@@ -8,8 +8,7 @@ HEADER_STRUCT = struct.Struct("<IHHIIIII16s")
 SYMBOLS = ("__app_load_start", "__app_image_end", "__app_bss_end", "vibe_app_entry")
 
 
-def load_symbols(nm, elf_path):
-    output = subprocess.check_output([nm, "-n", elf_path], text=True)
+def parse_nm_output(output):
     values = {}
     for line in output.splitlines():
         parts = line.strip().split()
@@ -24,14 +23,27 @@ def load_symbols(nm, elf_path):
     return values
 
 
+def load_symbols(nm, elf_path=None, symbols_path=None):
+    if symbols_path is not None:
+        if symbols_path == "-":
+            return parse_nm_output(sys.stdin.read())
+        with open(symbols_path, "r", encoding="utf-8") as symbols_file:
+            return parse_nm_output(symbols_file.read())
+    if elf_path is None:
+        raise RuntimeError("missing symbol source")
+    output = subprocess.check_output([nm, "-n", elf_path], text=True)
+    return parse_nm_output(output)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--nm", default="i686-elf-nm")
-    parser.add_argument("--elf", required=True)
+    parser.add_argument("--elf")
+    parser.add_argument("--symbols")
     parser.add_argument("--bin", required=True)
     args = parser.parse_args()
 
-    values = load_symbols(args.nm, args.elf)
+    values = load_symbols(args.nm, args.elf, args.symbols)
     load_start = values["__app_load_start"]
     image_end = values["__app_image_end"]
     bss_end = values["__app_bss_end"]

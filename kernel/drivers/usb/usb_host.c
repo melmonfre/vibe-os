@@ -125,6 +125,7 @@
 #define USB_ENDPOINT_TRANSFER_ISOCHRONOUS 0x01u
 #define USB_SETUP_PACKET_LENGTH 8u
 #define KERNEL_USB_UHCI_POLL_LIMIT 100000u
+#define KERNEL_USB_UHCI_MAX_CONTROL_DATA_TDS 64u
 
 #define KERNEL_USB_UHCI_TD_SETUP(len, endp, dev) \
     ((((uint32_t)(len) - 1u) << 21) | (((uint32_t)(endp) & 0x0fu) << 15) | \
@@ -222,9 +223,9 @@ struct kernel_usb_host_state {
 
 static struct kernel_usb_host_state g_kernel_usb_host_state;
 static uint32_t g_kernel_usb_uhci_probe_frame_list[UHCI_FRAMELIST_COUNT] __attribute__((aligned(4096)));
-static struct kernel_usb_uhci_probe_qh g_kernel_usb_uhci_probe_qh;
 static struct kernel_usb_uhci_probe_td g_kernel_usb_uhci_probe_setup_td;
-static struct kernel_usb_uhci_probe_td g_kernel_usb_uhci_probe_data_td;
+static struct kernel_usb_uhci_probe_td
+    g_kernel_usb_uhci_probe_data_tds[KERNEL_USB_UHCI_MAX_CONTROL_DATA_TDS];
 static struct kernel_usb_uhci_probe_td g_kernel_usb_uhci_probe_status_td;
 static struct kernel_usb_uhci_probe_td g_kernel_usb_uhci_audio_td;
 static struct kernel_usb_setup_packet g_kernel_usb_uhci_probe_request __attribute__((aligned(16)));
@@ -1102,6 +1103,7 @@ static void kernel_usb_host_scan_config_descriptor(const uint8_t *descriptor,
 
 static int kernel_usb_host_probe_execute_uhci_transfer(const struct kernel_usb_probe_dispatch_context *dispatch,
                                                        uint8_t target_address,
+                                                       uint16_t max_packet_size0,
                                                        uint8_t request_type,
                                                        uint8_t request,
                                                        uint16_t request_value,
@@ -1117,19 +1119,25 @@ static int kernel_usb_host_probe_execute_uhci_transfer(const struct kernel_usb_p
     uint16_t saved_frnum;
     uint32_t saved_flbase;
     uint32_t setup_status;
-    uint32_t data_status;
     uint32_t status_status;
     uint32_t actual_length;
-    uint32_t qh_phys;
     uint32_t setup_phys;
-    uint32_t data_phys;
     uint32_t status_phys;
+    uint32_t data_td_count;
+    uint32_t remaining;
+    uint32_t offset;
+    uint8_t data_toggle;
 
     if (dispatch == 0 || data_buffer == 0 || actual_length_out == 0 ||
-        request_length == 0u || request_length > data_capacity) {
+        request_length == 0u || request_length > data_capacity || max_packet_size0 == 0u) {
         return -1;
     }
     if (kernel_usb_host_probe_execute_uhci(dispatch) != 0) {
+        return -1;
+    }
+    data_td_count = ((uint32_t)request_length + (uint32_t)max_packet_size0 - 1u) /
+                    (uint32_t)max_packet_size0;
+    if (data_td_count == 0u || data_td_count > KERNEL_USB_UHCI_MAX_CONTROL_DATA_TDS) {
         return -1;
     }
 
@@ -1141,9 +1149,8 @@ static int kernel_usb_host_probe_execute_uhci_transfer(const struct kernel_usb_p
     saved_flbase = inl((uint16_t)(controller->bar_base + UHCI_FLBASEADDR));
 
     memset(g_kernel_usb_uhci_probe_frame_list, 0, sizeof(g_kernel_usb_uhci_probe_frame_list));
-    memset(&g_kernel_usb_uhci_probe_qh, 0, sizeof(g_kernel_usb_uhci_probe_qh));
     memset(&g_kernel_usb_uhci_probe_setup_td, 0, sizeof(g_kernel_usb_uhci_probe_setup_td));
-    memset(&g_kernel_usb_uhci_probe_data_td, 0, sizeof(g_kernel_usb_uhci_probe_data_td));
+    memset(&g_kernel_usb_uhci_probe_data_tds[0], 0, sizeof(g_kernel_usb_uhci_probe_data_tds));
     memset(&g_kernel_usb_uhci_probe_status_td, 0, sizeof(g_kernel_usb_uhci_probe_status_td));
     memset(&g_kernel_usb_uhci_probe_request, 0, sizeof(g_kernel_usb_uhci_probe_request));
     memset(data_buffer, 0, data_capacity);
@@ -1154,15 +1161,11 @@ static int kernel_usb_host_probe_execute_uhci_transfer(const struct kernel_usb_p
     g_kernel_usb_uhci_probe_request.index = request_index;
     g_kernel_usb_uhci_probe_request.length = request_length;
 
-    qh_phys = (uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_qh;
     setup_phys = (uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_setup_td;
-    data_phys = (uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_data_td;
     status_phys = (uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_status_td;
 
-    g_kernel_usb_uhci_probe_qh.qh_hlink = UHCI_PTR_T;
-    g_kernel_usb_uhci_probe_qh.qh_elink = setup_phys | UHCI_PTR_VF | UHCI_PTR_TD;
-
-    g_kernel_usb_uhci_probe_setup_td.td_link = data_phys | UHCI_PTR_VF | UHCI_PTR_TD;
+    g_kernel_usb_uhci_probe_setup_td.td_link =
+        ((uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_data_tds[0]) | UHCI_PTR_VF | UHCI_PTR_TD;
     g_kernel_usb_uhci_probe_setup_td.td_status = KERNEL_USB_UHCI_TD_ERRCNT(3) |
                                                  ((dispatch->snapshot.plan.device.speed == KERNEL_USB_HOST_PORT_SPEED_LOW) ?
                                                     UHCI_TD_LS : 0u) |
@@ -1170,13 +1173,29 @@ static int kernel_usb_host_probe_execute_uhci_transfer(const struct kernel_usb_p
     g_kernel_usb_uhci_probe_setup_td.td_token = KERNEL_USB_UHCI_TD_SETUP(USB_SETUP_PACKET_LENGTH, 0u, target_address);
     g_kernel_usb_uhci_probe_setup_td.td_buffer = (uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_request;
 
-    g_kernel_usb_uhci_probe_data_td.td_link = status_phys | UHCI_PTR_VF | UHCI_PTR_TD;
-    g_kernel_usb_uhci_probe_data_td.td_status = KERNEL_USB_UHCI_TD_ERRCNT(3) |
-                                                ((dispatch->snapshot.plan.device.speed == KERNEL_USB_HOST_PORT_SPEED_LOW) ?
-                                                    UHCI_TD_LS : 0u) |
-                                                UHCI_TD_ACTIVE;
-    g_kernel_usb_uhci_probe_data_td.td_token = KERNEL_USB_UHCI_TD_IN(request_length, 0u, target_address, 1u);
-    g_kernel_usb_uhci_probe_data_td.td_buffer = (uint32_t)(uintptr_t)data_buffer;
+    remaining = request_length;
+    offset = 0u;
+    data_toggle = 1u;
+    for (uint32_t i = 0u; i < data_td_count; ++i) {
+        uint32_t chunk_length = remaining;
+        struct kernel_usb_uhci_probe_td *td = &g_kernel_usb_uhci_probe_data_tds[i];
+
+        if (chunk_length > (uint32_t)max_packet_size0) {
+            chunk_length = (uint32_t)max_packet_size0;
+        }
+        td->td_link = (i + 1u < data_td_count) ?
+            (((uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_data_tds[i + 1u]) | UHCI_PTR_VF | UHCI_PTR_TD) :
+            (status_phys | UHCI_PTR_VF | UHCI_PTR_TD);
+        td->td_status = KERNEL_USB_UHCI_TD_ERRCNT(3) |
+                        ((dispatch->snapshot.plan.device.speed == KERNEL_USB_HOST_PORT_SPEED_LOW) ?
+                            UHCI_TD_LS : 0u) |
+                        UHCI_TD_ACTIVE;
+        td->td_token = KERNEL_USB_UHCI_TD_IN(chunk_length, 0u, target_address, data_toggle);
+        td->td_buffer = (uint32_t)(uintptr_t)(data_buffer + offset);
+        remaining -= chunk_length;
+        offset += chunk_length;
+        data_toggle ^= 0x1u;
+    }
 
     g_kernel_usb_uhci_probe_status_td.td_link = UHCI_PTR_T;
     g_kernel_usb_uhci_probe_status_td.td_status = KERNEL_USB_UHCI_TD_ERRCNT(3) |
@@ -1188,8 +1207,9 @@ static int kernel_usb_host_probe_execute_uhci_transfer(const struct kernel_usb_p
     g_kernel_usb_uhci_probe_status_td.td_buffer = 0u;
 
     for (uint32_t i = 0u; i < UHCI_FRAMELIST_COUNT; ++i) {
-        g_kernel_usb_uhci_probe_frame_list[i] = qh_phys | UHCI_PTR_QH;
+        g_kernel_usb_uhci_probe_frame_list[i] = UHCI_PTR_T;
     }
+    g_kernel_usb_uhci_probe_frame_list[0] = setup_phys | UHCI_PTR_TD;
 
     kernel_usb_host_write16_io(controller->bar_base, UHCI_INTR, 0u);
     kernel_usb_host_write16_io(controller->bar_base, UHCI_STS, UHCI_STS_ALLINTRS);
@@ -1212,21 +1232,40 @@ static int kernel_usb_host_probe_execute_uhci_transfer(const struct kernel_usb_p
     kernel_usb_host_write16_io(controller->bar_base, UHCI_STS, saved_sts & UHCI_STS_ALLINTRS);
 
     setup_status = g_kernel_usb_uhci_probe_setup_td.td_status;
-    data_status = g_kernel_usb_uhci_probe_data_td.td_status;
     status_status = g_kernel_usb_uhci_probe_status_td.td_status;
 
     if ((status_status & UHCI_TD_ACTIVE) != 0u) {
         return 1;
     }
-    if ((setup_status & 0x007e0000u) != 0u ||
-        (data_status & 0x007e0000u) != 0u ||
-        (status_status & 0x007e0000u) != 0u) {
+    if ((setup_status & 0x007e0000u) != 0u || (status_status & 0x007e0000u) != 0u) {
         return -1;
     }
+    actual_length = 0u;
+    remaining = request_length;
+    for (uint32_t i = 0u; i < data_td_count; ++i) {
+        uint32_t chunk_length = remaining;
+        uint32_t transferred;
+        uint32_t td_status = g_kernel_usb_uhci_probe_data_tds[i].td_status;
 
-    actual_length = KERNEL_USB_UHCI_TD_GET_ACTLEN(data_status);
-    if (actual_length > request_length) {
-        actual_length = request_length;
+        if ((td_status & UHCI_TD_ACTIVE) != 0u || (td_status & 0x007e0000u) != 0u) {
+            return -1;
+        }
+        if (chunk_length > (uint32_t)max_packet_size0) {
+            chunk_length = (uint32_t)max_packet_size0;
+        }
+        transferred = KERNEL_USB_UHCI_TD_GET_ACTLEN(td_status);
+        if (transferred > chunk_length) {
+            transferred = chunk_length;
+        }
+        actual_length += transferred;
+        if (remaining >= chunk_length) {
+            remaining -= chunk_length;
+        } else {
+            remaining = 0u;
+        }
+        if (transferred < chunk_length) {
+            break;
+        }
     }
     *actual_length_out = actual_length;
     return 0;
@@ -1272,7 +1311,6 @@ static int kernel_usb_host_probe_execute_uhci_no_data_request(
     uint32_t saved_flbase;
     uint32_t setup_status;
     uint32_t status_status;
-    uint32_t qh_phys;
     uint32_t setup_phys;
     uint32_t status_phys;
 
@@ -1291,7 +1329,6 @@ static int kernel_usb_host_probe_execute_uhci_no_data_request(
     saved_flbase = inl((uint16_t)(controller->bar_base + UHCI_FLBASEADDR));
 
     memset(g_kernel_usb_uhci_probe_frame_list, 0, sizeof(g_kernel_usb_uhci_probe_frame_list));
-    memset(&g_kernel_usb_uhci_probe_qh, 0, sizeof(g_kernel_usb_uhci_probe_qh));
     memset(&g_kernel_usb_uhci_probe_setup_td, 0, sizeof(g_kernel_usb_uhci_probe_setup_td));
     memset(&g_kernel_usb_uhci_probe_status_td, 0, sizeof(g_kernel_usb_uhci_probe_status_td));
     memset(&g_kernel_usb_uhci_probe_request, 0, sizeof(g_kernel_usb_uhci_probe_request));
@@ -1302,12 +1339,8 @@ static int kernel_usb_host_probe_execute_uhci_no_data_request(
     g_kernel_usb_uhci_probe_request.index = request_index;
     g_kernel_usb_uhci_probe_request.length = 0u;
 
-    qh_phys = (uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_qh;
     setup_phys = (uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_setup_td;
     status_phys = (uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_status_td;
-
-    g_kernel_usb_uhci_probe_qh.qh_hlink = UHCI_PTR_T;
-    g_kernel_usb_uhci_probe_qh.qh_elink = setup_phys | UHCI_PTR_VF | UHCI_PTR_TD;
 
     g_kernel_usb_uhci_probe_setup_td.td_link = status_phys | UHCI_PTR_VF | UHCI_PTR_TD;
     g_kernel_usb_uhci_probe_setup_td.td_status = KERNEL_USB_UHCI_TD_ERRCNT(3) |
@@ -1328,8 +1361,9 @@ static int kernel_usb_host_probe_execute_uhci_no_data_request(
     g_kernel_usb_uhci_probe_status_td.td_buffer = 0u;
 
     for (uint32_t i = 0u; i < UHCI_FRAMELIST_COUNT; ++i) {
-        g_kernel_usb_uhci_probe_frame_list[i] = qh_phys | UHCI_PTR_QH;
+        g_kernel_usb_uhci_probe_frame_list[i] = UHCI_PTR_T;
     }
+    g_kernel_usb_uhci_probe_frame_list[0] = setup_phys | UHCI_PTR_TD;
 
     kernel_usb_host_write16_io(controller->bar_base, UHCI_INTR, 0u);
     kernel_usb_host_write16_io(controller->bar_base, UHCI_STS, UHCI_STS_ALLINTRS);
@@ -1965,6 +1999,7 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
     }
     if (kernel_usb_host_probe_execute_uhci_transfer(dispatch,
                                                     0u,
+                                                    8u,
                                                     dispatch->snapshot.plan.request_type,
                                                     dispatch->snapshot.plan.request,
                                                     dispatch->snapshot.plan.value,
@@ -1973,6 +2008,7 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
                                                     &g_kernel_usb_uhci_probe_data[0],
                                                     sizeof(g_kernel_usb_uhci_probe_data),
                                                     &actual_length) != 0) {
+        kernel_debug_puts("usb-host: uhci short device descriptor failed\n");
         return -1;
     }
     kernel_usb_host_probe_copy_descriptor_prefix(execution,
@@ -1985,6 +2021,7 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
                                                           &max_packet_size0) != 0) {
         execution->actual_length = 0u;
         memset(execution->descriptor_prefix, 0, sizeof(execution->descriptor_prefix));
+        kernel_debug_puts("usb-host: uhci short device descriptor invalid\n");
         return -1;
     }
     execution->descriptor_valid = 1u;
@@ -1992,6 +2029,7 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
 
     if (kernel_usb_host_probe_execute_uhci_transfer(dispatch,
                                                     0u,
+                                                    max_packet_size0,
                                                     dispatch->snapshot.plan.request_type,
                                                     dispatch->snapshot.plan.request,
                                                     dispatch->snapshot.plan.value,
@@ -2000,6 +2038,7 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
                                                     &g_kernel_usb_uhci_probe_data[0],
                                                     sizeof(g_kernel_usb_uhci_probe_data),
                                                     &actual_length) != 0) {
+        kernel_debug_puts("usb-host: uhci full device descriptor failed\n");
         return -1;
     }
     kernel_usb_host_probe_copy_descriptor_prefix(execution,
@@ -2012,17 +2051,20 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
         execution->descriptor_valid = 0u;
         execution->max_packet_size0 = 0u;
         memset(execution->descriptor_prefix, 0, sizeof(execution->descriptor_prefix));
+        kernel_debug_puts("usb-host: uhci full device descriptor invalid\n");
         return -1;
     }
     execution->descriptor_valid = 1u;
     execution->max_packet_size0 = max_packet_size0;
     if (kernel_usb_host_probe_execute_uhci_set_address(dispatch,
                                                        dispatch->snapshot.plan.device.address) != 0) {
+        kernel_debug_puts("usb-host: uhci set address failed\n");
         return -1;
     }
     execution->assigned_address = dispatch->snapshot.plan.device.address;
     if (kernel_usb_host_probe_execute_uhci_transfer(dispatch,
                                                     execution->assigned_address,
+                                                    max_packet_size0,
                                                     (uint8_t)(USB_REQTYPE_IN |
                                                               USB_REQTYPE_STANDARD |
                                                               USB_REQTYPE_DEVICE),
@@ -2033,6 +2075,7 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
                                                     &g_kernel_usb_config_probe_data[0],
                                                     sizeof(g_kernel_usb_config_probe_data),
                                                     &actual_length) != 0) {
+        kernel_debug_puts("usb-host: uhci short config descriptor failed\n");
         return -1;
     }
     kernel_usb_host_probe_copy_config_prefix(execution,
@@ -2043,6 +2086,7 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
                                                           actual_length,
                                                           &config_total_length,
                                                           &configuration_value) != 0) {
+        kernel_debug_puts("usb-host: uhci short config descriptor invalid\n");
         return -1;
     }
     execution->config_valid = 1u;
@@ -2054,6 +2098,7 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
     }
     if (kernel_usb_host_probe_execute_uhci_transfer(dispatch,
                                                     execution->assigned_address,
+                                                    max_packet_size0,
                                                     (uint8_t)(USB_REQTYPE_IN |
                                                               USB_REQTYPE_STANDARD |
                                                               USB_REQTYPE_DEVICE),
@@ -2064,11 +2109,13 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
                                                     &g_kernel_usb_config_full_data[0],
                                                     sizeof(g_kernel_usb_config_full_data),
                                                     &actual_length) != 0) {
+        kernel_debug_puts("usb-host: uhci full config descriptor failed\n");
         return -1;
     }
     if (kernel_usb_host_validate_full_config_descriptor(&g_kernel_usb_config_full_data[0],
                                                         actual_length,
                                                         config_total_length) != 0) {
+        kernel_debug_puts("usb-host: uhci full config descriptor invalid\n");
         return -1;
     }
     kernel_usb_host_scan_config_descriptor(&g_kernel_usb_config_full_data[0], actual_length, execution);
@@ -2076,6 +2123,7 @@ static int kernel_usb_host_probe_execute_uhci_descriptor(const struct kernel_usb
     if (kernel_usb_host_probe_execute_uhci_set_configuration(dispatch,
                                                              execution->assigned_address,
                                                              execution->configuration_value) != 0) {
+        kernel_debug_puts("usb-host: uhci set configuration failed\n");
         return -1;
     }
     return 0;

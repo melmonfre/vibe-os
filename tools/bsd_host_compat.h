@@ -12,8 +12,10 @@ int pledge(const char *promises, const char *execpromises);
 int unveil(const char *path, const char *permissions);
 void setprogname(const char *progname);
 const char *getprogname(void);
+#if !defined(__APPLE__)
 size_t strlcpy(char *dst, const char *src, size_t size);
 size_t strlcat(char *dst, const char *src, size_t size);
+#endif
 long long strtonum(const char *text, long long minval, long long maxval,
                    const char **errstrp);
 uint32_t arc4random(void);

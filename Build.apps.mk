@@ -1,10 +1,11 @@
 # Apps Build for Vibe OS
-# Compiles language runtimes as standalone executables in /bin
+# Compiles language runtimes as standalone executables under build/
 # Each linked against dynamic glibc.so (or static glibc.a)
 
 APPS_DIR := lang/apps
-BIN_DIR := bin
-LIB_DIR := lib
+BUILD_DIR ?= build
+BIN_DIR := $(BUILD_DIR)/bin
+LIB_DIR := $(BUILD_DIR)/lib
 
 # Target apps to build
 APPS := js ruby python hello java javac
@@ -20,7 +21,7 @@ $1_MAIN := $(APPS_DIR)/$1/$1_main.c
 $1_BIN := $(BIN_DIR)/$1
 $1_OBJS := $(BIN_DIR)/$1.o
 
-$$(BIN_DIR)/$1: $1_MAIN
+$$(BIN_DIR)/$1: $$($1_MAIN)
 	@mkdir -p $(BIN_DIR)
 	@echo "Building $$@..."
 	gcc -m32 $(CPU_ARCH_CFLAGS) -Os -I. -Iheaders -Ilang/vendor/glibc/include \

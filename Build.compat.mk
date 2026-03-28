@@ -51,6 +51,7 @@ COMPAT_SRCS := \
 	compat/src/libc/assert.c \
 	compat/src/posix/errno.c \
 	compat/src/posix/unistd.c \
+	compat/src/posix/utsname.c \
 	compat/src/posix/time.c \
 	compat/src/posix/sched.c \
 	compat/src/posix/pthread.c \

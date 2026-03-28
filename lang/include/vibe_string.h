@@ -1,7 +1,7 @@
 #ifndef VIBE_STRING_H
 #define VIBE_STRING_H
 
-typedef unsigned int size_t;
+#include <stddef.h>
 
 void *memcpy(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);

@@ -567,6 +567,11 @@ static int host_keyboard_get_available_layouts(char *buf, int max_len) {
     return sys_keyboard_get_available_layouts(buf, max_len);
 }
 
+static int host_sync_filesystem(void) {
+    fs_flush();
+    return 0;
+}
+
 static const struct vibe_app_host_api g_host_api = {
     VIBE_APP_ABI_VERSION,
     console_putc,
@@ -589,7 +594,8 @@ static const struct vibe_app_host_api g_host_api = {
     host_seek_fd,
     host_stat_path,
     host_fstat_fd,
-    host_getenv_value
+    host_getenv_value,
+    host_sync_filesystem
 };
 
 static int lang_load_address_valid(uint32_t load_address) {

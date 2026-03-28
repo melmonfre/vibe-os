@@ -77,6 +77,7 @@ long long strtonum(const char *text, long long minval, long long maxval,
 uint32_t arc4random(void);
 uint32_t arc4random_uniform(uint32_t upper_bound);
 void arc4random_buf(void *buf, size_t size);
+char *strncpy(char *dst, const char *src, size_t n);
 size_t strlcpy(char *dst, const char *src, size_t size);
 size_t strlcat(char *dst, const char *src, size_t size);
 char *strsep(char **stringp, const char *delim);
@@ -101,6 +102,7 @@ int bsdgame_sprintf(char *dst, const char *fmt, ...);
 int bsdgame_snprintf(char *dst, size_t size, const char *fmt, ...);
 int bsdgame_vsprintf(char *dst, const char *fmt, va_list ap);
 int bsdgame_vsnprintf(char *dst, size_t size, const char *fmt, va_list ap);
+int delay_output(int ms);
 
 #ifndef VIBE_BSDGAME_NO_EXIT_REMAP
 #define exit vibe_bsdgame_exit

@@ -67,12 +67,7 @@ CFLAGS := -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stac
 INCLUDES := -I. -Icompat/include -Ilang/include -Iapplications/ported/include -Iheaders
 LDFLAGS := -m elf_i386 -T linker/app.ld -nostdlib -N --allow-multiple-definition
 
-UNAME_S := $(shell uname -s 2>/dev/null || echo Unknown)
-ifeq ($(UNAME_S),Linux)
 LIBGCC_A := $(shell $(CC) -m32 $(CPU_ARCH_CFLAGS) -print-libgcc-file-name 2>/dev/null)
-else
-LIBGCC_A :=
-endif
 
 # Ported app SDK
 APP_ENTRY := lang/sdk/app_entry.c
@@ -640,6 +635,117 @@ $(SED_APP): $(SED_ELF)
 
 ported-sed: $(SED_APP)
 
+# === UNAME APP ===
+
+UNAME_SRCS := applications/ported/uname/uname.c
+UNAME_OBJS := build/ported/uname.o \
+	build/app_entry_uname.o \
+	build/app_runtime_uname.o
+
+UNAME_ELF := build/ported/uname.elf
+UNAME_APP := build/ported/uname.app
+
+build/app_entry_uname.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"uname\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_uname.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/uname.o: $(UNAME_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(UNAME_ELF): $(UNAME_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(UNAME_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(UNAME_APP): $(UNAME_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Uname app: $@"
+
+ported-uname: $(UNAME_APP)
+
+# === SYNC APP ===
+
+SYNC_SRCS := applications/ported/sync/sync.c
+SYNC_OBJS := build/ported/sync.o \
+	build/app_entry_sync.o \
+	build/app_runtime_sync.o
+
+SYNC_ELF := build/ported/sync.elf
+SYNC_APP := build/ported/sync.app
+
+build/app_entry_sync.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"sync\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_sync.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/sync.o: $(SYNC_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(SYNC_ELF): $(SYNC_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(SYNC_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(SYNC_APP): $(SYNC_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Sync app: $@"
+
+ported-sync: $(SYNC_APP)
+
+# === TR APP ===
+
+TR_SRCS := applications/ported/tr/tr.c applications/ported/tr/str.c
+TR_OBJS := $(patsubst applications/ported/tr/%.c,build/ported/tr/%.o,$(TR_SRCS)) \
+	build/app_entry_tr.o \
+	build/app_runtime_tr.o
+
+TR_ELF := build/ported/tr.elf
+TR_APP := build/ported/tr.app
+
+build/app_entry_tr.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"tr\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_tr.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/tr/%.o: applications/ported/tr/%.c applications/ported/tr/extern.h $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -Iapplications/ported/tr $(INCLUDES) -c $< -o $@
+
+$(TR_ELF): $(TR_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(TR_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(TR_APP): $(TR_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Tr app: $@"
+
+ported-tr: $(TR_APP)
+
 # General rules
 build:
 	@mkdir -p $@
@@ -689,6 +795,15 @@ ported-false-clean:
 ported-printf-clean:
 	rm -f $(PRINTF_OBJS) $(PRINTF_ELF) $(PRINTF_APP)
 
+ported-uname-clean:
+	rm -f $(UNAME_OBJS) $(UNAME_ELF) $(UNAME_APP)
+
+ported-sync-clean:
+	rm -f $(SYNC_OBJS) $(SYNC_ELF) $(SYNC_APP)
+
+ported-tr-clean:
+	rm -f $(TR_OBJS) $(TR_ELF) $(TR_APP)
+
 PORTED_APP_TARGETS := \
 	$(ECHO_APP) \
 	$(CAT_APP) \
@@ -704,10 +819,13 @@ PORTED_APP_TARGETS := \
 	$(MKDIR_APP) \
 	$(TRUE_APP) \
 	$(FALSE_APP) \
-	$(PRINTF_APP)
+	$(PRINTF_APP) \
+	$(UNAME_APP) \
+	$(SYNC_APP) \
+	$(TR_APP)
 
 ported-all: $(PORTED_APP_TARGETS)
 
-ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean
+ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean ported-uname-clean ported-sync-clean ported-tr-clean
 
-.PHONY: ported-all ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-mkdir ported-true ported-false ported-printf ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean
+.PHONY: ported-all ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-mkdir ported-true ported-false ported-printf ported-uname ported-sync ported-tr ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean ported-uname-clean ported-sync-clean ported-tr-clean

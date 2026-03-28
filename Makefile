@@ -3,8 +3,8 @@ SHELL := /bin/sh
 
 # ARCHITECTURE:
 # - make            : Build kernel (no glibc, uses stubs)
-# - make glibc      : Build glibc library (lang/vendor/glibc -> lib/libglibc.*)
-# - make apps       : Build language runtimes in /bin
+# - make glibc      : Build glibc library (lang/vendor/glibc -> build/lib/libglibc.*)
+# - make apps       : Build language runtimes in build/bin
 # - make clean      : Clean kernel build
 # - make glibc-clean: Clean glibc
 # - make apps-clean : Clean apps
@@ -88,6 +88,36 @@ QEMU_MEMORY_MB ?= 3072
 QEMU_SERIAL_LOG ?= build/qemu-serial.log
 QEMU_AUDIO_CAPTURE_WAV ?= build/qemu-audio.wav
 QEMU_IMAGE_OPTS ?= format=raw,file=$(IMAGE),snapshot=on
+QEMU_NET_OPTS ?= -netdev user,id=net0 -device virtio-net-pci,netdev=net0
+QEMU_AUDIO_DEVICE ?= AC97
+QEMU_AUDIO_LIVE_CONTROLLER ?= intel-hda
+QEMU_AUDIO_LIVE_CODEC ?= hda-output
+QEMU_AUDIO_PROBE_BIN := $(shell if command -v $(QEMU) >/dev/null 2>&1; then printf '%s' '$(QEMU)'; elif command -v qemu-system-x86_64 >/dev/null 2>&1; then printf '%s' 'qemu-system-x86_64'; fi)
+QEMU_AUDIO_HAS_COREAUDIO := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'coreaudio'; then printf '1'; fi)
+QEMU_AUDIO_HAS_DBUS := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'dbus'; then printf '1'; fi)
+QEMU_AUDIO_HAS_PA := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'pa'; then printf '1'; fi)
+QEMU_AUDIO_HAS_ALSA := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'alsa'; then printf '1'; fi)
+ifeq ($(UNAME_S),Darwin)
+ifeq ($(QEMU_AUDIO_HAS_COREAUDIO),1)
+QEMU_AUDIO_DRIVER ?= coreaudio
+endif
+else ifeq ($(UNAME_S),Linux)
+ifeq ($(QEMU_AUDIO_HAS_DBUS),1)
+QEMU_AUDIO_DRIVER ?= dbus
+else ifeq ($(QEMU_AUDIO_HAS_PA),1)
+QEMU_AUDIO_DRIVER ?= pa
+else ifeq ($(QEMU_AUDIO_HAS_ALSA),1)
+QEMU_AUDIO_DRIVER ?= alsa
+endif
+endif
+ifeq ($(strip $(QEMU_AUDIO_DRIVER)),)
+QEMU_AUDIO_OPTS ?= -device $(QEMU_AUDIO_DEVICE)
+QEMU_AUDIO_LIVE_OPTS ?= -device $(QEMU_AUDIO_DEVICE)
+else
+QEMU_AUDIO_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
+QEMU_AUDIO_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_LIVE_CONTROLLER) -device $(QEMU_AUDIO_LIVE_CODEC),audiodev=snd0
+endif
+QEMU_AUDIO_CAPTURE_OPTS ?= -audiodev wav,id=snd0,path=$(QEMU_AUDIO_CAPTURE_WAV) -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
 ifeq ($(strip $(PYTHON)),)
 PYTHON := python3
 endif
@@ -201,6 +231,8 @@ endif
 endif
 
 BUILD_DIR := build
+APP_BIN_DIR := $(BUILD_DIR)/bin
+APP_LIB_DIR := $(BUILD_DIR)/lib
 APP_CATALOG_MANIFEST := config/app_catalog.tsv
 APP_CATALOG_GENERATED_DIR := $(BUILD_DIR)/generated
 APP_CATALOG_GENERATED_MK := $(APP_CATALOG_GENERATED_DIR)/app_catalog.mk
@@ -261,6 +293,16 @@ AUDIO_STACK_REPORT := $(BUILD_DIR)/audio-stack-validation.md
 GPU_BACKENDS_I915_EXPERIMENTAL_REPORT := $(BUILD_DIR)/gpu-backends-i915-experimental-report.md
 GPU_BACKENDS_RECOVERY_REPORT := $(BUILD_DIR)/gpu-backends-recovery-report.md
 CRAFT_UPSTREAM_EXPERIMENTAL ?= 1
+
+BOOT_SMOKE_IMAGE := $(BUILD_DIR)/boot-smoke.img
+BOOT_SMOKE_DATA_IMAGE := $(BUILD_DIR)/data-partition.boot-smoke.img
+BOOT_SMOKE_DATA_IMAGE_MANIFEST := $(BUILD_DIR)/data-partition.boot-smoke.manifest
+BOOT_SMOKE_IMAGE_ASSET_MANIFEST := $(BUILD_DIR)/image-assets.boot-smoke.manifest
+BOOT_SMOKE_VOLUME_MANIFEST := $(BUILD_DIR)/boot-volume-layout.boot-smoke.txt
+BOOT_SMOKE_POLICY_MANIFEST := $(BUILD_DIR)/boot-policy.boot-smoke.txt
+BOOT_SMOKE_PHASE6_REPORT := $(BUILD_DIR)/phase6-validation-boot-smoke.md
+BOOTLOADER_BG_SMOKE_BIN := $(BUILD_DIR)/bootloader-bg.smoke.bin
+WALLPAPER_RUNTIME_SMOKE_PNG := $(BUILD_DIR)/wallpaper-runtime.smoke.png
 
 # Kernel sources - kernel only, no stage2
 KERNEL_SRCS := $(shell find kernel -name '*.c' ! -name '* *')
@@ -547,11 +589,7 @@ LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N --allow-mu
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
 LDFLAGS_APP := -m elf_i386 -T $(LINKER_DIR)/app.ld -nostdlib -N
 
-ifeq ($(UNAME_S),Linux)
 LIBGCC_A := $(shell $(CC) -m32 $(CPU_ARCH_CFLAGS) -print-libgcc-file-name 2>/dev/null)
-else
-LIBGCC_A :=
-endif
 
 HELLO_APP_BUILD_DIR := $(BUILD_DIR)/lang/hello
 HELLO_APP_OBJS := \
@@ -843,6 +881,9 @@ TRUE_APP_BIN := $(BUILD_DIR)/ported/true.app
 FALSE_APP_BIN := $(BUILD_DIR)/ported/false.app
 PRINTF_APP_BIN := $(BUILD_DIR)/ported/printf.app
 SED_APP_BIN := $(BUILD_DIR)/ported/sed.app
+UNAME_APP_BIN := $(BUILD_DIR)/ported/uname.app
+SYNC_APP_BIN := $(BUILD_DIR)/ported/sync.app
+TR_APP_BIN := $(BUILD_DIR)/ported/tr.app
 PORTED_APPS_STAMP := $(BUILD_DIR)/.ported_apps.stamp
 ADVENTURE_APP_BIN := $(BUILD_DIR)/ported/adventure.app
 ARITHMETIC_APP_BIN := $(BUILD_DIR)/ported/arithmetic.app
@@ -892,6 +933,16 @@ $(shell $(PYTHON) tools/generate_app_catalog.py --manifest $(APP_CATALOG_MANIFES
 -include $(APP_CATALOG_GENERATED_MK)
 
 LANG_APP_BINS := $(APP_CATALOG_APP_BINS)
+IMAGE_APP_BINS ?= $(LANG_APP_BINS)
+BOOT_SMOKE_APP_BINS := \
+	$(USERLAND_BOOT_APP_BIN) \
+	$(HELLO_APP_BIN) \
+	$(LUA_APP_BIN) \
+	$(SECTORC_APP_BIN) \
+	$(SOUNDCTL_APP_BIN) \
+	$(AUDIOSVC_APP_BIN) \
+	$(NETMGRD_APP_BIN) \
+	$(NETCTL_APP_BIN)
 
 # Include compatibility layer build rules
 include Build.compat.mk
@@ -961,6 +1012,7 @@ $(STAGE2_BIN): $(BOOT_DIR)/stage2.asm | $(BUILD_DIR)
 		exit 1; \
 	fi
 
+ifneq ($(BOOTLOADER_BG_BIN),$(BOOTLOADER_BG_SMOKE_BIN))
 $(BOOTLOADER_BG_BIN): $(BOOTLOADER_BG_SRC) tools/build_boot_palette_asset.py Makefile | $(BUILD_DIR)
 	$(PYTHON) tools/build_boot_palette_asset.py \
 		--input $(BOOTLOADER_BG_SRC) \
@@ -968,6 +1020,10 @@ $(BOOTLOADER_BG_BIN): $(BOOTLOADER_BG_SRC) tools/build_boot_palette_asset.py Mak
 		--width $(BOOTLOADER_BG_WIDTH) \
 		--height $(BOOTLOADER_BG_HEIGHT) \
 		--resample $(BOOTLOADER_BG_RESAMPLE)
+endif
+
+$(BOOTLOADER_BG_SMOKE_BIN): | $(BUILD_DIR)
+	$(PYTHON) -c 'from pathlib import Path; p = Path(r"$@"); p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(bytes($(BOOTLOADER_BG_WIDTH) * $(BOOTLOADER_BG_HEIGHT)))'
 
 $(BOOT_BIN): $(BOOT_DIR)/stage1.asm $(STAGE2_BIN) | $(BUILD_DIR)
 	@stage2_sectors=$$((($$(wc -c < $(STAGE2_BIN)) + 511) / 512)); \
@@ -1132,7 +1188,12 @@ $(JAVAC_APP_BUILD_DIR)/javac_main.o: lang/apps/javac/javac_main.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(LUA_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+$(LUA_APP_BUILD_DIR):
+	@mkdir -p $(LUA_APP_BUILD_DIR)/userland/lua
+	@mkdir -p $(LUA_APP_BUILD_DIR)/userland/modules
+	@mkdir -p $(LUA_APP_BUILD_DIR)/userland/lua/vendor/lua-5.4.6/src
+
+$(LUA_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR) $(LUA_APP_BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -DVIBE_USERLAND_APP -c $< -o $@
 
@@ -1175,78 +1236,100 @@ $(HELLO_APP_ELF): $(HELLO_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(HELLO_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(HELLO_APP_BIN): $(HELLO_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(SOUNDCTL_APP_ELF): $(SOUNDCTL_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(SOUNDCTL_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(SOUNDCTL_APP_BIN): $(SOUNDCTL_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(AUDIOSVC_APP_ELF): $(AUDIOSVC_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(AUDIOSVC_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(AUDIOSVC_APP_BIN): $(AUDIOSVC_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(NETMGRD_APP_ELF): $(NETMGRD_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(NETMGRD_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(NETMGRD_APP_BIN): $(NETMGRD_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(NETCTL_APP_ELF): $(NETCTL_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(NETCTL_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(NETCTL_APP_BIN): $(NETCTL_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(JS_APP_ELF): $(JS_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(JS_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(JS_APP_BIN): $(JS_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(RUBY_APP_ELF): $(RUBY_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(RUBY_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(RUBY_APP_BIN): $(RUBY_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(PYTHON_APP_ELF): $(PYTHON_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(PYTHON_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(PYTHON_APP_BIN): $(PYTHON_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(JAVA_APP_ELF): $(JAVA_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(JAVA_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(JAVA_APP_BIN): $(JAVA_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(JAVAC_APP_ELF): $(JAVAC_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(JAVAC_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(JAVAC_APP_BIN): $(JAVAC_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(LUA_APP_ELF): $(LUA_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
 	$(LD) $(LDFLAGS_APP) $(LUA_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(LUA_APP_BIN): $(LUA_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(DESKTOP_APP_MAIN_OBJ): $(USERLAND_DIR)/applications/desktop_app_main.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
@@ -1265,8 +1348,10 @@ $(BUILD_DIR)/lang/$(1).elf: $$(DESKTOP_APP_MAIN_OBJ) $$(DESKTOP_APP_RUNTIME_OBJ)
 	$$(LD) -m elf_i386 -T $$(LINKER_DIR)/app_desktop.ld -nostdlib -N $$(DESKTOP_APP_MAIN_OBJ) $$(DESKTOP_APP_RUNTIME_OBJ) $$(DESKTOP_RUNTIME_OBJS) $(BUILD_DIR)/lang/$(1)_app_entry.o $$(COMPAT_LIB) -o $$@ $$(LIBGCC_A)
 
 $(BUILD_DIR)/lang/$(1).app: $(BUILD_DIR)/lang/$(1).elf
+	cp $$< $$<.keep
 	$$(OBJCOPY) -O binary $$< $$@
-	$$(PYTHON) tools/patch_app_header.py --nm $$(NM) --elf $$< --bin $$@
+	$$(PYTHON) tools/patch_app_header.py --nm $$(NM) --elf $$<.keep --bin $$@
+	rm -f $$<.keep
 endef
 
 $(foreach app,$(DESKTOP_LAUNCHER_APPS),$(eval $(call DESKTOP_LAUNCHER_RULES,$(app))))
@@ -1275,8 +1360,10 @@ $(SECTORC_APP_ELF): $(SECTORC_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
 	$(LD) $(LDFLAGS_APP) $(SECTORC_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(SECTORC_APP_BIN): $(SECTORC_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 $(USERLAND_BOOT_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
@@ -1294,8 +1381,10 @@ $(USERLAND_BOOT_APP_ELF): $(USERLAND_BOOT_APP_OBJS) $(LINKER_DIR)/app_boot.ld $(
 	$(LD) -m elf_i386 -T $(LINKER_DIR)/app_boot.ld -nostdlib -N $(USERLAND_BOOT_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(USERLAND_BOOT_APP_BIN): $(USERLAND_BOOT_APP_ELF)
+	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
-	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
 
 # Ported GNU apps (echo, cat, wc, head, tail, grep, etc)
 # Build once via stamp to avoid parallel duplicate sub-make executions.
@@ -1306,7 +1395,7 @@ $(PORTED_APPS_STAMP): $(COMPAT_LIB) Build.ported.mk lang/sdk/app_entry.c lang/sd
 		ported-all
 	@touch $@
 
-$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(SED_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN): $(PORTED_APPS_STAMP)
+$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(SED_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN) $(UNAME_APP_BIN) $(SYNC_APP_BIN) $(TR_APP_BIN): $(PORTED_APPS_STAMP)
 
 $(BSD_GAMES_APPS_STAMP): $(COMPAT_LIB) Build.bsdgames.mk lang/sdk/app_entry.c lang/sdk/app_runtime.c lang/include/vibe_app.h tools/patch_app_header.py \
 	applications/ported/bsdgames/vibe_bsdgame_main.c applications/ported/bsdgames/vibe_bsdgame_compat.c applications/ported/bsdgames/vibe_bsdgame_shim.h
@@ -1325,14 +1414,19 @@ $(PRIMES_APP_BIN) $(QUIZ_APP_BIN) $(RAIN_APP_BIN) $(RANDOM_APP_BIN) $(ROBOTS_APP
 $(SNAKE_BSD_APP_BIN) $(TEACHGAMMON_APP_BIN) $(TETRIS_BSD_APP_BIN) $(TREK_APP_BIN) \
 $(WARGAMES_APP_BIN) $(WORM_APP_BIN) $(WORMS_APP_BIN) $(WUMP_APP_BIN): $(BSD_GAMES_APPS_STAMP)
 
+ifneq ($(WALLPAPER_RUNTIME_PNG),$(WALLPAPER_RUNTIME_SMOKE_PNG))
 $(WALLPAPER_RUNTIME_PNG): $(WALLPAPER_SRC) tools/build_runtime_png_asset.py Makefile | $(BUILD_DIR)
 	$(PYTHON) tools/build_runtime_png_asset.py \
 		--input $(WALLPAPER_SRC) \
 		--output $@ \
 		--width $(WALLPAPER_RUNTIME_W) \
 		--height $(WALLPAPER_RUNTIME_H)
+endif
 
-$(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC) $(WALLPAPER_RUNTIME_PNG) $(VIBE_BOOT_WAV_SRC) $(VIBE_DESKTOP_WAV_SRC) $(BOOTLOADER_BG_SRC)
+$(WALLPAPER_RUNTIME_SMOKE_PNG): $(WALLPAPER_SRC) | $(BUILD_DIR)
+	cp $(WALLPAPER_SRC) $@
+
+$(DATA_IMAGE): $(IMAGE_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC) $(WALLPAPER_RUNTIME_PNG) $(VIBE_BOOT_WAV_SRC) $(VIBE_DESKTOP_WAV_SRC) $(BOOTLOADER_BG_SRC)
 	$(PYTHON) tools/build_data_partition.py \
 		--image $@ \
 		--image-total-sectors $(DATA_PARTITION_SECTORS) \
@@ -1350,7 +1444,7 @@ $(DATA_IMAGE): $(LANG_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FON
 		--asset "$(VIBE_BOOT_WAV_SRC):$(VIBE_BOOT_WAV_IMAGE_LBA):vibe_os_boot.wav" \
 		--asset "$(VIBE_DESKTOP_WAV_SRC):$(VIBE_DESKTOP_WAV_IMAGE_LBA):vibe_os_desktop.wav" \
 		--asset "$(BOOTLOADER_BG_SRC):$(BOOTLOADER_BG_IMAGE_LBA):bootloader_background.png" \
-		$(LANG_APP_BINS)
+		$(IMAGE_APP_BINS)
 	@cp $(DATA_IMAGE_MANIFEST) $(IMAGE_ASSET_MANIFEST)
 
 $(BOOT_VOLUME_MANIFEST): $(KERNEL_BIN) $(STAGE2_BIN) $(DATA_IMAGE)
@@ -1397,12 +1491,12 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOO
 
 run: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS); \
 	else \
 		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			echo "Usando qemu-system-x86_64"; \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS); \
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \
@@ -1417,10 +1511,10 @@ run-debug-gui: $(IMAGE)
 	@rm -f $(QEMU_SERIAL_LOG)
 	@echo "QEMU GUI debug ativo. Serial do kernel: $(QEMU_SERIAL_LOG)"
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS) -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS) -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1429,10 +1523,10 @@ run-debug-gui: $(IMAGE)
 
 run-headless-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1445,15 +1539,15 @@ run-headless-audio-debug: $(IMAGE)
 	@echo "QEMU headless audio debug ativo. Captura WAV: $(QEMU_AUDIO_CAPTURE_WAV)"
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
 		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c \
+			$(QEMU_NET_OPTS) \
 			-display none -serial stdio -monitor none \
-			-audiodev wav,id=snd0,path=$(QEMU_AUDIO_CAPTURE_WAV) \
-			-device AC97,audiodev=snd0; \
+			$(QEMU_AUDIO_CAPTURE_OPTS); \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c \
+				$(QEMU_NET_OPTS) \
 				-display none -serial stdio -monitor none \
-				-audiodev wav,id=snd0,path=$(QEMU_AUDIO_CAPTURE_WAV) \
-				-device AC97,audiodev=snd0; \
+				$(QEMU_AUDIO_CAPTURE_OPTS); \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1462,10 +1556,10 @@ run-headless-audio-debug: $(IMAGE)
 
 run-headless-core2duo-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -cpu core2duo -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
+		$(QEMU) -cpu core2duo -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -cpu core2duo -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
+			qemu-system-x86_64 -cpu core2duo -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1474,10 +1568,10 @@ run-headless-core2duo-debug: $(IMAGE)
 
 run-headless-pentium-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -cpu pentium -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
+		$(QEMU) -cpu pentium -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -cpu pentium -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
+			qemu-system-x86_64 -cpu pentium -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1486,10 +1580,10 @@ run-headless-pentium-debug: $(IMAGE)
 
 run-headless-atom-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -cpu n270 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
+		$(QEMU) -cpu n270 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -cpu n270 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c -display none -serial stdio -monitor none; \
+			qemu-system-x86_64 -cpu n270 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) -display none -serial stdio -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1500,6 +1594,7 @@ run-headless-ahci-debug: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
 		$(QEMU) -machine q35 -m $(QEMU_MEMORY_MB) \
 			-drive if=none,id=bootdisk,$(QEMU_IMAGE_OPTS) \
+			$(QEMU_NET_OPTS) \
 			-device ahci,id=ahci \
 			-device ide-hd,drive=bootdisk,bus=ahci.0,bootindex=0 \
 			-boot c -display none -serial stdio -monitor none; \
@@ -1507,6 +1602,7 @@ run-headless-ahci-debug: $(IMAGE)
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			qemu-system-x86_64 -machine q35 -m $(QEMU_MEMORY_MB) \
 				-drive if=none,id=bootdisk,$(QEMU_IMAGE_OPTS) \
+				$(QEMU_NET_OPTS) \
 				-device ahci,id=ahci \
 				-device ide-hd,drive=bootdisk,bus=ahci.0,bootindex=0 \
 				-boot c -display none -serial stdio -monitor none; \
@@ -1538,6 +1634,33 @@ run-headless-usb-debug: $(IMAGE)
 
 validate-phase6: $(IMAGE)
 	$(PYTHON) tools/validate_phase6.py --image $(IMAGE) --report $(PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+boot-smoke-image: check-tools
+	$(MAKE) IMAGE="$(BOOT_SMOKE_IMAGE)" \
+		DATA_IMAGE="$(BOOT_SMOKE_DATA_IMAGE)" \
+		DATA_IMAGE_MANIFEST="$(BOOT_SMOKE_DATA_IMAGE_MANIFEST)" \
+		IMAGE_ASSET_MANIFEST="$(BOOT_SMOKE_IMAGE_ASSET_MANIFEST)" \
+		BOOT_VOLUME_MANIFEST="$(BOOT_SMOKE_VOLUME_MANIFEST)" \
+		BOOT_POLICY_MANIFEST="$(BOOT_SMOKE_POLICY_MANIFEST)" \
+		WALLPAPER_RUNTIME_PNG="$(WALLPAPER_RUNTIME_SMOKE_PNG)" \
+		BOOTLOADER_BG_BIN="$(BOOTLOADER_BG_SMOKE_BIN)" \
+		IMAGE_APP_BINS="$(BOOT_SMOKE_APP_BINS)" \
+		"$(BOOT_SMOKE_IMAGE)"
+
+run-headless-boot-smoke-debug: boot-smoke-image
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(BOOT_SMOKE_IMAGE),snapshot=on -boot c -display none -serial stdio -monitor none; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive format=raw,file=$(BOOT_SMOKE_IMAGE),snapshot=on -boot c -display none -serial stdio -monitor none; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
+
+validate-phase6-boot-smoke: boot-smoke-image
+	$(PYTHON) tools/validate_phase6.py --image $(BOOT_SMOKE_IMAGE) --report $(BOOT_SMOKE_PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
 validate-modular-apps: $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
@@ -1661,26 +1784,26 @@ glibc-core:
 	@echo "Building glibc-core (810 core functions)..."
 	$(MAKE) -f Build.glibc.mk glibc-build
 
-# Build language apps as standalone /bin executables
+# Build language apps as standalone build/bin executables
 # Apps link glibc.a statically (or can load glibc.so dynamically at runtime)
-apps: glibc-core | bin lib
-	@echo "Building language runtime apps to /bin..."
-	@mkdir -p bin lib
-	@echo "$(HELLO_APP_BIN) -> bin/hello"
-	@cp $(HELLO_APP_BIN) bin/hello || echo "WARNING: hello app not found"
-	@if [ -f "$(JS_APP_BIN)" ]; then cp $(JS_APP_BIN) bin/js; else echo "WARNING: js app not found"; fi
-	@if [ -f "$(RUBY_APP_BIN)" ]; then cp $(RUBY_APP_BIN) bin/ruby; else echo "WARNING: ruby app not found"; fi
-	@if [ -f "$(PYTHON_APP_BIN)" ]; then cp $(PYTHON_APP_BIN) bin/python; else echo "WARNING: python app not found"; fi
-	@if [ -f "$(JAVA_APP_BIN)" ]; then cp $(JAVA_APP_BIN) bin/java; else echo "WARNING: java app not found"; fi
-	@if [ -f "$(JAVAC_APP_BIN)" ]; then cp $(JAVAC_APP_BIN) bin/javac; else echo "WARNING: javac app not found"; fi
-	@if [ -f "build/libglibc-full.a" ]; then cp build/libglibc-full.a lib/libglibc.a; else cp build/libglibc-core.a lib/libglibc.a; fi || true
-	@echo "Apps built to /bin"
+apps: glibc-core | $(APP_BIN_DIR) $(APP_LIB_DIR)
+	@echo "Building language runtime apps to $(APP_BIN_DIR)..."
+	@mkdir -p $(APP_BIN_DIR) $(APP_LIB_DIR)
+	@echo "$(HELLO_APP_BIN) -> $(APP_BIN_DIR)/hello"
+	@cp $(HELLO_APP_BIN) $(APP_BIN_DIR)/hello || echo "WARNING: hello app not found"
+	@if [ -f "$(JS_APP_BIN)" ]; then cp $(JS_APP_BIN) $(APP_BIN_DIR)/js; else echo "WARNING: js app not found"; fi
+	@if [ -f "$(RUBY_APP_BIN)" ]; then cp $(RUBY_APP_BIN) $(APP_BIN_DIR)/ruby; else echo "WARNING: ruby app not found"; fi
+	@if [ -f "$(PYTHON_APP_BIN)" ]; then cp $(PYTHON_APP_BIN) $(APP_BIN_DIR)/python; else echo "WARNING: python app not found"; fi
+	@if [ -f "$(JAVA_APP_BIN)" ]; then cp $(JAVA_APP_BIN) $(APP_BIN_DIR)/java; else echo "WARNING: java app not found"; fi
+	@if [ -f "$(JAVAC_APP_BIN)" ]; then cp $(JAVAC_APP_BIN) $(APP_BIN_DIR)/javac; else echo "WARNING: javac app not found"; fi
+	@if [ -f "build/libglibc-full.a" ]; then cp build/libglibc-full.a $(APP_LIB_DIR)/libglibc.a; else cp build/libglibc-core.a $(APP_LIB_DIR)/libglibc.a; fi || true
+	@echo "Apps built to $(APP_BIN_DIR)"
 
-bin:
-	mkdir -p bin
+$(APP_BIN_DIR):
+	mkdir -p $(APP_BIN_DIR)
 
-lib:
-	mkdir -p lib
+$(APP_LIB_DIR):
+	mkdir -p $(APP_LIB_DIR)
 
 glibc-clean:
 	@echo "Cleaning glibc build..."
@@ -1688,7 +1811,7 @@ glibc-clean:
 
 apps-clean:
 	@echo "Cleaning apps..."
-	rm -rf bin/ lib/
+	rm -rf $(APP_BIN_DIR) $(APP_LIB_DIR)
 	rm -f $(HELLO_APP_OBJS) $(HELLO_APP_ELF) $(HELLO_APP_BIN)
 	rm -f $(JS_APP_OBJS) $(JS_APP_ELF) $(JS_APP_BIN)
 	rm -f $(RUBY_APP_OBJS) $(RUBY_APP_ELF) $(RUBY_APP_BIN)
@@ -1697,35 +1820,37 @@ apps-clean:
 	rm -f $(JAVAC_APP_OBJS) $(JAVAC_APP_ELF) $(JAVAC_APP_BIN)
 
 # Standalone app compilation (requires vendor builds)
-# These compile each app to /bin independently
-app-hello: $(HELLO_APP_BIN) | bin
-	@echo "Copying hello to /bin..."
-	@cp $(HELLO_APP_BIN) bin/hello
-	@echo "✓ /bin/hello ready"
+# These compile each app to build/bin independently
+app-hello: $(HELLO_APP_BIN) | $(APP_BIN_DIR)
+	@echo "Copying hello to $(APP_BIN_DIR)..."
+	@cp $(HELLO_APP_BIN) $(APP_BIN_DIR)/hello
+	@echo "✓ $(APP_BIN_DIR)/hello ready"
 
-app-js: $(JS_APP_BIN) | bin
-	@echo "Copying js to /bin..."
-	@cp $(JS_APP_BIN) bin/js
-	@echo "✓ /bin/js ready"
+app-js: $(JS_APP_BIN) | $(APP_BIN_DIR)
+	@echo "Copying js to $(APP_BIN_DIR)..."
+	@cp $(JS_APP_BIN) $(APP_BIN_DIR)/js
+	@echo "✓ $(APP_BIN_DIR)/js ready"
 
 app-ruby:
-	@if [ -f "$(RUBY_APP_BIN)" ]; then cp $(RUBY_APP_BIN) bin/ruby; echo "✓ /bin/ruby ready"; else echo "ℹ ruby.app not built. Requires mruby vendor. See BUILD_LANGS.md"; fi
+	@if [ -f "$(RUBY_APP_BIN)" ]; then mkdir -p $(APP_BIN_DIR); cp $(RUBY_APP_BIN) $(APP_BIN_DIR)/ruby; echo "✓ $(APP_BIN_DIR)/ruby ready"; else echo "ℹ ruby.app not built. Requires mruby vendor. See BUILD_LANGS.md"; fi
 
 app-python:
-	@if [ -f "$(PYTHON_APP_BIN)" ]; then cp $(PYTHON_APP_BIN) bin/python; echo "✓ /bin/python ready"; else echo "ℹ python.app not built. Requires micropython vendor. See BUILD_LANGS.md"; fi
+	@if [ -f "$(PYTHON_APP_BIN)" ]; then mkdir -p $(APP_BIN_DIR); cp $(PYTHON_APP_BIN) $(APP_BIN_DIR)/python; echo "✓ $(APP_BIN_DIR)/python ready"; else echo "ℹ python.app not built. Requires micropython vendor. See BUILD_LANGS.md"; fi
 
-app-java: $(JAVA_APP_BIN) | bin
-	@echo "Copying java to /bin..."
-	@cp $(JAVA_APP_BIN) bin/java
-	@echo "✓ /bin/java ready"
+app-java: $(JAVA_APP_BIN) | $(APP_BIN_DIR)
+	@echo "Copying java to $(APP_BIN_DIR)..."
+	@cp $(JAVA_APP_BIN) $(APP_BIN_DIR)/java
+	@echo "✓ $(APP_BIN_DIR)/java ready"
 
-app-javac: $(JAVAC_APP_BIN) | bin
-	@echo "Copying javac to /bin..."
-	@cp $(JAVAC_APP_BIN) bin/javac
-	@echo "✓ /bin/javac ready"
+app-javac: $(JAVAC_APP_BIN) | $(APP_BIN_DIR)
+	@echo "Copying javac to $(APP_BIN_DIR)..."
+	@cp $(JAVAC_APP_BIN) $(APP_BIN_DIR)/javac
+	@echo "✓ $(APP_BIN_DIR)/javac ready"
 
 clean:
 	rm -rf $(BUILD_DIR)
+	find kernel -type f \( -name '*.o' -o -name '*.d' \) -delete
+	rm -f "lang/vendor/glibc/benchtests/strcoll-inputs/filelist#C 2"
 
 full: clean all
 

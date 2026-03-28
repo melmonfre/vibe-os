@@ -451,7 +451,6 @@ static uint32_t sys_audio_write(uint32_t data_ptr, uint32_t size, uint32_t c,
     if (data_ptr == 0u || size == 0u) {
         return (uint32_t)-1;
     }
-    kernel_debug_puts("audio: syscall write enter\n");
     return (uint32_t)mk_audio_service_write((const void *)(uintptr_t)data_ptr, size);
 }
 

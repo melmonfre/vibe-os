@@ -24,6 +24,7 @@ int vibe_app_read(int fd, void *buf, int size);
 int vibe_app_write(int fd, const void *buf, int size);
 int vibe_app_close(int fd);
 int vibe_app_lseek(int fd, int offset, int whence);
+int vibe_app_sync(void);
 int vibe_app_stat(const char *path, struct vibe_app_stat *stat_out);
 int vibe_app_fstat(int fd, struct vibe_app_stat *stat_out);
 const char *vibe_app_getenv(const char *name);

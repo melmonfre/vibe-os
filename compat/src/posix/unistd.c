@@ -368,6 +368,10 @@ int usleep(unsigned int usec) {
     return 0;
 }
 
+void sync(void) {
+    (void)vibe_app_sync();
+}
+
 void _exit(int status) {
     (void)status;
     for (;;) {

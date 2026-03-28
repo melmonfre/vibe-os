@@ -3595,7 +3595,7 @@ static void draw_network_applet(const struct mouse_state *mouse) {
 
         sys_text(popup.x + 8, popup.y + 186, theme->text, "Ethernet");
         ui_draw_button(&ethernet_connect_button,
-                       "Subir em0",
+                       "Subir link",
                        g_network_applet_cache.status_valid &&
                                g_network_applet_cache.status.link_state == MK_NETWORK_LINK_CONNECTED &&
                                g_network_applet_cache.status.active_kind == MK_NETWORK_IF_ETHERNET
@@ -3606,7 +3606,7 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                        "Derrubar",
                        g_network_applet_cache.status_valid &&
                                g_network_applet_cache.status.active_if[0] != '\0' &&
-                               str_eq(g_network_applet_cache.status.active_if, "em0")
+                               !str_eq(g_network_applet_cache.status.active_if, "wlan0")
                            ? UI_BUTTON_DANGER
                            : UI_BUTTON_NORMAL,
                        point_in_rect(&ethernet_disconnect_button, mouse->x, mouse->y));
@@ -3668,7 +3668,7 @@ static int network_applet_connect_ethernet(void) {
 
     connect_argv[0] = "netmgrd";
     connect_argv[1] = "connect";
-    connect_argv[2] = "em0";
+    connect_argv[2] = "ethernet";
     connect_argv[3] = 0;
     return lang_try_run(3, connect_argv);
 }
@@ -5156,7 +5156,9 @@ void desktop_main(void) {
 
                         disconnect_argv[0] = "netmgrd";
                         disconnect_argv[1] = "disconnect";
-                        disconnect_argv[2] = "em0";
+                        disconnect_argv[2] = g_network_applet_cache.status.active_if[0] != '\0'
+                                                 ? g_network_applet_cache.status.active_if
+                                                 : "ethernet";
                         disconnect_argv[3] = 0;
                         if (lang_try_run(3, disconnect_argv) == 0) {
                             network_applet_invalidate_backend_cache();
@@ -5875,7 +5877,9 @@ void desktop_main(void) {
 
                     disconnect_argv[0] = "netmgrd";
                     disconnect_argv[1] = "disconnect";
-                    disconnect_argv[2] = "em0";
+                    disconnect_argv[2] = g_network_applet_cache.status.active_if[0] != '\0'
+                                             ? g_network_applet_cache.status.active_if
+                                             : "ethernet";
                     disconnect_argv[3] = 0;
                     if (lang_try_run(3, disconnect_argv) == 0) {
                         network_applet_invalidate_backend_cache();

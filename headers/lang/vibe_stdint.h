@@ -1,6 +1,8 @@
 #ifndef VIBE_STDINT_H
 #define VIBE_STDINT_H
 
+#include <stddef.h>
+
 typedef signed char int8_t;
 typedef unsigned char uint8_t;
 typedef signed short int16_t;
@@ -12,7 +14,6 @@ typedef unsigned long long uint64_t;
 
 typedef int intptr_t;
 typedef unsigned int uintptr_t;
-typedef unsigned int size_t;
 typedef int ssize_t;
 typedef int ptrdiff_t;
 

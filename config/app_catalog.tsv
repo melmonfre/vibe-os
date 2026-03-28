@@ -90,3 +90,6 @@ loadkeys	LOADKEYS_APP_BIN	1	0	/bin/loadkeys,/compat/bin/loadkeys
 true	TRUE_APP_BIN	1	1	/compat/bin/true
 false	FALSE_APP_BIN	1	1	/compat/bin/false
 printf	PRINTF_APP_BIN	1	1	/compat/bin/printf
+uname	UNAME_APP_BIN	1	1	/bin/uname,/usr/bin/uname,/compat/bin/uname
+sync	SYNC_APP_BIN	1	0	/bin/sync,/usr/bin/sync,/compat/bin/sync
+tr	TR_APP_BIN	1	0	/bin/tr,/usr/bin/tr,/compat/bin/tr

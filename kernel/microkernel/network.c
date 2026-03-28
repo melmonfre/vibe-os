@@ -1,10 +1,52 @@
 #include <kernel/kernel_string.h>
+#include <kernel/drivers/pci/pci.h>
+#include <kernel/drivers/debug/debug.h>
+#include <kernel/hal/io.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/network.h>
 #include <kernel/microkernel/service.h>
 #include <kernel/scheduler.h>
 #include <kernel/userland_service.h>
+#include <stddef.h>
 #include <string.h>
+
+#define VIRTIO_PCI_VENDOR_ID 0x1AF4u
+#define VIRTIO_PCI_DEVICE_NET_LEGACY 0x1000u
+#define VIRTIO_PCI_DEVICE_NET_MODERN 0x1041u
+
+#define VIRTIO_CONFIG_DEVICE_FEATURES 0u
+#define VIRTIO_CONFIG_GUEST_FEATURES 4u
+#define VIRTIO_CONFIG_QUEUE_ADDRESS 8u
+#define VIRTIO_CONFIG_QUEUE_SIZE 12u
+#define VIRTIO_CONFIG_QUEUE_SELECT 14u
+#define VIRTIO_CONFIG_QUEUE_NOTIFY 16u
+#define VIRTIO_CONFIG_ISR_STATUS 19u
+#define VIRTIO_CONFIG_DEVICE_CONFIG_NOMSI 20u
+#define VIRTIO_CONFIG_DEVICE_STATUS 18u
+
+#define VIRTIO_CONFIG_DEVICE_STATUS_RESET 0u
+#define VIRTIO_CONFIG_DEVICE_STATUS_ACK 1u
+#define VIRTIO_CONFIG_DEVICE_STATUS_DRIVER 2u
+#define VIRTIO_CONFIG_DEVICE_STATUS_DRIVER_OK 4u
+#define VIRTIO_CONFIG_DEVICE_STATUS_FAILED 128u
+
+#define VIRTIO_NET_CONFIG_MAC 0u
+#define VIRTIO_NET_CONFIG_STATUS 6u
+#define VIRTIO_NET_F_MAC (1u << 5)
+#define VIRTIO_NET_F_STATUS (1u << 16)
+#define VIRTIO_NET_S_LINK_UP 0x1u
+#define VIRTIO_PAGE_SIZE 4096u
+#define MK_NETWORK_VIRTIO_RING_ALIGN 4096u
+#define MK_NETWORK_VIRTIO_MAX_QUEUE_SIZE 256u
+#define MK_NETWORK_VIRTIO_QUEUE_COUNT 2u
+#define MK_NETWORK_VIRTIO_RX_QUEUE_INDEX 0u
+#define MK_NETWORK_VIRTIO_TX_QUEUE_INDEX 1u
+#define MK_NETWORK_VIRTIO_DESC_F_NEXT 1u
+#define MK_NETWORK_VIRTIO_DESC_F_WRITE 2u
+#define MK_NETWORK_VIRTIO_HDR_SIZE 10u
+#define MK_NETWORK_VIRTIO_RX_SLOT_COUNT 8u
+#define MK_NETWORK_VIRTIO_RX_BUFFER_BYTES 2048u
+#define MK_NETWORK_VIRTIO_TX_FRAME_BYTES 64u
 
 struct mk_network_scan_entry_state {
     char ssid[MK_NETWORK_SSID_MAX + 1];
@@ -33,6 +75,93 @@ struct mk_network_socket_state {
     uint8_t rx_buffer[MK_NETWORK_SOCKET_RX_CAPACITY];
 };
 
+struct mk_network_pci_probe_state {
+    int present;
+    int virtio_legacy_ready;
+    int virtio_queue_ready;
+    int virtio_link_up;
+    int virtio_status_valid;
+    int mac_valid;
+    uint8_t bus;
+    uint8_t slot;
+    uint8_t function;
+    uint16_t vendor_id;
+    uint16_t device_id;
+    uint16_t io_base;
+    uint8_t mac[6];
+    uint16_t queue_size[MK_NETWORK_VIRTIO_QUEUE_COUNT];
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+    char backend_name[24];
+};
+
+struct mk_network_vring_desc {
+    uint64_t addr;
+    uint32_t len;
+    uint16_t flags;
+    uint16_t next;
+} __attribute__((packed));
+
+struct mk_network_vring_avail {
+    uint16_t flags;
+    uint16_t idx;
+    uint16_t ring[MK_NETWORK_VIRTIO_MAX_QUEUE_SIZE];
+    uint16_t used_event;
+} __attribute__((packed));
+
+struct mk_network_vring_used_elem {
+    uint32_t id;
+    uint32_t len;
+} __attribute__((packed));
+
+struct mk_network_vring_used {
+    uint16_t flags;
+    uint16_t idx;
+    struct mk_network_vring_used_elem ring[MK_NETWORK_VIRTIO_MAX_QUEUE_SIZE];
+    uint16_t avail_event;
+} __attribute__((packed));
+
+struct mk_network_virtio_net_hdr {
+    uint8_t flags;
+    uint8_t gso_type;
+    uint16_t hdr_len;
+    uint16_t gso_size;
+    uint16_t csum_start;
+    uint16_t csum_offset;
+    uint16_t num_buffers;
+} __attribute__((packed));
+
+struct mk_network_virtio_legacy_queue {
+    struct mk_network_vring_desc *desc;
+    struct mk_network_vring_avail *avail;
+    struct mk_network_vring_used *used;
+    uint32_t queue_size;
+    uint32_t used_offset;
+    uint32_t total_bytes;
+    uintptr_t phys_addr;
+    uint16_t next_avail_idx;
+    uint16_t last_used_idx;
+};
+
+static uint8_t g_network_virtio_queue_storage[MK_NETWORK_VIRTIO_QUEUE_COUNT][16384]
+    __attribute__((aligned(MK_NETWORK_VIRTIO_RING_ALIGN)));
+static struct mk_network_virtio_legacy_queue
+    g_network_virtio_queues[MK_NETWORK_VIRTIO_QUEUE_COUNT];
+static struct mk_network_virtio_net_hdr
+    g_network_virtio_rx_hdr[MK_NETWORK_VIRTIO_RX_SLOT_COUNT] __attribute__((aligned(16)));
+static uint8_t g_network_virtio_rx_payload[MK_NETWORK_VIRTIO_RX_SLOT_COUNT][MK_NETWORK_VIRTIO_RX_BUFFER_BYTES]
+    __attribute__((aligned(16)));
+static struct mk_network_virtio_net_hdr g_network_virtio_tx_hdr __attribute__((aligned(16)));
+static uint8_t g_network_virtio_tx_frame[MK_NETWORK_VIRTIO_TX_FRAME_BYTES] __attribute__((aligned(16)));
+static const uint8_t g_network_virtio_fallback_mac[6] = {0x52u, 0x54u, 0x00u, 0x12u, 0x34u, 0x56u};
+static int g_network_virtio_rx_posted = 0;
+static int g_network_virtio_tx_smoke_sent = 0;
+static int g_network_virtio_tx_smoke_done = 0;
+static int g_network_virtio_rx_activity_seen = 0;
+static int g_network_virtio_rx_arp_reply_seen = 0;
+static int g_network_virtio_tx_smoke_logged = 0;
+static int g_network_virtio_rx_activity_logged = 0;
+static int g_network_virtio_rx_arp_reply_logged = 0;
+
 struct mk_network_service_state {
     struct mk_network_info info;
     struct mk_network_status status;
@@ -40,6 +169,7 @@ struct mk_network_service_state {
     uint32_t scan_count;
     uint32_t ethernet_transition_polls;
     int ethernet_pending;
+    struct mk_network_pci_probe_state pci_probe;
     struct mk_network_socket_state sockets[MK_NETWORK_SOCKET_MAX];
 };
 
@@ -123,6 +253,480 @@ static int mk_network_socket_valid_type(uint32_t type) {
     return type == SOCK_STREAM || type == SOCK_DGRAM;
 }
 
+static uint16_t mk_network_pci_io_base(uint32_t bar_value) {
+    if ((bar_value & 0x1u) == 0u) {
+        return 0u;
+    }
+    return (uint16_t)(bar_value & 0xfffcu);
+}
+
+static uint32_t mk_network_align_up_u32(uint32_t value, uint32_t align) {
+    return (value + align - 1u) & ~(align - 1u);
+}
+
+static uint8_t mk_network_virtio_read_status(uint16_t io_base) {
+    return inb((uint16_t)(io_base + VIRTIO_CONFIG_DEVICE_STATUS));
+}
+
+static void mk_network_virtio_write_status(uint16_t io_base, uint8_t status) {
+    outb((uint16_t)(io_base + VIRTIO_CONFIG_DEVICE_STATUS), status);
+}
+
+static void mk_network_virtio_set_status_bits(uint16_t io_base, uint8_t bits) {
+    mk_network_virtio_write_status(io_base, (uint8_t)(mk_network_virtio_read_status(io_base) | bits));
+}
+
+static void mk_network_virtio_notify_queue(uint16_t io_base, uint16_t queue_index) {
+    outw((uint16_t)(io_base + VIRTIO_CONFIG_QUEUE_NOTIFY), queue_index);
+}
+
+static void mk_network_virtio_ack_isr(uint16_t io_base) {
+    (void)inb((uint16_t)(io_base + VIRTIO_CONFIG_ISR_STATUS));
+}
+
+static void mk_network_virtio_publish_desc_chain(struct mk_network_virtio_legacy_queue *queue_state,
+                                                 uint16_t head_desc) {
+    uint16_t slot;
+
+    if (queue_state == 0 || queue_state->avail == 0 || queue_state->queue_size == 0u) {
+        return;
+    }
+
+    slot = (uint16_t)(queue_state->next_avail_idx % queue_state->queue_size);
+    queue_state->avail->ring[slot] = head_desc;
+    __sync_synchronize();
+    queue_state->next_avail_idx = (uint16_t)(queue_state->next_avail_idx + 1u);
+    queue_state->avail->idx = queue_state->next_avail_idx;
+}
+
+static int mk_network_virtio_setup_queue(uint16_t io_base,
+                                         uint16_t queue_index,
+                                         uint16_t offered_size,
+                                         struct mk_network_virtio_legacy_queue *queue_state) {
+    uint32_t desc_bytes;
+    uint32_t avail_bytes;
+    uint32_t used_bytes;
+    uint32_t used_offset;
+    uint32_t total_bytes;
+    uint8_t *storage;
+
+    if (queue_state == 0 || offered_size == 0u || offered_size > MK_NETWORK_VIRTIO_MAX_QUEUE_SIZE) {
+        return -1;
+    }
+
+    desc_bytes = (uint32_t)sizeof(struct mk_network_vring_desc) * (uint32_t)offered_size;
+    avail_bytes = (uint32_t)(offsetof(struct mk_network_vring_avail, ring) +
+                             ((uint32_t)offered_size * (uint32_t)sizeof(uint16_t)) +
+                             sizeof(uint16_t));
+    used_bytes = (uint32_t)(offsetof(struct mk_network_vring_used, ring) +
+                            ((uint32_t)offered_size * (uint32_t)sizeof(struct mk_network_vring_used_elem)) +
+                            sizeof(uint16_t));
+    used_offset = mk_network_align_up_u32(desc_bytes + avail_bytes, MK_NETWORK_VIRTIO_RING_ALIGN);
+    total_bytes = used_offset + used_bytes;
+    if (total_bytes > sizeof(g_network_virtio_queue_storage[0])) {
+        return -1;
+    }
+
+    storage = g_network_virtio_queue_storage[queue_index];
+    memset(storage, 0, total_bytes);
+
+    queue_state->desc = (struct mk_network_vring_desc *)storage;
+    queue_state->avail = (struct mk_network_vring_avail *)(storage + desc_bytes);
+    queue_state->used = (struct mk_network_vring_used *)(storage + used_offset);
+    queue_state->queue_size = offered_size;
+    queue_state->used_offset = used_offset;
+    queue_state->total_bytes = total_bytes;
+    queue_state->phys_addr = (uintptr_t)storage;
+    queue_state->next_avail_idx = 0u;
+    queue_state->last_used_idx = 0u;
+
+    outw((uint16_t)(io_base + VIRTIO_CONFIG_QUEUE_SELECT), queue_index);
+    outl((uint16_t)(io_base + VIRTIO_CONFIG_QUEUE_ADDRESS),
+         (uint32_t)(queue_state->phys_addr / VIRTIO_PAGE_SIZE));
+    return 0;
+}
+
+static void mk_network_virtio_post_rx_buffers(struct mk_network_pci_probe_state *probe) {
+    struct mk_network_virtio_legacy_queue *queue_state;
+    uint16_t slot;
+
+    if (probe == 0 || !probe->virtio_queue_ready || g_network_virtio_rx_posted) {
+        return;
+    }
+
+    queue_state = &g_network_virtio_queues[MK_NETWORK_VIRTIO_RX_QUEUE_INDEX];
+    if (queue_state->queue_size < (MK_NETWORK_VIRTIO_RX_SLOT_COUNT * 2u)) {
+        return;
+    }
+
+    for (slot = 0u; slot < MK_NETWORK_VIRTIO_RX_SLOT_COUNT; ++slot) {
+        uint16_t head_desc = (uint16_t)(slot * 2u);
+        uint16_t data_desc = (uint16_t)(head_desc + 1u);
+
+        memset(&g_network_virtio_rx_hdr[slot], 0, sizeof(g_network_virtio_rx_hdr[slot]));
+        memset(g_network_virtio_rx_payload[slot], 0, sizeof(g_network_virtio_rx_payload[slot]));
+
+        queue_state->desc[head_desc].addr = (uint64_t)(uintptr_t)&g_network_virtio_rx_hdr[slot];
+        queue_state->desc[head_desc].len = MK_NETWORK_VIRTIO_HDR_SIZE;
+        queue_state->desc[head_desc].flags = MK_NETWORK_VIRTIO_DESC_F_NEXT | MK_NETWORK_VIRTIO_DESC_F_WRITE;
+        queue_state->desc[head_desc].next = data_desc;
+
+        queue_state->desc[data_desc].addr = (uint64_t)(uintptr_t)g_network_virtio_rx_payload[slot];
+        queue_state->desc[data_desc].len = MK_NETWORK_VIRTIO_RX_BUFFER_BYTES;
+        queue_state->desc[data_desc].flags = MK_NETWORK_VIRTIO_DESC_F_WRITE;
+        queue_state->desc[data_desc].next = 0u;
+
+        mk_network_virtio_publish_desc_chain(queue_state, head_desc);
+    }
+
+    g_network_virtio_rx_posted = 1;
+    mk_network_virtio_notify_queue(probe->io_base, MK_NETWORK_VIRTIO_RX_QUEUE_INDEX);
+}
+
+static void mk_network_virtio_send_tx_smoke(struct mk_network_pci_probe_state *probe) {
+    struct mk_network_virtio_legacy_queue *queue_state;
+    uint8_t *frame = g_network_virtio_tx_frame;
+    const uint8_t *source_mac;
+
+    if (probe == 0 || !probe->virtio_queue_ready || g_network_virtio_tx_smoke_sent) {
+        return;
+    }
+
+    queue_state = &g_network_virtio_queues[MK_NETWORK_VIRTIO_TX_QUEUE_INDEX];
+    if (queue_state->queue_size < 2u) {
+        return;
+    }
+
+    memset(&g_network_virtio_tx_hdr, 0, sizeof(g_network_virtio_tx_hdr));
+    memset(frame, 0, MK_NETWORK_VIRTIO_TX_FRAME_BYTES);
+    source_mac = probe->mac_valid ? probe->mac : g_network_virtio_fallback_mac;
+
+    memset(frame, 0xff, 6u);
+    memcpy(frame + 6u, source_mac, 6u);
+    frame[12] = 0x08u;
+    frame[13] = 0x06u;
+    frame[14] = 0x00u;
+    frame[15] = 0x01u;
+    frame[16] = 0x08u;
+    frame[17] = 0x00u;
+    frame[18] = 0x06u;
+    frame[19] = 0x04u;
+    frame[20] = 0x00u;
+    frame[21] = 0x01u;
+    memcpy(frame + 22u, source_mac, 6u);
+    frame[28] = 10u;
+    frame[29] = 0u;
+    frame[30] = 2u;
+    frame[31] = 15u;
+    memset(frame + 32u, 0, 6u);
+    frame[38] = 10u;
+    frame[39] = 0u;
+    frame[40] = 2u;
+    frame[41] = 2u;
+
+    queue_state->desc[0].addr = (uint64_t)(uintptr_t)&g_network_virtio_tx_hdr;
+    queue_state->desc[0].len = MK_NETWORK_VIRTIO_HDR_SIZE;
+    queue_state->desc[0].flags = MK_NETWORK_VIRTIO_DESC_F_NEXT;
+    queue_state->desc[0].next = 1u;
+    queue_state->desc[1].addr = (uint64_t)(uintptr_t)frame;
+    queue_state->desc[1].len = 42u;
+    queue_state->desc[1].flags = 0u;
+    queue_state->desc[1].next = 0u;
+
+    mk_network_virtio_publish_desc_chain(queue_state, 0u);
+    g_network_virtio_tx_smoke_sent = 1;
+    mk_network_virtio_notify_queue(probe->io_base, MK_NETWORK_VIRTIO_TX_QUEUE_INDEX);
+}
+
+static void mk_network_virtio_poll_queues(struct mk_network_pci_probe_state *probe) {
+    struct mk_network_virtio_legacy_queue *rx_queue;
+    struct mk_network_virtio_legacy_queue *tx_queue;
+
+    if (probe == 0 || !probe->virtio_queue_ready) {
+        return;
+    }
+
+    mk_network_virtio_ack_isr(probe->io_base);
+    rx_queue = &g_network_virtio_queues[MK_NETWORK_VIRTIO_RX_QUEUE_INDEX];
+    tx_queue = &g_network_virtio_queues[MK_NETWORK_VIRTIO_TX_QUEUE_INDEX];
+
+    while (tx_queue->last_used_idx != tx_queue->used->idx) {
+        uint16_t used_slot = (uint16_t)(tx_queue->last_used_idx % tx_queue->queue_size);
+        struct mk_network_vring_used_elem *elem = &tx_queue->used->ring[used_slot];
+
+        tx_queue->last_used_idx = (uint16_t)(tx_queue->last_used_idx + 1u);
+        if ((int)elem->id == 0) {
+            g_network_virtio_tx_smoke_done = 1;
+            if (!g_network_virtio_tx_smoke_logged) {
+                kernel_debug_puts("network: virtio tx smoke consumed\n");
+                g_network_virtio_tx_smoke_logged = 1;
+            }
+        }
+    }
+
+    while (rx_queue->last_used_idx != rx_queue->used->idx) {
+        uint16_t used_slot = (uint16_t)(rx_queue->last_used_idx % rx_queue->queue_size);
+        struct mk_network_vring_used_elem *elem = &rx_queue->used->ring[used_slot];
+        uint16_t head_desc = (uint16_t)elem->id;
+        uint16_t slot = (uint16_t)(head_desc / 2u);
+        uint32_t payload_len = elem->len > MK_NETWORK_VIRTIO_HDR_SIZE ?
+            (uint32_t)(elem->len - MK_NETWORK_VIRTIO_HDR_SIZE) : 0u;
+
+        rx_queue->last_used_idx = (uint16_t)(rx_queue->last_used_idx + 1u);
+        g_network_virtio_rx_activity_seen = 1;
+        if (!g_network_virtio_rx_activity_logged) {
+            kernel_debug_printf("network: virtio rx activity len=%u head=%u\n",
+                                (unsigned int)elem->len,
+                                (unsigned int)head_desc);
+            g_network_virtio_rx_activity_logged = 1;
+        }
+
+        if (slot < MK_NETWORK_VIRTIO_RX_SLOT_COUNT && payload_len >= 42u) {
+            uint8_t *frame = g_network_virtio_rx_payload[slot];
+
+            if (frame[12] == 0x08u &&
+                frame[13] == 0x06u &&
+                frame[20] == 0x00u &&
+                frame[21] == 0x02u) {
+                g_network_virtio_rx_arp_reply_seen = 1;
+                if (!g_network_virtio_rx_arp_reply_logged) {
+                    kernel_debug_puts("network: virtio rx arp-reply seen\n");
+                    g_network_virtio_rx_arp_reply_logged = 1;
+                }
+            }
+        }
+
+        if (slot < MK_NETWORK_VIRTIO_RX_SLOT_COUNT) {
+            mk_network_virtio_publish_desc_chain(rx_queue, head_desc);
+        }
+    }
+
+    if (g_network_virtio_rx_activity_seen) {
+        mk_network_virtio_notify_queue(probe->io_base, MK_NETWORK_VIRTIO_RX_QUEUE_INDEX);
+    }
+}
+
+static void mk_network_virtio_spin_poll(struct mk_network_pci_probe_state *probe, uint32_t iterations) {
+    uint32_t i;
+
+    for (i = 0u; i < iterations; ++i) {
+        mk_network_virtio_poll_queues(probe);
+        if (g_network_virtio_tx_smoke_done &&
+            (g_network_virtio_rx_activity_seen || i >= (iterations / 4u))) {
+            break;
+        }
+    }
+}
+
+static void mk_network_virtio_maybe_activate_runtime(struct mk_network_pci_probe_state *probe) {
+    if (probe == 0 || !probe->virtio_queue_ready) {
+        return;
+    }
+    if (!g_network_virtio_rx_posted) {
+        mk_network_virtio_post_rx_buffers(probe);
+    }
+    if (!g_network_virtio_tx_smoke_sent) {
+        mk_network_virtio_send_tx_smoke(probe);
+    }
+    if (g_network_virtio_tx_smoke_sent &&
+        (!g_network_virtio_tx_smoke_done || !g_network_virtio_rx_activity_seen)) {
+        mk_network_virtio_spin_poll(probe, 4096u);
+    }
+}
+
+static void mk_network_probe_virtio_legacy_queues(struct mk_network_pci_probe_state *probe) {
+    uint16_t queue_index;
+    uint32_t guest_features;
+
+    if (probe == 0 || probe->io_base == 0u) {
+        return;
+    }
+
+    mk_network_virtio_write_status(probe->io_base, VIRTIO_CONFIG_DEVICE_STATUS_RESET);
+    if (mk_network_virtio_read_status(probe->io_base) != VIRTIO_CONFIG_DEVICE_STATUS_RESET) {
+        return;
+    }
+
+    mk_network_virtio_set_status_bits(probe->io_base, VIRTIO_CONFIG_DEVICE_STATUS_ACK);
+    mk_network_virtio_set_status_bits(probe->io_base, VIRTIO_CONFIG_DEVICE_STATUS_DRIVER);
+
+    guest_features = 0u;
+    if (probe->mac_valid) {
+        guest_features |= VIRTIO_NET_F_MAC;
+    }
+    if (probe->virtio_status_valid) {
+        guest_features |= VIRTIO_NET_F_STATUS;
+    }
+    outl((uint16_t)(probe->io_base + VIRTIO_CONFIG_GUEST_FEATURES), guest_features);
+
+    memset(g_network_virtio_queues, 0, sizeof(g_network_virtio_queues));
+    for (queue_index = 0u; queue_index < MK_NETWORK_VIRTIO_QUEUE_COUNT; ++queue_index) {
+        uint16_t queue_size;
+
+        outw((uint16_t)(probe->io_base + VIRTIO_CONFIG_QUEUE_SELECT), queue_index);
+        queue_size = inw((uint16_t)(probe->io_base + VIRTIO_CONFIG_QUEUE_SIZE));
+        probe->queue_size[queue_index] = queue_size;
+        if (mk_network_virtio_setup_queue(probe->io_base,
+                                          queue_index,
+                                          queue_size,
+                                          &g_network_virtio_queues[queue_index]) != 0) {
+            mk_network_virtio_set_status_bits(probe->io_base, VIRTIO_CONFIG_DEVICE_STATUS_FAILED);
+            return;
+        }
+    }
+
+    mk_network_virtio_set_status_bits(probe->io_base, VIRTIO_CONFIG_DEVICE_STATUS_DRIVER_OK);
+    probe->virtio_queue_ready = 1;
+    mk_network_virtio_post_rx_buffers(probe);
+}
+
+static void mk_network_reset_link_state(void) {
+    g_network_state.ethernet_pending = 0;
+    g_network_state.ethernet_transition_polls = 0u;
+    memset(&g_network_state.status, 0, sizeof(g_network_state.status));
+    g_network_state.status.active_kind = MK_NETWORK_IF_LOOPBACK;
+    g_network_state.status.visible_network_count = g_network_state.scan_count;
+    (void)mk_network_copy_string(
+        g_network_state.status.active_if,
+        sizeof(g_network_state.status.active_if),
+        g_network_state.pci_probe.present ? g_network_state.pci_probe.if_name : "lo0");
+}
+
+static void mk_network_probe_virtio_legacy_config(struct mk_network_pci_probe_state *probe) {
+    uint32_t device_features;
+    uint16_t config_base;
+    uint32_t i;
+
+    if (probe == 0 || probe->vendor_id != VIRTIO_PCI_VENDOR_ID) {
+        return;
+    }
+    if (probe->device_id != VIRTIO_PCI_DEVICE_NET_LEGACY &&
+        probe->device_id != VIRTIO_PCI_DEVICE_NET_MODERN) {
+        return;
+    }
+
+    probe->io_base = mk_network_pci_io_base(
+        kernel_pci_config_read_u32(probe->bus, probe->slot, probe->function, 0x10u));
+    if (probe->io_base == 0u) {
+        return;
+    }
+
+    device_features = inl((uint16_t)(probe->io_base + VIRTIO_CONFIG_DEVICE_FEATURES));
+    config_base = (uint16_t)(probe->io_base + VIRTIO_CONFIG_DEVICE_CONFIG_NOMSI);
+
+    if ((device_features & VIRTIO_NET_F_MAC) != 0u) {
+        for (i = 0u; i < 6u; ++i) {
+            probe->mac[i] = inb((uint16_t)(config_base + VIRTIO_NET_CONFIG_MAC + i));
+        }
+        probe->mac_valid = 1;
+    }
+    if ((device_features & VIRTIO_NET_F_STATUS) != 0u) {
+        uint16_t status = inw((uint16_t)(config_base + VIRTIO_NET_CONFIG_STATUS));
+
+        probe->virtio_status_valid = 1;
+        probe->virtio_link_up = (status & VIRTIO_NET_S_LINK_UP) != 0u;
+    }
+
+    probe->virtio_legacy_ready = 1;
+    mk_network_probe_virtio_legacy_queues(probe);
+}
+
+static void mk_network_select_pci_backend(const struct kernel_pci_device_info *info,
+                                          struct mk_network_pci_probe_state *probe) {
+    const char *if_name = "eth0";
+    const char *backend_name = "compat-pci-pending";
+
+    if (info == 0 || probe == 0) {
+        return;
+    }
+
+    if (info->vendor_id == 0x1AF4u) {
+        if_name = "vio0";
+        backend_name = "compat-virtio";
+    } else if (info->vendor_id == 0x8086u) {
+        if_name = "em0";
+        backend_name = "compat-em";
+    } else if (info->vendor_id == 0x10ECu) {
+        if (info->device_id == 0x8029u) {
+            if_name = "ne0";
+            backend_name = "compat-ne2000";
+        } else {
+            if_name = "re0";
+            backend_name = "compat-rtl81x9";
+        }
+    } else if (info->vendor_id == 0x1022u && info->device_id == 0x2000u) {
+        if_name = "pcn0";
+        backend_name = "compat-pcnet";
+    }
+
+    probe->present = 1;
+    probe->bus = info->bus;
+    probe->slot = info->slot;
+    probe->function = info->function;
+    probe->vendor_id = info->vendor_id;
+    probe->device_id = info->device_id;
+    (void)mk_network_copy_string(probe->if_name, sizeof(probe->if_name), if_name);
+    (void)mk_network_copy_string(probe->backend_name, sizeof(probe->backend_name), backend_name);
+    mk_network_probe_virtio_legacy_config(probe);
+}
+
+static int mk_network_probe_pci_cb(const struct kernel_pci_device_info *info, void *ctx) {
+    struct mk_network_pci_probe_state *probe = (struct mk_network_pci_probe_state *)ctx;
+
+    if (info == 0 || probe == 0 || probe->present) {
+        return 0;
+    }
+    if (info->class_code != 0x02u) {
+        return 0;
+    }
+    if (info->subclass != 0x00u && info->subclass != 0x80u) {
+        return 0;
+    }
+
+    mk_network_select_pci_backend(info, probe);
+    return 1;
+}
+
+static void mk_network_probe_pci_devices(void) {
+    memset(&g_network_state.pci_probe, 0, sizeof(g_network_state.pci_probe));
+    (void)kernel_pci_enumerate(mk_network_probe_pci_cb, &g_network_state.pci_probe);
+}
+
+static void mk_network_log_probe(void) {
+    if (!g_network_state.pci_probe.present) {
+        return;
+    }
+    if (g_network_state.pci_probe.virtio_legacy_ready) {
+        kernel_debug_printf("network: pci=%x:%x if=%s backend=%s io=%x q=%d rxq=%d txq=%d txsmoke=%d rxseen=%d arprx=%d link=%d mac=%x:%x:%x:%x:%x:%x\n",
+                            (unsigned int)g_network_state.pci_probe.vendor_id,
+                            (unsigned int)g_network_state.pci_probe.device_id,
+                            g_network_state.pci_probe.if_name,
+                            g_network_state.pci_probe.backend_name,
+                            (unsigned int)g_network_state.pci_probe.io_base,
+                            g_network_state.pci_probe.virtio_queue_ready,
+                            (int)g_network_state.pci_probe.queue_size[0],
+                            (int)g_network_state.pci_probe.queue_size[1],
+                            g_network_virtio_tx_smoke_done,
+                            g_network_virtio_rx_activity_seen,
+                            g_network_virtio_rx_arp_reply_seen,
+                            g_network_state.pci_probe.virtio_status_valid ?
+                                g_network_state.pci_probe.virtio_link_up : 0,
+                            (unsigned int)g_network_state.pci_probe.mac[0],
+                            (unsigned int)g_network_state.pci_probe.mac[1],
+                            (unsigned int)g_network_state.pci_probe.mac[2],
+                            (unsigned int)g_network_state.pci_probe.mac[3],
+                            (unsigned int)g_network_state.pci_probe.mac[4],
+                            (unsigned int)g_network_state.pci_probe.mac[5]);
+        return;
+    }
+
+    kernel_debug_printf("network: pci=%x:%x if=%s backend=%s\n",
+                        (unsigned int)g_network_state.pci_probe.vendor_id,
+                        (unsigned int)g_network_state.pci_probe.device_id,
+                        g_network_state.pci_probe.if_name,
+                        g_network_state.pci_probe.backend_name);
+}
+
 static struct mk_network_socket_state *mk_network_socket_by_handle(int handle) {
     if (handle <= 0 || handle > MK_NETWORK_SOCKET_MAX) {
         return 0;
@@ -201,29 +805,45 @@ static struct mk_network_socket_state *mk_network_socket_allocate(uint32_t owner
 }
 
 static void mk_network_apply_ethernet_profile(void) {
+    if (!g_network_state.pci_probe.present) {
+        mk_network_reset_link_state();
+        return;
+    }
+
     g_network_state.ethernet_pending = 0;
     g_network_state.ethernet_transition_polls = 0u;
-    g_network_state.status.link_state = MK_NETWORK_LINK_CONNECTED;
+    g_network_state.status.link_state =
+        (g_network_state.pci_probe.virtio_status_valid && !g_network_state.pci_probe.virtio_link_up)
+            ? MK_NETWORK_LINK_DISCONNECTED
+            : MK_NETWORK_LINK_CONNECTED;
     g_network_state.status.active_kind = MK_NETWORK_IF_ETHERNET;
     g_network_state.status.wifi_signal = 0u;
     g_network_state.status.visible_network_count = g_network_state.scan_count;
     (void)mk_network_copy_string(g_network_state.status.active_if,
                                  sizeof(g_network_state.status.active_if),
-                                 "em0");
+                                 g_network_state.pci_probe.if_name);
     g_network_state.status.current_ssid[0] = '\0';
-    (void)mk_network_copy_string(g_network_state.status.ip_address,
-                                 sizeof(g_network_state.status.ip_address),
-                                 "10.0.2.15");
-    (void)mk_network_copy_string(g_network_state.status.gateway,
-                                 sizeof(g_network_state.status.gateway),
-                                 "10.0.2.2");
-    (void)mk_network_copy_string(g_network_state.status.dns_server,
-                                 sizeof(g_network_state.status.dns_server),
-                                 "10.0.2.3");
+    if (!g_network_state.pci_probe.virtio_legacy_ready) {
+        (void)mk_network_copy_string(g_network_state.status.ip_address,
+                                     sizeof(g_network_state.status.ip_address),
+                                     "10.0.2.15");
+        (void)mk_network_copy_string(g_network_state.status.gateway,
+                                     sizeof(g_network_state.status.gateway),
+                                     "10.0.2.2");
+        (void)mk_network_copy_string(g_network_state.status.dns_server,
+                                     sizeof(g_network_state.status.dns_server),
+                                     "10.0.2.3");
+    } else {
+        g_network_state.status.ip_address[0] = '\0';
+        g_network_state.status.gateway[0] = '\0';
+        g_network_state.status.dns_server[0] = '\0';
+    }
 }
 
 static int mk_network_apply_ethernet_config(const struct mk_network_ethernet_config *config) {
-    if (config == 0 || !mk_network_string_eq(config->if_name, "em0")) {
+    if (config == 0 ||
+        !g_network_state.pci_probe.present ||
+        !mk_network_string_eq(config->if_name, g_network_state.pci_probe.if_name)) {
         return -1;
     }
 
@@ -250,6 +870,11 @@ static int mk_network_apply_ethernet_config(const struct mk_network_ethernet_con
 }
 
 static void mk_network_begin_ethernet_connect(void) {
+    if (!g_network_state.pci_probe.present) {
+        mk_network_reset_link_state();
+        return;
+    }
+
     g_network_state.ethernet_pending = 1;
     g_network_state.ethernet_transition_polls = 2u;
     g_network_state.status.link_state = MK_NETWORK_LINK_CONNECTING;
@@ -258,7 +883,7 @@ static void mk_network_begin_ethernet_connect(void) {
     g_network_state.status.visible_network_count = g_network_state.scan_count;
     (void)mk_network_copy_string(g_network_state.status.active_if,
                                  sizeof(g_network_state.status.active_if),
-                                 "em0");
+                                 g_network_state.pci_probe.if_name);
     g_network_state.status.current_ssid[0] = '\0';
     g_network_state.status.ip_address[0] = '\0';
     g_network_state.status.gateway[0] = '\0';
@@ -266,6 +891,8 @@ static void mk_network_begin_ethernet_connect(void) {
 }
 
 static void mk_network_progress_state(void) {
+    mk_network_virtio_maybe_activate_runtime(&g_network_state.pci_probe);
+    mk_network_virtio_poll_queues(&g_network_state.pci_probe);
     if (!g_network_state.ethernet_pending) {
         return;
     }
@@ -344,21 +971,25 @@ static int mk_network_state_disconnect(const char *if_name) {
     }
 
     if (mk_network_string_eq(if_name, "wlan0")) {
-        mk_network_begin_ethernet_connect();
+        if (g_network_state.pci_probe.present) {
+            mk_network_begin_ethernet_connect();
+        } else {
+            mk_network_reset_link_state();
+        }
         return 0;
     }
-    if (mk_network_string_eq(if_name, "em0")) {
-        g_network_state.ethernet_pending = 0;
-        g_network_state.ethernet_transition_polls = 0u;
-        memset(&g_network_state.status, 0, sizeof(g_network_state.status));
-        g_network_state.status.visible_network_count = g_network_state.scan_count;
+    if (g_network_state.pci_probe.present &&
+        mk_network_string_eq(if_name, g_network_state.pci_probe.if_name)) {
+        mk_network_reset_link_state();
         return 0;
     }
     return -1;
 }
 
 static int mk_network_state_connect_ethernet(const char *if_name) {
-    if (if_name == 0 || !mk_network_string_eq(if_name, "em0")) {
+    if (if_name == 0 ||
+        !g_network_state.pci_probe.present ||
+        !mk_network_string_eq(if_name, g_network_state.pci_probe.if_name)) {
         return -1;
     }
     if (g_network_state.status.link_state == MK_NETWORK_LINK_CONNECTED &&
@@ -513,14 +1144,20 @@ void mk_network_service_init(void) {
     memset(&g_last_network_reply, 0, sizeof(g_last_network_reply));
     memset(&g_network_state, 0, sizeof(g_network_state));
 
+    mk_network_probe_pci_devices();
+
     g_network_state.info.flags = MK_NETWORK_CAPS_BSD_SOCKET_ABI |
-                                 MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING |
                                  MK_NETWORK_CAPS_CONTROL_PLANE |
                                  MK_NETWORK_CAPS_LOOPBACK_READY |
                                  MK_NETWORK_CAPS_ETHERNET_STATUS |
                                  MK_NETWORK_CAPS_WIFI_SCAN |
                                  MK_NETWORK_CAPS_WIFI_CONNECT |
                                  MK_NETWORK_CAPS_DNS_STATUS;
+    if (g_network_state.pci_probe.present) {
+        g_network_state.info.flags |= MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING;
+    } else {
+        g_network_state.info.flags |= MK_NETWORK_CAPS_QUERY_ONLY;
+    }
     g_network_state.info.supported_families = MK_NETWORK_FAMILY_UNIX |
                                               MK_NETWORK_FAMILY_INET |
                                               MK_NETWORK_FAMILY_INET6;
@@ -543,6 +1180,7 @@ void mk_network_service_init(void) {
     g_network_state.scans[3].signal_strength = 4u;
     g_network_state.scans[3].security = MK_NETWORK_SECURITY_WPA_PSK;
     mk_network_apply_ethernet_profile();
+    mk_network_log_probe();
 
     (void)mk_service_launch_task(MK_SERVICE_NETWORK,
                                  "network",

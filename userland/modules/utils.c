@@ -9,6 +9,7 @@
 #define AUDIO_WAV_STREAM_CHUNK 960
 #define AUDIO_WAV_AZALIA_CHUNK 16384
 #define AUDIO_WAV_AZALIA_ASYNC_CHUNK 4096
+#define AUDIO_WAV_COMPAT_ASYNC_CHUNK 2048
 #define AUDIO_STATUS_BACKEND_MASK 0x000000ffu
 #define AUDIO_BACKEND_SOFT 0
 #define AUDIO_BACKEND_COMPAT_AC97 1
@@ -582,6 +583,11 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
         if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AZALIA) {
             if (chunk_size > AUDIO_WAV_AZALIA_ASYNC_CHUNK) {
                 chunk_size = AUDIO_WAV_AZALIA_ASYNC_CHUNK;
+            }
+        } else if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AC97 ||
+                   playback->backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO) {
+            if (chunk_size > AUDIO_WAV_COMPAT_ASYNC_CHUNK) {
+                chunk_size = AUDIO_WAV_COMPAT_ASYNC_CHUNK;
             }
         } else if (chunk_size > (uint32_t)sizeof(buffer)) {
             chunk_size = (uint32_t)sizeof(buffer);

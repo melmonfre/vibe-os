@@ -856,6 +856,19 @@ static int cmd_vidmodes(int argc, char **argv) {
 
         if (sys_gfx_info(&mode) == 0) {
             debug_line("vidmodes: active ", mode.width, "x", mode.height, "");
+            if (mode.width != width || mode.height != height) {
+                fail_count += 1u;
+                debug_text("vidmodes: active mismatch requested=");
+                debug_line("", width, "x", height, "");
+                debug_text("vidmodes: active mismatch got=");
+                debug_line("", mode.width, "x", mode.height, "");
+                continue;
+            }
+            debug_line("vidmodes: mode verify ok ", width, "x", height, "");
+        } else {
+            fail_count += 1u;
+            debug_line("vidmodes: active query failed ", width, "x", height, "");
+            continue;
         }
 
         sys_clear(0u);
@@ -875,6 +888,18 @@ static int cmd_vidmodes(int argc, char **argv) {
         (void)sys_gfx_set_mode(original_width, original_height);
         sys_clear(0u);
         sys_present_full();
+        if (sys_gfx_info(&mode) == 0 &&
+            mode.width == original_width &&
+            mode.height == original_height) {
+            debug_line("vidmodes: restore ok ", original_width, "x", original_height, "");
+        } else if (sys_gfx_info(&mode) == 0) {
+            debug_text("vidmodes: restore failed expected=");
+            debug_line("", original_width, "x", original_height, "");
+            debug_text("vidmodes: restore failed got=");
+            debug_line("", mode.width, "x", mode.height, "");
+        } else {
+            debug_text("vidmodes: restore failed query");
+        }
     } else {
         sys_leave_graphics();
     }

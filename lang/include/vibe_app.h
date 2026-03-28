@@ -58,6 +58,7 @@ struct vibe_app_host_api {
     int (*stat_path)(const char *path, struct vibe_app_stat *stat_out);
     int (*fstat_fd)(int fd, struct vibe_app_stat *stat_out);
     const char *(*getenv_value)(const char *name);
+    int (*sync_filesystem)(void);
 };
 
 struct vibe_app_context {

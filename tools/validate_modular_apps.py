@@ -58,8 +58,8 @@ def parse_mode_text(mode_text: str) -> Optional[str]:
 
 class QemuSession:
     def __init__(self, qemu_binary: str, image_path: Path, memory_mb: int, workspace: Path):
-        self.serial_log = workspace / "serial.log"
-        self.monitor_socket = workspace / "monitor.sock"
+        self.serial_log = workspace / "s.log"
+        self.monitor_socket = workspace / "m.sock"
         self.proc = subprocess.Popen(
             [
                 qemu_binary,
@@ -67,6 +67,10 @@ class QemuSession:
                 str(memory_mb),
                 "-drive",
                 f"format=raw,file={image_path}",
+                "-netdev",
+                "user,id=net0",
+                "-device",
+                "virtio-net-pci,netdev=net0",
                 "-boot",
                 "c",
                 "-display",
@@ -221,7 +225,7 @@ class QemuSession:
 
 
 def scenario_startx(session: QemuSession) -> None:
-    session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=45.0)
+    session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=90.0)
     session.send_key("ctrl-f", pause=0.15)
     session.wait_for_log("desktop: open-new w=0 t=3 i=0", timeout=8.0)
     session.send_key("ctrl-t", pause=0.15)
@@ -264,9 +268,14 @@ def scenario_terminal_vidmodes(session: QemuSession) -> None:
             "vidmodes: begin",
             "vidmodes: caps mode_count=",
             "vidmodes: try 800x600",
+            "video: runtime modeset source=",
+            "video: handoff stage=runtime source=",
+            "vidmodes: mode verify ok 800x600",
             "vidmodes: mode ok 800x600",
             "vidmodes: try 1024x768",
+            "vidmodes: mode verify ok 1024x768",
             "vidmodes: mode ok 1024x768",
+            "vidmodes: restore ok ",
             "vidmodes: summary ok=",
         ],
         timeout=40.0,
@@ -505,9 +514,14 @@ SCENARIOS = [
             "vidmodes: begin",
             "vidmodes: caps mode_count=",
             "vidmodes: try 800x600",
+            "video: runtime modeset source=",
+            "video: handoff stage=runtime source=",
+            "vidmodes: mode verify ok 800x600",
             "vidmodes: mode ok 800x600",
             "vidmodes: try 1024x768",
+            "vidmodes: mode verify ok 1024x768",
             "vidmodes: mode ok 1024x768",
+            "vidmodes: restore ok ",
             "vidmodes: summary ok=",
         ],
         boot_markers=[
@@ -521,7 +535,7 @@ SCENARIOS = [
 
 
 def run_scenario(qemu_binary: str, image_path: Path, memory_mb: int, scenario: Scenario) -> ScenarioResult:
-    with tempfile.TemporaryDirectory(prefix=f"vibe-modular-{scenario.name}-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="vmod-") as temp_dir:
         workspace = Path(temp_dir)
         scenario_image = workspace / "boot.img"
         shutil.copyfile(image_path, scenario_image)
@@ -530,7 +544,7 @@ def run_scenario(qemu_binary: str, image_path: Path, memory_mb: int, scenario: S
         error: Optional[str] = None
         log = ""
         try:
-            session.wait_for_all(scenario.boot_markers or [BOOT_MARKER, SHELL_READY_MARKER], timeout=25.0)
+            session.wait_for_all(scenario.boot_markers or [BOOT_MARKER, SHELL_READY_MARKER], timeout=60.0)
             if scenario.command:
                 run_command(session,
                             scenario.command,

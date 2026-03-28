@@ -35,6 +35,7 @@ void _exit(int status);
 char *getenv(const char *name);
 char *getcwd(char *buf, size_t size);
 int rmdir(const char *path);
+void sync(void);
 
 /* Sleep/delay */
 unsigned int sleep(unsigned int seconds);

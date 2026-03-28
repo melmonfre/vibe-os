@@ -12,14 +12,33 @@ struct netctl_profile {
     char psk[MK_NETWORK_PSK_MAX + 1];
 };
 
+static void netctl_resolve_ethernet_if_name(char *buffer, int buffer_size) {
+    struct mk_network_status status;
+
+    if (buffer == 0 || buffer_size <= 0) {
+        return;
+    }
+    snprintf(buffer, (size_t)buffer_size, "%s", "em0");
+    if (vibe_app_network_get_status(&status) != 0) {
+        return;
+    }
+    if (status.active_if[0] == '\0') {
+        return;
+    }
+    if (strcmp(status.active_if, "wlan0") == 0 || strcmp(status.active_if, "lo0") == 0) {
+        return;
+    }
+    snprintf(buffer, (size_t)buffer_size, "%s", status.active_if);
+}
+
 static void netctl_usage(void) {
     printf("usage: netctl <command> [args]\n");
     printf("commands:\n");
     printf("  status\n");
     printf("  scan [wlan0]\n");
     printf("  connect wlan0 <ssid> [--psk <senha>]\n");
-    printf("  connect em0\n");
-    printf("  disconnect [wlan0|em0]\n");
+    printf("  connect ethernet\n");
+    printf("  disconnect [wlan0|ethernet]\n");
     printf("  profiles\n");
     printf("  remember wlan0 <ssid> [--psk <senha>]\n");
     printf("  forget <ssid>\n");
@@ -345,28 +364,31 @@ static int netctl_command_connect(int argc, char **argv) {
         netctl_usage();
         return 1;
     }
-    if (strcmp(argv[2], "em0") == 0) {
+    if (strcmp(argv[2], "em0") == 0 || strcmp(argv[2], "ethernet") == 0) {
+        char if_name[MK_NETWORK_IF_NAME_MAX];
+
+        netctl_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
         if (argc != 3) {
-            printf("usage: netctl connect em0\n");
+            printf("usage: netctl connect ethernet\n");
             return 1;
         }
-        if (vibe_app_network_connect_ethernet("em0") != 0) {
-            printf("netctl: failed to connect em0\n");
+        if (vibe_app_network_connect_ethernet(if_name) != 0) {
+            printf("netctl: failed to connect %s\n", if_name);
             return 1;
         }
         if (netctl_wait_for_ethernet_ready(&status) == 0) {
             printf("connected %s (%s) ip=%s dns=%s\n",
-                   status.active_if[0] != '\0' ? status.active_if : "em0",
+                   status.active_if[0] != '\0' ? status.active_if : if_name,
                    netctl_if_kind_name(status.active_kind),
                    status.ip_address[0] != '\0' ? status.ip_address : "-",
                    status.dns_server[0] != '\0' ? status.dns_server : "-");
         } else {
-            printf("connected em0\n");
+            printf("connected %s\n", if_name);
         }
         return 0;
     }
     if (strcmp(argv[2], "wlan0") != 0) {
-        printf("netctl: supported interfaces in this MVP are wlan0 and em0\n");
+        printf("netctl: supported interfaces in this MVP are wlan0 and ethernet\n");
         return 1;
     }
     if (argc < 4) {

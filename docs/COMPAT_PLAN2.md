@@ -99,11 +99,11 @@ Exemplos comuns:
 
 echo
 cat
-uname
 pwd
 ls
 
 Esses NÃO contam como port de compat.
+`uname` já saiu desse grupo e já entrou no pipeline de ports.
 
 Quando um port real ficar pronto:
 
@@ -174,7 +174,6 @@ cat
 true
 false
 printf
-uname
 pwd
 
 PRIORIDADE MÉDIA
@@ -185,6 +184,8 @@ tail
 grep
 cut
 tr
+
+Obs: `uname` já foi portado neste ciclo e deve ser tratado como concluído no backlog, nao como stub.
 
 PRIORIDADE AVANÇADA
 
@@ -357,7 +358,9 @@ Pendências imediatas da fase 1
 - [x] Port de `mkdir` baseado em `compat/bin/mkdir/mkdir.c`
 - [x] Port de `true` e `false` integrado como apps externas
 - [x] Port de `printf` integrado como app externa
-- [ ] Expandir próximos alvos de `compat/bin` (`sync`) conforme APIs necessárias
+- [x] Port de `uname` integrado como app externa, com a shell preferindo o binario compat em vez do stub
+- [x] Port de `tr` integrado como app externa
+- [x] Port de `sync` integrado como app externa, com flush real do VFS via host API do runtime
 
 ====================================================================
 HANDOFF TÉCNICO (PARA PRÓXIMO AGENTE)
@@ -366,7 +369,7 @@ HANDOFF TÉCNICO (PARA PRÓXIMO AGENTE)
 Resumo objetivo do estado atual
 
 - Build completo segue passando com `make clean && make run-debug`.
-- Apps externos são gerados e empacotados no appfs (confirmado: `echo`, `cat`, `wc`, `pwd`, `head`, `sleep`, `rmdir`, `mkdir`, `tail`, `grep`, `loadkeys`, `true`, `false`, `printf`).
+- Apps externos são gerados e empacotados no appfs (confirmado: `echo`, `cat`, `wc`, `pwd`, `head`, `sleep`, `rmdir`, `mkdir`, `tail`, `grep`, `loadkeys`, `true`, `false`, `printf`, `uname`, `sync`, `tr`).
 - Shell encontra comandos externos (não é falha de build/empacotamento).
 - Em runtime, usuário reporta travamento/loop com cursor piscando para comandos portados.
 

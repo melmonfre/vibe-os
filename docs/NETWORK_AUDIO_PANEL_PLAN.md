@@ -8,16 +8,16 @@ Adicionar ao desktop do VibeOS dois applets no lado direito do painel:
 
 - um applet de rede, antes do som, para listar redes Wi-Fi, pedir senha, conectar e mostrar estado da interface
 - um applet de som, na extrema direita, para listar entradas/saidas de audio e controlar o volume de cada uma
-- o port completo de `userland/applications/network/vibe-browser` como aplicacao de desktop e navegador padrao do sistema
-- o port completo de `userland/applications/network/vibe-browser` como aplicacao de desktop e navegador padrao do sistema
-- deve mostrar na aba desempenho do gerenciador de tarefas o driver de som e o driver de rede detectados assim como ja é feito com a gpu
--deve se criar sprites para os applets de som e network no painel ao inves de usar letras
+- o `vibe-browser` continua importado no repo, mas ainda nao esta integrado ao desktop/AppFS
+- deve mostrar na aba desempenho do gerenciador de tarefas o driver de som e o driver de rede detectados assim como ja e feito com a gpu
+- deve se criar sprites para os applets de som e network no painel ao inves de usar letras
 O plano prioriza reaproveitar ao maximo o que ja existe em `compat/` e no microkernel atual, em vez de criar APIs totalmente novas.
 - usar o novo sistema de som para tentar reproduzir assets/vibe_os_boot.wav no bootloader uma unica vez, caso falhe na execução isso não deve impactar o boot.
 - o mesmo vale para assets/vibe_os_desktop.wav que deve reproduzir uma unica vez ao carregar o startx. caso falhe tambem não deve travar a area de trabalho
 ## Resumo executivo
 
-Conseguimos planejar isso de forma realista e com bastante reuso, mas os dois itens nao estao no mesmo estagio:
+Conseguimos planejar isso de forma realista e com bastante reuso, mas os dois itens nao estao no mesmo estagio.
+Hoje a verdade dura e simples e esta: a rede segue em MVP sintético de control-plane e o navegador ainda nao virou app desktop/AppFS de verdade.
 
 - Som:
   - ha um caminho claro e incremental
@@ -26,13 +26,13 @@ Conseguimos planejar isso de forma realista e com bastante reuso, mas os dois it
   - o applet de painel e o painel de volume sao viaveis cedo, mesmo com backend inicial simples
 
 - Rede:
-  - o servico `network` tambem existe, mas ainda esta em `query-only`
+  - o servico `network` tambem existe, mas ainda esta em `query-only` e segue sustentado por estado sintético, nao por driver compat real
   - para DHCP e DNS ha muito reuso pronto em `compat`
   - para Wi-Fi real ainda faltam partes de stack e driver/control-plane 802.11
   - o equivalente a "NetworkManager" no VibeOS deve nascer como um daemon proprio e fino, reaproveitando `ifconfig`, `dhcpleased` e `unwind`, nao como um port literal do NetworkManager do Linux
 
 - Navegador:
-  - o `vibe-browser` ja esta no repo, mas ainda nao esta integrado ao desktop do VibeOS
+  - o `vibe-browser` ja esta no repo, mas ainda nao esta integrado ao desktop/AppFS do VibeOS
   - ele vira uma fase propria do projeto, dependente da stack de rede, DNS, downloads e UX de desktop
 
 ## Checklist de progresso
@@ -99,6 +99,7 @@ Conseguimos planejar isso de forma realista e com bastante reuso, mas os dois it
 - [X] task manager mostra backend/estado de rede e lease exportado pelo `netmgrd`
 - [X] task manager tambem consome o snapshot exportado por `netmgrd`
 - [X] o snapshot/status de rede agora tambem explicita a origem do lease aplicado em `em0`
+- [X] o servico `network` agora sonda NIC PCI presente e parou de assumir sempre `em0` no estado exportado
 - [X] socket/connect/send/recv MVP deixou de ser puro stub com loopback local
 - [X] socket ABI MVP agora cobre `listen`/`accept` no loopback local
 - [X] existe `netmgrd` MVP como app dedicado para reconciliacao/estado/perfis
@@ -178,7 +179,14 @@ Estado atual:
 - [~] existe agora um backend `compat-azalia` bootstrap: detecta controladora HDA, faz reset MMIO basico, sobe CORB/RIRB, responde a probe minima de codec/AFG, registra IRQ/telemetria e passa a aparecer como backend proprio em vez de cair diretamente em `softmix`; o bootstrap agora tambem aproveita verbos/constantes de conexao do `compat/azalia` para ficar menos "stub disfarçado"
 - [~] o `compat-azalia` agora tambem descobre widgets basicos de saida (DAC/pin), classifica pins fisicos por `config default`, tenta casar pin->DAC via `connection list`/`selector`, programa verbs iniciais de caminho de playback e arma stream descriptor + BDL no controlador; os cenarios `validate-audio-hda-smoke`, `validate-audio-hda-playback` e `validate-audio-hda-startup` passam no QEMU `intel-hda`, o codec sobe com `codec-probe=1`, `widget-probe=1` e agora tambem preserva `path-programmed=1` apos playback; o playback explícito ja recicla defensivamente o stream anterior entre chunks e o handler de IRQ HDA agora reconhece/limpa `BCIS`/`FIFOE`/`DESE`; os WAVs automáticos de `boot` e `desktop` agora completam no HDA no fluxo automatizado de startup; ainda falta revalidar isso em hardware real
 - [~] mais uma aproximacao do `azalia_codec.c` entrou no caminho de widgets multi-connection: quando a rota ativa atravessa `AUDIO_MIXER`, o backend agora desmuta a entrada selecionada e muta explicitamente as paralelas, em vez de deixar o mixer inteiro aberto; isso aproxima os defaults praticos de `azalia_mixer_default()` sem puxar o framework completo do BSD
-- [~] outra fatia estrutural do `compat/azalia` entrou no `jack sense`: pins de saida com presenca e suporte a `UNSOL` agora recebem `SET_UNSOLICITED_RESPONSE`, e eventos assincronos passam a invalidar imediatamente o cache de presenca/rota para o proximo `START/WRITE`; ainda nao e o `speaker mute` completo do BSD, mas ja reduz dependencia do refresh periodico
+- [~] outra fatia estrutural do `compat/azalia` entrou no `jack sense`: pins de saida com presenca e suporte a `UNSOL` agora recebem `SET_UNSOLICITED_RESPONSE`, eventos assincronos invalidam imediatamente o cache de presenca/rota para o proximo `START/WRITE`, e a politica de saida passou a aplicar mute do `speaker` interno quando existe jack externo realmente presente, alem de desligar explicitamente jacks ausentes em vez de continuar "primando" rota morta; `validate-audio-hda-smoke` e `validate-audio-hda-playback` seguiram verdes depois desse lote
+- [~] o `compat-azalia` agora tambem materializa uma trilha canonica `pin -> ... -> dac` antes de programar playback: `connection select`, `power state`, `input/output amp` e `pin ctl` passaram a andar pela mesma rota resolvida, em vez de cada etapa recalcular o ramo por conta propria; junto disso, a validacao de `widget_has_output_path()` deixou de aceitar `PIN/AUD_IN` como terminal valido no meio do grafo de playback. `validate-audio-hda-smoke` e `validate-audio-hda-playback` voltaram a passar com esse endurecimento
+- [~] outra aproximacao direta do `azalia` do BSD entrou no probe: widgets `AUDIO_MIXER`/`AUDIO_SELECTOR` sem cadeia de conexao plausivel agora sao podados cedo no scan, no mesmo espirito de `widget_check_conn()`, e o rebalance dos outputs passa a consolidar a rota escolhida no proprio codec em vez de ficar so no cache local; alem disso, o mute automatico do `speaker` interno ganhou metodo mais proximo do BSD (`pin outamp`, `pin ctl` ou `dac outamp`, conforme a topologia). Esse lote ainda precisa revalidacao limpa porque o ambiente de teste esbarrou em falhas paralelas de build/AppFS
+- [~] o tratamento de `UNSOL` no `compat-azalia` tambem ficou menos passivo: quando um evento de jack chega para uma saida observada e a rota atual segue valida, o backend agora refresca a presenca e reaplica imediatamente a politica de `speaker`/pins em vez de apenas zerar cache e esperar o proximo `START`; isso aproxima melhor o mute de speaker guiado por jack do comportamento do BSD em notebook real
+- [~] a poda de widgets do `compat-azalia` deixou de ser so diagnostico de probe e passou a virar estado persistente de topologia: mixers/selectors descartados no scan agora ficam realmente desabilitados para `find_output_dac()`, `resolve_output_path()`, `rebind` e validacao da rota corrente, no espirito do `w->enable` do BSD; `validate-audio-hda-smoke` e `validate-audio-hda-playback` voltaram a passar com esse endurecimento
+- [~] outra aproximacao do `select_spkrdac()` do BSD entrou no rebalance de saidas: quando o `speaker` interno ainda divide DAC com saidas externas depois do scan, o backend agora tenta primeiro dar um DAC proprio ao speaker e, se nao houver rota alternativa para ele, passa a empurrar cada saida externa conflitante para outro DAC compativel ate quebrar o conflito; `validate-audio-hda-smoke` e `validate-audio-hda-playback` seguiram verdes
+- [~] outra nuance do `compat` entrou na programacao da rota: `AUDIO_SELECTOR` com conexao unica e `outamp` proprio agora deixa de ser tratado sempre como mero `input amp`; quando o widget filho nao anuncia `input amp` ou `output amp`, o backend passa a usar o `outamp` do proprio selector, no mesmo espirito do caso especial do OpenBSD para widgets de conexao unica; `validate-audio-hda-smoke` e `validate-audio-hda-playback` seguiram verdes
+- [~] mais uma aproximacao do caminho de notebook do BSD entrou no `compat-azalia`: quando o codec anuncia mais de um pin fixo de `speaker`, o backend agora preserva um `speaker2` enxuto em vez de colapsar tudo no primeiro pin; esse segundo speaker participa do `commit` de rota e da politica de mute/pin para acompanhar o `speaker` principal, o que aproxima o comportamento de `speaker/speaker2` do OpenBSD sem puxar o mixer framework inteiro. `validate-audio-hda-smoke` e `validate-audio-hda-playback` seguiram verdes
 - [X] o `compat-azalia` agora registra rotas por endpoint fisico (`speaker`, `headphones`, `line-out`, `digital`) em vez de depender de um unico pin "melhor"; o `default output` do mixer passa a escolher o pin/DAC correspondente ao endpoint HDA detectado, e `audiosvc`/`soundctl`/popup exportam esses nomes fisicos quando o backend ativo e `compat-azalia`
 - [X] o playback WAV em HDA foi endurecido tambem para os sons automáticos: `soundctl play` fatia o WAV em bursts HDA e aguarda o backend ficar ocioso entre chunks; para autoplay, o `desktop` agora dispara uma unica vez, com atraso, depois do inicio da sessao, e o `boot` deixou de cair em `defer`; o `desktop-session` passou a ser reproduzido em modo cooperativo no loop do desktop, sem monopolizar a UI enquanto o HDA esvazia cada chunk; os alvos `validate-audio-hda-startup` e `validate-audio-hda-playback` voltaram a passar juntos no QEMU `intel-hda`
 - [X] o alvo `validate-audio-hda-playback` agora exige `path-programmed=1` apos playback, endurecendo a validacao do `compat-azalia` no proprio fluxo padrao do repo
@@ -398,6 +406,7 @@ Proximos lotes concretos ainda abertos:
 - [~] a ordem real de fallback do servico agora foi alinhada ao plano: quando HDA/AC97 sao detectados mas nao ficam utilizaveis, `compat-uaudio` passa a entrar antes de `pcspkr` se houver `USB Audio Class` anexado com playback disponivel, em vez de ficar preso ao caso "sem hardware PCI detectado"
 - [~] o runtime do `compat-uaudio` tambem ficou mais acionavel para hardware real: `START` e `WRITE` agora deixam `device.config` especifico por transporte em falhas como `-unsupported`, `-write-failed` e `-short-write`, reduzindo o numero de erros USB que antes apareciam so como retorno generico
 - [~] o runtime do `compat-uaudio` tambem passou a limpar estados stale de diagnostico quando o backend volta a funcionar: em `select/start/stop` e em `write()` completo ele restaura a identidade normal `usb-audio-<transport>-attached`, em vez de deixar o ultimo `-unsupported`/`-write-failed` preso no snapshot
+- [~] o runtime de fallback ficou mais robusto quando um backend some na hora errada: se `compat-uaudio` perder suporte efetivo em `START`/`WRITE`, ou se `compat-auich` falhar no `START`/`WRITE`, o servico agora degrada automaticamente para `pcspkr`/`softmix` e ainda tenta priorizar `compat-uaudio` antes do buzzer quando houver `USB Audio Class` anexado e pronto
 - [~] os parametros default do `compat-uaudio` tambem ficaram menos conservadores: o backend agora calcula `round` a partir de multiplos do `max packet` do endpoint USB e sobe `nblks` para reduzir overhead de syscalls no playback continuo, em vez de empurrar bursts quase do tamanho de um unico pacote isocronico
 - [~] o `compat-uaudio` agora tambem aproveita melhor o descritor `AudioStreaming`: o scan USB passa a carregar `channels/subframe/bits/sample-rate` do primeiro `FORMAT_TYPE I` encontrado no altsetting de playback, e o backend usa esses metadados para montar parametros menos fixos que o antigo estereo 48 kHz hardcoded
 - [~] o `compat-uaudio` agora tambem evita quebrar frames PCM no meio ao fatiar `write()` por `max packet`: o backend usa `subframe/channels/bits` do descritor para alinhar chunks ao tamanho real do frame USB antes de enviar pacotes, reduzindo o risco de short writes que ainda so seriam "validos" byte a byte

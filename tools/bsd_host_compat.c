@@ -32,6 +32,7 @@ const char *getprogname(void) {
     return g_progname;
 }
 
+#if !defined(__APPLE__)
 size_t strlcpy(char *dst, const char *src, size_t size) {
     size_t src_len = src ? strlen(src) : 0u;
 
@@ -58,6 +59,7 @@ size_t strlcat(char *dst, const char *src, size_t size) {
     }
     return dst_len + strlcpy(dst + dst_len, src, size - dst_len);
 }
+#endif
 
 long long strtonum(const char *text, long long minval, long long maxval,
                    const char **errstrp) {

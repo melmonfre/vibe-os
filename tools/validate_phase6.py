@@ -88,6 +88,7 @@ def run_scenario(
             argument.format(image=scenario_image, memory_mb=memory_mb)
             for argument in scenario.args
         ]
+        command.extend(["-netdev", "user,id=net0", "-device", "virtio-net-pci,netdev=net0"])
 
         timed_out = False
         exit_code = 0

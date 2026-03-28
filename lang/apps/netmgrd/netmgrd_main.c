@@ -3,8 +3,6 @@
 
 #define NETMGRD_NETWORK_SETTINGS_PATH "/config/network.cfg"
 #define NETMGRD_STATUS_EXPORT_PATH "/runtime/netmgrd-status.txt"
-#define NETMGRD_COMPAT_LEASE_PATH "/runtime/dhcpleased-em0.lease"
-#define NETMGRD_COMPAT_DEFAULT_LEASE_SOURCE "/var/db/dhcpleased/em0"
 #define NETMGRD_PROFILE_MAX 4
 
 struct netmgrd_profile {
@@ -22,6 +20,9 @@ struct netmgrd_compat_lease {
 static int netmgrd_saved_profile_count(const struct netmgrd_profile *profiles);
 static int netmgrd_load_compat_lease_path(const char *path, struct netmgrd_compat_lease *lease);
 static int netmgrd_write_compat_lease(const struct netmgrd_compat_lease *lease, const char *path);
+static void netmgrd_resolve_ethernet_if_name(char *buffer, int buffer_size);
+static void netmgrd_resolve_runtime_lease_path(char *buffer, int buffer_size, const char *if_name);
+static void netmgrd_resolve_default_lease_source(char *buffer, int buffer_size, const char *if_name);
 static int netmgrd_write_state_file(const char *path,
                                     const struct mk_network_info *info,
                                     const struct mk_network_status *status,
@@ -36,8 +37,8 @@ static void netmgrd_usage(void) {
     printf("  status\n");
     printf("  scan [wlan0]\n");
     printf("  connect wlan0 <ssid> [--psk <senha>]\n");
-    printf("  connect em0\n");
-    printf("  disconnect [wlan0|em0]\n");
+    printf("  connect ethernet\n");
+    printf("  disconnect [wlan0|ethernet]\n");
     printf("  profiles\n");
     printf("  remember wlan0 <ssid> [--psk <senha>]\n");
     printf("  forget <ssid>\n");
@@ -75,16 +76,57 @@ static const char *netmgrd_backend_name(const struct mk_network_info *info) {
     if (info == 0) {
         return "indisponivel";
     }
+    if ((info->flags & MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING) != 0u &&
+        (info->flags & MK_NETWORK_CAPS_CONTROL_PLANE) != 0u) {
+        return "control-plane+pci-probe";
+    }
     if ((info->flags & MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING) != 0u) {
-        return "microkernel-mvp";
+        return "driver-pending";
     }
     if ((info->flags & MK_NETWORK_CAPS_CONTROL_PLANE) != 0u) {
-        return "control-plane";
+        return "compat-lease";
     }
     if ((info->flags & MK_NETWORK_CAPS_QUERY_ONLY) != 0u) {
         return "query-only";
     }
     return "ativo";
+}
+
+static void netmgrd_resolve_ethernet_if_name(char *buffer, int buffer_size) {
+    struct mk_network_status status;
+
+    if (buffer == 0 || buffer_size <= 0) {
+        return;
+    }
+    snprintf(buffer, (size_t)buffer_size, "%s", "em0");
+    if (vibe_app_network_get_status(&status) != 0) {
+        return;
+    }
+    if (status.active_if[0] == '\0') {
+        return;
+    }
+    if (strcmp(status.active_if, "wlan0") == 0 || strcmp(status.active_if, "lo0") == 0) {
+        return;
+    }
+    snprintf(buffer, (size_t)buffer_size, "%s", status.active_if);
+}
+
+static void netmgrd_resolve_runtime_lease_path(char *buffer, int buffer_size, const char *if_name) {
+    const char *resolved = if_name != 0 && *if_name != '\0' ? if_name : "em0";
+
+    if (buffer == 0 || buffer_size <= 0) {
+        return;
+    }
+    snprintf(buffer, (size_t)buffer_size, "/runtime/dhcpleased-%s.lease", resolved);
+}
+
+static void netmgrd_resolve_default_lease_source(char *buffer, int buffer_size, const char *if_name) {
+    const char *resolved = if_name != 0 && *if_name != '\0' ? if_name : "em0";
+
+    if (buffer == 0 || buffer_size <= 0) {
+        return;
+    }
+    snprintf(buffer, (size_t)buffer_size, "/var/db/dhcpleased/%s", resolved);
 }
 
 static const char *netmgrd_dns_mode_name(const struct mk_network_info *info,
@@ -346,6 +388,9 @@ static void netmgrd_detect_lease_source(const struct mk_network_status *status,
                                         char *buffer,
                                         int buffer_size) {
     struct netmgrd_compat_lease lease;
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+    char runtime_path[64];
+    char default_source[64];
 
     if (buffer == 0 || buffer_size <= 0) {
         return;
@@ -359,11 +404,14 @@ static void netmgrd_detect_lease_source(const struct mk_network_status *status,
         snprintf(buffer, (size_t)buffer_size, "%s", "nenhum");
         return;
     }
-    if (netmgrd_load_compat_lease_path(NETMGRD_COMPAT_LEASE_PATH, &lease) == 0 && lease.valid) {
+    netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
+    netmgrd_resolve_runtime_lease_path(runtime_path, (int)sizeof(runtime_path), if_name);
+    netmgrd_resolve_default_lease_source(default_source, (int)sizeof(default_source), if_name);
+    if (netmgrd_load_compat_lease_path(runtime_path, &lease) == 0 && lease.valid) {
         snprintf(buffer, (size_t)buffer_size, "%s", lease.source[0] != '\0' ? lease.source : "runtime");
         return;
     }
-    if (netmgrd_load_compat_lease_path(NETMGRD_COMPAT_DEFAULT_LEASE_SOURCE, &lease) == 0 && lease.valid) {
+    if (netmgrd_load_compat_lease_path(default_source, &lease) == 0 && lease.valid) {
         snprintf(buffer, (size_t)buffer_size, "%s", lease.source[0] != '\0' ? lease.source : "compat-default");
         return;
     }
@@ -382,11 +430,16 @@ static int netmgrd_load_compat_lease_path(const char *path, struct netmgrd_compa
     const char *data = 0;
     int size = 0;
     char text[256];
-    const char *target = path != 0 && *path != '\0' ? path : NETMGRD_COMPAT_LEASE_PATH;
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+    char runtime_path[64];
+    const char *target;
 
     if (lease == 0) {
         return -1;
     }
+    netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
+    netmgrd_resolve_runtime_lease_path(runtime_path, (int)sizeof(runtime_path), if_name);
+    target = path != 0 && *path != '\0' ? path : runtime_path;
 
     if (vibe_app_read_file(target, &data, &size) != 0 || data == 0 || size <= 0) {
         return 0;
@@ -400,31 +453,44 @@ static int netmgrd_load_compat_lease_path(const char *path, struct netmgrd_compa
 }
 
 static int netmgrd_load_compat_lease(struct netmgrd_compat_lease *lease) {
-    if (netmgrd_load_compat_lease_path(NETMGRD_COMPAT_LEASE_PATH, lease) != 0) {
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+    char runtime_path[64];
+    char default_source[64];
+
+    netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
+    netmgrd_resolve_runtime_lease_path(runtime_path, (int)sizeof(runtime_path), if_name);
+    netmgrd_resolve_default_lease_source(default_source, (int)sizeof(default_source), if_name);
+
+    if (netmgrd_load_compat_lease_path(runtime_path, lease) != 0) {
         return -1;
     }
     if (lease != 0 && lease->valid) {
         return 0;
     }
-    if (netmgrd_load_compat_lease_path(NETMGRD_COMPAT_DEFAULT_LEASE_SOURCE, lease) != 0) {
+    if (netmgrd_load_compat_lease_path(default_source, lease) != 0) {
         return -1;
     }
     if (lease != 0 && lease->valid) {
         if (lease->source[0] == '\0') {
             strcpy(lease->source, "compat-default");
         }
-        (void)netmgrd_write_compat_lease(lease, NETMGRD_COMPAT_LEASE_PATH);
+        (void)netmgrd_write_compat_lease(lease, runtime_path);
     }
     return 0;
 }
 
 static int netmgrd_write_compat_lease(const struct netmgrd_compat_lease *lease, const char *path) {
     char text[256];
-    const char *target = path != 0 && *path != '\0' ? path : NETMGRD_COMPAT_LEASE_PATH;
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+    char runtime_path[64];
+    const char *target;
 
     if (lease == 0 || !lease->valid) {
         return -1;
     }
+    netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
+    netmgrd_resolve_runtime_lease_path(runtime_path, (int)sizeof(runtime_path), if_name);
+    target = path != 0 && *path != '\0' ? path : runtime_path;
     (void)vibe_app_create_dir("/runtime");
     snprintf(text,
              sizeof(text),
@@ -459,21 +525,29 @@ static int netmgrd_command_import_lease(const char *path) {
     struct netmgrd_profile profiles[NETMGRD_PROFILE_MAX];
     char auto_ssid[MK_NETWORK_SSID_MAX + 1];
     int saved_count;
-    const char *source = path != 0 && *path != '\0' ? path : NETMGRD_COMPAT_DEFAULT_LEASE_SOURCE;
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+    char runtime_path[64];
+    char default_source[64];
+    const char *source;
+
+    netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
+    netmgrd_resolve_runtime_lease_path(runtime_path, (int)sizeof(runtime_path), if_name);
+    netmgrd_resolve_default_lease_source(default_source, (int)sizeof(default_source), if_name);
+    source = path != 0 && *path != '\0' ? path : default_source;
 
     if (netmgrd_load_compat_lease_path(source, &lease) != 0 || !lease.valid) {
         printf("netmgrd: failed to import lease from %s\n", source);
         return 1;
     }
     if (lease.source[0] == '\0') {
-        if (strcmp(source, NETMGRD_COMPAT_DEFAULT_LEASE_SOURCE) == 0) {
+        if (strcmp(source, default_source) == 0) {
             strcpy(lease.source, "compat-default");
         } else {
             strcpy(lease.source, "manual-import");
         }
     }
-    if (netmgrd_write_compat_lease(&lease, NETMGRD_COMPAT_LEASE_PATH) != 0) {
-        printf("netmgrd: failed to write runtime lease %s\n", NETMGRD_COMPAT_LEASE_PATH);
+    if (netmgrd_write_compat_lease(&lease, runtime_path) != 0) {
+        printf("netmgrd: failed to write runtime lease %s\n", runtime_path);
         return 1;
     }
 
@@ -496,7 +570,7 @@ static int netmgrd_command_import_lease(const char *path) {
         }
     }
 
-    printf("netmgrd: imported lease from %s to %s\n", source, NETMGRD_COMPAT_LEASE_PATH);
+    printf("netmgrd: imported lease from %s to %s\n", source, runtime_path);
     return 0;
 }
 
@@ -728,13 +802,16 @@ static int netmgrd_command_connect(int argc, char **argv) {
         netmgrd_usage();
         return 1;
     }
-    if (strcmp(argv[2], "em0") == 0) {
+    if (strcmp(argv[2], "em0") == 0 || strcmp(argv[2], "ethernet") == 0) {
+        char if_name[MK_NETWORK_IF_NAME_MAX];
+
+        netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
         if (argc != 3) {
-            printf("usage: netmgrd connect em0\n");
+            printf("usage: netmgrd connect ethernet\n");
             return 1;
         }
-        if (vibe_app_network_connect_ethernet("em0") != 0) {
-            printf("netmgrd: failed to connect em0\n");
+        if (vibe_app_network_connect_ethernet(if_name) != 0) {
+            printf("netmgrd: failed to connect %s\n", if_name);
             return 1;
         }
         if (vibe_app_network_get_info(&info) != 0 ||
@@ -743,7 +820,7 @@ static int netmgrd_command_connect(int argc, char **argv) {
             return 1;
         }
         if (netmgrd_apply_compat_lease(&status) != 0) {
-            printf("netmgrd: compat lease found for em0, but failed to apply it\n");
+            printf("netmgrd: compat lease found for %s, but failed to apply it\n", if_name);
             return 1;
         }
         (void)netmgrd_load_profiles(profiles, auto_ssid, sizeof(auto_ssid));
@@ -756,12 +833,12 @@ static int netmgrd_command_connect(int argc, char **argv) {
                                        "ethernet-connect",
                                        0);
         printf("netmgrd: connected %s (%s)\n",
-               status.active_if[0] != '\0' ? status.active_if : "em0",
+               status.active_if[0] != '\0' ? status.active_if : if_name,
                netmgrd_if_kind_name(status.active_kind));
         return 0;
     }
     if (strcmp(argv[2], "wlan0") != 0) {
-        printf("netmgrd: supported interfaces in this MVP are wlan0 and em0\n");
+        printf("netmgrd: supported interfaces in this MVP are wlan0 and ethernet\n");
         return 1;
     }
     if (argc < 4) {
@@ -864,11 +941,14 @@ static int netmgrd_command_reconcile(void) {
     (void)netmgrd_load_profiles(profiles, auto_ssid, sizeof(auto_ssid));
     saved_count = netmgrd_saved_profile_count(profiles);
     if (auto_ssid[0] == '\0') {
+        char if_name[MK_NETWORK_IF_NAME_MAX];
+
+        netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
         if (status.link_state != MK_NETWORK_LINK_CONNECTED &&
-            vibe_app_network_connect_ethernet("em0") == 0 &&
+            vibe_app_network_connect_ethernet(if_name) == 0 &&
             netmgrd_wait_for_ethernet_ready(&status) == 0) {
             if (netmgrd_apply_compat_lease(&status) != 0) {
-                printf("netmgrd: failed to apply compat lease for em0\n");
+                printf("netmgrd: failed to apply compat lease for %s\n", if_name);
                 return 1;
             }
             (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
@@ -878,7 +958,7 @@ static int netmgrd_command_reconcile(void) {
                                            auto_ssid,
                                            "ethernet-fallback",
                                            0);
-            printf("netmgrd: restored ethernet em0\n");
+            printf("netmgrd: restored ethernet %s\n", if_name);
             return 0;
         }
         (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
@@ -924,11 +1004,14 @@ static int netmgrd_command_reconcile(void) {
     strcpy(request.ssid, auto_ssid);
     strcpy(request.psk, profile->psk);
     if (vibe_app_network_connect_wifi(&request) != 0) {
+        char if_name[MK_NETWORK_IF_NAME_MAX];
+
+        netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
         if (status.link_state != MK_NETWORK_LINK_CONNECTED &&
-            vibe_app_network_connect_ethernet("em0") == 0 &&
+            vibe_app_network_connect_ethernet(if_name) == 0 &&
             netmgrd_wait_for_ethernet_ready(&status) == 0) {
             if (netmgrd_apply_compat_lease(&status) != 0) {
-                printf("netmgrd: failed to apply compat lease for em0\n");
+                printf("netmgrd: failed to apply compat lease for %s\n", if_name);
                 return 1;
             }
             (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
@@ -938,7 +1021,7 @@ static int netmgrd_command_reconcile(void) {
                                            auto_ssid,
                                            "ethernet-fallback",
                                            0);
-            printf("netmgrd: wifi unavailable, restored ethernet em0\n");
+            printf("netmgrd: wifi unavailable, restored ethernet %s\n", if_name);
             return 0;
         }
         (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
@@ -1171,7 +1254,7 @@ int vibe_app_main(int argc, char **argv) {
         return netmgrd_command_reconcile();
     }
     if (strcmp(argv[1], "import-lease") == 0) {
-        return netmgrd_command_import_lease(argc >= 3 ? argv[2] : "/var/db/dhcpleased/em0");
+        return netmgrd_command_import_lease(argc >= 3 ? argv[2] : 0);
     }
     if (strcmp(argv[1], "export-state") == 0) {
         return netmgrd_command_export_state(argc >= 3 ? argv[2] : NETMGRD_STATUS_EXPORT_PATH);

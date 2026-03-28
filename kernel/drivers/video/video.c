@@ -118,6 +118,8 @@ static int kernel_video_has_graphics_mode(void);
 static int kernel_video_backbuffer_is_lfb(void);
 static enum kernel_video_backend_kind kernel_video_choose_boot_backend(const struct video_mode *mode);
 static void kernel_video_log_state(const char *reason);
+static const char *kernel_video_present_kind_name(enum kernel_video_present_kind kind);
+static void kernel_video_log_handoff(const char *stage, const char *source);
 static uint32_t kernel_video_measure_fill_time(void);
 static uint32_t kernel_video_measure_present_time(void);
 static uint32_t kernel_video_measure_frame_time(void);
@@ -655,6 +657,38 @@ static void kernel_video_log_state(const char *reason) {
                         (int)kernel_heap_free(),
                         (int)g_video_perf.cpu_has_pat,
                         (int)g_video_perf.cpu_has_sse2);
+}
+
+static const char *kernel_video_present_kind_name(enum kernel_video_present_kind kind) {
+    switch (kind) {
+    case KERNEL_VIDEO_PRESENT_REP_MOVSD:
+        return "rep_movsd";
+    case KERNEL_VIDEO_PRESENT_MOVNTDQ:
+        return "movntdq";
+    case KERNEL_VIDEO_PRESENT_BYTE_LOOP:
+    default:
+        return "byte_loop";
+    }
+}
+
+static void kernel_video_log_handoff(const char *stage, const char *source) {
+    const char *native_name = kernel_drm_active_backend_name();
+
+    if (native_name == 0 || native_name[0] == '\0') {
+        native_name = "none";
+    }
+
+    kernel_debug_printf("video: handoff stage=%s source=%s backend=%s native=%s present=%s mode=%dx%dx%d pitch=%d fb=%x\n",
+                        stage != 0 ? stage : "unknown",
+                        source != 0 ? source : "unknown",
+                        kernel_video_backend_name(),
+                        native_name,
+                        kernel_video_present_kind_name(g_present_kind),
+                        (int)g_mode.width,
+                        (int)g_mode.height,
+                        (int)g_mode.bpp,
+                        (int)g_mode.pitch,
+                        g_mode.fb_addr);
 }
 
 static int kernel_video_rect_sanitize(struct kernel_video_rect *rect) {
@@ -1331,6 +1365,7 @@ void kernel_video_init(void) {
         kernel_video_flip();
         g_video_perf.heap_free_after = kernel_heap_free();
         kernel_video_log_state("boot init");
+        kernel_video_log_handoff("boot", "boot");
         kernel_video_run_drm_recovery_selftest();
         g_video_initialized = 1;
         return;
@@ -1593,6 +1628,9 @@ try_activate_mode:
             kernel_drm_forget_last_modeset();
         }
         kernel_video_log_state("runtime mode");
+        kernel_video_log_handoff("runtime",
+                                 used_native_modeset ? "drm" :
+                                 (used_bios_recovery ? "bios-after-drm-revert" : "bios"));
         kernel_video_record_benchmarks();
         return 0;
     }
@@ -1629,6 +1667,17 @@ try_activate_mode:
                         (int)height,
                         used_native_modeset ? "drm" :
                         (used_bios_recovery ? "bios-after-drm-revert" : "bios"));
+    kernel_debug_printf("video: handoff stage=runtime-fail source=%s backend=%s native=%s present=%s mode=%dx%dx%d pitch=%d fb=%x\n",
+                        used_native_modeset ? "drm" :
+                        (used_bios_recovery ? "bios-after-drm-revert" : "bios"),
+                        kernel_video_backend_name(),
+                        kernel_drm_active_backend_name() != 0 ? kernel_drm_active_backend_name() : "none",
+                        kernel_video_present_kind_name(g_present_kind),
+                        (int)g_mode.width,
+                        (int)g_mode.height,
+                        (int)g_mode.bpp,
+                        (int)g_mode.pitch,
+                        g_mode.fb_addr);
     return -1;
 }
 

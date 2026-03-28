@@ -65,6 +65,7 @@ This also clarifies a naming issue: the imported tree is predominantly OpenBSD-s
 
 ## What Is Still Missing
 
+- The current network path in VibeOS is still a synthetic MVP: `network` exposes control-plane state and in-memory loopback sockets, but there is no real compat NIC driver, no real DHCP path, no real DNS resolver, and no real Wi-Fi stack yet.
 - No generic PCI enumeration and attach framework suitable for extracted drivers
 - No `bus_space` / `bus_dma` compatibility layer
 - No device interrupt routing contract for user-space drivers
