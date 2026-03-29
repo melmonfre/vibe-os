@@ -19,6 +19,8 @@ global irq13_stub
 global irq14_stub
 global irq15_stub
 global syscall_stub
+global yield_stub
+global smp_wakeup_stub
 
 global divide_error_stub
 global invalid_opcode_stub
@@ -30,7 +32,9 @@ extern kernel_timer_irq_handler
 extern kernel_keyboard_irq_handler
 extern kernel_mouse_irq_handler
 extern kernel_irq_dispatch
+extern scheduler_schedule_frame
 extern syscall_dispatch_internal
+extern smp_wakeup_ipi_handler
 
 extern divide_error_handler
 extern invalid_opcode_handler
@@ -41,7 +45,11 @@ extern double_fault_handler
 irq0_stub:
     pusha
     cld
+    mov eax, esp
+    push eax
     call kernel_timer_irq_handler
+    add esp, 4
+    mov esp, eax
     popa
     iretd
 
@@ -84,6 +92,25 @@ irq12_stub:
 IRQ_STUB 13, 13
 IRQ_STUB 14, 14
 IRQ_STUB 15, 15
+
+yield_stub:
+    pusha
+    cld
+    mov eax, esp
+    push dword 0
+    push eax
+    call scheduler_schedule_frame
+    add esp, 8
+    mov esp, eax
+    popa
+    iretd
+
+smp_wakeup_stub:
+    pusha
+    cld
+    call smp_wakeup_ipi_handler
+    popa
+    iretd
 
 ; syscall_stub: pass registers as function arguments to syscall_dispatch_internal
 ; syscall_dispatch_internal(uint32_t num, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e)

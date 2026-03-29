@@ -46,6 +46,20 @@ static void pic_unmask_irq(uint8_t irq_line) {
     outb(0xA1, mask);
 }
 
+static void pic_mask_irq(uint8_t irq_line) {
+    if (irq_line < 8) {
+        uint8_t mask = inb(0x21);
+        mask |= (uint8_t)(1u << irq_line);
+        outb(0x21, mask);
+        return;
+    }
+
+    irq_line -= 8;
+    uint8_t mask = inb(0xA1);
+    mask |= (uint8_t)(1u << irq_line);
+    outb(0xA1, mask);
+}
+
 void kernel_pic_init(void) {
     pic_remap();
 }
@@ -55,6 +69,13 @@ void kernel_irq_unmask(uint8_t irq_line) {
         return;
     }
     pic_unmask_irq(irq_line);
+}
+
+void kernel_irq_mask(uint8_t irq_line) {
+    if (irq_line >= 16u) {
+        return;
+    }
+    pic_mask_irq(irq_line);
 }
 
 int kernel_irq_register_handler(uint8_t irq_line, kernel_irq_handler_t handler) {

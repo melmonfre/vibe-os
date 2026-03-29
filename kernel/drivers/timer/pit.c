@@ -2,6 +2,7 @@
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/hal/io.h>
 #include <kernel/interrupt.h>
+#include <kernel/scheduler.h>
 
 static volatile uint32_t g_kernel_ticks = 0u;
 static volatile uint32_t g_timer_trace_budget = 8u;
@@ -13,13 +14,14 @@ uint32_t kernel_timer_get_ticks(void) {
     return ticks;
 }
 
-void kernel_timer_irq_handler(void) {
+kernel_trap_frame_t *kernel_timer_irq_handler(kernel_trap_frame_t *frame) {
     g_kernel_ticks += 1u;
     if (g_timer_trace_budget != 0u && (g_kernel_ticks % 500u) == 0u) {
         g_timer_trace_budget -= 1u;
         kernel_debug_printf("timer: tick=%d\n", (int)g_kernel_ticks);
     }
     kernel_pic_send_eoi(0);
+    return scheduler_schedule_frame(frame, 1);
 }
 
 int kernel_timer_pc_speaker_available(void) {

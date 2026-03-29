@@ -21,6 +21,22 @@ static uint32_t process_normalize_stack_size(uint32_t stack_size) {
 
 static int g_next_pid = 1;
 
+void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top) {
+    kernel_trap_frame_t *frame;
+
+    if (proc == NULL || stack_top < sizeof(kernel_trap_frame_t)) {
+        return;
+    }
+
+    frame = (kernel_trap_frame_t *)(stack_top - sizeof(kernel_trap_frame_t));
+    memset(frame, 0, sizeof(*frame));
+    frame->esp_dummy = (uint32_t)stack_top;
+    frame->eip = (uint32_t)entry;
+    frame->cs = 0x08u;
+    frame->eflags = 0x00000202u;
+    proc->context = frame;
+}
+
 process_t *process_create(void (*entry)(void)) {
     return process_create_with_stack(entry, PROCESS_KIND_USER, 0u, PROCESS_DEFAULT_STACK_SIZE);
 }
@@ -66,12 +82,9 @@ process_t *process_create_with_stack(void (*entry)(void),
         return NULL;
     }
 
-    uintptr_t stack_top = (uintptr_t)p->stack + normalized_stack_size;
-    p->regs.eip = (uint32_t)entry;
-    p->regs.esp = (uint32_t)stack_top;
-    p->regs.ebp = (uint32_t)stack_top;
-    p->regs.eax = p->regs.ebx = p->regs.ecx = p->regs.edx = 0;
-    p->regs.esi = p->regs.edi = 0;
+    process_setup_initial_context(p,
+                                  (uintptr_t)entry,
+                                  (uintptr_t)p->stack + normalized_stack_size);
     return p;
 }
 

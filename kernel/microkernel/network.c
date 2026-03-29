@@ -187,9 +187,7 @@ static struct mk_message g_last_network_reply;
 static struct mk_network_service_state g_network_state;
 
 static uint32_t mk_network_current_pid(void) {
-    process_t *current = scheduler_current();
-
-    return current != 0 ? (uint32_t)current->pid : 0u;
+    return scheduler_current_pid();
 }
 
 static int mk_network_prepare_request(struct mk_message *message,

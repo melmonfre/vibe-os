@@ -276,8 +276,7 @@ static uint32_t sys_network_accept(uint32_t handle, uint32_t b, uint32_t c,
 static uint32_t sys_getpid(uint32_t a, uint32_t b, uint32_t c,
                            uint32_t d, uint32_t e) {
     (void)a; (void)b; (void)c; (void)d; (void)e;
-    process_t *cur = scheduler_current();
-    return cur ? (uint32_t)cur->pid : 0u;
+    return scheduler_current_pid();
 }
 
 static uint32_t sys_launch_info(uint32_t out_ptr, uint32_t b, uint32_t c,

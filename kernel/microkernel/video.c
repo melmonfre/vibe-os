@@ -27,9 +27,7 @@ static struct mk_video_upload_cache g_video_upload_cache[MK_VIDEO_UPLOAD_CACHE_S
 static struct mk_video_palette_cache g_video_palette_cache[MK_VIDEO_PALETTE_CACHE_SLOTS];
 
 static uint32_t mk_video_current_pid(void) {
-    process_t *current = scheduler_current();
-
-    return current != 0 ? (uint32_t)current->pid : 0u;
+    return scheduler_current_pid();
 }
 
 static int mk_video_share_transfer(uint32_t transfer_id, uint32_t permissions) {

@@ -25,6 +25,7 @@ ORG 0x9000
 %define BOOTINFO_FLAG_BOOT_RESCUE_SHELL 0x00040000
 %define BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT 0x00100000
 %define BOOTINFO_FLAG_FORCE_LEGACY_VIDEO 0x00200000
+%define BOOTINFO_FLAG_EXPERIMENTAL_SMP 0x00400000
 %define BOOTINFO_FLAG_BOOT_MODE_MASK (BOOTINFO_FLAG_BOOT_TO_DESKTOP | BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)
 %define BOOTINFO_VESA_MODE 16
 %define BOOTINFO_VESA_FB 20
@@ -2599,8 +2600,10 @@ menu_poll_keyboard:
 	    je .toggle_video_driver
 	    cmp al, 0x17
 	    je .toggle_i915_experiment
-    cmp al, 0x1F
-    je .move_down
+	    cmp al, 0x32
+	    je .toggle_smp_experiment
+	    cmp al, 0x1F
+	    je .move_down
     cmp al, 0x1C
     je .confirm
     jmp .poll
@@ -2675,9 +2678,20 @@ menu_poll_keyboard:
 	    mov [menu_last_action], al
 	    call bootdebug_store_action32
 	    xor eax, eax
-    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
-    xor eax, BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT
-    mov [BOOTINFO_ADDR + BOOTINFO_FLAGS], eax
+	    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+	    xor eax, BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT
+	    mov [BOOTINFO_ADDR + BOOTINFO_FLAGS], eax
+	    mov eax, 1
+	    ret
+
+	.toggle_smp_experiment:
+	    mov al, 'M'
+	    mov [menu_last_action], al
+	    call bootdebug_store_action32
+	    xor eax, eax
+	    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+	    xor eax, BOOTINFO_FLAG_EXPERIMENTAL_SMP
+	    mov [BOOTINFO_ADDR + BOOTINFO_FLAGS], eax
 	    mov eax, 1
 	    ret
 
@@ -2920,11 +2934,21 @@ menu_render:
     add eax, [menu_base_x]
     mov ebx, 366
     add ebx, [menu_base_y]
-    mov ecx, 1
-    mov edx, 15
+	    mov ecx, 1
+	    mov edx, 15
+		    call draw_text
+
+	    call menu_build_smp_text
+	    mov esi, menu_smp_text
+	    mov eax, 296
+	    add eax, [menu_base_x]
+	    mov ebx, 366
+	    add ebx, [menu_base_y]
+	    mov ecx, 1
+	    mov edx, 15
 	    call draw_text
 
-	    call menu_build_driver_text
+		    call menu_build_driver_text
     mov esi, menu_driver_text
     mov eax, 208
     add eax, [menu_base_x]
@@ -3332,12 +3356,47 @@ menu_build_i915_text:
     pop edi
     pop esi
     pop edx
-    pop ecx
-    pop ebx
+	    pop ecx
+	    pop ebx
 	    pop eax
 	    ret
 
-	menu_build_driver_text:
+menu_build_smp_text:
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+
+    mov edi, menu_smp_text
+    mov esi, menu_smp_label
+    call menu_append_cstring
+
+    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+    test eax, BOOTINFO_FLAG_EXPERIMENTAL_SMP
+    jz .disabled
+    mov esi, menu_smp_on
+    call menu_append_cstring
+    jmp .finish
+
+.disabled:
+    mov esi, menu_smp_off
+    call menu_append_cstring
+
+.finish:
+    mov al, 0
+    stosb
+
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
+    ret
+
+		menu_build_driver_text:
 	    push eax
 	    push ebx
 	    push ecx
@@ -3418,13 +3477,23 @@ menu_build_debug_text:
     mov esi, menu_i915_prefix
     call menu_append_cstring
 
-    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
-    and eax, BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT
-    shr eax, 20
-    call menu_append_uint
+	    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+	    and eax, BOOTINFO_FLAG_EXPERIMENTAL_I915_COMMIT
+	    shr eax, 20
+	    call menu_append_uint
 
-    mov al, 0
-    stosb
+	    mov al, ' '
+	    stosb
+	    mov esi, menu_smp_prefix
+	    call menu_append_cstring
+
+	    mov eax, [BOOTINFO_ADDR + BOOTINFO_FLAGS]
+	    and eax, BOOTINFO_FLAG_EXPERIMENTAL_SMP
+	    shr eax, 22
+	    call menu_append_uint
+
+	    mov al, 0
+	    stosb
 
     pop edi
     pop esi
@@ -3939,12 +4008,16 @@ countdown_paused_text db 'AUTO BOOT PAUSED', 0
 menu_video_prefix db 'VIDEO ', 0
 menu_video_unknown db 'UNKNOWN', 0
 menu_hint_top db 'UP/DOWN SELECT  ENTER BOOT', 0
-menu_hint_bottom db 'LEFT/RIGHT VIDEO  V DRIVER  I I915 EXP', 0
+menu_hint_bottom db 'LEFT/RIGHT VIDEO  V DRIVER  I I915 EXP  M SMP EXP', 0
 menu_video_text times 24 db 0
 menu_i915_label db 'I915 EXP ', 0
 menu_i915_on db 'ON', 0
 menu_i915_off db 'OFF', 0
 menu_i915_text times 16 db 0
+menu_smp_label db 'SMP EXP ', 0
+menu_smp_on db 'ON', 0
+menu_smp_off db 'OFF', 0
+menu_smp_text times 16 db 0
 menu_driver_label db 'DRIVER ', 0
 menu_driver_auto db 'AUTO', 0
 menu_driver_legacy db 'LEGACY', 0
@@ -3954,7 +4027,8 @@ menu_key_prefix db 'KEY ', 0
 menu_ext_prefix db 'EXT ', 0
 menu_act_prefix db 'ACT ', 0
 menu_i915_prefix db 'I915 ', 0
-menu_debug_text times 40 db 0
+menu_smp_prefix db 'SMP ', 0
+menu_debug_text times 48 db 0
 menu_number_buffer times 6 db 0
 text_no_vesa_title db 'VIBELOADER DEBUG HALT', 0
 text_last_label db 'LAST ', 0

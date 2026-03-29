@@ -18,27 +18,32 @@ enum process_kind {
     PROCESS_KIND_KERNEL_TASK = 2,
 };
 
-/* saved register set for context switching.  order is important; the
-   assembly context_switch routine assumes this layout. */
-typedef struct {
-    uint32_t eip;
-    uint32_t esp;
-    uint32_t ebp;
-    uint32_t eax;
-    uint32_t ebx;
-    uint32_t ecx;
-    uint32_t edx;
-    uint32_t esi;
+/*
+ * Saved trap frame layout used by timer/yield preemption.
+ * It matches the stack produced by:
+ *   CPU interrupt gate push: EIP, CS, EFLAGS
+ *   followed by the stub's pusha: EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI
+ * When observed from the final ESP after pusha, the order below is correct.
+ */
+typedef struct kernel_trap_frame {
     uint32_t edi;
-} regs_t;
+    uint32_t esi;
+    uint32_t ebp;
+    uint32_t esp_dummy;
+    uint32_t ebx;
+    uint32_t edx;
+    uint32_t ecx;
+    uint32_t eax;
+    uint32_t eip;
+    uint32_t cs;
+    uint32_t eflags;
+} kernel_trap_frame_t;
 
-/* process descriptor.  regs_t is placed first so that a pointer to the
-   structure is also a pointer to the saved register block. */
 typedef struct process {
-    regs_t regs;            /* processor state (must be first field) */
     int pid;                /* process identifier */
     void *stack;            /* base pointer of allocated stack memory */
     uint32_t stack_size;    /* allocated stack size in bytes */
+    kernel_trap_frame_t *context; /* saved trap frame on this process stack */
     int current_cpu;        /* CPU que esta executando este processo, -1 se nenhuma */
     int preferred_cpu;      /* CPU alvo para balanceamento inicial */
     int last_cpu;           /* ultimo CPU que executou a tarefa */
@@ -59,7 +64,18 @@ process_t *process_create_with_stack(void (*entry)(void),
                                      enum process_kind kind,
                                      uint32_t service_type,
                                      uint32_t stack_size);
+void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top);
 void process_terminate(process_t *proc);
 void process_destroy(process_t *proc);
+
+static inline uint32_t process_saved_eip(const process_t *proc) {
+    return (proc != NULL && proc->context != NULL) ? proc->context->eip : 0u;
+}
+
+static inline uint32_t process_saved_esp(const process_t *proc) {
+    return (proc != NULL && proc->context != NULL)
+               ? (uint32_t)((uintptr_t)proc->context + sizeof(kernel_trap_frame_t))
+               : 0u;
+}
 
 #endif /* KERNEL_PROCESS_H */

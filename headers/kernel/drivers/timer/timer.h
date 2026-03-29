@@ -2,6 +2,7 @@
 #define KERNEL_TIMER_H
 
 #include <stdint.h>
+#include <kernel/process.h>
 
 /* Initialize PIT timer at given frequency (Hz) */
 void kernel_timer_init(uint32_t freq_hz);
@@ -10,7 +11,7 @@ void kernel_timer_init(uint32_t freq_hz);
 uint32_t kernel_timer_get_ticks(void);
 
 /* IRQ0 handler (called from assembly) */
-void kernel_timer_irq_handler(void);
+kernel_trap_frame_t *kernel_timer_irq_handler(kernel_trap_frame_t *frame);
 
 /* Legacy PC speaker / buzzer control */
 int kernel_timer_pc_speaker_available(void);

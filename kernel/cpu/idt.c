@@ -7,6 +7,8 @@
 #define IRQ0_VECTOR 0x20
 #define IRQ15_VECTOR 0x2F
 #define SYSCALL_VECTOR 0x80
+#define YIELD_VECTOR 0x81
+#define SMP_WAKE_VECTOR 0x82
 
 /* These symbols are provided by the assembly stubs in kernel_asm/isr.asm. */
 extern void irq0_stub(void);
@@ -26,6 +28,8 @@ extern void irq13_stub(void);
 extern void irq14_stub(void);
 extern void irq15_stub(void);
 extern void syscall_stub(void);
+extern void yield_stub(void);
+extern void smp_wakeup_stub(void);
 
 extern void divide_error_stub(void);
 extern void invalid_opcode_stub(void);
@@ -91,6 +95,8 @@ void kernel_idt_init(void) {
     idt_set_gate(IRQ0_VECTOR + 14, (uint32_t)irq14_stub, 0x8E);
     idt_set_gate(IRQ15_VECTOR,     (uint32_t)irq15_stub, 0x8E);
     idt_set_gate(SYSCALL_VECTOR,   (uint32_t)syscall_stub, 0x8F);
+    idt_set_gate(YIELD_VECTOR,     (uint32_t)yield_stub, 0x8E);
+    idt_set_gate(SMP_WAKE_VECTOR,  (uint32_t)smp_wakeup_stub, 0x8E);
 
     g_idt_ptr.limit = (uint16_t)(sizeof(g_idt) - 1u);
     g_idt_ptr.base = (uint32_t)(uintptr_t)&g_idt[0];

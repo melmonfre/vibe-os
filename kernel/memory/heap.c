@@ -34,6 +34,36 @@ void *kernel_malloc(size_t size) {
     return ptr;
 }
 
+void *kernel_malloc_aligned(size_t size, size_t align) {
+    uintptr_t ptr;
+    uintptr_t aligned_ptr;
+    size_t padding;
+
+    if (size == 0u) {
+        return NULL;
+    }
+    if (align == 0u) {
+        align = 8u;
+    }
+    if ((align & (align - 1u)) != 0u) {
+        return NULL;
+    }
+    if (size & 0x7u) {
+        size += 8u - (size & 0x7u);
+    }
+
+    ptr = g_heap_ptr;
+    aligned_ptr = (ptr + (uintptr_t)(align - 1u)) & ~(uintptr_t)(align - 1u);
+    padding = (size_t)(aligned_ptr - ptr);
+    if (aligned_ptr + size > g_heap_end) {
+        return NULL;
+    }
+
+    g_heap_ptr = aligned_ptr + size;
+    g_heap_used += padding + size;
+    return (void *)aligned_ptr;
+}
+
 void kernel_free(void *ptr) {
     (void)ptr;  /* No-op for bump allocator */
 }

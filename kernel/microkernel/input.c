@@ -9,9 +9,7 @@
 #include <kernel/userland_service.h>
 
 static uint32_t mk_input_current_pid(void) {
-    process_t *current = scheduler_current();
-
-    return current != 0 ? (uint32_t)current->pid : 0u;
+    return scheduler_current_pid();
 }
 
 static int g_input_service_transport_degraded = 0;

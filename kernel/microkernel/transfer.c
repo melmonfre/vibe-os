@@ -24,9 +24,7 @@ void mk_transfer_init(void) {
 }
 
 static uint32_t mk_transfer_current_pid(void) {
-    process_t *current = scheduler_current();
-
-    return current != 0 ? (uint32_t)current->pid : 0u;
+    return scheduler_current_pid();
 }
 
 static struct mk_transfer_slot *mk_transfer_find_slot_unlocked(uint32_t transfer_id) {

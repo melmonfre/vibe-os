@@ -3,6 +3,7 @@
 
 #define SOUNDCTL_WAV_STREAM_CHUNK 960u
 #define SOUNDCTL_WAV_AZALIA_CHUNK 16384u
+#define SOUNDCTL_WAV_UAUDIO_CHUNK 16384u
 #define MK_AUDIO_STATUS_BACKEND_MASK 0x000000ffu
 #define MK_AUDIO_STATUS_FLAG_IRQ_REGISTERED 0x00000100u
 #define MK_AUDIO_STATUS_FLAG_IRQ_SEEN 0x00000200u
@@ -1013,6 +1014,8 @@ static int soundctl_command_play(const char *path) {
     backend_kind = soundctl_current_backend();
     if (backend_kind == 2) {
         stream_chunk = SOUNDCTL_WAV_AZALIA_CHUNK;
+    } else if (backend_kind == 4) {
+        stream_chunk = SOUNDCTL_WAV_UAUDIO_CHUNK;
     }
 
     if (vibe_app_audio_set_params(&params) != 0 || vibe_app_audio_start() != 0) {

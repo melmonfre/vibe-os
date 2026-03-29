@@ -39,6 +39,16 @@ struct bootdebug_persist {
 static volatile struct bootdebug_persist *const bootdebug_persist =
     (volatile struct bootdebug_persist *)(uintptr_t)BOOTDEBUG_ADDR;
 
+static int kernel_smp_boot_experiment_enabled(void) {
+    const volatile struct bootinfo *bootinfo =
+        (const volatile struct bootinfo *)(uintptr_t)BOOTINFO_ADDR;
+
+    if (bootinfo->magic != BOOTINFO_MAGIC || bootinfo->version != BOOTINFO_VERSION) {
+        return 0;
+    }
+    return (bootinfo->flags & BOOTINFO_FLAG_EXPERIMENTAL_SMP) != 0u;
+}
+
 static void kernel_bootdebug_append(uint8_t code) {
     if (bootdebug_persist->magic != BOOTDEBUG_MAGIC ||
         bootdebug_persist->dirty != BOOTDEBUG_DIRTY) {
@@ -333,8 +343,10 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     } else {
         kernel_text_puts("CPU topology: single processor\n");
     }
-    if (kernel_cpu_is_smp_capable()) {
+    if (kernel_cpu_is_smp_capable() && kernel_smp_boot_experiment_enabled()) {
         local_apic_init();
+    } else if (kernel_cpu_is_smp_capable()) {
+        kernel_text_puts("LAPIC/SMP experimental toggle is OFF\n");
     } else {
         kernel_text_puts("LAPIC/SMP deferred on this platform\n");
     }
@@ -467,7 +479,8 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_text_puts("Scheduler OK\n");
 
     if (kernel_cpu_is_smp_capable() && local_apic_enabled()) {
-        kernel_text_puts("SMP deferred\n");
+        smp_init();
+        kernel_text_puts(smp_started_cpu_count() > 1u ? "SMP OK\n" : "SMP partial\n");
     } else {
         kernel_text_puts("SMP skipped\n");
     }

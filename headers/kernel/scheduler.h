@@ -13,15 +13,23 @@ void scheduler_init(void);
 /* add a newly created process to the run queue */
 void scheduler_add_task(process_t *proc);
 
-/* perform a context switch to the next ready task */
+/* enter the scheduler cooperatively from the current CPU context */
 void schedule(void);
 
 /* voluntarily relinquish the CPU (syscall/yield) */
 void yield(void);
 
+/* mark when timer-driven preemption may safely switch tasks */
+void scheduler_set_preemption_ready(int ready);
+
+/* schedule from an interrupt/yield trap and return the frame to resume */
+kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int preemptive);
+
 /* return currently executing process (may be NULL) */
 process_t *scheduler_current(void);
 process_t *scheduler_current_for_cpu(uint32_t cpu_index);
+uint32_t scheduler_current_pid(void);
+uint32_t scheduler_current_pid_for_cpu(uint32_t cpu_index);
 process_t *scheduler_find_task_by_pid(int pid);
 void scheduler_terminate_task(process_t *task);
 uint32_t scheduler_snapshot(struct task_snapshot_entry *entries,

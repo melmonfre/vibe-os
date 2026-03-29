@@ -7,6 +7,7 @@
 /* Early physical memory allocator (bump) - internal names */
 void kernel_mm_init(uintptr_t heap_start, size_t heap_size);
 void *kernel_malloc(size_t size);
+void *kernel_malloc_aligned(size_t size, size_t align);
 void kernel_free(void *ptr);
 uintptr_t kernel_heap_start(void);
 uintptr_t kernel_heap_end(void);
@@ -20,6 +21,10 @@ static inline void memory_init(uintptr_t start, size_t size) {
 
 static inline void *kmalloc(size_t sz) {
     return kernel_malloc(sz);
+}
+
+static inline void *kmalloc_aligned(size_t sz, size_t align) {
+    return kernel_malloc_aligned(sz, align);
 }
 
 static inline void kfree(void *ptr) {

@@ -9,9 +9,7 @@
 #include <kernel/userland_service.h>
 
 static uint32_t mk_console_current_pid(void) {
-    process_t *current = scheduler_current();
-
-    return current != 0 ? (uint32_t)current->pid : 0u;
+    return scheduler_current_pid();
 }
 
 static int mk_console_share_transfer(uint32_t transfer_id, uint32_t permissions) {

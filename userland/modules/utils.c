@@ -10,6 +10,7 @@
 #define AUDIO_WAV_AZALIA_CHUNK 16384
 #define AUDIO_WAV_AZALIA_ASYNC_CHUNK 4096
 #define AUDIO_WAV_COMPAT_ASYNC_CHUNK 2048
+#define AUDIO_WAV_UAUDIO_ASYNC_CHUNK 16384
 #define AUDIO_STATUS_BACKEND_MASK 0x000000ffu
 #define AUDIO_BACKEND_SOFT 0
 #define AUDIO_BACKEND_COMPAT_AC97 1
@@ -393,6 +394,13 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
         audio_debug_line("audio: defer wav ", tag, "\n");
         return 0;
     }
+    if (backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO &&
+        tag != 0 &&
+        str_eq(tag, "boot")) {
+        audio_set_last_playback_error("deferred");
+        audio_debug_line("audio: defer wav ", tag, "\n");
+        return 0;
+    }
     if (sys_audio_set_params(&params) != 0) {
         audio_set_last_playback_error("set-params-failed");
         audio_update_last_playback_detail();
@@ -415,6 +423,10 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
         if (backend_kind == AUDIO_BACKEND_COMPAT_AZALIA) {
             if (chunk_size > AUDIO_WAV_AZALIA_CHUNK) {
                 chunk_size = AUDIO_WAV_AZALIA_CHUNK;
+            }
+        } else if (backend_kind == AUDIO_BACKEND_COMPAT_AC97) {
+            if (chunk_size > AUDIO_WAV_COMPAT_ASYNC_CHUNK) {
+                chunk_size = AUDIO_WAV_COMPAT_ASYNC_CHUNK;
             }
         } else if (chunk_size > (uint32_t)sizeof(buffer)) {
             chunk_size = (uint32_t)sizeof(buffer);
@@ -458,6 +470,7 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
     }
 
     if (playback_ticks > 0u &&
+        backend_kind != AUDIO_BACKEND_COMPAT_UAUDIO &&
         !(backend_kind == AUDIO_BACKEND_COMPAT_AZALIA && waited_for_hda_chunks)) {
         uint32_t started = sys_ticks();
         while ((uint32_t)(sys_ticks() - started) < playback_ticks) {
@@ -518,6 +531,14 @@ int audio_play_wav_async_start(struct audio_async_playback *playback, const char
     playback->node = node;
     playback->last_chunk_ticks = 0u;
     str_copy_limited(playback->tag, tag ? tag : "audio", (int)sizeof(playback->tag));
+
+    if (playback->backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO &&
+        tag != 0 &&
+        (str_eq(tag, "desktop-session") || str_eq(tag, "desktop"))) {
+        audio_set_last_playback_error("deferred");
+        audio_debug_line("audio: defer wav ", tag, "\n");
+        return 0;
+    }
 
     if (sys_audio_set_params(params) != 0) {
         audio_set_last_playback_error("set-params-failed");
@@ -584,8 +605,11 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
             if (chunk_size > AUDIO_WAV_AZALIA_ASYNC_CHUNK) {
                 chunk_size = AUDIO_WAV_AZALIA_ASYNC_CHUNK;
             }
-        } else if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AC97 ||
-                   playback->backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO) {
+        } else if (playback->backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO) {
+            if (chunk_size > AUDIO_WAV_UAUDIO_ASYNC_CHUNK) {
+                chunk_size = AUDIO_WAV_UAUDIO_ASYNC_CHUNK;
+            }
+        } else if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AC97) {
             if (chunk_size > AUDIO_WAV_COMPAT_ASYNC_CHUNK) {
                 chunk_size = AUDIO_WAV_COMPAT_ASYNC_CHUNK;
             }
@@ -621,7 +645,8 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
         }
 
         if (playback->backend_kind == AUDIO_BACKEND_COMPAT_AZALIA ||
-            playback->streamed >= playback->data_size) {
+            (playback->backend_kind != AUDIO_BACKEND_COMPAT_UAUDIO &&
+             playback->streamed >= playback->data_size)) {
             playback->waiting_for_idle = 1;
             playback->finalizing = playback->streamed >= playback->data_size;
             playback->idle_started = sys_ticks();

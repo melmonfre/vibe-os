@@ -5,6 +5,7 @@
 #include <kernel/interrupt.h>
 #include <kernel/lock.h>
 #include <kernel/memory/heap.h>
+#include <kernel/memory/physmem.h>
 #include <kernel/memory/paging.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/scheduler.h>
@@ -12,6 +13,7 @@
 #include <string.h>
 
 #define AP_TRAMPOLINE_PHYS_ADDR 0x7000u
+#define SMP_WAKE_VECTOR 0x82u
 #define AP_TRAMPOLINE_VECTOR (AP_TRAMPOLINE_PHYS_ADDR >> 12)
 #define AP_TRAMPOLINE_GDT_START_OFFSET 0x60u
 #define AP_TRAMPOLINE_GDT_DESC_OFFSET 0x78u
@@ -47,6 +49,22 @@ static volatile uint32_t g_smp_scheduler_enabled = 0u;
 
 static uint32_t smp_trampoline_size(void) {
     return (uint32_t)(_binary_build_ap_trampoline_bin_end - _binary_build_ap_trampoline_bin_start);
+}
+
+static void smp_assert_trampoline_reserved(void) {
+    uintptr_t tramp_begin = AP_TRAMPOLINE_PHYS_ADDR;
+    uintptr_t tramp_end = AP_TRAMPOLINE_PHYS_ADDR + 0x1000u;
+    uintptr_t usable_begin = physmem_usable_base();
+    uintptr_t usable_end = physmem_usable_end();
+
+    if (tramp_end <= usable_begin || tramp_begin >= usable_end) {
+        return;
+    }
+
+    physmem_reserve_range(tramp_begin, tramp_end - tramp_begin);
+    kernel_debug_printf("smp: trampoline explicitly reserved [%x,%x)\n",
+                        (uint32_t)tramp_begin,
+                        (uint32_t)tramp_end);
 }
 
 static void smp_prepare_trampoline(uint32_t entry, uint32_t stack_top) {
@@ -101,6 +119,7 @@ void smp_ap_entry(void) {
     uint32_t apic_id;
     int idx;
 
+    gdt_init();
     kernel_idt_init();
     local_apic_init();
     apic_id = local_apic_id();
@@ -136,8 +155,7 @@ void smp_ap_entry(void) {
         if (g_smp_scheduler_enabled != 0u) {
             schedule();
         } else {
-            __asm__ volatile("cli");
-            __asm__ volatile("hlt");
+            __asm__ volatile("sti; hlt" : : : "memory");
         }
         __asm__ volatile("pause");
     }
@@ -158,6 +176,7 @@ void smp_init(void) {
         return;
     }
 
+    smp_assert_trampoline_reserved();
     kernel_debug_printf("smp: preparing trampoline at %x (%d bytes)\n",
                         AP_TRAMPOLINE_PHYS_ADDR,
                         (int)smp_trampoline_size());
@@ -226,6 +245,21 @@ void smp_init(void) {
 
 uint32_t smp_started_cpu_count(void) {
     return g_smp_started_cpus;
+}
+
+void smp_scheduler_enable(void) {
+    g_smp_scheduler_enabled = 1u;
+    if (g_smp_started_cpus > 1u && local_apic_enabled()) {
+        (void)local_apic_broadcast_ipi((uint8_t)SMP_WAKE_VECTOR);
+    }
+}
+
+int smp_scheduler_enabled(void) {
+    return g_smp_scheduler_enabled != 0u;
+}
+
+void smp_wakeup_ipi_handler(void) {
+    local_apic_eoi();
 }
 
 uint32_t smp_cpu_stage(uint32_t cpu_index) {

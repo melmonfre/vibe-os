@@ -16,9 +16,11 @@
 #define LAPIC_SPURIOUS_VECTOR 0xFFu
 #define LAPIC_ICR_DELIVERY_STATUS 0x1000u
 #define LAPIC_DM_INIT 0x500u
+#define LAPIC_DM_FIXED 0x000u
 #define LAPIC_DM_STARTUP 0x600u
 #define LAPIC_LEVEL_ASSERT 0x4000u
 #define LAPIC_TRIGGER_LEVEL 0x8000u
+#define LAPIC_DEST_ALL_EXCLUDING_SELF 0x000C0000u
 
 static int g_local_apic_present = 0;
 static int g_local_apic_enabled = 0;
@@ -155,5 +157,29 @@ int local_apic_send_startup(uint32_t apic_id, uint8_t vector) {
     }
     local_apic_write(LAPIC_ICRHI_REG, apic_id << 24);
     local_apic_write(LAPIC_ICRLO_REG, LAPIC_DM_STARTUP | (uint32_t)vector);
+    return local_apic_wait_icr_idle();
+}
+
+int local_apic_send_ipi(uint32_t apic_id, uint8_t vector) {
+    if (!g_local_apic_enabled) {
+        return -1;
+    }
+    if (local_apic_wait_icr_idle() != 0) {
+        return -1;
+    }
+    local_apic_write(LAPIC_ICRHI_REG, apic_id << 24);
+    local_apic_write(LAPIC_ICRLO_REG, LAPIC_DM_FIXED | (uint32_t)vector);
+    return local_apic_wait_icr_idle();
+}
+
+int local_apic_broadcast_ipi(uint8_t vector) {
+    if (!g_local_apic_enabled) {
+        return -1;
+    }
+    if (local_apic_wait_icr_idle() != 0) {
+        return -1;
+    }
+    local_apic_write(LAPIC_ICRHI_REG, 0u);
+    local_apic_write(LAPIC_ICRLO_REG, LAPIC_DM_FIXED | LAPIC_DEST_ALL_EXCLUDING_SELF | (uint32_t)vector);
     return local_apic_wait_icr_idle();
 }

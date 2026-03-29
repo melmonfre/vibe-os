@@ -86,6 +86,7 @@ Hoje a verdade dura e simples e esta: a rede segue em MVP sintético de control-
 - [~] captura real de audio esta pronta
 - [~] HDA/`azalia` foi portada como segundo backend `compat`
 - [~] existe matriz de validacao em hardware real para as ~20 maquinas alvo
+- [~] no T61 real o audio ainda sai com cara de filme de terror / TV com interferencia; antes de nova rodada seria de validacao auditiva ainda falta acertar clock, formato PCM e/ou DMA do backend
 
 ### Rede
 
@@ -233,6 +234,9 @@ Estado atual:
 - [~] a descoberta de widgets tambem ficou menos dependente da metadata "bonita" do AFG: se a faixa anunciada por `SUB_NODE_COUNT` parece valida mas nao rende nenhum widget real no scan, o backend agora refaz a busca em `legacy nid scan` (`2..0x3f`) antes de desistir; isso cobre melhor codecs antigos que respondem ao AFG mas anunciam `widget range` incompleto ou enganoso
 - [~] a transicao do `Audio Function Group` para o scan de widgets tambem ficou mais robusta: depois de subir o AFG para `D0`, o backend agora espera um settle curto e faz retries em `SUB_NODE_COUNT` do proprio AFG antes de cair no `legacy nid scan`; isso aproxima mais o timing tolerante do `compat` e ajuda quando o codec acorda "meio tarde" em HDA antigo
 - [~] a coleta dos parametros-base do `Audio Function Group` tambem ficou menos fragil: `STREAM_FORMATS`, `PCM` e `INPUT/OUTPUT_AMP_CAP` agora sao lidos so depois de repor o AFG em `D0` com um settle curto e retries curtos por parametro; isso reduz o risco de o estado-base do codec nascer zerado ou parcial logo apos o wake no T61
+- [~] nova rodada de endurecimento do `compat-azalia`: antes de cada verbo via `CORB/RIRB`, o backend agora descarta respostas `RIRB` solicitadas atrasadas para nao casar o comando atual com reply stale; o power-up de widgets ficou mais fiel ao `compat` com `D0` + settle curto apenas quando o widget realmente anuncia power management; e o scan de widgets passou a cair no `legacy nid scan` tambem quando a faixa oficial do `AFG` ate responde, mas nao produz nenhuma saida utilizavel. A rodada seguinte tambem levou `START`/`WRITE` a falhar mais rapido e a chamar failover quando o HDA prova que nao sobe. O kernel recompilou, mas o smoke `validate-audio-hda-smoke` desta rodada ainda ficou `FAIL` em QEMU por timeout antes de `startx`/`audiosvc` (`build/audio-hda-validation.md`), entao a validacao funcional ainda nao voltou ao estado verde
+- [X] nova rodada focada em reduzir o risco de congelamento em HDA antigo sem regredir o caminho verde do QEMU: o `compat-azalia` agora usa timeouts de `stream reset`/`CORB-RIRB` alinhados ao `compat`, trocou o polling bruto mais quente por espera cooperativa e passou a enfileirar respostas `unsolicited` antes de processa-las, em vez de misturar isso inline no caminho do verbo atual; com isso os tres cenarios `validate-audio-hda-smoke`, `validate-audio-hda-playback` e `validate-audio-hda-startup` voltaram a passar no QEMU `intel-hda`, e o backend ficou menos propenso a travar minutos quando a controladora antiga entra em estado ruim
+- [X] mais uma rodada para estabilizar o lote anterior sem mascarar falha real: a politica de `speaker`/`pin sense` agora bloqueia reentrada enquanto reaplica `apply_output_pin_policy()`, o power-up de widgets passa a reutilizar cache `D0` por `nid` e o settle por widget caiu para um valor curto; com isso o probe/runtime quente do `compat-azalia` ficou mais leve, `build/kernel/microkernel/audio.o` voltou a compilar limpo e os tres validadores HDA (`validate-audio-hda-smoke`, `validate-audio-hda-playback` e `validate-audio-hda-startup`) seguiram verdes em sequencia no QEMU `intel-hda`
 - [X] o fallback final de audio deixou de ser sempre silencioso: quando HDA/AC97 nao ficam utilizaveis, o servico agora sobe um backend `pcspkr` baseado no PIT/channel 2 e no speaker legacy (`porta 0x61`), aparecendo em `audiosvc`/`soundctl` como backend proprio em vez de ficar so em `softmix`
 - [~] o backend `pcspkr` ja garante um fallback audivel praticamente universal em desktops/notebooks x86, inclusive para `soundctl tone` e para WAV/PCM em modo degradado; a qualidade ainda e propositalmente rudimentar, com reducao do PCM para blocos curtos de tom no buzzer
 - [ ] o terceiro backend amplo planejado agora e `compat-uaudio` para USB Audio Class; o repo ja tem a base `compat/sys/dev/usb/uaudio.c`, mas o VibeOS ainda precisa hospedar/controlar uma stack USB nativa suficiente para enumerar controladoras/dispositivos e dar substrate real para esse port
@@ -1135,3 +1139,23 @@ Com rede real entregue:
 5. portar um primeiro driver Wi-Fi PCI
 6. fechar scan + associacao aberta
 7. fechar WPA2-PSK e perfis salvos
+
+Pode testar no T61. Nesse ponto não parece desperdício de ciclo do HD.
+
+O motivo é simples: os dois bloqueios que estavam mais feios no QEMU já foram resolvidos. O `compat-azalia` parou de travar o bootstrap e chegou até `desktop-session` com playback no `intel-hda`, e o bug do `compat-ac97` que te mostrou “Falha ao enviar audio” também foi reproduzido e corrigido no `AC97` do QEMU.
+
+Minha leitura honesta é:
+- vale teste real no T61 se o alvo é validar HDA/ThinkPad de verdade
+- ainda existe risco de ajuste fino de rota/pin quirk específico do codec do notebook
+- mas agora já estamos no estágio em que hardware real pode revelar coisa nova útil, não só repetir falha besta já conhecida
+
+Se quiser economizar tentativas, eu sugiro esse critério:
+- vale gravar se a sua meta é “ver se sobe som algum no T61 e coletar diagnóstico real”
+- não vale gravar se você só queria confirmar que “o básico nem trava mais”, porque isso eu já confirmei no QEMU
+
+Se rodar no T61 e der ruim, me manda exatamente a linha de erro do player ou do `soundctl status` que eu continuo em cima sem te fazer queimar tentativas à toa.
+
+--smoke test no t61: som não foi reproduzido, startx deu falha ao iniciar app externo catalog, após reboot em fallback 480p deu o mesmo sintoma. regressão confirmada em drivers ahci, um dos logs deu erro ao carregar storage vfs. em modo compatibilidade do sata controller eu repeti o teste, chegamoa a um bootloop sem som, em fallback 480p congelamento no startx... nada carrega e após minutos nada de novidades 
+
+- causa provável isolada nesta rodada: o `compat-azalia` estava mascarando a linha PIC do HDA já na seleção do backend; no T61 isso pode bloquear uma IRQ PCI INTx compartilhada com SATA/USB e derrubar `AHCI`, `AppFS/catalog` e `startx` mesmo antes do primeiro playback. Corrigido para manter a linha desmascarada e deixar o gating só no `INTCTL` do próprio HDA.
+- endurecimento adicional aplicado logo depois: como o PIC atual ainda só aceita um handler por IRQ, o `compat-azalia` deixou de registrar INTx no modo legado e passou a operar em polling no runtime HDA. Isso evita que o áudio roube uma linha compartilhada do SATA/USB no T61 até existir multiplexação real de IRQ no kernel.

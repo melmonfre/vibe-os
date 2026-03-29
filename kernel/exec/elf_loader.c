@@ -108,10 +108,9 @@ process_t *elf_load(const void *elf_data, size_t size) {
         kernel_free(proc);
         return NULL;
     }
-    uintptr_t stack_top = (uintptr_t)proc->stack + PROCESS_STACK_SIZE;
-    proc->regs.esp = (uint32_t)stack_top;
-    proc->regs.ebp = (uint32_t)stack_top;
-    proc->regs.eip = (uint32_t)mem + (ehdr->e_entry - low);
+    process_setup_initial_context(proc,
+                                  (uintptr_t)mem + (ehdr->e_entry - low),
+                                  (uintptr_t)proc->stack + PROCESS_STACK_SIZE);
     /* note: the caller is responsible for tracking the memory block
        (mem) so that it doesn't get freed while the process runs; for our
        simple kernel we simply leak it. */
