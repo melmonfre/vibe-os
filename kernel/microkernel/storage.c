@@ -317,6 +317,14 @@ uint32_t mk_storage_service_total_sectors(void) {
     struct mk_message reply;
     struct mk_storage_info info;
 
+    /*
+     * Read-only geometry queries are used by interactive shell flows such as
+     * vibefetch during desktop startup. Keep them on the kernel-owned block
+     * state until the storage service request/reply path is proven reliable
+     * for info requests as well.
+     */
+    return kernel_storage_total_sectors();
+
     if (mk_storage_prepare_request(&request_message, MK_MSG_BLOCK_INFO, 0, 0u) != 0) {
         return 0u;
     }
@@ -336,6 +344,8 @@ uint32_t mk_storage_service_partition_start_lba(void) {
     struct mk_message request_message;
     struct mk_message reply;
     struct mk_storage_info info;
+
+    return kernel_storage_partition_start_lba();
 
     if (mk_storage_prepare_request(&request_message, MK_MSG_BLOCK_INFO, 0, 0u) != 0) {
         return 0u;

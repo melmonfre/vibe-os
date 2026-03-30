@@ -14,6 +14,10 @@ static int g_cached_directory_valid = 0;
 static unsigned char *g_host_read_file_buf = 0;
 static int g_host_read_file_buf_capacity = 0;
 static void lang_debug_vga(int row, const char *text);
+static int lang_has_runtime_stub(const char *name);
+static int lang_load_directory(struct vibe_appfs_directory *directory);
+static const struct vibe_appfs_entry *lang_find_entry(const struct vibe_appfs_directory *directory,
+                                                      const char *name);
 void *malloc(size_t size);
 void *realloc(void *ptr, size_t size);
 void free(void *ptr);
@@ -607,6 +611,29 @@ static int lang_load_address_valid(uint32_t load_address) {
 void lang_invalidate_directory_cache(void) {
     g_cached_directory_valid = 0;
     lang_memset(&g_cached_directory, 0, (uint32_t)sizeof(g_cached_directory));
+}
+
+int lang_can_run(const char *name) {
+    struct vibe_appfs_directory directory;
+
+    if (!name || name[0] == '\0') {
+        return 0;
+    }
+
+    if (lang_has_runtime_stub(name)) {
+        return 1;
+    }
+
+    /*
+     * If the directory cannot be read right now, let the caller try the real
+     * launch path so the loader can surface the concrete storage/catalog error
+     * instead of collapsing everything into "unknown command".
+     */
+    if (lang_load_directory(&directory) != 0) {
+        return 1;
+    }
+
+    return lang_find_entry(&directory, name) != 0 ? 1 : 0;
 }
 
 static int lang_has_runtime_stub(const char *name) {

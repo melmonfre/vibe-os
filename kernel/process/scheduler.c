@@ -11,6 +11,7 @@
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/event.h>
+#include <kernel/microkernel/launch.h>
 
 /* simple singly‑linked list of processes */
 static process_t *g_head = NULL;
@@ -18,13 +19,36 @@ static process_t *g_current[32];
 static process_t *g_cursor[32];
 static uint32_t g_timeslice_remaining[32];
 static spinlock_t g_scheduler_lock;
+static spinlock_t g_task_event_lock;
 static int g_scheduler_boot_trace_emitted = 0;
 static int g_scheduler_switch_trace_budget = 24;
+static int g_scheduler_block_trace_budget = 24;
 static volatile int g_scheduler_preemption_ready = 0;
+
+#define SCHEDULER_TASK_EVENT_SUBSCRIBERS 8u
+#define SCHEDULER_TASK_EVENT_QUEUE_SIZE 32u
 
 #define SCHEDULER_TIMESLICE_TICKS 4u
 
+struct scheduler_task_event_subscription {
+    uint32_t pid;
+    kernel_waitable_t waitable;
+    struct mk_task_event events[SCHEDULER_TASK_EVENT_QUEUE_SIZE];
+    uint32_t head;
+    uint32_t tail;
+    uint32_t count;
+};
+
+static struct scheduler_task_event_subscription
+    g_task_event_subscriptions[SCHEDULER_TASK_EVENT_SUBSCRIBERS];
+
 static void scheduler_timeout_tick_hook(uint32_t tick);
+static void scheduler_task_event_init(void);
+static void scheduler_publish_task_event(uint32_t event_type, const process_t *task);
+static struct scheduler_task_event_subscription *
+scheduler_find_task_event_subscription_locked(process_t *subscriber);
+static struct scheduler_task_event_subscription *
+scheduler_alloc_task_event_subscription_locked(process_t *subscriber);
 
 static void scheduler_account_runtime(process_t *task, uint32_t now_ticks) {
     if (task == NULL || task->state != PROCESS_RUNNING || task->last_start_tick == 0u) {
@@ -115,6 +139,7 @@ static process_t *scheduler_first_runnable(void) {
 
 static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
     int wait_bonus = 0;
+    int wait_penalty = 0;
     int affinity_score;
     int base_score;
 
@@ -131,10 +156,69 @@ static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
     }
 
     /*
+     * Protect the most interactive classes from paying a large migration cost
+     * under wakeup/restart pressure. They should remain responsive even when
+     * load-balancing would otherwise move them away from the previous CPU.
+     */
+    if (task->priority_tier <= PROCESS_PRIORITY_INPUT && affinity_score > 1) {
+        affinity_score = 1;
+    } else if (task->priority_tier == PROCESS_PRIORITY_VIDEO && affinity_score > 2) {
+        affinity_score = 2;
+    }
+
+    /*
+     * Freshly launched interactive services need an immediate first slice so
+     * restart recovery can complete before higher-tier callers spin on IPC
+     * retries and starve the worker they are waiting for.
+     */
+    if (task->kind == PROCESS_KIND_SERVICE &&
+        task->priority_tier <= PROCESS_PRIORITY_INPUT &&
+        task->context_switches == 0u &&
+        task->runtime_ticks == 0u) {
+        return -40;
+    }
+    if (task->kind == PROCESS_KIND_USER &&
+        task->context_switches == 0u &&
+        task->runtime_ticks == 0u) {
+        /*
+         * Fresh user hosts need an immediate bootstrap slice before desktop
+         * frame/input traffic dominates the ready queue. App hosts are
+         * particularly sensitive here because they still need to bring up the
+         * loader and hand control to the modular app entrypoint.
+         */
+        if (task->priority_tier == PROCESS_PRIORITY_DESKTOP_USER) {
+            return -36;
+        }
+        if (task->priority_tier == PROCESS_PRIORITY_APP) {
+            return -34;
+        }
+        return -12;
+    }
+    if (task->kind == PROCESS_KIND_USER &&
+        task->priority_tier == PROCESS_PRIORITY_APP &&
+        task->context_switches < 4u &&
+        task->runtime_ticks < 16u) {
+        /*
+         * Let freshly launched app hosts finish their initial loader/fs work
+         * over the first few slices so they do not starve behind continuous
+         * desktop/input wakeups on graphical boots.
+         */
+        return -26;
+    }
+
+    /*
      * Recently signaled tasks that were blocked on interactive queues should
      * run ahead of bulk/background work once they become ready again.
      */
     if (task->wait_result == TASK_WAIT_RESULT_SIGNALED) {
+        if (task->wait_event_class == TASK_WAIT_CLASS_IPC) {
+            /*
+             * Synchronous service request/reply depends on both sides of the
+             * mailbox running immediately once signaled, otherwise a top-tier
+             * caller can block indefinitely behind unrelated ready work.
+             */
+            return task->kind == PROCESS_KIND_SERVICE ? -32 : -24;
+        }
         switch (task->wait_event_class) {
         case TASK_WAIT_CLASS_INPUT:
             wait_bonus = 12;
@@ -156,9 +240,16 @@ static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
         default:
             break;
         }
+    } else if (task->wait_result == TASK_WAIT_RESULT_TIMED_OUT &&
+               task->wait_event_class == TASK_WAIT_CLASS_IPC) {
+        /*
+         * A caller that is only timing out on a synchronous service retry
+         * should not outrank the service task that must run to satisfy it.
+         */
+        wait_penalty = 12;
     }
 
-    base_score = (int)(task->priority_tier * 16u) + affinity_score - wait_bonus;
+    base_score = (int)(task->priority_tier * 16u) + affinity_score + wait_penalty - wait_bonus;
     if (base_score < 0) {
         base_score = 0;
     }
@@ -186,7 +277,140 @@ void scheduler_init(void) {
     }
     spinlock_init(&g_scheduler_lock);
     g_scheduler_preemption_ready = 0;
+    scheduler_task_event_init();
     (void)kernel_timer_register_tick_hook(scheduler_timeout_tick_hook);
+}
+
+static void scheduler_task_event_init(void) {
+    uint32_t index;
+
+    spinlock_init(&g_task_event_lock);
+    for (index = 0u; index < SCHEDULER_TASK_EVENT_SUBSCRIBERS; ++index) {
+        struct scheduler_task_event_subscription *subscription =
+            &g_task_event_subscriptions[index];
+
+        memset(subscription, 0, sizeof(*subscription));
+        kernel_waitable_init_ex(&subscription->waitable,
+                                TASK_WAIT_EVENT_QUEUE,
+                                TASK_WAIT_CLASS_SUPERVISION,
+                                0u);
+    }
+}
+
+static struct scheduler_task_event_subscription *
+scheduler_find_task_event_subscription_locked(process_t *subscriber) {
+    uint32_t index;
+
+    if (subscriber == NULL || subscriber->pid <= 0) {
+        return NULL;
+    }
+
+    for (index = 0u; index < SCHEDULER_TASK_EVENT_SUBSCRIBERS; ++index) {
+        struct scheduler_task_event_subscription *subscription =
+            &g_task_event_subscriptions[index];
+
+        if (subscription->pid == (uint32_t)subscriber->pid) {
+            return subscription;
+        }
+    }
+    return NULL;
+}
+
+static struct scheduler_task_event_subscription *
+scheduler_alloc_task_event_subscription_locked(process_t *subscriber) {
+    uint32_t index;
+    struct scheduler_task_event_subscription *empty = NULL;
+
+    if (subscriber == NULL || subscriber->pid <= 0) {
+        return NULL;
+    }
+
+    for (index = 0u; index < SCHEDULER_TASK_EVENT_SUBSCRIBERS; ++index) {
+        struct scheduler_task_event_subscription *subscription =
+            &g_task_event_subscriptions[index];
+
+        if (subscription->pid == (uint32_t)subscriber->pid) {
+            return subscription;
+        }
+        if (empty == NULL &&
+            (subscription->pid == 0u ||
+             scheduler_find_task_by_pid((int)subscription->pid) == NULL)) {
+            empty = subscription;
+        }
+    }
+
+    if (empty != NULL) {
+        memset(empty, 0, sizeof(*empty));
+        empty->pid = (uint32_t)subscriber->pid;
+        kernel_waitable_init_ex(&empty->waitable,
+                                TASK_WAIT_EVENT_QUEUE,
+                                TASK_WAIT_CLASS_SUPERVISION,
+                                0u);
+    }
+    return empty;
+}
+
+static void scheduler_publish_task_event(uint32_t event_type, const process_t *task) {
+    uint32_t index;
+    uint32_t flags;
+    const struct mk_launch_context *context;
+    kernel_waitable_t *wake_waitables[SCHEDULER_TASK_EVENT_SUBSCRIBERS];
+    uint32_t wake_count = 0u;
+
+    if (task == NULL || task->pid <= 0 || event_type == MK_TASK_EVENT_NONE) {
+        return;
+    }
+
+    context = mk_launch_context_for_pid(task->pid);
+    flags = spinlock_lock_irqsave(&g_task_event_lock);
+
+    for (index = 0u; index < SCHEDULER_TASK_EVENT_SUBSCRIBERS; ++index) {
+        struct scheduler_task_event_subscription *subscription =
+            &g_task_event_subscriptions[index];
+        struct mk_task_event *event;
+
+        if (subscription->pid == 0u) {
+            continue;
+        }
+        if (scheduler_find_task_by_pid((int)subscription->pid) == NULL) {
+            memset(subscription, 0, sizeof(*subscription));
+            kernel_waitable_init_ex(&subscription->waitable,
+                                    TASK_WAIT_EVENT_QUEUE,
+                                    TASK_WAIT_CLASS_SUPERVISION,
+                                    0u);
+            continue;
+        }
+
+        if (subscription->count >= SCHEDULER_TASK_EVENT_QUEUE_SIZE) {
+            subscription->head = (subscription->head + 1u) % SCHEDULER_TASK_EVENT_QUEUE_SIZE;
+            subscription->count -= 1u;
+        }
+
+        event = &subscription->events[subscription->tail];
+        memset(event, 0, sizeof(*event));
+        event->abi_version = 1u;
+        event->event_type = event_type;
+        event->pid = (uint32_t)task->pid;
+        event->kind = (uint32_t)task->kind;
+        event->service_type = task->service_type;
+        event->priority_tier = task->priority_tier;
+        event->flags = context != 0 ? context->flags : 0u;
+        event->tick = kernel_timer_get_ticks();
+        subscription->tail = (subscription->tail + 1u) % SCHEDULER_TASK_EVENT_QUEUE_SIZE;
+        subscription->count += 1u;
+        if (wake_count < SCHEDULER_TASK_EVENT_SUBSCRIBERS) {
+            wake_waitables[wake_count++] = &subscription->waitable;
+        }
+    }
+    spinlock_unlock_irqrestore(&g_task_event_lock, flags);
+
+    for (index = 0u; index < wake_count; ++index) {
+        kernel_waitable_signal(wake_waitables[index], 1u);
+    }
+}
+
+void scheduler_publish_lifecycle_event(uint32_t event_type, const process_t *task) {
+    scheduler_publish_task_event(event_type, task);
 }
 
 void scheduler_add_task(process_t *proc) {
@@ -200,7 +424,9 @@ void scheduler_add_task(process_t *proc) {
     proc->state = PROCESS_READY;
     proc->current_cpu = -1;
     proc->last_cpu = -1;
-    proc->preferred_cpu = scheduler_pick_target_cpu();
+    if (proc->preferred_cpu < 0) {
+        proc->preferred_cpu = scheduler_pick_target_cpu();
+    }
     if (g_head == NULL) {
         g_head = proc;
         g_cursor[proc->preferred_cpu >= 0 ? (uint32_t)proc->preferred_cpu : 0u] = proc;
@@ -212,6 +438,8 @@ void scheduler_add_task(process_t *proc) {
         p->next = proc;
     }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+    scheduler_publish_task_event(MK_TASK_EVENT_LAUNCHED, proc);
+    smp_wake_sleeping_cpus();
 }
 
 static process_t *find_next(uint32_t cpu_index, process_t *current) {
@@ -468,6 +696,8 @@ void scheduler_terminate_task(process_t *task) {
     }
 
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+    scheduler_publish_task_event(MK_TASK_EVENT_TERMINATED, task);
+    mk_launch_release_pid(task->pid);
 }
 
 int scheduler_block_current_ex(const void *wait_channel,
@@ -498,6 +728,18 @@ int scheduler_block_current_ex(const void *wait_channel,
     current->wait_event_class = wait_event_class;
     current->wait_owner_service = wait_owner_service;
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+    if (g_scheduler_block_trace_budget > 0) {
+        g_scheduler_block_trace_budget -= 1;
+        kernel_debug_printf("scheduler: block pid=%d kind=%d svc=%d class=%d event=%d owner=%d deadline=%d\n",
+                            current->pid,
+                            (int)current->kind,
+                            (int)current->service_type,
+                            (int)wait_event_class,
+                            (int)wait_event_kind,
+                            (int)wait_owner_service,
+                            (int)wait_deadline);
+    }
+    scheduler_publish_task_event(MK_TASK_EVENT_BLOCKED, current);
     return 0;
 }
 
@@ -527,14 +769,62 @@ int scheduler_complete_wait(process_t *task, uint32_t wait_result) {
         scheduler_clear_wait_channel(task);
         task->wait_result = wait_result;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+        scheduler_publish_task_event(MK_TASK_EVENT_WOKE, task);
         return 0;
     }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
     return -1;
 }
 
+int scheduler_task_event_subscribe(process_t *subscriber) {
+    uint32_t flags;
+    int rc;
+
+    flags = spinlock_lock_irqsave(&g_task_event_lock);
+    rc = scheduler_alloc_task_event_subscription_locked(subscriber) != NULL ? 0 : -1;
+    spinlock_unlock_irqrestore(&g_task_event_lock, flags);
+    return rc;
+}
+
+int scheduler_task_event_receive(process_t *subscriber,
+                                 struct mk_task_event *event,
+                                 uint32_t timeout_ticks) {
+    uint32_t flags;
+
+    if (subscriber == NULL || event == NULL) {
+        return -1;
+    }
+
+    for (;;) {
+        struct scheduler_task_event_subscription *subscription;
+
+        flags = spinlock_lock_irqsave(&g_task_event_lock);
+        subscription = scheduler_find_task_event_subscription_locked(subscriber);
+        if (subscription == NULL) {
+            spinlock_unlock_irqrestore(&g_task_event_lock, flags);
+            return -1;
+        }
+        if (subscription->count != 0u) {
+            *event = subscription->events[subscription->head];
+            subscription->head = (subscription->head + 1u) % SCHEDULER_TASK_EVENT_QUEUE_SIZE;
+            subscription->count -= 1u;
+            spinlock_unlock_irqrestore(&g_task_event_lock, flags);
+            return 0;
+        }
+        spinlock_unlock_irqrestore(&g_task_event_lock, flags);
+        if (timeout_ticks == 0u) {
+            return -1;
+        }
+        if (kernel_waitable_wait_timeout(&subscription->waitable, timeout_ticks) != 0) {
+            return -1;
+        }
+    }
+}
+
 static void scheduler_timeout_tick_hook(uint32_t tick) {
     process_t *task;
+    process_t *woke_tasks[16];
+    uint32_t woke_count = 0u;
     uint32_t flags;
 
     flags = spinlock_lock_irqsave(&g_scheduler_lock);
@@ -551,8 +841,15 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
         task->current_cpu = -1;
         scheduler_clear_wait_channel(task);
         task->wait_result = TASK_WAIT_RESULT_TIMED_OUT;
+        if (woke_count < (sizeof(woke_tasks) / sizeof(woke_tasks[0]))) {
+            woke_tasks[woke_count++] = task;
+        }
     }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+
+    for (uint32_t i = 0u; i < woke_count; ++i) {
+        scheduler_publish_task_event(MK_TASK_EVENT_WOKE, woke_tasks[i]);
+    }
 }
 
 uint32_t scheduler_snapshot(struct task_snapshot_entry *entries,

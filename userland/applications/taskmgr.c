@@ -234,6 +234,7 @@ static const char *taskmgr_audio_event_name(uint32_t event_type) {
     case MK_AUDIO_EVENT_QUEUED: return "queued";
     case MK_AUDIO_EVENT_IDLE: return "idle";
     case MK_AUDIO_EVENT_UNDERRUN: return "underrun";
+    case MK_AUDIO_EVENT_OVERFLOW: return "overflow";
     default: return "unknown";
     }
 }
@@ -241,8 +242,10 @@ static const char *taskmgr_audio_event_name(uint32_t event_type) {
 static const char *taskmgr_video_event_name(uint32_t event_type) {
     switch (event_type) {
     case MK_VIDEO_EVENT_PRESENT: return "present";
+    case MK_VIDEO_EVENT_PRESENT_SUBMITTED: return "submit";
     case MK_VIDEO_EVENT_MODE_SET: return "mode";
     case MK_VIDEO_EVENT_LEAVE: return "leave";
+    case MK_VIDEO_EVENT_OVERFLOW: return "overflow";
     default: return "unknown";
     }
 }
@@ -254,6 +257,9 @@ static const char *taskmgr_network_event_name(uint32_t event_type) {
     case MK_NETWORK_EVENT_SOCKET_ACCEPT: return "accept";
     case MK_NETWORK_EVENT_SOCKET_SEND: return "send";
     case MK_NETWORK_EVENT_SOCKET_CLOSED: return "closed";
+    case MK_NETWORK_EVENT_BACKEND_RX: return "backend-rx";
+    case MK_NETWORK_EVENT_BACKEND_TX: return "backend-tx";
+    case MK_NETWORK_EVENT_OVERFLOW: return "overflow";
     default: return "unknown";
     }
 }
@@ -952,6 +958,18 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
             str_append(detail, taskmgr_video_event_name(tm->video_event.event_type), (int)sizeof(detail));
             str_append(detail, " #", (int)sizeof(detail));
             append_uint(detail, tm->video_event.sequence, (int)sizeof(detail));
+            if (tm->video_event.completed_sequence > 0u) {
+                str_append(detail, " done ", (int)sizeof(detail));
+                append_uint(detail, tm->video_event.completed_sequence, (int)sizeof(detail));
+            }
+            if (tm->video_event.pending_depth > 0u) {
+                str_append(detail, " q ", (int)sizeof(detail));
+                append_uint(detail, tm->video_event.pending_depth, (int)sizeof(detail));
+            }
+            if (tm->video_event.dropped_events > 0u) {
+                str_append(detail, " drop ", (int)sizeof(detail));
+                append_uint(detail, tm->video_event.dropped_events, (int)sizeof(detail));
+            }
         }
         taskmgr_draw_performance_card(&cards[5], "Present / Scanout", value, detail);
     } else {
@@ -1080,6 +1098,10 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
             append_uint(detail, tm->audio_event.queued_bytes, (int)sizeof(detail));
             str_append(detail, " u ", (int)sizeof(detail));
             append_uint(detail, tm->audio_event.underruns, (int)sizeof(detail));
+            if (tm->audio_event.dropped_events > 0u) {
+                str_append(detail, " drop ", (int)sizeof(detail));
+                append_uint(detail, tm->audio_event.dropped_events, (int)sizeof(detail));
+            }
         }
         taskmgr_draw_performance_card(&cards[6], "Driver de Audio", value, detail);
     } else {
@@ -1167,6 +1189,10 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
                 str_append(detail, " b ", (int)sizeof(detail));
                 append_uint(detail, tm->network_event.byte_count, (int)sizeof(detail));
             }
+            if (tm->network_event.dropped_events > 0u) {
+                str_append(detail, " drop ", (int)sizeof(detail));
+                append_uint(detail, tm->network_event.dropped_events, (int)sizeof(detail));
+            }
         }
         taskmgr_draw_performance_card(&cards[7], "Driver de Rede", value, detail);
     } else {
@@ -1206,12 +1232,32 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
         str_append(detail, taskmgr_video_event_name(tm->video_event.event_type), (int)sizeof(detail));
         str_append(detail, " #", (int)sizeof(detail));
         append_uint(detail, tm->video_event.sequence, (int)sizeof(detail));
+        if (tm->video_event.completed_sequence > 0u) {
+            str_append(detail, " done ", (int)sizeof(detail));
+            append_uint(detail, tm->video_event.completed_sequence, (int)sizeof(detail));
+        }
+        if (tm->video_event.pending_depth > 0u) {
+            str_append(detail, " q ", (int)sizeof(detail));
+            append_uint(detail, tm->video_event.pending_depth, (int)sizeof(detail));
+        }
+        if (tm->video_event.dropped_events > 0u) {
+            str_append(detail, " drop ", (int)sizeof(detail));
+            append_uint(detail, tm->video_event.dropped_events, (int)sizeof(detail));
+        }
     }
     if (tm->network_event_valid) {
         str_append(detail, "  net ", (int)sizeof(detail));
         str_append(detail, taskmgr_network_event_name(tm->network_event.event_type), (int)sizeof(detail));
         str_append(detail, " #", (int)sizeof(detail));
         append_uint(detail, tm->network_event.sequence, (int)sizeof(detail));
+        if (tm->network_event.byte_count > 0u) {
+            str_append(detail, " b ", (int)sizeof(detail));
+            append_uint(detail, tm->network_event.byte_count, (int)sizeof(detail));
+        }
+        if (tm->network_event.dropped_events > 0u) {
+            str_append(detail, " drop ", (int)sizeof(detail));
+            append_uint(detail, tm->network_event.dropped_events, (int)sizeof(detail));
+        }
     }
     if (tm->netmgrd_status.valid) {
         if (tm->netmgrd_status.state[0] != '\0') {

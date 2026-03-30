@@ -32,9 +32,11 @@ const char* kernel_keyboard_get_layout(void);
 
 /* Get a list of available keyboard layouts */
 void kernel_keyboard_get_available_layouts(char* buffer, int size);
+int kernel_keyboard_translate_hid_usage(uint8_t usage, uint8_t modifiers);
 
 /* Keyboard IRQ handler (called from assembly) */
 void kernel_keyboard_irq_handler(void);
+void kernel_keyboard_poll(void);
 
 /* Reset transient PS/2 keyboard state before entering graphics mode. */
 void kernel_keyboard_prepare_for_graphics(void);
@@ -53,6 +55,7 @@ void kernel_mouse_sync_to_video(void);
 
 /* Mouse IRQ handler (called from assembly) */
 void kernel_mouse_irq_handler(void);
+void kernel_mouse_poll(void);
 
 /* Reset transient PS/2 mouse state before entering graphics mode. */
 void kernel_mouse_prepare_for_graphics(void);

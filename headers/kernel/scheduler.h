@@ -40,6 +40,11 @@ int scheduler_block_current_ex(const void *wait_channel,
                                uint32_t wait_owner_service);
 int scheduler_wake_task(process_t *task);
 int scheduler_complete_wait(process_t *task, uint32_t wait_result);
+int scheduler_task_event_subscribe(process_t *subscriber);
+int scheduler_task_event_receive(process_t *subscriber,
+                                 struct mk_task_event *event,
+                                 uint32_t timeout_ticks);
+void scheduler_publish_lifecycle_event(uint32_t event_type, const process_t *task);
 uint32_t scheduler_snapshot(struct task_snapshot_entry *entries,
                             uint32_t max_entries,
                             struct task_snapshot_summary *summary);

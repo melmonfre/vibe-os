@@ -24,6 +24,7 @@ typedef struct {
 struct ipc_queue {
     int owner_pid;
     kernel_waitable_t waitable;
+    spinlock_t lock;
     ipc_msg_t msgs[IPC_QUEUE_SIZE];
     int head;
     int tail;
@@ -71,6 +72,7 @@ static struct ipc_queue *ensure_queue(process_t *p) {
                             TASK_WAIT_EVENT_QUEUE,
                             TASK_WAIT_CLASS_IPC,
                             p->service_type);
+    spinlock_init(&queue->lock);
     g_queues[empty_slot] = queue;
     spinlock_unlock_irqrestore(&g_queue_table_lock, flags);
     return queue;
@@ -90,16 +92,16 @@ int ipc_send(process_t *dest, const void *data, size_t len) {
         return -1;
     }
 
-    flags = kernel_irq_save();
+    flags = spinlock_lock_irqsave(&q->lock);
     if (q->count >= IPC_QUEUE_SIZE) {
-        kernel_irq_restore(flags);
+        spinlock_unlock_irqrestore(&q->lock, flags);
         return -1;
     }
 
     m = &q->msgs[q->tail];
     m->data = kernel_malloc(len);
     if (!m->data) {
-        kernel_irq_restore(flags);
+        spinlock_unlock_irqrestore(&q->lock, flags);
         return -1;
     }
 
@@ -107,7 +109,7 @@ int ipc_send(process_t *dest, const void *data, size_t len) {
     m->len = len;
     q->tail = (q->tail + 1) % IPC_QUEUE_SIZE;
     q->count++;
-    kernel_irq_restore(flags);
+    spinlock_unlock_irqrestore(&q->lock, flags);
     kernel_waitable_signal(&q->waitable, 1u);
     return 0;
 }
@@ -127,9 +129,9 @@ int ipc_receive(process_t *self, void *buf, size_t bufsize) {
         return -1;
     }
 
-    flags = kernel_irq_save();
+    flags = spinlock_lock_irqsave(&q->lock);
     if (q->count == 0) {
-        kernel_irq_restore(flags);
+        spinlock_unlock_irqrestore(&q->lock, flags);
         return -1;
     }
 
@@ -141,11 +143,14 @@ int ipc_receive(process_t *self, void *buf, size_t bufsize) {
     m->len = 0u;
     q->head = (q->head + 1) % IPC_QUEUE_SIZE;
     q->count--;
-    kernel_irq_restore(flags);
+    spinlock_unlock_irqrestore(&q->lock, flags);
     return (int)tocopy;
 }
 
-int ipc_receive_wait(process_t *self, void *buf, size_t bufsize) {
+int ipc_receive_wait_timeout(process_t *self,
+                             void *buf,
+                             size_t bufsize,
+                             uint32_t timeout_ticks) {
     int received;
 
     if (!self || !buf || bufsize == 0u) {
@@ -163,8 +168,19 @@ int ipc_receive_wait(process_t *self, void *buf, size_t bufsize) {
         if (received >= 0) {
             return received;
         }
-        if (kernel_waitable_wait(&q->waitable) != 0) {
+        if (timeout_ticks == 0u) {
+            if (kernel_waitable_wait(&q->waitable) < 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (kernel_waitable_wait_timeout(&q->waitable, timeout_ticks) !=
+            TASK_WAIT_RESULT_SIGNALED) {
             return -1;
         }
     }
+}
+
+int ipc_receive_wait(process_t *self, void *buf, size_t bufsize) {
+    return ipc_receive_wait_timeout(self, buf, bufsize, 0u);
 }

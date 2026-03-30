@@ -24,7 +24,7 @@
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 88
+#define MAX_SYSCALLS 93
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
 
@@ -32,6 +32,25 @@ extern void userland_shell_host_entry(void);
 extern void userland_desktop_host_entry(void);
 extern void userland_startx_host_entry(void);
 extern void userland_desktop_audio_host_entry(void);
+extern void userland_boot_audio_host_entry(void);
+extern void userland_app_host_entry(void);
+
+static const char *sys_launch_path_basename(const char *path) {
+    const char *last = path;
+
+    if (path == 0) {
+        return 0;
+    }
+
+    while (*path != '\0') {
+        if (*path == '/' && path[1] != '\0') {
+            last = path + 1;
+        }
+        ++path;
+    }
+
+    return last;
+}
 
 static uint32_t sys_gfx_clear(uint32_t color, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
@@ -268,13 +287,8 @@ static uint32_t sys_input_mouse(uint32_t state_ptr, uint32_t b, uint32_t c,
         return 0;
     }
 
-    /*
-     * Keep desktop mouse polling on the kernel-owned input queue even when the
-     * input service restarts. This preserves low-latency pointer updates
-     * without reading device state straight from the raw driver path.
-     */
     state = (struct mouse_state *)(uintptr_t)state_ptr;
-    if (!kernel_input_mouse_event_dequeue(state)) {
+    if (!mk_input_service_poll_mouse(state)) {
         memset(state, 0, sizeof(*state));
         return 0;
     }
@@ -291,13 +305,7 @@ static uint32_t sys_input_event(uint32_t event_ptr, uint32_t b, uint32_t c,
     }
 
     event = (struct input_event *)(uintptr_t)event_ptr;
-    /*
-     * Desktop/session input should consume the kernel-owned event stream
-     * directly so pointer/key continuity survives input-service restarts.
-     * The input service remains relevant for publication/supervision and
-     * layout/state APIs, but not as a mandatory hop for foreground input.
-     */
-    return (uint32_t)kernel_input_event_dequeue(event);
+    return (uint32_t)mk_input_service_next_event(event);
 }
 
 static uint32_t sys_network_listen(uint32_t handle, uint32_t backlog, uint32_t c,
@@ -355,17 +363,8 @@ static uint32_t sys_write_debug(uint32_t a, uint32_t b, uint32_t c,
 
 static uint32_t sys_input_key(uint32_t a, uint32_t b, uint32_t c,
                               uint32_t d, uint32_t e) {
-    int key = -1;
-
     (void)a; (void)b; (void)c; (void)d; (void)e;
-    /*
-     * Key polling is latency-sensitive, but it should still consume the
-     * kernel-owned input queue instead of bypassing into the raw driver.
-     */
-    if (kernel_input_key_event_dequeue(&key) != 0) {
-        return (uint32_t)key;
-    }
-    return (uint32_t)-1;
+    return (uint32_t)mk_input_service_read_key();
 }
 
 static uint32_t sys_text_clear(uint32_t a, uint32_t b, uint32_t c,
@@ -786,6 +785,31 @@ static uint32_t sys_service_event_receive(uint32_t service_type, uint32_t event_
                                               timeout_ticks);
 }
 
+static uint32_t sys_service_pid(uint32_t service_type, uint32_t b, uint32_t c,
+                                uint32_t d, uint32_t e) {
+    const struct mk_service_record *service;
+
+    (void)b; (void)c; (void)d; (void)e;
+    if (service_type == MK_SERVICE_NONE) {
+        return 0u;
+    }
+
+    service = mk_service_find_by_type(service_type);
+    if (service == 0 || service->pid <= 0) {
+        return 0u;
+    }
+    return (uint32_t)service->pid;
+}
+
+static uint32_t sys_service_restart(uint32_t service_type, uint32_t b, uint32_t c,
+                                    uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (service_type == MK_SERVICE_NONE) {
+        return (uint32_t)-1;
+    }
+    return mk_service_restart(service_type) == 0 ? 0u : (uint32_t)-1;
+}
+
 static uint32_t sys_audio_event_subscribe(uint32_t a, uint32_t b, uint32_t c,
                                           uint32_t d, uint32_t e) {
     process_t *current;
@@ -860,12 +884,12 @@ static uint32_t sys_task_snapshot(uint32_t summary_ptr, uint32_t entries_ptr, ui
 static uint32_t sys_launch_builtin_user(uint32_t target, uint32_t b, uint32_t c,
                                         uint32_t d, uint32_t e) {
     struct mk_launch_descriptor descriptor;
+    uint32_t stack_size = 65536u;
 
     (void)b; (void)c; (void)d; (void)e;
     memset(&descriptor, 0, sizeof(descriptor));
     descriptor.abi_version = MK_LAUNCH_ABI_VERSION;
     descriptor.kind = MK_LAUNCH_KIND_USER;
-    descriptor.stack_size = 65536u;
     descriptor.flags = MK_LAUNCH_FLAG_BUILTIN;
 
     switch (target) {
@@ -876,11 +900,13 @@ static uint32_t sys_launch_builtin_user(uint32_t target, uint32_t b, uint32_t c,
         break;
     case USERLAND_BUILTIN_DESKTOP:
         descriptor.flags |= MK_LAUNCH_FLAG_USER_DESKTOP;
+        stack_size = 262144u;
         memcpy(descriptor.name, "desktop-host", 13u);
         descriptor.entry = userland_desktop_host_entry;
         break;
     case USERLAND_BUILTIN_STARTX:
         descriptor.flags |= MK_LAUNCH_FLAG_USER_DESKTOP;
+        stack_size = 262144u;
         memcpy(descriptor.name, "startx-host", 12u);
         descriptor.entry = userland_startx_host_entry;
         break;
@@ -889,10 +915,16 @@ static uint32_t sys_launch_builtin_user(uint32_t target, uint32_t b, uint32_t c,
         memcpy(descriptor.name, "audio-host", 11u);
         descriptor.entry = userland_desktop_audio_host_entry;
         break;
+    case USERLAND_BUILTIN_BOOT_AUDIO:
+        descriptor.flags |= MK_LAUNCH_FLAG_USER_APP;
+        memcpy(descriptor.name, "boot-audio", 11u);
+        descriptor.entry = userland_boot_audio_host_entry;
+        break;
     default:
         return (uint32_t)-1;
     }
 
+    descriptor.stack_size = stack_size;
     return (uint32_t)mk_launch_bootstrap(&descriptor);
 }
 
@@ -924,6 +956,147 @@ static uint32_t sys_task_terminate(uint32_t pid, uint32_t b, uint32_t c,
 
     scheduler_terminate_task(task);
     return 0u;
+}
+
+static int sys_launch_app_copy_name(const char *name, struct mk_launch_descriptor *descriptor) {
+    const char *label;
+    uint32_t len = 0u;
+    uint32_t label_len = 0u;
+
+    if (name == 0 || descriptor == 0) {
+        return -1;
+    }
+
+    while (len < (MK_LAUNCH_ARGV_BYTES - 1u) && name[len] != '\0') {
+        len += 1u;
+    }
+    if (len == 0u || name[len] != '\0') {
+        return -1;
+    }
+
+    label = sys_launch_path_basename(name);
+    if (label == 0 || label[0] == '\0') {
+        label = name;
+    }
+    while (label[label_len] != '\0' && label_len < (MK_LAUNCH_NAME_MAX - 1u)) {
+        descriptor->name[label_len] = label[label_len];
+        label_len += 1u;
+    }
+    if (label_len == 0u) {
+        return -1;
+    }
+    descriptor->name[label_len] = '\0';
+    descriptor->argc = 1u;
+    memcpy(descriptor->argv_data, name, len);
+    descriptor->argv_data[len] = '\0';
+    return 0;
+}
+
+static int sys_launch_app_copy_argv(const char *const *argv,
+                                    uint32_t argc,
+                                    struct mk_launch_descriptor *descriptor) {
+    uint32_t arg_index;
+    uint32_t used = 0u;
+
+    if (argv == 0 || descriptor == 0 || argc == 0u || argc > MK_LAUNCH_ARGC_MAX) {
+        return -1;
+    }
+
+    for (arg_index = 0; arg_index < argc; ++arg_index) {
+        const char *arg = argv[arg_index];
+        uint32_t len = 0u;
+
+        if (arg == 0) {
+            return -1;
+        }
+        while (used + len < (MK_LAUNCH_ARGV_BYTES - 1u) && arg[len] != '\0') {
+            len += 1u;
+        }
+        if (len == 0u || arg[len] != '\0' || (used + len + 1u) > MK_LAUNCH_ARGV_BYTES) {
+            return -1;
+        }
+
+        memcpy(&descriptor->argv_data[used], arg, len);
+        descriptor->argv_data[used + len] = '\0';
+        if (arg_index == 0u) {
+            const char *label = sys_launch_path_basename(arg);
+            uint32_t label_len = 0u;
+
+            if (label == 0 || label[0] == '\0') {
+                label = arg;
+            }
+            while (label[label_len] != '\0' && label_len < (MK_LAUNCH_NAME_MAX - 1u)) {
+                descriptor->name[label_len] = label[label_len];
+                label_len += 1u;
+            }
+            if (label_len == 0u) {
+                return -1;
+            }
+            descriptor->name[label_len] = '\0';
+        }
+        used += len + 1u;
+    }
+
+    descriptor->argc = argc;
+    return 0;
+}
+
+static uint32_t sys_launch_app(uint32_t name_ptr, uint32_t b, uint32_t c,
+                               uint32_t d, uint32_t e) {
+    struct mk_launch_descriptor descriptor;
+
+    (void)c; (void)d; (void)e;
+    if (name_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.abi_version = MK_LAUNCH_ABI_VERSION;
+    descriptor.kind = MK_LAUNCH_KIND_USER;
+    descriptor.stack_size = 65536u;
+    descriptor.flags = MK_LAUNCH_FLAG_USER_APP;
+    if (b == 0u) {
+        if (sys_launch_app_copy_name((const char *)(uintptr_t)name_ptr, &descriptor) != 0) {
+            return (uint32_t)-1;
+        }
+    } else {
+        if (sys_launch_app_copy_argv((const char *const *)(uintptr_t)name_ptr, b, &descriptor) != 0) {
+            return (uint32_t)-1;
+        }
+    }
+    descriptor.entry = userland_app_host_entry;
+    return (uint32_t)mk_launch_bootstrap(&descriptor);
+}
+
+static uint32_t sys_task_event_subscribe(uint32_t a, uint32_t b, uint32_t c,
+                                         uint32_t d, uint32_t e) {
+    process_t *current;
+
+    (void)a; (void)b; (void)c; (void)d; (void)e;
+    current = scheduler_current();
+    if (current == 0) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)(scheduler_task_event_subscribe(current) == 0 ? 0 : (uint32_t)-1);
+}
+
+static uint32_t sys_task_event_receive(uint32_t event_ptr, uint32_t timeout_ticks, uint32_t c,
+                                       uint32_t d, uint32_t e) {
+    process_t *current;
+    struct mk_task_event *event;
+
+    (void)c; (void)d; (void)e;
+    if (event_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    current = scheduler_current();
+    if (current == 0) {
+        return (uint32_t)-1;
+    }
+
+    event = (struct mk_task_event *)(uintptr_t)event_ptr;
+    return (uint32_t)(scheduler_task_event_receive(current, event, timeout_ticks) == 0 ? 0 : (uint32_t)-1);
 }
 
 static uint32_t sys_video_event_subscribe(uint32_t a, uint32_t b, uint32_t c,
@@ -1089,6 +1262,8 @@ void syscall_init(void) {
     syscall_table[SYSCALL_SERVICE_SEND] = sys_service_send;
     syscall_table[SYSCALL_SERVICE_BACKEND] = sys_service_backend;
     syscall_table[SYSCALL_SERVICE_SUBSCRIBE] = sys_service_subscribe;
+    syscall_table[SYSCALL_SERVICE_PID] = sys_service_pid;
+    syscall_table[SYSCALL_SERVICE_RESTART] = sys_service_restart;
     syscall_table[SYSCALL_SERVICE_EVENT_RECV] = sys_service_event_receive;
     syscall_table[SYSCALL_AUDIO_EVENT_SUBSCRIBE] = sys_audio_event_subscribe;
     syscall_table[SYSCALL_AUDIO_EVENT_RECV] = sys_audio_event_receive;
@@ -1100,6 +1275,9 @@ void syscall_init(void) {
     syscall_table[SYSCALL_TASK_SNAPSHOT] = sys_task_snapshot;
     syscall_table[SYSCALL_LAUNCH_BUILTIN_USER] = sys_launch_builtin_user;
     syscall_table[SYSCALL_TASK_TERMINATE] = sys_task_terminate;
+    syscall_table[SYSCALL_LAUNCH_APP] = sys_launch_app;
+    syscall_table[SYSCALL_TASK_EVENT_SUBSCRIBE] = sys_task_event_subscribe;
+    syscall_table[SYSCALL_TASK_EVENT_RECV] = sys_task_event_receive;
 }
 
 /* dispatch routine called by ISR */

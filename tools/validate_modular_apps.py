@@ -16,18 +16,33 @@ from typing import Callable, List, Optional, Tuple
 
 BOOT_MARKER = "userland.app: shell start"
 SHELL_READY_MARKER = "shell: ready"
+DESKTOP_READY_MARKER = "desktop: session ready"
 AUTODESKTOP_BOOT_MARKERS = [
     "init: desktop host launched",
     "host: startx start",
-    "desktop: session start",
+    DESKTOP_READY_MARKER,
+]
+QEMU_VALIDATION_COMMON_OPTS = [
+    "-machine",
+    "pc",
+    "-cpu",
+    "core2duo",
+    "-smp",
+    "2,sockets=1,cores=2,threads=1,maxcpus=2",
+    "-vga",
+    "std",
+    "-rtc",
+    "base=localtime",
+    "-usb",
 ]
 DESKTOP_CENTER_X = 320
 DESKTOP_CENTER_Y = 240
 FILES_ICON_CENTER = (572, 63)
-START_BUTTON_CENTER = (35, 469)
-START_MENU_TERMINAL_CENTER = (186, 142)
 BASE_WIDTH = 640
 BASE_HEIGHT = 480
+TASKBAR_HEIGHT = 22
+START_MENU_HEIGHT = 404
+START_MENU_WIDTH = 336
 
 
 @dataclass
@@ -72,6 +87,7 @@ class QemuSession:
         self.proc = subprocess.Popen(
             [
                 qemu_binary,
+                *QEMU_VALIDATION_COMMON_OPTS,
                 "-m",
                 str(memory_mb),
                 "-drive",
@@ -99,9 +115,9 @@ class QemuSession:
         self.mouse_x = 0
         self.mouse_y = 0
         self.qmp_client: Optional[socket.socket] = None
+        self.qmp_buffer = ""
         self._wait_for_monitor()
         self._wait_for_qmp()
-        self._connect_qmp()
 
     def _wait_for_monitor(self) -> None:
         deadline = time.time() + 10.0
@@ -129,12 +145,7 @@ class QemuSession:
                 self.qmp({"execute": "quit"}, timeout=0.5)
             except Exception:
                 pass
-        if self.qmp_client is not None:
-            try:
-                self.qmp_client.close()
-            except Exception:
-                pass
-            self.qmp_client = None
+        self._disconnect_qmp()
         if self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -180,39 +191,54 @@ class QemuSession:
         return (int(width_text, 10), int(height_text, 10))
 
     def hmp(self, command: str, timeout: float = 1.0) -> str:
-        chunks: List[bytes] = []
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(timeout)
-            client.connect(str(self.monitor_socket))
+        last_error: Optional[Exception] = None
+        deadline = time.time() + max(1.0, timeout * 3.0)
+
+        while time.time() < deadline:
+            chunks: List[bytes] = []
             try:
-                while True:
-                    chunk = client.recv(4096)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    if b"(qemu)" in chunk:
-                        break
-            except socket.timeout:
-                pass
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.settimeout(timeout)
+                    client.connect(str(self.monitor_socket))
+                    try:
+                        while True:
+                            chunk = client.recv(4096)
+                            if not chunk:
+                                break
+                            chunks.append(chunk)
+                            if b"(qemu)" in chunk:
+                                break
+                    except socket.timeout:
+                        pass
 
-            client.sendall(command.encode("utf-8") + b"\n")
-            if command.strip() == "quit":
+                    client.sendall(command.encode("utf-8") + b"\n")
+                    if command.strip() == "quit":
+                        return b"".join(chunks).decode("utf-8", errors="replace")
+
+                    response_deadline = time.time() + timeout
+                    while time.time() < response_deadline:
+                        try:
+                            chunk = client.recv(4096)
+                        except socket.timeout:
+                            break
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        if b"(qemu)" in chunk:
+                            break
                 return b"".join(chunks).decode("utf-8", errors="replace")
+            except (BrokenPipeError, ConnectionRefusedError, ConnectionResetError, OSError) as exc:
+                last_error = exc
+                if self.proc.poll() is not None:
+                    raise
+                time.sleep(0.05)
 
-            response_deadline = time.time() + timeout
-            while time.time() < response_deadline:
-                try:
-                    chunk = client.recv(4096)
-                except socket.timeout:
-                    break
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                if b"(qemu)" in chunk:
-                    break
-        return b"".join(chunks).decode("utf-8", errors="replace")
+        if last_error is not None:
+            raise last_error
+        return ""
 
     def _connect_qmp(self) -> None:
+        self._disconnect_qmp()
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.settimeout(1.0)
         client.connect(str(self.qmp_socket))
@@ -221,31 +247,125 @@ class QemuSession:
             client.close()
             raise RuntimeError("Unexpected QMP greeting")
         self.qmp_client = client
+        self.qmp_buffer = ""
         response = self.qmp({"execute": "qmp_capabilities"})
         if "return" not in response:
             raise RuntimeError("QMP capability handshake failed")
 
-    def qmp(self, payload: dict, timeout: float = 1.0) -> dict:
+    def _disconnect_qmp(self) -> None:
+        if self.qmp_client is not None:
+            try:
+                self.qmp_client.close()
+            except Exception:
+                pass
+        self.qmp_client = None
+        self.qmp_buffer = ""
+
+    def _recv_qmp_message(self, timeout: float) -> dict:
         client = self.qmp_client
         if client is None:
             raise RuntimeError("QMP client is not connected")
-        client.settimeout(timeout)
-        client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
-        data = b""
+
         deadline = time.time() + timeout
         while time.time() < deadline:
-            try:
-                chunk = client.recv(65536)
-            except socket.timeout:
-                break
+            if "\n" in self.qmp_buffer:
+                line, self.qmp_buffer = self.qmp_buffer.split("\n", 1)
+                if not line.strip():
+                    continue
+                return json.loads(line)
+
+            client.settimeout(max(0.05, deadline - time.time()))
+            chunk = client.recv(65536)
             if not chunk:
                 break
-            data += chunk
-            if b"\n" in chunk:
+            self.qmp_buffer += chunk.decode("utf-8", errors="replace")
+
+        return {}
+
+    def _recv_qmp_message_once(self, client: socket.socket, timeout: float) -> dict:
+        buffer = ""
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            client.settimeout(max(0.05, deadline - time.time()))
+            chunk = client.recv(65536)
+            if not chunk:
                 break
-        if not data:
-            return {}
-        return json.loads(data.decode("utf-8", errors="replace"))
+            buffer += chunk.decode("utf-8", errors="replace")
+
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                if not line.strip():
+                    continue
+                message = json.loads(line)
+                if "return" in message or "error" in message:
+                    return message
+
+        return {}
+
+    def qmp_once(self, payload: dict, timeout: float = 1.0) -> dict:
+        last_error: Optional[Exception] = None
+        deadline = time.time() + max(1.0, timeout * 3.0)
+
+        while time.time() < deadline:
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.settimeout(timeout)
+                    client.connect(str(self.qmp_socket))
+                    greeting = client.recv(4096)
+                    if b"QMP" not in greeting:
+                        raise RuntimeError("Unexpected QMP greeting")
+
+                    client.sendall(json.dumps({"execute": "qmp_capabilities"}).encode("utf-8") + b"\n")
+                    response = self._recv_qmp_message_once(client, timeout)
+                    if "return" not in response:
+                        raise RuntimeError("QMP capability handshake failed")
+
+                    client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+                    return self._recv_qmp_message_once(client, timeout)
+            except (BrokenPipeError, ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as exc:
+                last_error = exc
+                if self.proc.poll() is not None:
+                    raise
+                time.sleep(0.05)
+
+        if last_error is not None:
+            raise last_error
+        return {}
+
+    def qmp(self, payload: dict, timeout: float = 1.0) -> dict:
+        last_error: Optional[Exception] = None
+
+        for attempt in range(2):
+            try:
+                if self.qmp_client is None:
+                    self._connect_qmp()
+
+                client = self.qmp_client
+                if client is None:
+                    raise RuntimeError("QMP client is not connected")
+
+                client.settimeout(timeout)
+                client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    message = self._recv_qmp_message(deadline - time.time())
+                    if not message:
+                        break
+                    if "return" in message or "error" in message:
+                        return message
+                return {}
+            except (BrokenPipeError, ConnectionResetError, OSError, json.JSONDecodeError) as exc:
+                last_error = exc
+                self._disconnect_qmp()
+                if attempt == 0:
+                    continue
+                raise
+
+        if last_error is not None:
+            raise last_error
+        return {}
 
     def qmp_mouse_rel(self, dx: int, dy: int) -> None:
         raw_dx = dx // 2
@@ -270,6 +390,66 @@ class QemuSession:
             raise RuntimeError(f"QMP mouse move failed: {response['error']}")
 
     def send_key(self, key: str, pause: float = 0.08) -> None:
+        parts = key.split("-")
+        base_key = parts[-1]
+        modifier_keys = parts[:-1]
+        events = []
+
+        self._disconnect_qmp()
+
+        for modifier in modifier_keys:
+            events.append(
+                {
+                    "type": "key",
+                    "data": {
+                        "down": True,
+                        "key": {"type": "qcode", "data": modifier},
+                    },
+                }
+            )
+        events.append(
+            {
+                "type": "key",
+                "data": {
+                    "down": True,
+                    "key": {"type": "qcode", "data": base_key},
+                },
+            }
+        )
+        events.append(
+            {
+                "type": "key",
+                "data": {
+                    "down": False,
+                    "key": {"type": "qcode", "data": base_key},
+                },
+            }
+        )
+        for modifier in reversed(modifier_keys):
+            events.append(
+                {
+                    "type": "key",
+                    "data": {
+                        "down": False,
+                        "key": {"type": "qcode", "data": modifier},
+                    },
+                }
+            )
+
+        response = self.qmp_once(
+            {
+                "execute": "input-send-event",
+                "arguments": {
+                    "head": 0,
+                    "events": events,
+                },
+            }
+        )
+        if "error" in response:
+            raise RuntimeError(f"QMP key send failed for {key}: {response['error']}")
+        time.sleep(pause)
+
+    def send_shortcut(self, key: str, pause: float = 0.08) -> None:
         self.hmp(f"sendkey {key}")
         time.sleep(pause)
 
@@ -287,11 +467,16 @@ class QemuSession:
             self.send_key(key, pause=pause)
 
     def reset_mouse_to_center(self) -> None:
-        for _ in range(4):
-            self.qmp_mouse_rel(-32768, -32768)
-            time.sleep(0.03)
-        self.mouse_x = 0
-        self.mouse_y = 0
+        mode = self.boot_mode_size()
+
+        if not mode:
+            self.mouse_x = 0
+            self.mouse_y = 0
+            return
+
+        width, height = mode
+        self.mouse_x = width // 2
+        self.mouse_y = height // 2
 
     def move_mouse_to(self, x: int, y: int, pause: float = 0.04) -> None:
         dx = x - self.mouse_x
@@ -355,18 +540,137 @@ def scaled_point(session: QemuSession, point: Tuple[int, int]) -> Tuple[int, int
     )
 
 
+def files_icon_center(session: QemuSession) -> Tuple[int, int]:
+    mode = session.boot_mode_size()
+    if not mode:
+        return FILES_ICON_CENTER
+    width, _ = mode
+    return (width - 68, 63)
+
+
+def start_button_center(session: QemuSession) -> Tuple[int, int]:
+    mode = session.boot_mode_size()
+    if not mode:
+        return (35, 469)
+    _, height = mode
+    return (35, height - 11)
+
+
+def start_menu_terminal_center(session: QemuSession) -> Tuple[int, int]:
+    mode = session.boot_mode_size()
+    if not mode:
+        return (274, 203)
+    _, height = mode
+    menu_y = height - TASKBAR_HEIGHT - START_MENU_HEIGHT
+    return (274, menu_y + 149)
+
+
+def start_menu_list_entry_center(session: QemuSession, slot: int) -> Tuple[int, int]:
+    mode = session.boot_mode_size()
+    if not mode:
+        return (110, 282 + (slot * 36))
+    _, height = mode
+    menu_y = height - TASKBAR_HEIGHT - START_MENU_HEIGHT
+    return (110, menu_y + 108 + (slot * 36))
+
+
+def start_menu_input_restart_center(session: QemuSession) -> Tuple[int, int]:
+    return start_menu_list_entry_center(session, 5)
+
+
+def log_contains(session: QemuSession, marker: str) -> bool:
+    return marker in session.read_log()
+
+
+def click_until_log(session: QemuSession,
+                    point_fn: Callable[[QemuSession], Tuple[int, int]],
+                    marker: str,
+                    attempts: int = 4,
+                    settle: float = 0.4,
+                    timeout_per_attempt: float = 4.0) -> None:
+    if log_contains(session, marker):
+        return
+
+    last_error: Optional[Exception] = None
+    for attempt in range(attempts):
+        time.sleep(settle if attempt == 0 else 0.25)
+        try:
+            session.reset_mouse_to_center()
+            x, y = point_fn(session)
+            session.move_mouse_to(x, y, pause=0.03)
+            session.left_click(pause=0.08)
+        except Exception as exc:
+            last_error = exc
+            if session.proc.poll() is not None:
+                raise
+            time.sleep(0.1)
+            continue
+
+        deadline = time.time() + timeout_per_attempt
+        while time.time() < deadline:
+            if log_contains(session, marker):
+                return
+            if session.proc.poll() is not None:
+                break
+            time.sleep(0.05)
+
+    if last_error is not None and session.proc.poll() is not None:
+        raise last_error
+    raise RuntimeError(f"Timed out waiting for marker: {marker}")
+
+
+def send_shortcut_until_log(session: QemuSession,
+                            key: str,
+                            marker: str,
+                            attempts: int = 3,
+                            settle: float = 0.5,
+                            timeout_per_attempt: float = 4.0) -> None:
+    if log_contains(session, marker):
+        return
+
+    last_error: Optional[Exception] = None
+    for attempt in range(attempts):
+        time.sleep(settle if attempt == 0 else 0.25)
+        for sender in (session.send_shortcut, session.send_key):
+            try:
+                sender(key, pause=0.2)
+            except Exception as exc:
+                last_error = exc
+                if session.proc.poll() is not None:
+                    raise
+                time.sleep(0.1)
+                continue
+
+            deadline = time.time() + timeout_per_attempt
+            while time.time() < deadline:
+                if log_contains(session, marker):
+                    return
+                if session.proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+
+    if last_error is not None and session.proc.poll() is not None:
+        raise last_error
+    raise RuntimeError(f"Timed out waiting for marker: {marker}")
+
+
+def wait_for_terminal_command_done(session: QemuSession, command: str, timeout: float = 12.0) -> None:
+    done_marker = f"terminal: command done {command}"
+    if log_contains(session, done_marker):
+        return
+    try:
+        session.wait_for_log(done_marker, timeout=timeout)
+    except RuntimeError:
+        if log_contains(session, f"terminal: command start {command}") or \
+           log_contains(session, f"shell: command {command}"):
+            raise RuntimeError(f"Timed out waiting for marker: {done_marker}")
+        raise
+
+
 def scenario_startx(session: QemuSession) -> None:
-    session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=90.0)
-    session.reset_mouse_to_center()
-    session.move_mouse_to(*scaled_point(session, FILES_ICON_CENTER))
-    session.left_click(pause=0.12)
-    session.wait_for_log("desktop: open-new w=0 t=3 i=0", timeout=8.0)
-    session.move_mouse_to(*scaled_point(session, START_BUTTON_CENTER))
-    session.left_click(pause=0.12)
-    time.sleep(0.25)
-    session.move_mouse_to(*scaled_point(session, START_MENU_TERMINAL_CENTER))
-    session.left_click(pause=0.12)
-    session.wait_for_log("desktop: open-new w=1 t=1 i=0", timeout=8.0)
+    session.wait_for_all(["desktop.app: launch startx", DESKTOP_READY_MARKER], timeout=90.0)
+    send_shortcut_until_log(session, "ctrl-y", "desktop: open-new w=1 t=1 i=0")
+    wait_for_terminal_command_done(session, "vibefetch", timeout=20.0)
 
 
 def run_command(session: QemuSession, command: str, timeout: float = 6.0, pause: float = 0.12,
@@ -417,16 +721,20 @@ def scenario_terminal_vidmodes(session: QemuSession) -> None:
     )
 
 
+def scenario_open_terminal_combo(session: QemuSession, timeout: float = 45.0) -> None:
+    _ = timeout
+    scenario_startx(session)
+
+
 def scenario_open_terminal(session: QemuSession, timeout: float = 45.0) -> None:
-    session.wait_for_all(["desktop.app: launch startx", "desktop: session start"], timeout=timeout)
-    session.reset_mouse_to_center()
-    session.move_mouse_to(*scaled_point(session, START_BUTTON_CENTER))
-    session.left_click(pause=0.12)
-    time.sleep(0.25)
-    session.move_mouse_to(*scaled_point(session, START_MENU_TERMINAL_CENTER))
-    session.left_click(pause=0.12)
-    session.wait_for_log("desktop: open-new w=0 t=1 i=0", timeout=8.0)
-    time.sleep(1.0)
+    session.wait_for_all(["desktop.app: launch startx", DESKTOP_READY_MARKER], timeout=timeout)
+    send_shortcut_until_log(session,
+                            "ctrl-t",
+                            "desktop: open-new w=0 t=1 i=0",
+                            attempts=6,
+                            settle=0.8,
+                            timeout_per_attempt=5.0)
+    wait_for_terminal_command_done(session, "vibefetch", timeout=20.0)
 
 
 def scenario_doom(session: QemuSession) -> None:
@@ -464,10 +772,41 @@ def scenario_craft(session: QemuSession) -> None:
     )
 
 
+def scenario_input_restart(session: QemuSession) -> None:
+    scenario_open_terminal_combo(session, timeout=45.0)
+    time.sleep(0.8)
+    send_shortcut_until_log(session,
+                            "ctrl-k",
+                            "service: restarting type=5",
+                            attempts=6,
+                            settle=0.8,
+                            timeout_per_attempt=6.0)
+    session.wait_for_log("desktop: input reset", timeout=12.0)
+    send_shortcut_until_log(session,
+                            "ctrl-l",
+                            "spawn: launched pid=",
+                            attempts=6,
+                            settle=0.8,
+                            timeout_per_attempt=6.0)
+    session.wait_for_log("host: app start", timeout=8.0)
+
+
+def scenario_spawn_clock_shell(session: QemuSession) -> None:
+    scenario_open_terminal_combo(session, timeout=45.0)
+    time.sleep(0.8)
+    send_shortcut_until_log(session,
+                            "ctrl-l",
+                            "spawn: launched pid=",
+                            attempts=6,
+                            settle=0.8,
+                            timeout_per_attempt=6.0)
+    session.wait_for_log("host: app start", timeout=8.0)
+
+
 SCENARIOS = [
     Scenario(
         name="startx-desktop",
-        description="Shell -> startx.app -> desktop session -> Ctrl+F files + Ctrl+T terminal",
+        description="Shell -> startx.app -> desktop session -> single smoke shortcut opens files + terminal",
         command="startx",
         must_have=[
             "desktop.app: launch startx",
@@ -479,7 +818,7 @@ SCENARIOS = [
     ),
     Scenario(
         name="startx-autoboot-desktop",
-        description="Userland autostart reaches desktop session and opens files + terminal shortcuts",
+        description="Userland autostart reaches desktop session and opens files + terminal via single smoke shortcut",
         command=None,
         must_have=[
             "desktop.app: launch startx",
@@ -663,6 +1002,45 @@ SCENARIOS = [
         ],
         action=scenario_terminal_vidmodes,
     ),
+    Scenario(
+        name="input-restart-desktop",
+        description="Desktop smoke opens files + terminal, restarts input service from the terminal, then keyboard input still launches a detached app",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "kill: terminated pid=",
+            "service: restarting type=5",
+            "service-host: online input",
+            "shell: command spawn",
+            "spawn: launched pid=",
+            "host: app start",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_input_restart,
+    ),
+    Scenario(
+        name="spawn-clock-shell",
+        description="Desktop smoke opens files + terminal and the shell launches a modular AppFS app in its own detached task context",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "shell: command spawn",
+            "spawn: launched pid=",
+            "host: app start",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_spawn_clock_shell,
+    ),
 ]
 
 
@@ -690,8 +1068,9 @@ def run_scenario(qemu_binary: str, image_path: Path, memory_mb: int, scenario: S
         except Exception as exc:
             error = str(exc)
         finally:
-            log = session.read_log()
             session.close()
+            time.sleep(0.1)
+            log = session.read_log()
 
     missing = [marker for marker in scenario.must_have if marker not in log]
     return ScenarioResult(

@@ -74,8 +74,10 @@ static void mk_launch_fill_context(struct mk_launch_context *context,
     context->kind = descriptor->kind;
     context->service_type = descriptor->service_type;
     context->flags = descriptor->flags;
+    context->argc = descriptor->argc;
     strncpy(context->name, descriptor->name, MK_LAUNCH_NAME_MAX - 1u);
     context->name[MK_LAUNCH_NAME_MAX - 1u] = '\0';
+    memcpy(context->argv_data, descriptor->argv_data, sizeof(context->argv_data));
 
     bootinfo = (const volatile struct bootinfo *)(uintptr_t)BOOTINFO_ADDR;
     if (bootinfo->magic != BOOTINFO_MAGIC || bootinfo->version != BOOTINFO_VERSION) {
@@ -123,10 +125,10 @@ int mk_launch_bootstrap(const struct mk_launch_descriptor *descriptor) {
         return -1;
     }
 
-    scheduler_add_task(process);
     record->pid = process->pid;
     record->process = process;
     mk_launch_fill_context(&record->context, descriptor, process);
+    scheduler_add_task(process);
     return process->pid;
 }
 

@@ -1,7 +1,9 @@
 #include <include/userland_api.h>
+#include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/input/input.h>
 #include <kernel/kernel_string.h>
 #include <kernel/microkernel/input.h>
+#include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/service.h>
 #include <kernel/microkernel/transfer.h>
@@ -13,6 +15,21 @@ static uint32_t mk_input_current_pid(void) {
 }
 
 static int g_input_service_transport_degraded = 0;
+
+static int mk_input_caller_allows_rescue_fallback(void) {
+    const struct mk_launch_context *context = mk_launch_context_current();
+
+    if (context == 0) {
+        return 1;
+    }
+    if ((context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) != 0u) {
+        return 0;
+    }
+    if ((context->flags & (MK_LAUNCH_FLAG_BOOTSTRAP | MK_LAUNCH_FLAG_CRITICAL)) != 0u) {
+        return 1;
+    }
+    return 1;
+}
 
 static int mk_input_should_use_local_fallback(void) {
     const struct mk_service_record *service = mk_service_find_by_type(MK_SERVICE_INPUT);
@@ -204,7 +221,7 @@ static int mk_input_local_handler(const struct mk_message *request,
         if (request->payload_size != 0u) {
             return -1;
         }
-        if (kernel_input_key_event_has_data()) {
+        {
             int key = 0;
 
             if (kernel_input_key_event_dequeue(&key) != 0) {
@@ -280,16 +297,26 @@ void mk_input_service_init(void) {
 int mk_input_service_next_event(struct input_event *event) {
     struct mk_message request;
     struct mk_message reply;
+    int allow_rescue_fallback;
 
     if (event == 0) {
         return 0;
     }
-    if (mk_input_should_use_local_fallback() ||
+    allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
+    if ((allow_rescue_fallback && mk_input_should_use_local_fallback()) ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_EVENT, 0, 0u) != 0) {
+        if (!allow_rescue_fallback) {
+            memset(event, 0, sizeof(*event));
+            return 0;
+        }
         return kernel_input_event_dequeue(event);
     }
     if (mk_service_request(MK_SERVICE_INPUT, &request, &reply) != 0) {
         g_input_service_transport_degraded = 1;
+        if (!allow_rescue_fallback) {
+            memset(event, 0, sizeof(*event));
+            return 0;
+        }
         return kernel_input_event_dequeue(event);
     }
     g_input_service_transport_degraded = 0;
@@ -299,13 +326,19 @@ int mk_input_service_next_event(struct input_event *event) {
 int mk_input_service_poll_mouse(struct mouse_state *state) {
     struct mk_message request;
     struct mk_message reply;
+    int allow_rescue_fallback;
     int rc;
 
     if (state == 0) {
         return 0;
     }
-    if (mk_input_should_use_local_fallback() ||
+    allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
+    if ((allow_rescue_fallback && mk_input_should_use_local_fallback()) ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_MOUSE_POLL, 0, 0u) != 0) {
+        if (!allow_rescue_fallback) {
+            memset(state, 0, sizeof(*state));
+            return 0;
+        }
         if (!kernel_input_mouse_event_dequeue(state)) {
             memset(state, 0, sizeof(*state));
             return 0;
@@ -315,6 +348,10 @@ int mk_input_service_poll_mouse(struct mouse_state *state) {
     rc = mk_service_request(MK_SERVICE_INPUT, &request, &reply);
     if (rc != 0) {
         g_input_service_transport_degraded = 1;
+        if (!allow_rescue_fallback) {
+            memset(state, 0, sizeof(*state));
+            return 0;
+        }
         if (!kernel_input_mouse_event_dequeue(state)) {
             memset(state, 0, sizeof(*state));
             return 0;
@@ -328,11 +365,16 @@ int mk_input_service_poll_mouse(struct mouse_state *state) {
 int mk_input_service_read_key(void) {
     struct mk_message request;
     struct mk_message reply;
+    int allow_rescue_fallback;
     int rc;
     int key = -1;
 
-    if (mk_input_should_use_local_fallback() ||
+    allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
+    if ((allow_rescue_fallback && mk_input_should_use_local_fallback()) ||
         mk_input_prepare_request(&request, MK_MSG_INPUT_KEY_READ, 0, 0u) != 0) {
+        if (!allow_rescue_fallback) {
+            return -1;
+        }
         if (kernel_input_key_event_dequeue(&key) != 0) {
             return key;
         }
@@ -341,6 +383,9 @@ int mk_input_service_read_key(void) {
     rc = mk_service_request(MK_SERVICE_INPUT, &request, &reply);
     if (rc != 0) {
         g_input_service_transport_degraded = 1;
+        if (!allow_rescue_fallback) {
+            return -1;
+        }
         if (kernel_input_key_event_dequeue(&key) != 0) {
             return key;
         }
@@ -399,6 +444,26 @@ static int mk_input_service_fill_buffer_request(uint32_t type, char *buffer, int
 
     if (buffer == 0 || size <= 0) {
         return -1;
+    }
+    /*
+     * Read-only layout queries are latency-sensitive in interactive desktop
+     * flows (for example the terminal's startup vibefetch). Keep them on the
+     * kernel-owned keyboard state until the input service buffer-reply path is
+     * proven reliable for these requests too.
+     */
+    if (type == MK_MSG_INPUT_GET_LAYOUT) {
+        const char *name = kernel_keyboard_get_layout();
+        int length = (int)strlen(name);
+
+        if (size <= length) {
+            return 0;
+        }
+        memcpy(buffer, name, (size_t)length + 1u);
+        return length;
+    }
+    if (type == MK_MSG_INPUT_GET_AVAILABLE_LAYOUTS) {
+        kernel_keyboard_get_available_layouts(buffer, size);
+        return 0;
     }
     if (mk_transfer_create(mk_input_current_pid(), (uint32_t)size, &transfer_id) != 0) {
         return -1;

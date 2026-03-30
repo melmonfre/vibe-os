@@ -3,6 +3,7 @@
 #include <kernel/interrupt.h>
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
+#include <kernel/smp.h>
 #include <kernel/drivers/timer/timer.h>
 
 static void kernel_waitable_enqueue(kernel_waitable_t *waitable, process_t *task) {
@@ -41,11 +42,13 @@ static process_t *kernel_waitable_dequeue(kernel_waitable_t *waitable) {
 void kernel_waitable_detach_task(kernel_waitable_t *waitable, process_t *task) {
     process_t *prev = 0;
     process_t *cursor;
+    uint32_t flags;
 
     if (waitable == 0 || task == 0) {
         return;
     }
 
+    flags = spinlock_lock_irqsave(&waitable->lock);
     cursor = waitable->wait_head;
     while (cursor != 0) {
         if (cursor == task) {
@@ -55,11 +58,13 @@ void kernel_waitable_detach_task(kernel_waitable_t *waitable, process_t *task) {
                 prev->wait_next = cursor->wait_next;
             }
             cursor->wait_next = 0;
+            spinlock_unlock_irqrestore(&waitable->lock, flags);
             return;
         }
         prev = cursor;
         cursor = cursor->wait_next;
     }
+    spinlock_unlock_irqrestore(&waitable->lock, flags);
 }
 
 void kernel_waitable_init_ex(kernel_waitable_t *waitable,
@@ -70,6 +75,7 @@ void kernel_waitable_init_ex(kernel_waitable_t *waitable,
         return;
     }
 
+    spinlock_init(&waitable->lock);
     waitable->event_kind = event_kind;
     waitable->event_class = event_class;
     waitable->owner_service = owner_service;
@@ -96,13 +102,13 @@ int kernel_waitable_try_wait(kernel_waitable_t *waitable) {
         return -1;
     }
 
-    flags = kernel_irq_save();
+    flags = spinlock_lock_irqsave(&waitable->lock);
     if (waitable->pending_signals != 0u) {
         waitable->pending_signals -= 1u;
         waitable->signal_count += 1u;
         ready = 0;
     }
-    kernel_irq_restore(flags);
+    spinlock_unlock_irqrestore(&waitable->lock, flags);
     return ready;
 }
 
@@ -124,12 +130,12 @@ int kernel_waitable_wait_timeout(kernel_waitable_t *waitable, uint32_t timeout_t
     }
 
     for (;;) {
-        flags = kernel_irq_save();
+        flags = spinlock_lock_irqsave(&waitable->lock);
         if (waitable->pending_signals != 0u) {
             waitable->pending_signals -= 1u;
             waitable->signal_count += 1u;
             current->wait_result = TASK_WAIT_RESULT_SIGNALED;
-            kernel_irq_restore(flags);
+            spinlock_unlock_irqrestore(&waitable->lock, flags);
             return TASK_WAIT_RESULT_SIGNALED;
         }
 
@@ -137,7 +143,7 @@ int kernel_waitable_wait_timeout(kernel_waitable_t *waitable, uint32_t timeout_t
             current->wait_channel = waitable;
             kernel_waitable_enqueue(waitable, current);
         }
-        kernel_irq_restore(flags);
+        spinlock_unlock_irqrestore(&waitable->lock, flags);
 
         if (scheduler_block_current_ex(waitable,
                                        deadline,
@@ -169,47 +175,69 @@ int kernel_waitable_wait(kernel_waitable_t *waitable) {
 
 void kernel_waitable_signal(kernel_waitable_t *waitable, uint32_t count) {
     uint32_t flags;
+    uint32_t woke = 0u;
 
     if (waitable == 0 || count == 0u) {
         return;
     }
 
-    flags = kernel_irq_save();
+    flags = spinlock_lock_irqsave(&waitable->lock);
     waitable->pending_signals += count;
+    spinlock_unlock_irqrestore(&waitable->lock, flags);
+
     while (count != 0u) {
-        process_t *task = kernel_waitable_dequeue(waitable);
+        process_t *task;
+
+        flags = spinlock_lock_irqsave(&waitable->lock);
+        task = kernel_waitable_dequeue(waitable);
+        if (task != 0) {
+            task->wait_channel = 0;
+        }
+        spinlock_unlock_irqrestore(&waitable->lock, flags);
 
         if (task == 0) {
             break;
         }
-        task->wait_channel = 0;
         if (scheduler_complete_wait(task, TASK_WAIT_RESULT_SIGNALED) == 0) {
             count -= 1u;
+            woke += 1u;
         }
     }
-    kernel_irq_restore(flags);
+
+    if (woke != 0u) {
+        smp_wake_sleeping_cpus();
+    }
 }
 
 void kernel_waitable_cancel(kernel_waitable_t *waitable, uint32_t count) {
     uint32_t flags;
+    uint32_t woke = 0u;
 
     if (waitable == 0 || count == 0u) {
         return;
     }
 
-    flags = kernel_irq_save();
     while (count != 0u) {
-        process_t *task = kernel_waitable_dequeue(waitable);
+        process_t *task;
 
+        flags = spinlock_lock_irqsave(&waitable->lock);
+        task = kernel_waitable_dequeue(waitable);
+        if (task != 0) {
+            task->wait_channel = 0;
+        }
+        spinlock_unlock_irqrestore(&waitable->lock, flags);
         if (task == 0) {
             break;
         }
-        task->wait_channel = 0;
         if (scheduler_complete_wait(task, TASK_WAIT_RESULT_CANCELED) == 0) {
             count -= 1u;
+            woke += 1u;
         }
     }
-    kernel_irq_restore(flags);
+
+    if (woke != 0u) {
+        smp_wake_sleeping_cpus();
+    }
 }
 
 void kernel_signal_init(kernel_signal_t *signal, uint32_t event_class, uint32_t owner_service) {

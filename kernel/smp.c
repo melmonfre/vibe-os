@@ -434,6 +434,15 @@ int smp_scheduler_enabled(void) {
     return g_smp_scheduler_enabled != 0u;
 }
 
+void smp_wake_sleeping_cpus(void) {
+    if (g_smp_scheduler_enabled == 0u ||
+        g_smp_started_cpus <= 1u ||
+        !local_apic_enabled()) {
+        return;
+    }
+    (void)local_apic_broadcast_ipi((uint8_t)SMP_WAKE_VECTOR);
+}
+
 void smp_wakeup_ipi_handler(void) {
     local_apic_eoi();
 }

@@ -211,6 +211,27 @@ int sys_task_terminate(uint32_t pid) {
     return syscall5(SYSCALL_TASK_TERMINATE, (int)pid, 0, 0, 0, 0);
 }
 
+int sys_launch_app(const char *name) {
+    return syscall5(SYSCALL_LAUNCH_APP, (int)(uintptr_t)name, 0, 0, 0, 0);
+}
+
+int sys_launch_app_argv(int argc, char **argv) {
+    return syscall5(SYSCALL_LAUNCH_APP, (int)(uintptr_t)argv, argc, 0, 0, 0);
+}
+
+int sys_task_event_subscribe(void) {
+    return syscall5(SYSCALL_TASK_EVENT_SUBSCRIBE, 0, 0, 0, 0, 0);
+}
+
+int sys_task_event_receive(struct mk_task_event *event, uint32_t timeout_ticks) {
+    return syscall5(SYSCALL_TASK_EVENT_RECV,
+                    (int)(uintptr_t)event,
+                    (int)timeout_ticks,
+                    0,
+                    0,
+                    0);
+}
+
 void sys_sleep(void) {
     (void)syscall5(SYSCALL_SLEEP, 0, 0, 0, 0, 0);
 }
@@ -427,6 +448,14 @@ int sys_service_backend(const struct mk_message *request, struct mk_message *rep
 
 int sys_service_subscribe(uint32_t service_type) {
     return syscall5(SYSCALL_SERVICE_SUBSCRIBE, (int)service_type, 0, 0, 0, 0);
+}
+
+int sys_service_pid(uint32_t service_type) {
+    return syscall5(SYSCALL_SERVICE_PID, (int)service_type, 0, 0, 0, 0);
+}
+
+int sys_service_restart(uint32_t service_type) {
+    return syscall5(SYSCALL_SERVICE_RESTART, (int)service_type, 0, 0, 0, 0);
 }
 
 int sys_service_event_receive(uint32_t service_type,

@@ -19,6 +19,8 @@ static volatile uint8_t g_kernel_mouse_packet_size = 3u;
 static volatile uint8_t g_kernel_mouse_ready = 0u;
 static volatile uint32_t g_mouse_trace_budget = 16u;
 
+static void kernel_mouse_clamp_to_mode(const struct video_mode *mode);
+
 static void kernel_mouse_queue_event_unlocked(void) {
     struct mouse_state event_state;
 
@@ -29,6 +31,47 @@ static void kernel_mouse_queue_event_unlocked(void) {
     event_state.wheel = g_kernel_mouse.wheel;
     event_state.buttons = g_kernel_mouse.buttons;
     kernel_input_mouse_event_enqueue(&event_state);
+}
+
+static void kernel_mouse_process_data(uint8_t data, struct video_mode *mode) {
+    if (!g_kernel_mouse_ready) {
+        return;
+    }
+    if (g_kernel_mouse_packet_index == 0u && (data & 0x08u) == 0u) {
+        return;
+    }
+
+    g_kernel_mouse_packet[g_kernel_mouse_packet_index] = data;
+    g_kernel_mouse_packet_index += 1u;
+
+    if (g_kernel_mouse_packet_index < g_kernel_mouse_packet_size) {
+        return;
+    }
+
+    g_kernel_mouse_packet_index = 0u;
+
+    g_kernel_mouse.dx = ((int)(int8_t)g_kernel_mouse_packet[1]) * 2;
+    g_kernel_mouse.dy = -((int)(int8_t)g_kernel_mouse_packet[2]) * 2;
+    g_kernel_mouse.wheel = 0;
+    if (g_kernel_mouse_packet_size >= 4u) {
+        g_kernel_mouse.wheel = -((int)((int8_t)(g_kernel_mouse_packet[3] << 4)) >> 4);
+    }
+    g_kernel_mouse.x += g_kernel_mouse.dx;
+    g_kernel_mouse.y += g_kernel_mouse.dy;
+    kernel_mouse_clamp_to_mode(mode);
+
+    g_kernel_mouse.buttons = g_kernel_mouse_packet[0] & 0x07u;
+    kernel_mouse_queue_event_unlocked();
+    if (g_mouse_trace_budget != 0u) {
+        g_mouse_trace_budget -= 1u;
+        kernel_debug_printf("mouse: x=%d y=%d dx=%d dy=%d wheel=%d b=%d\n",
+                            g_kernel_mouse.x,
+                            g_kernel_mouse.y,
+                            g_kernel_mouse.dx,
+                            g_kernel_mouse.dy,
+                            g_kernel_mouse.wheel,
+                            (int)g_kernel_mouse.buttons);
+    }
 }
 
 static void kernel_mouse_clamp_to_mode(const struct video_mode *mode) {
@@ -209,6 +252,7 @@ void kernel_mouse_init(void) {
     g_kernel_mouse.wheel = 0;
     g_kernel_mouse.buttons = 0u;
     kernel_mouse_queue_event_unlocked();
+    kernel_debug_puts("mouse: init ready\n");
 }
 
 int kernel_mouse_has_data(void) {
@@ -291,46 +335,22 @@ void kernel_mouse_irq_handler(void) {
     }
 
     data = inb(PS2_DATA_PORT);
-
-    if (g_kernel_mouse_packet_index == 0u && (data & 0x08u) == 0u) {
-        kernel_irq_complete(12);
-        return;
-    }
-    
-    g_kernel_mouse_packet[g_kernel_mouse_packet_index] = data;
-    g_kernel_mouse_packet_index += 1u;
-    
-    if (g_kernel_mouse_packet_index < g_kernel_mouse_packet_size) {
-        kernel_irq_complete(12);
-        return;
-    }
-
-    g_kernel_mouse_packet_index = 0u;
-
-    g_kernel_mouse.dx = ((int)(int8_t)g_kernel_mouse_packet[1]) * 2;
-    g_kernel_mouse.dy = -((int)(int8_t)g_kernel_mouse_packet[2]) * 2;
-    g_kernel_mouse.wheel = 0;
-    if (g_kernel_mouse_packet_size >= 4u) {
-        g_kernel_mouse.wheel = -((int)((int8_t)(g_kernel_mouse_packet[3] << 4)) >> 4);
-    }
-    g_kernel_mouse.x += g_kernel_mouse.dx;
-    g_kernel_mouse.y += g_kernel_mouse.dy;
-    kernel_mouse_clamp_to_mode(mode);
-
-    g_kernel_mouse.buttons = g_kernel_mouse_packet[0] & 0x07u;
-    kernel_mouse_queue_event_unlocked();
-    if (g_mouse_trace_budget != 0u) {
-        g_mouse_trace_budget -= 1u;
-        kernel_debug_printf("mouse: x=%d y=%d dx=%d dy=%d wheel=%d b=%d\n",
-                            g_kernel_mouse.x,
-                            g_kernel_mouse.y,
-                            g_kernel_mouse.dx,
-                            g_kernel_mouse.dy,
-                            g_kernel_mouse.wheel,
-                            (int)g_kernel_mouse.buttons);
-    }
+    kernel_mouse_process_data(data, mode);
 
     kernel_irq_complete(12);
+}
+
+void kernel_mouse_poll(void) {
+    uint32_t flags = kernel_irq_save();
+    struct video_mode *mode = kernel_video_get_mode();
+
+    while ((inb(PS2_STATUS_PORT) & (PS2_STATUS_OUTPUT_FULL | PS2_STATUS_AUX_OUTPUT_FULL)) ==
+           (PS2_STATUS_OUTPUT_FULL | PS2_STATUS_AUX_OUTPUT_FULL)) {
+        uint8_t data = inb(PS2_DATA_PORT);
+        kernel_mouse_process_data(data, mode);
+    }
+
+    kernel_irq_restore(flags);
 }
 
 void kernel_mouse_prepare_for_graphics(void) {

@@ -7,7 +7,8 @@
 
 #define BOOTSTRAP_STORAGE_SMOKE_SECTOR (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT - 1u)
 #define BOOTSTRAP_STORAGE_SMOKE_SIZE 512u
-#define BOOTSTRAP_SERVICE_EVENT_TIMEOUT_TICKS 32u
+#define BOOTSTRAP_SERVICE_EVENT_TIMEOUT_TICKS 0u
+#define BOOTSTRAP_TASK_EVENT_TIMEOUT_TICKS 0u
 
 static const char *bootstrap_service_name(uint32_t service_type) {
     switch (service_type) {
@@ -98,6 +99,66 @@ static void bootstrap_log_service_event(const struct mk_service_event *event) {
     sys_write_debug(buffer);
 }
 
+static const char *bootstrap_task_event_name(uint32_t event_type) {
+    switch (event_type) {
+    case MK_TASK_EVENT_LAUNCHED:
+        return "launched";
+    case MK_TASK_EVENT_TERMINATED:
+        return "terminated";
+    case MK_TASK_EVENT_BLOCKED:
+        return "blocked";
+    case MK_TASK_EVENT_WOKE:
+        return "woke";
+    case MK_TASK_EVENT_RESTART_REQUESTED:
+        return "restart-requested";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *bootstrap_task_priority_name(uint32_t priority_tier) {
+    switch (priority_tier) {
+    case 0u:
+        return "desktop";
+    case 1u:
+        return "input";
+    case 2u:
+        return "video";
+    case 3u:
+        return "storage";
+    case 4u:
+        return "audio";
+    case 5u:
+        return "network";
+    case 6u:
+        return "app";
+    default:
+        return "background";
+    }
+}
+
+static void bootstrap_log_task_event(const struct mk_task_event *event) {
+    char buffer[192];
+
+    if (event == 0 || event->event_type == MK_TASK_EVENT_NONE) {
+        return;
+    }
+
+    buffer[0] = '\0';
+    str_append(buffer, "init: task-event ", (int)sizeof(buffer));
+    str_append(buffer, bootstrap_task_event_name(event->event_type), (int)sizeof(buffer));
+    str_append(buffer, " pid=", (int)sizeof(buffer));
+    bootstrap_append_u32(buffer, (int)sizeof(buffer), event->pid);
+    str_append(buffer, " prio=", (int)sizeof(buffer));
+    str_append(buffer, bootstrap_task_priority_name(event->priority_tier), (int)sizeof(buffer));
+    str_append(buffer, " service=", (int)sizeof(buffer));
+    str_append(buffer, bootstrap_service_name(event->service_type), (int)sizeof(buffer));
+    str_append(buffer, " tick=", (int)sizeof(buffer));
+    bootstrap_append_u32(buffer, (int)sizeof(buffer), event->tick);
+    str_append(buffer, "\n", (int)sizeof(buffer));
+    sys_write_debug(buffer);
+}
+
 static void bootstrap_subscribe_supervision_events(void) {
     uint32_t service_type;
 
@@ -179,6 +240,11 @@ static void bootstrap_storage_smoke_test(void) {
 }
 
 static void bootstrap_try_play_boot_sound(void) {
+    if (sys_launch_builtin_user(USERLAND_BUILTIN_BOOT_AUDIO) > 0) {
+        sys_write_debug("init: boot audio host launched\n");
+        return;
+    }
+
     (void)audio_play_wav_best_effort("/assets/vibe_os_boot.wav", "boot");
     sys_write_debug("init: boot sound returned\n");
 }
@@ -238,9 +304,11 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     }
     kernel_debug_puts("init: supervisor idle\n");
     bootstrap_subscribe_supervision_events();
+    (void)sys_task_event_subscribe();
     for (;;) {
         uint32_t service_type;
         int handled = 0;
+        struct mk_task_event task_event;
 
         for (service_type = 1u; service_type <= 8u; ++service_type) {
             if (service_type == 1u) {
@@ -252,6 +320,10 @@ __attribute__((section(".entry"))) void userland_entry(void) {
                 bootstrap_log_service_event(&event);
                 handled = 1;
             }
+        }
+        while (sys_task_event_receive(&task_event, BOOTSTRAP_TASK_EVENT_TIMEOUT_TICKS) == 0) {
+            bootstrap_log_task_event(&task_event);
+            handled = 1;
         }
         if (!handled) {
             sys_yield();

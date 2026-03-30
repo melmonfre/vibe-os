@@ -128,7 +128,15 @@ struct kernel_usb_probe_snapshot {
     uint8_t descriptor_valid;
     uint8_t config_valid;
     uint8_t audio_class_detected;
+    uint8_t hid_boot_keyboard_detected;
+    uint8_t hid_boot_mouse_detected;
+    uint8_t hid_interface_number;
+    uint8_t hid_interface_protocol;
+    uint8_t hid_endpoint_address;
+    uint8_t hid_endpoint_attributes;
+    uint8_t hid_poll_interval;
     uint8_t assigned_address;
+    uint16_t hid_endpoint_max_packet;
     uint16_t max_packet_size0;
     uint16_t config_total_length;
     struct kernel_usb_probe_plan plan;
@@ -194,7 +202,15 @@ struct kernel_usb_probe_execution {
     uint8_t descriptor_valid;
     uint8_t config_valid;
     uint8_t audio_class_detected;
+    uint8_t hid_boot_keyboard_detected;
+    uint8_t hid_boot_mouse_detected;
+    uint8_t hid_interface_number;
+    uint8_t hid_interface_protocol;
+    uint8_t hid_endpoint_address;
+    uint8_t hid_endpoint_attributes;
+    uint8_t hid_poll_interval;
     uint8_t assigned_address;
+    uint16_t hid_endpoint_max_packet;
     uint16_t max_packet_size0;
     uint16_t config_total_length;
     uint8_t descriptor_prefix[18];
@@ -282,5 +298,6 @@ int kernel_usb_device_probe_plan(uint32_t start_index,
                                  struct kernel_usb_probe_plan *plan_out,
                                  uint32_t *match_index_out);
 int kernel_usb_probe_snapshot_info(uint32_t index, struct kernel_usb_probe_snapshot *info_out);
+void kernel_usb_hid_poll(void);
 
 #endif

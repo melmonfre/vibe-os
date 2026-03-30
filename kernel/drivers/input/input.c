@@ -1,9 +1,12 @@
 #include <kernel/drivers/input/input.h>
 
+#include <kernel/drivers/debug/debug.h>
+#include <kernel/drivers/usb/usb_host.h>
 #include <kernel/event.h>
 #include <kernel/interrupt.h>
 #include <kernel/kernel_string.h>
 #include <kernel/microkernel/service.h>
+#include <kernel/smp.h>
 
 #define KERNEL_INPUT_EVENT_QUEUE_CAPACITY 256u
 #define KERNEL_INPUT_KEY_QUEUE_CAPACITY 128u
@@ -102,9 +105,16 @@ int kernel_input_event_dequeue(struct input_event *event) {
 
     flags = kernel_irq_save();
     if (g_input_event_tail == g_input_event_head) {
-        memset(event, 0, sizeof(*event));
         kernel_irq_restore(flags);
-        return 0;
+        kernel_keyboard_poll();
+        kernel_mouse_poll();
+        kernel_usb_hid_poll();
+        flags = kernel_irq_save();
+        if (g_input_event_tail == g_input_event_head) {
+            memset(event, 0, sizeof(*event));
+            kernel_irq_restore(flags);
+            return 0;
+        }
     }
 
     *event = g_input_event_queue[g_input_event_tail];
@@ -146,6 +156,7 @@ void kernel_input_event_enqueue_key(int key) {
     kernel_irq_restore(flags);
     kernel_waitable_signal(&g_input_event_waitable, 1u);
     kernel_waitable_signal(&g_input_key_waitable, 1u);
+    smp_wake_sleeping_cpus();
 }
 
 void kernel_input_event_enqueue_mouse(const struct mouse_state *state) {
@@ -166,6 +177,7 @@ void kernel_input_event_enqueue_mouse(const struct mouse_state *state) {
     kernel_irq_restore(flags);
     kernel_waitable_signal(&g_input_event_waitable, 1u);
     kernel_waitable_signal(&g_input_mouse_waitable, 1u);
+    smp_wake_sleeping_cpus();
 }
 
 int kernel_input_key_event_has_data(void) {
@@ -187,9 +199,15 @@ int kernel_input_key_event_dequeue(int *key) {
 
     flags = kernel_irq_save();
     if (g_input_key_tail == g_input_key_head) {
-        *key = 0;
         kernel_irq_restore(flags);
-        return 0;
+        kernel_keyboard_poll();
+        kernel_usb_hid_poll();
+        flags = kernel_irq_save();
+        if (g_input_key_tail == g_input_key_head) {
+            *key = 0;
+            kernel_irq_restore(flags);
+            return 0;
+        }
     }
 
     *key = g_input_key_queue[g_input_key_tail];
@@ -236,9 +254,15 @@ int kernel_input_mouse_event_dequeue(struct mouse_state *state) {
 
     flags = kernel_irq_save();
     if (g_input_mouse_tail == g_input_mouse_head) {
-        memset(state, 0, sizeof(*state));
         kernel_irq_restore(flags);
-        return 0;
+        kernel_mouse_poll();
+        kernel_usb_hid_poll();
+        flags = kernel_irq_save();
+        if (g_input_mouse_tail == g_input_mouse_head) {
+            memset(state, 0, sizeof(*state));
+            kernel_irq_restore(flags);
+            return 0;
+        }
     }
 
     *state = g_input_mouse_queue[g_input_mouse_tail];

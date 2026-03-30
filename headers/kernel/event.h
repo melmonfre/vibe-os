@@ -3,10 +3,12 @@
 
 #include <stdint.h>
 #include <include/userland_api.h>
+#include <kernel/lock.h>
 
 struct process;
 
 typedef struct kernel_waitable {
+    spinlock_t lock;
     uint32_t event_kind;
     uint32_t event_class;
     uint32_t owner_service;

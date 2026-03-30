@@ -145,7 +145,8 @@ Important audit note: in the current tree, a checked item means the migration bo
 - The ported-userland build path is now stable under the official regression target too: `Build.ported.mk` exposes a single deterministic `ported-all` goal, `make validate-phase6` completes successfully again, and the generated `build/phase6-validation.md` reflects the same boot markers used by the migration plan.
 - Kernel waitables now exist as a first real async substrate: IPC mailboxes can block on a waitable instead of spinning in `yield()` loops, `ipc_send()` signals sleeping receivers, the scheduler can park a blocked task until wakeup, and headless QEMU boot still reaches `init: supervisor idle` with all current service hosts online.
 - Keyboard and mouse IRQ paths now also publish into a shared kernel input-event queue with an explicit dequeue ABI (`SYSCALL_INPUT_EVENT`), so the tree has a first unified event stream for userland input consumers in parallel with the older compatibility polling syscalls.
-- The `input` service boundary now also carries that event stream: `MK_MSG_INPUT_EVENT` is implemented in the current local handler, `SYSCALL_INPUT_EVENT` routes through `mk_input_service_next_event()`, and the desktop consumes queued key/mouse events through the new dequeue ABI while the direct in-kernel queue remains as the compatibility fallback.
+- The `input` service boundary now also carries that event stream: `MK_MSG_INPUT_EVENT` is implemented in the current local handler, while `SYSCALL_INPUT_EVENT` currently drains the kernel-owned unified queue directly so foreground desktop input can survive `inputsvc` restarts; the service path remains relevant for publication/layout/state APIs and the final ownership cutover.
+- The USB host path now captures boot-HID endpoint metadata during descriptor scan and performs on-demand UHCI/OHCI polling for enumerated boot keyboard/mouse interfaces, feeding the same kernel input queues used by PS/2 while the fully service-owned input publisher is still in progress.
 - The waitable substrate is now richer than a bare wakeup bit: kernel waitables carry event class/kind metadata, per-service ownership tags, signal/completion wrappers, timeout/cancel paths, and scheduler snapshots can now report timed-out/canceled waits plus pending signal state without regressing the current headless boot smoke.
 - Service supervision now also emits explicit async state events: each service record owns a subscriber-aware event ring for `online/offline/degraded/recovered/restarted` notifications, so restart/degradation is no longer only observable through the synchronous request path.
 - The `init` supervisor now consumes that service-event stream in userland through explicit subscribe/receive syscalls, logging the initial `online` snapshot for storage/filesystem/video/input/console/network/audio during boot instead of idling as a pure `yield()` loop.
@@ -154,6 +155,7 @@ Important audit note: in the current tree, a checked item means the migration bo
 - The video service now also emits a first presentation event stream to userland: `present`, `mode-set`, and `leave-graphics` notifications flow through dedicated subscribe/receive syscalls, and the task manager can observe recent present activity without depending only on bench snapshots.
 - Video presentation now also has an explicit submit boundary: userland can submit a `present` request and receive a concrete `sequence` fence token back, and the desktop now uses that path instead of treating framebuffer presentation as an anonymous trap.
 - The network service now also exposes a first async readiness stream to userland: subscribe/receive syscalls publish link-status transitions plus socket `recv`, `accept`, `send`, and `closed` notifications from the current service state machine, and the task manager now consumes that stream for live diagnostics.
+- Desktop/session supervision now also has a first task-lifecycle event path: the scheduler publishes launched/terminated task events through a dedicated subscribe/receive ABI, and `desktop-host` now waits for `startx` session exit via that event stream instead of spinning on repeated task snapshots in a `yield()` loop.
 
 ## Audited Remaining Gaps
 
@@ -238,11 +240,66 @@ Rules:
 - [x] add timeout/cancel primitives for pending work items
 - [x] add non-busy wait/wakeup path so services stop relying on `yield`/poll loops
 - [~] add subscription model for async completion and state-change notifications
-: state-change subscription now exists for service supervision, but subsystem-level async completions are still missing
+: service supervision and task-lifecycle subscriptions now exist for `launched` / `terminated` / `blocked` / `woke` / `restart-requested`, but subsystem-level async completions are still missing outside the per-domain streams
+- [~] subsystem event streams now also surface ring pressure through per-event `dropped_events` telemetry for audio/video/network consumers, so queue overruns stop disappearing silently during restart/degradation work
 - [x] define scheduler-visible event metadata so the kernel can audit pending events and prioritize desktop/input-critical work
 - [ ] define one independent async worker/thread context per major task class instead of reusing UI loops as pumps
 - [~] move bootstrap/main-thread responsibility to supervision/event arbitration instead of foreground app execution
-: `init` now remains in a supervision/event loop and `desktop-host` now relaunches a separate `startx-host` task instead of executing the desktop session inline, but generic AppFS foreground apps still do not launch into their own independent task contexts yet
+: `init` now remains in a supervision/event loop, subscribes to service/task lifecycle events, `desktop-host` relaunches a separate `startx-host` task instead of executing the desktop session inline, and the generic AppFS launch path now carries a small serialized `argv` via `SYSCALL_LAUNCH_APP`; shell foreground AppFS commands now also prefer a dedicated app-host task and wait on task-lifecycle events instead of owning `lang_try_run()` inline, while oversized/richer launch payloads plus some desktop-side callsites still fall back to the inline path
+- [~] detached AppFS launch telemetry now exposes `argc`/`argv` through launch-info reporting and host-side debug logs, so supervised generic app workers are easier to audit while broader mailbox/supervision work is still pending
+- [~] `init` no longer needs to own boot-sound playback directly on non-desktop boots; a dedicated `boot-audio` builtin worker now carries that audio launch path with inline playback retained only as fallback
+
+Implementation to finish Phase A:
+
+1. add a generic task-lifecycle event stream beside service/audio/video/network streams
+   - publish `launched`, `terminated`, `blocked`, `woke`, and `restart-requested`
+   - make scheduler snapshots and supervisor logs correlate to the same event IDs
+   - use this as the canonical wakeup source for `desktop-host`, `shell-host`, and later AppFS app hosts
+2. add one waitable-backed mailbox per major task class
+   - `desktop`
+   - `input-keyboard`
+   - `input-pointer`
+   - `video-present`
+   - `storage-io`
+   - `filesystem-io`
+   - `audio-io`
+   - `network-io`
+   - `app-runtime`
+3. introduce launch helpers for independent user workers instead of inline `lang_try_run()` ownership
+   - `desktop-host` owns session supervision only
+   - `startx-host` owns session launch only
+   - shell command execution and modular AppFS app execution move into separate launched tasks
+   - modular AppFS launch now has a reusable host path with short `argv` support; the shell foreground path uses that host and task events by default, while inline fallback remains only for longer/richer launch payloads or launch-path failure
+4. make the bootstrap thread reject foreground execution work after handoff
+   - bootstrap may supervise, subscribe, restart, and log
+   - bootstrap may not become the long-lived owner of shell, desktop, or app execution
+
+Acceptance for Phase A:
+
+- every wait-heavy subsystem blocks on waitables, not `yield()` loops
+- `init` remains a pure supervision loop after startup
+- desktop/shell/app execution are all observable through task-lifecycle events
+- the tree has a reusable spawn/supervise path for foreground modular apps, not only for built-in hosts
+
+Execution slices for Phase A:
+
+1. land the remaining task-lifecycle events and make them visible in telemetry
+2. add per-class mailboxes without changing existing request/reply ABIs
+3. convert built-in hosts to mailbox-backed supervision
+4. convert generic AppFS foreground app launch to independent task contexts
+
+Phase A regression risks:
+
+- adding new wait paths that accidentally starve the current desktop host
+- introducing task-event spam that overruns tiny rings and hides the one event the supervisor needs
+- keeping `lang_try_run()` as an implicit ownership path after task-host launch exists
+
+Phase A validation gate:
+
+- boot reaches `init` supervision idle
+- desktop host launch still works
+- shell host launch still works
+- at least one modular app launches in its own task and emits lifecycle events on launch/exit
 
 ### Phase B: Input / Desktop Decoupling
 
@@ -253,14 +310,75 @@ Rules:
 - [~] move input service to event publication ownership instead of kernel fallback ownership
 : the shared `INPUT_EVENT` stream now sits on top of explicit kernel-owned keyboard and mouse queues with their own waitable contexts, so per-device capture no longer exists only as private driver-local state; the steady-state fallback path still exists and service ownership is not complete yet
 - [~] split desktop input ingestion from desktop render/update loop
-  : desktop agora coleta eventos de input em um batch explicito antes de update/render e consolida efeitos de mouse/async state nesse estagio; a separacao completa em workers/loops independentes ainda nao foi feita
+  : desktop agora coleta eventos de input em um batch explicito antes de update/render, consolida efeitos de mouse/async state nesse estagio e o caminho principal do desktop passa a consumir `INPUT_EVENT` tambem para mouse em vez de depender do polling paralelo do mouse; a separacao completa em workers/loops independentes ainda nao foi feita
 - [~] introduce explicit per-device queues for keyboard, mouse, and future gamepad/touch sources
 : keyboard and mouse now enqueue into dedicated kernel device queues in parallel with the compatibility aggregate stream used by current userland consumers; future gamepad/touch sources and a fully extracted input publisher are still pending
 - [~] convert desktop shortcuts, pointer motion, focus changes, and window actions into queued events
   : pointer motion, wheel scroll e cliques do mouse agora entram primeiro em uma fila interna curta de eventos de UI, as teclas/atalhos do desktop tambem passam por uma fila explicita antes do processamento, drag/resize/menu-scroll-drag/pintura continua do sketchpad ja reagem aos eventos `POINTER_MOVE`, toggle/focus-raise/close/minimize/maximize/begin-drag/begin-resize de janelas ja passam por uma fila dedicada de acoes antes de mutar estado, a fila de acoes de sessao agora absorve parte importante do clique esquerdo como toggle/close do start menu, launch dos icones principais da area de trabalho, launch dos atalhos laterais do start menu, abertura de entradas do proprio start menu e fechamento pos-acao dos context menus de app/file manager, e uma fila curta de acoes de app ja despacha operacoes da Trash, as acoes primary/save-as de Editor/Sketchpad, o botao save do Editor, as interacoes principais de up/lista do File Manager, as operacoes do menu de contexto do proprio File Manager, praticamente todo o bloco de tema/wallpaper/resolucao do Personalize, os cliques principais de Task Manager/Calculator/Sketchpad e tambem os cliques de ImageViewer, Audio Player, Flap Birb, DOOM e Craft; Task Manager, Calculator, Sketchpad e Personalize agora tambem fazem o proprio hit-testing por esse dispatcher, os app-clicks simples desses blocos tambem ja passam por um helper compartilhado de enqueue e por um mapeamento central `app_type -> action`, `Editor`, `File Manager` e `Trash` agora tambem ja roteiam seu conteudo por helpers dedicados, o dispatcher de conteudo de janela ja foi achatado para um roteador mais direto por `switch`/tipo de app, e o flush das filas de sessao/janela no loop principal agora tambem passa por helpers dedicados, inclusive um flush composto pos-clique para sessao/app/janela; o loop principal passou a delegar o roteamento de conteudo de janela, a moldura/controles de janela, o fechamento de overlays/popups do shell, o taskbar-toggle de janelas, o roteamento final de janela sob clique no dispatcher de shell, os atalhos da area de trabalho, o clique do start menu, os cliques contextuais/sessao iniciais, o clique do file dialog, o clique direito do desktop/file manager/app context, o clique dos applets de rede/som e o bloco residual de shell/taskbar/janelas para helpers dedicados; alem disso, o fechamento de `CLOSE_CONTEXTS` e o fechamento de popups do shell agora tambem passam por helpers centrais reutilizados, mas ainda restam decisoes e acoes de app/janela no fluxo direto atual
-- [ ] make `startx` survive input-service restart without direct-driver fallback
-- [ ] reserve scheduling/service priority for desktop, mouse, and keyboard above optional services
+- [~] make `startx` survive input-service restart without direct-driver fallback
+  : desktop-launched callers no longer fall back to direct driver reads in the normal path, service requests now stop waiting forever on a dead `inputsvc` PID and resend across restart, and fresh `inputsvc` / `app-host` tasks now get an explicit bootstrap scheduling window so recovery can make forward progress after restart; the remaining gap is proving the full `kill input` -> recover -> launch-app path reliably in automated smoke and on real USB hardware
+- [~] desktop-launched `INPUT_EVENT` consumers now refuse the normal kernel direct-driver fallback path and instead wait for `inputsvc` recovery while preserving queued session state/reset semantics; rescue fallback still exists for bootstrap/critical contexts
+- [~] reserve scheduling/service priority for desktop, mouse, and keyboard above optional services
+  : a atribuicao de prioridade agora promove tasks userland marcadas como `shell`/`desktop`/`bootstrap`/`critical` para `PROCESS_PRIORITY_DESKTOP_USER`, coloca `inputsvc` junto do `console` em `PROCESS_PRIORITY_INPUT`, acima de audio/network/background, e ainda reserva slices iniciais mais fortes para workers `app-host`/servicos recem-lancados para que launch/restart nao fiquem presos atras do trafego continuo de input/desktop; ainda falta provar a politica com smoke automatizado de restart e revisar se o cutover final precisa de uma regra ainda mais explicita para video
 - [ ] prove keyboard and mouse remain live while audio/network/video workers restart
+  : headless QEMU validation is still limited by flaky shortcut/text injection in `-display none`, so restart smoke remains partially manual, but the real-hardware path now has a first native USB HID boot datapath into the kernel input queues; the remaining gap is proving that path under restart/degradation, extending USB input beyond the current UHCI/OHCI-oriented boot HID datapath when the machine only exposes EHCI/xHCI, and then moving steady-state publication ownership fully into `inputsvc`
+
+Implementation to finish Phase B:
+
+1. move input publication ownership into `inputsvc`
+   - IRQ handlers push raw device events into kernel device queues only
+   - `inputsvc` becomes the sole steady-state publisher of normalized keyboard/mouse events
+   - direct driver reads remain rescue-mode only
+2. split the desktop main loop into explicit stages
+   - ingest input batch
+   - apply queued desktop/window/session actions
+   - update app state
+   - submit present request
+   - drain async service events
+   this keeps input ingestion logically separate even before a full compositor worker lands
+3. make `startx` and desktop survive input-service restart
+   - detect `input` `offline/degraded/restarted/recovered`
+   - freeze only input-dependent transient state such as drag or menu-scroll-drag
+   - re-subscribe automatically after restart
+   - do not fall back to direct-driver polling in normal desktop mode
+4. codify scheduler priority for interactivity
+   - desktop continuity tier above all
+   - keyboard tier above pointer-neutral background work
+   - pointer tier above audio/network/app/background
+   - degraded lower tiers must be terminated before interactivity tiers are sacrificed
+   - detached shell/bootstrap/critical workers should remain in the same interactive band as desktop continuity helpers
+5. add proof scenarios
+   - restart `inputsvc` while moving the mouse
+   - restart `audiosvc` while typing in terminal
+   - restart `network` while dragging windows
+   - restart `videosvc` and confirm input remains queued and replay-safe
+
+Acceptance for Phase B:
+
+- `startx` continues after `inputsvc` restart without reboot and without direct-driver steady-state fallback
+- keyboard and pointer stay live while audio/network workers are killed or restarted
+- desktop actions are queued before mutating window/session state
+- scheduler policy explicitly favors desktop/input classes in code, not only in docs
+
+Execution slices for Phase B:
+
+1. make desktop re-subscribe and recover across `inputsvc` restart
+2. remove normal-mode direct-driver fallback from desktop paths
+3. codify interactive priority in scheduler/service restart policy
+4. add restart-smoke scenarios for input/audio/network/video while desktop is in active use
+
+Phase B regression risks:
+
+- losing pointer continuity after input restart because drag/menu transient state is not canceled safely
+- accidentally making safe mode or rescue shell depend on the new input-service ownership path
+- raising desktop/input priority without throttling lower tiers first, causing starvation inversions elsewhere
+
+Phase B validation gate:
+
+- `make run` reaches responsive desktop
+- restarting `inputsvc` does not require reboot
+- mouse moves and keyboard typing still work during audio/network degradation
+- `startx` session remains alive even when input service cycles
 
 ### Phase C: Audio Async Data Plane
 
@@ -271,21 +389,134 @@ Rules:
 - [ ] move audio queue ownership entirely into `audiosvc`
 - [~] add evented playback completions / underrun notifications back to userland
 : `audiosvc` now publishes `queued` / `idle` / `underrun` events through a dedicated ABI, and both diagnostics plus the async WAV helper consume that stream on the kernel-async path; queue ownership and steady-state completion semantics still need to move fully out of the preserved kernel bridge
+- [~] audio async telemetry now carries per-subscriber `dropped_events` pressure so `audiosvc` queue churn is visible to diagnostics while queue ownership is still migrating
 - [ ] add async capture queue and delivery path
 - [ ] stop using the desktop process as a cooperative pump participant for audio progress
 - [ ] make `compat-auich`, `compat-azalia`, and future `compat-uaudio` complete playback/capture without UI-coupled progress
 - [ ] move mixer policy/default-route policy fully out of kernel local handlers
+
+Implementation to finish Phase C:
+
+1. move playback queue ownership into `audiosvc`
+   - `SYSCALL_AUDIO_WRITE_ASYNC` becomes submit-only
+   - queue depth, producer index, completion, and underrun accounting live in `audiosvc`
+   - kernel bridge stops owning long-lived playback state
+2. add capture queue ABI
+   - subscribe to capture-ready events
+   - receive completed capture chunks by transfer buffer ID
+   - support timeout/cancel and overflow reporting
+3. split control plane from dataplane
+   - control plane: route, params, start/stop, mixer, backend selection
+   - dataplane: playback buffers, capture buffers, completion and underrun events
+4. remove desktop from audio progress paths
+   - startup sound remains fire-and-forget
+   - app/desktop audio players submit and observe completions; they never advance DMA/ring state themselves
+5. promote real backend ownership in service context
+   - `compat-auich`, `compat-azalia`, and later `compat-uaudio` run to completion behind `audiosvc`
+   - backend-specific IRQ/progress feeds service-owned queues/events
+6. move policy out of kernel local handlers
+   - default output route
+   - backend preference
+   - mute/volume persistence
+   - capture source selection
+
+Acceptance for Phase C:
+
+- playback and capture complete through `audiosvc` queues/events only
+- desktop/UI remains responsive if audio backend stalls or underruns
+- no audio path requires desktop cadence or UI code to make hardware progress
+- backend selection and mixer policy are visible in telemetry and service state
+
+Execution slices for Phase C:
+
+1. move playback queue ownership into `audiosvc`
+2. add capture queue and completion path
+3. move backend progress and IRQ completion accounting under service ownership
+4. move mixer/default-route policy out of kernel handlers
+
+Phase C regression risks:
+
+- startup sound path regressing desktop bring-up latency
+- capture queue work starving playback if both share one coarse worker
+- backend selection turning nondeterministic across QEMU and laptop targets
+
+Phase C validation gate:
+
+- startup sound either completes asynchronously or fails fast
+- playback and capture work without desktop loop involvement
+- backend telemetry names the active path consistently
+- killing/restarting `audiosvc` does not freeze input or presentation
 
 ### Phase D: Video / Presentation Split
 
 - [ ] separate window/compositor logic from framebuffer/present backend logic
 - [~] introduce explicit present queue / frame fence model
 : `videosvc` now publishes `present` / `mode-set` / `leave` events through a dedicated ABI, and `present submit` now returns a concrete `sequence` fence token that the desktop uses on its main path; a true queued presenter worker still remains open
-- [ ] stop doing heavyweight backend work directly from desktop paint cadence
+- [~] `videosvc` now also emits an explicit `present-submitted` stage plus per-event `pending_depth` / `completed_sequence` telemetry, so the present path is visible as a service-owned fence lifecycle even though the backend work is still completing synchronously underneath
+- [~] video event delivery now reports subscriber-ring overflow explicitly, so presenter pressure and missed notifications are visible while the queued presenter worker is still pending
+- [~] desktop now also consumes the video fence/backlog stream directly and resets its async video path when `videosvc` reports overflow or dropped notifications, so presenter-pressure faults no longer leave the compositor blind to stale fence state
+- [~] stop doing heavyweight backend work directly from desktop paint cadence
+: the desktop no longer falls back to `sys_present_full()` when `videosvc` rejects `present_submit`; it now tears down its async video subscriptions and waits for the service path to recover, but the actual present work is still completed synchronously inside `videosvc`
 - [~] add evented mode-change / hotplug / backend-failure notifications
 : mode-change and leave-graphics notifications now exist on the new video-event stream, and the desktop now consumes those events plus `video`/`input` supervision events to refresh metrics, clamp layout, and redraw immediately when the backend changes; hotplug/backend-failure paths are still pending
 - [ ] move video service off backend-shim steady-state execution
 - [ ] define what remains privileged for GPU/MMIO ownership versus what moves into service processes
+
+Implementation to finish Phase D:
+
+1. formalize a two-stage video model
+   - desktop/compositor produces frame jobs
+   - `videosvc` owns present queue, fences, mode transitions, and backend coordination
+2. turn `present submit` into a real queued presenter
+   - queue present request with fence token
+   - presenter worker drains queue independently of desktop update cadence
+   - desktop waits only on fence/event when it truly needs pacing feedback
+3. remove heavyweight backend work from desktop cadence
+   - no mode-set
+   - no large backend copies
+   - no backend handoff logic
+   - no device health probing in the desktop loop
+4. expand video event stream
+   - `present-complete`
+   - `mode-set-begin`
+   - `mode-set-done`
+   - `backend-failed`
+   - `backend-recovered`
+   - future `hotplug`
+5. define privilege boundary
+   - privileged kernel keeps minimal MMIO/interrupt mediation and protected mappings
+   - queue ownership, policy, present scheduling, and telemetry move to `videosvc`
+6. add desktop recovery semantics
+   - if `videosvc` restarts, desktop keeps state and re-subscribes
+   - input stays live while presentation is temporarily unavailable
+   - restart should degrade visuals before killing the session
+
+Acceptance for Phase D:
+
+- desktop no longer performs device-progress work directly
+- frame submission is queued and fence-based
+- `videosvc` restart does not destroy desktop/session state
+- backend failures are surfaced as explicit events, not inferred from stalls
+
+Execution slices for Phase D:
+
+1. queue `present submit` behind a dedicated presenter worker
+2. move mode-set/handoff/backend-failure handling under `videosvc`
+3. make desktop consume only fences/events, not backend progress
+4. define the minimal privileged MMIO/interrupt surface and keep the rest in service-space policy
+
+Phase D regression risks:
+
+- desktop repaint cadence appearing smooth in QEMU while fence handling races on `2+` CPUs
+- mode-set recovery paths breaking because desktop state is still tied to backend-local assumptions
+- over-moving privileged code and leaving MMIO ownership ambiguous
+
+Phase D validation gate:
+
+- `make validate-startx-*` still reaches desktop
+- presentation uses queue/fence semantics
+- `videosvc` restart degrades visuals without killing input/session state
+- mode change notifications remain observable from userland
 
 ### Phase E: Storage / Filesystem Async Split
 
@@ -295,14 +526,125 @@ Rules:
 - [ ] move VFS execution/discovery off placeholder/stub bridging toward native executable lookup
 - [ ] remove filesystem steady-state dependence on kernel local handler execution
 
+Implementation to finish Phase E:
+
+1. add queued async IO requests where latency matters
+   - executable/app loading
+   - asset reads
+   - file manager directory enumeration
+   - large writes and persistence flush
+2. add async completion objects for block IO
+   - request ID
+   - transfer buffer ID
+   - completion event
+   - timeout/cancel/error result
+3. add writeback workers
+   - metadata writeback
+   - persistence flush
+   - delayed dirty-page/file flush policy
+   these workers must not block unrelated UI or app reads
+4. move executable discovery away from placeholder files
+   - give AppFS/VFS native executable metadata and lookup
+   - let `lang_loader` resolve real manifests/entries instead of placeholder path discovery
+5. shift backend ownership out of kernel local handlers
+   - `storagesvc` owns request queueing and completion
+   - `fssvc` owns path traversal/open/read/write orchestration
+   - backend-shim remains bootstrap/rescue only
+6. add foreground-aware priority
+   - desktop launch and active app asset loads outrank background scans or writeback
+
+Acceptance for Phase E:
+
+- app launch and asset IO do not block the desktop loop
+- persistence flush/writeback no longer stalls unrelated reads or input
+- executable discovery no longer depends on placeholder files
+- steady-state storage/filesystem work flows through service-owned queues
+
+Execution slices for Phase E:
+
+1. queue app/asset reads first
+2. queue writeback and persistence flush second
+3. replace placeholder-based executable lookup with native metadata lookup
+4. remove steady-state filesystem/storage backend-shim dependence
+
+Phase E regression risks:
+
+- app launch slowing down because async lookup adds queueing without foreground priority
+- writeback workers causing hidden ordering bugs in persistence paths
+- breaking current command discovery before native executable metadata is fully in place
+
+Phase E validation gate:
+
+- desktop remains responsive while large reads/writes run
+- modular app launch still works after placeholder discovery removal
+- persistence flush no longer blocks unrelated active foreground work
+- storage/filesystem state is observable through service events and queue metrics
+
 ### Phase F: Network Async Split
 
 - [ ] replace current control-plane MVP with real packet TX/RX queues
 - [~] add socket wakeup/readiness events
 : `network` now publishes `status`, `recv`, `accept`, `send`, and `closed` events through a dedicated event stream, and the desktop consumes those events to refresh network state reactively instead of relying only on periodic polling; true queued TX/RX ownership is still pending
+- [~] the network event stream now also publishes backend `rx` / `tx` activity from the virtio compatibility path plus explicit overflow telemetry, giving userland visibility into datapath motion before full extracted TX/RX ownership lands
+- [~] desktop async consumers now tear down and re-subscribe their audio/network/video event streams when supervision reports `offline` / `degraded` / `restarted`, and the desktop now applies the same reset path when a `videosvc` `present_submit` fails, reducing stale-subscription behavior across service restarts and submit-path faults
+- [~] desktop-side `netmgrd` control actions now prefer detached AppFS launch for ethernet connect/disconnect before falling back to inline execution, reducing UI ownership of routine network control work while wifi connect/reconcile and real datapath ownership are still pending
 - [ ] add async DNS/DHCP completion flow
 - [ ] keep `netmgrd` as policy daemon, not datapath owner
 - [ ] remove steady-state dependence on kernel local handler execution for networking
+
+Implementation to finish Phase F:
+
+1. introduce real TX/RX queues
+   - receive ring owned by networking service/driver task
+   - transmit queue with completion events
+   - per-socket readiness fed from service-owned queue state
+2. keep `netmgrd` in policy space only
+   - Wi-Fi/ethernet selection
+   - DHCP trigger
+   - reconnection/autoconnect policy
+   - saved credentials and profile logic
+   it must not own packet movement or socket progress
+3. add async DHCP/DNS flow
+   - request submission
+   - completion event
+   - timeout/error event
+   - desktop terminal tools observe readiness instead of sleeping/polling
+4. remove kernel local-handler steady-state dependence
+   - control-plane scaffolding remains only until real datapath is service-owned
+   - packet RX/TX, socket accept/recv/send readiness, and link transitions stop terminating in kernel shims
+5. expose actionable network telemetry
+   - active backend
+   - link state
+   - lease state
+   - DNS state
+   - per-socket readiness backlog counters
+
+Acceptance for Phase F:
+
+- socket readiness comes from service-owned TX/RX queues
+- DHCP and DNS complete asynchronously with explicit events
+- `netmgrd` remains policy-only
+- networking no longer depends on backend-shim for normal packet flow
+
+Execution slices for Phase F:
+
+1. land real TX/RX queues and service-owned readiness
+2. move DHCP and DNS to explicit async request/completion flows
+3. strip datapath ownership out of `netmgrd`
+4. remove steady-state kernel local-handler dependence
+
+Phase F regression risks:
+
+- mixing policy-daemon responsibilities with datapath queue ownership again during early bring-up
+- socket APIs appearing async while still doing synchronous datapath work underneath
+- network restart paths stalling terminal/desktop because readiness queues are not drained correctly
+
+Phase F validation gate:
+
+- link transitions generate events
+- socket `recv`/`accept`/`send` readiness is queue-driven
+- DHCP/DNS operations complete through explicit async flows
+- restarting network service does not freeze shell or desktop
 
 ### Phase G: Strict Microkernel Cutover
 
@@ -313,6 +655,285 @@ Rules:
 - [ ] prove that one failed service does not freeze unrelated UI/control loops
 - [ ] audit privileged kernel code down to scheduler, VM, IPC, interrupts, supervision, and minimal hardware mediation
 - [ ] codify desktop/input primacy in scheduler and supervision policy, not just in docs
+
+Implementation to finish Phase G:
+
+1. remove `backend-shim` from steady-state paths one subsystem at a time
+   - storage
+   - filesystem
+   - video
+   - input
+   - console
+   - network
+   - audio
+   keep rescue/bootstrap-only compatibility behind explicit boot flags while each cutover lands
+2. define crash-containment contracts per domain
+   - input failure must not kill desktop state
+   - audio failure must not stall input/video
+   - network failure must not stall shell/desktop/app loops
+   - video failure may blank presentation temporarily but must preserve session state and supervision
+3. codify scheduler and supervision policy in code
+   - desktop, keyboard, mouse always first
+   - lower tiers throttled or killed first under overload
+   - restart ordering favors preserving the live desktop session
+4. audit privileged code aggressively
+   - what stays in kernel: scheduler, VM/memory mediation, IPC, interrupts, supervision, minimal hardware isolation
+   - what leaves kernel: subsystem policy, queue ownership, steady-state backend orchestration
+5. turn service restart into a normal tested path
+   - chaos-style validation for audio/input/network/video restart
+   - desktop/session survives without reboot
+   - telemetry explains every degrade/recover/restart transition
+
+Acceptance for Phase G:
+
+- `backend-shim` is absent from steady-state desktop/session operation
+- service crash/restart is a supported normal path
+- one failed service does not freeze unrelated UI/control loops
+- privileged kernel scope is small, explicit, and auditable
+
+Execution slices for Phase G:
+
+1. remove steady-state `backend-shim` for the already-prepared domains first
+2. keep rescue/bootstrap-only compatibility behind explicit boot flags
+3. codify crash containment and restart order in code
+4. run destructive restart validation until it is boring and repeatable
+
+Phase G regression risks:
+
+- deleting a compatibility bridge before the replacement path is observable and diagnosable
+- rescue/safe-mode accidentally losing its minimal fallback guarantees
+- claiming strict microkernel cutover while restart still silently falls back to kernel-local work
+
+Phase G validation gate:
+
+- normal desktop/session usage does not hit `backend-shim`
+- safe mode and rescue shell still boot
+- one failed service host does not freeze pointer motion, keyboard input, or repaint cadence
+- privileged kernel inventory can be listed concretely and defended line by line
+
+## Cross-Phase Rules
+
+These rules apply to every phase and should not be violated for convenience:
+
+- never trade desktop/input continuity for optional subsystem throughput
+- every new async queue must have visible telemetry, timeout, and cancel semantics
+- every new service restart path must be testable in QEMU before it is called complete
+- rescue/safe-mode fallbacks may exist, but normal desktop steady-state must not rely on them
+- if a lower-tier worker can wedge the machine, the correct fix is containment and kill/restart policy, not pushing more work back into the desktop loop
+
+## Anti-Patterns To Avoid
+
+- replacing one `poll + yield` loop with another loop hidden behind a helper
+- calling a path "async" when it still performs the real backend transaction synchronously before returning
+- using the desktop loop as the hidden owner of audio/video/network progress
+- keeping `backend-shim` in normal desktop usage while marking a phase done
+- routing recovery through reboot/session restart before trying per-service containment
+
+## Recommended Execution Order For Phases A-G
+
+The best practical order is:
+
+1. finish Phase A first
+   - without generic task events, waitables, and worker contexts, later phases keep leaking back into poll loops
+2. finish Phase B next
+   - desktop, keyboard, mouse, and `startx` continuity are the hard UX contract
+3. finish Phase D before deep audio/network work
+   - presentation separation is the other half of desktop continuity
+4. finish Phase C in parallel once B/D boundaries are stable
+   - audio must become queue-driven, but it must never outrank desktop/input/video continuity
+5. finish Phase E before broad app/runtime claims
+   - modular app launch and filesystem discovery need native async ownership
+6. finish Phase F after the event substrate and restart policy are proven
+   - real networking will stress queueing, telemetry, and supervision
+7. use Phase G as the final cutover gate, not as an aspirational cleanup bucket
+
+## Definition Of Done Per Phase
+
+- Phase A is done when bootstrap is pure supervision and all major task classes have auditable event-driven workers.
+- Phase B is done when `startx` and desktop survive input restart and interactivity priority is enforced in code.
+- Phase C is done when `audiosvc` owns playback/capture queues and UI no longer participates in audio progress.
+- Phase D is done when `videosvc` owns present queue/fences and desktop no longer drives backend work directly.
+- Phase E is done when IO-heavy launch/read/writeback paths are queued and executable discovery is native.
+- Phase F is done when packet flow, socket readiness, DHCP, and DNS are all service-owned and async.
+- Phase G is done when steady-state desktop usage no longer depends on backend-shim or destructive fallbacks.
+
+## Concrete File Ownership By Phase
+
+This section maps each phase to the files most likely to change first. It is intentionally pragmatic and should be used to keep patches focused instead of spreading one phase across the whole tree without need.
+
+### Phase A likely files
+
+- `kernel/process/scheduler.c`
+- `headers/kernel/scheduler.h`
+- `kernel/syscall.c`
+- `headers/include/userland_api.h`
+- `headers/userland/modules/include/syscalls.h`
+- `userland/modules/syscalls.c`
+- `userland/bootstrap_init.c`
+- `userland/bootstrap_hosts.c`
+- `userland/modules/lang_loader.c`
+
+Phase A ownership notes:
+
+- keep event primitives and lifecycle streams centered in the scheduler/syscall layer
+- keep supervision ownership in `bootstrap_init.c` and host lifecycle ownership in `bootstrap_hosts.c`
+- do not mix generic task-host work with audio/video/network specifics yet
+
+### Phase B likely files
+
+- `kernel/drivers/input/input.c`
+- `kernel/microkernel/input.c`
+- `kernel/process/scheduler.c`
+- `userland/applications/desktop.c`
+- `userland/bootstrap_hosts.c`
+- `kernel/microkernel/service.c`
+- `tools/validate_modular_apps.py`
+
+Phase B ownership notes:
+
+- kernel input code should only capture and queue raw device events
+- service ownership and restart behavior belong in `kernel/microkernel/input.c` and `kernel/microkernel/service.c`
+- desktop-side recovery, resubscribe, and transient-state cleanup belong in `userland/applications/desktop.c`
+
+### Phase C likely files
+
+- `kernel/microkernel/audio.c`
+- `headers/kernel/microkernel/audio.h`
+- `lang/apps/audiosvc/audiosvc_main.c`
+- `userland/modules/utils.c`
+- `userland/applications/audioplayer.c`
+- `kernel/microkernel/service.c`
+- `tools/validate_audio_stack.py`
+
+Phase C ownership notes:
+
+- queue ownership and completion semantics should move toward `audiosvc_main.c`
+- generic helper consumers may observe audio events, but they must not become hidden datapath owners
+
+### Phase D likely files
+
+- `kernel/microkernel/video.c`
+- `headers/kernel/microkernel/video.h`
+- `kernel/drivers/video/video.c`
+- `userland/applications/desktop.c`
+- `kernel/microkernel/service.c`
+- `tools/validate_gpu_backends.py`
+- `tools/validate_modular_apps.py`
+
+Phase D ownership notes:
+
+- backend privilege boundaries must be documented while code moves
+- compositor/session logic should stay in desktop code; present queue and backend transitions belong in `video.c`
+
+### Phase E likely files
+
+- `kernel/microkernel/storage.c`
+- `kernel/microkernel/filesystem.c`
+- `headers/kernel/microkernel/filesystem.h`
+- `userland/modules/fs.c`
+- `userland/modules/lang_loader.c`
+- `userland/applications/filemanager.c`
+- `kernel/microkernel/service.c`
+
+Phase E ownership notes:
+
+- executable discovery cleanup likely spans `fs.c` and `lang_loader.c`
+- queued IO ownership belongs first to storage/filesystem service layers, not to desktop code
+
+### Phase F likely files
+
+- `kernel/microkernel/network.c`
+- `headers/kernel/microkernel/network.h`
+- `lang/apps/netmgrd/netmgrd_main.c`
+- `lang/apps/netctl/netctl_main.c`
+- `userland/applications/desktop.c`
+- `kernel/microkernel/service.c`
+
+Phase F ownership notes:
+
+- `netmgrd` must stay policy-only as extraction advances
+- queued datapath and readiness logic belongs in `network.c`, not in desktop helpers
+
+### Phase G likely files
+
+- `kernel/microkernel/service.c`
+- `kernel/microkernel/storage.c`
+- `kernel/microkernel/filesystem.c`
+- `kernel/microkernel/video.c`
+- `kernel/microkernel/input.c`
+- `kernel/microkernel/network.c`
+- `kernel/microkernel/audio.c`
+- `kernel/process/scheduler.c`
+- `kernel/syscall.c`
+
+Phase G ownership notes:
+
+- this is where `backend-shim` steady-state removal should happen domain by domain
+- avoid mixing privilege audit with user-facing UX work in the same patch unless the dependency is direct
+
+## Minimal Commit Sequence Per Phase
+
+Each phase should be landed as a short sequence of reviewable commits rather than one large migration patch.
+
+### Phase A commit sequence
+
+1. scheduler/task lifecycle event ABI
+2. host/supervisor subscription and logging
+3. generic launched-task context for modular foreground apps
+4. bootstrap enforcement as supervision-only
+
+### Phase B commit sequence
+
+1. input-service restart/resubscribe handling
+2. removal of normal desktop-mode direct-driver fallback
+3. scheduler priority hardening for desktop/keyboard/mouse
+4. restart-smoke validation for desktop continuity
+
+### Phase C commit sequence
+
+1. playback queue ownership into `audiosvc`
+2. capture queue and completion events
+3. backend progress completion under service ownership
+4. mixer/default-route policy extraction
+
+### Phase D commit sequence
+
+1. present queue and fence worker
+2. desktop-side fence/event consumption
+3. mode-set/backend-failure event expansion
+4. privilege-boundary cleanup for video backend ownership
+
+### Phase E commit sequence
+
+1. async read path for app/assets
+2. writeback worker path
+3. native executable lookup replacing placeholders
+4. steady-state storage/filesystem backend-shim removal
+
+### Phase F commit sequence
+
+1. service-owned TX/RX readiness queues
+2. DHCP/DNS async completion path
+3. `netmgrd` narrowed to policy-only role
+4. steady-state network backend-shim removal
+
+### Phase G commit sequence
+
+1. domain-by-domain steady-state bridge removal
+2. crash containment/restart policy codified
+3. destructive restart validation matrix
+4. privileged kernel audit and final cleanup
+
+## What Must Not Be Marked Done Early
+
+To keep the migration honest, the following claims are explicitly forbidden until they are literally true in code and validation:
+
+- do not mark Phase B done while desktop still depends on direct-driver steady-state fallback
+- do not mark Phase C done while audio progress still needs UI cadence
+- do not mark Phase D done while desktop still owns heavyweight present/backend work
+- do not mark Phase E done while executable discovery still depends on placeholder paths
+- do not mark Phase F done while packet flow still resolves through kernel local-handler steady-state execution
+- do not mark Phase G done while normal desktop usage still hits `backend-shim`
 
 ## Checklist For "Microkernel For Real"
 

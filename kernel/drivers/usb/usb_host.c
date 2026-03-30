@@ -1,8 +1,10 @@
 #include <kernel/drivers/usb/usb_host.h>
 
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/drivers/input/input.h>
 #include <kernel/drivers/pci/pci.h>
 #include <kernel/drivers/timer/timer.h>
+#include <kernel/drivers/video/video.h>
 #include <kernel/hal/io.h>
 #include <kernel/kernel_string.h>
 #include <kernel/scheduler.h>
@@ -106,14 +108,17 @@
 #define XHCI_PORT_SPEED_SHIFT 10u
 #define XHCI_PORT_SPEED_MASK 0x0fu
 
+#define USB_REQTYPE_OUT 0x00u
 #define USB_REQTYPE_IN 0x80u
 #define USB_REQTYPE_STANDARD 0x00u
+#define USB_REQTYPE_CLASS 0x20u
 #define USB_REQTYPE_DEVICE 0x00u
 #define USB_REQTYPE_INTERFACE 0x01u
 #define USB_REQUEST_GET_DESCRIPTOR 0x06u
 #define USB_REQUEST_SET_ADDRESS 0x05u
 #define USB_REQUEST_SET_CONFIGURATION 0x09u
 #define USB_REQUEST_SET_INTERFACE 0x0bu
+#define USB_REQUEST_SET_PROTOCOL 0x0bu
 #define USB_DESCRIPTOR_TYPE_DEVICE 0x01u
 #define USB_DESCRIPTOR_TYPE_CONFIG 0x02u
 #define USB_DEVICE_DESCRIPTOR_PROBE_LENGTH 8u
@@ -124,17 +129,23 @@
 #define USB_DESCRIPTOR_TYPE_ENDPOINT 0x05u
 #define USB_DESCRIPTOR_TYPE_CS_INTERFACE 0x24u
 #define USB_CLASS_AUDIO 0x01u
+#define USB_CLASS_HID 0x03u
 #define USB_SUBCLASS_AUDIOCONTROL 0x01u
 #define USB_SUBCLASS_AUDIOSTREAM 0x02u
+#define USB_SUBCLASS_HID_BOOT 0x01u
+#define USB_PROTOCOL_HID_KEYBOARD 0x01u
+#define USB_PROTOCOL_HID_MOUSE 0x02u
 #define USB_AUDIO_AS_DESCRIPTOR_GENERAL 0x01u
 #define USB_AUDIO_AS_DESCRIPTOR_FORMAT_TYPE 0x02u
 #define USB_AUDIO_FORMAT_TYPE_I 0x01u
 #define USB_ENDPOINT_DIR_IN 0x80u
 #define USB_ENDPOINT_TRANSFER_MASK 0x03u
 #define USB_ENDPOINT_TRANSFER_ISOCHRONOUS 0x01u
+#define USB_ENDPOINT_TRANSFER_INTERRUPT 0x03u
 #define USB_SETUP_PACKET_LENGTH 8u
 #define KERNEL_USB_UHCI_POLL_LIMIT 100000u
 #define KERNEL_USB_UHCI_MAX_CONTROL_DATA_TDS 64u
+#define KERNEL_USB_HID_REPORT_MAX 16u
 
 #define KERNEL_USB_UHCI_TD_MAXLEN(len) \
     (((uint32_t)((len) == 0u ? 0x7ffu : ((uint32_t)(len) - 1u)) & 0x7ffu) << 21)
@@ -234,6 +245,22 @@ struct kernel_usb_host_state {
     struct kernel_usb_probe_snapshot probe_snapshot_entries[KERNEL_USB_MAX_PROBE_SNAPSHOTS];
 };
 
+struct kernel_usb_hid_runtime {
+    uint8_t active;
+    uint8_t snapshot_index;
+    uint8_t protocol;
+    uint8_t address;
+    uint8_t interface_number;
+    uint8_t endpoint_address;
+    uint8_t endpoint_attributes;
+    uint8_t poll_interval_ticks;
+    uint8_t data_toggle;
+    uint8_t protocol_armed;
+    uint16_t max_packet_size;
+    uint32_t next_poll_tick;
+    uint8_t last_report[KERNEL_USB_HID_REPORT_MAX];
+};
+
 static struct kernel_usb_host_state g_kernel_usb_host_state;
 static uint32_t g_kernel_usb_uhci_probe_frame_list[UHCI_FRAMELIST_COUNT] __attribute__((aligned(4096)));
 static struct kernel_usb_uhci_probe_td g_kernel_usb_uhci_probe_setup_td;
@@ -244,6 +271,7 @@ static struct kernel_usb_uhci_probe_td g_kernel_usb_uhci_audio_td;
 static struct kernel_usb_setup_packet g_kernel_usb_uhci_probe_request __attribute__((aligned(16)));
 static uint8_t g_kernel_usb_uhci_probe_data[USB_DEVICE_DESCRIPTOR_FULL_LENGTH] __attribute__((aligned(16)));
 static uint8_t g_kernel_usb_uhci_audio_data[1024] __attribute__((aligned(16)));
+static struct kernel_usb_uhci_probe_td g_kernel_usb_uhci_hid_td;
 static struct kernel_usb_ohci_probe_hcca g_kernel_usb_ohci_probe_hcca;
 static struct kernel_usb_ohci_probe_ed g_kernel_usb_ohci_probe_ed;
 static struct kernel_usb_ohci_probe_td g_kernel_usb_ohci_probe_setup_td;
@@ -253,8 +281,15 @@ static struct kernel_usb_ohci_probe_td g_kernel_usb_ohci_probe_tail_td;
 static struct kernel_usb_setup_packet g_kernel_usb_ohci_probe_request __attribute__((aligned(16)));
 static uint8_t g_kernel_usb_ohci_probe_data[USB_DEVICE_DESCRIPTOR_FULL_LENGTH] __attribute__((aligned(16)));
 static uint8_t g_kernel_usb_ohci_audio_data[1024] __attribute__((aligned(16)));
+static uint8_t g_kernel_usb_uhci_hid_data[KERNEL_USB_HID_REPORT_MAX] __attribute__((aligned(16)));
+static uint8_t g_kernel_usb_ohci_hid_data[KERNEL_USB_HID_REPORT_MAX] __attribute__((aligned(16)));
 static uint8_t g_kernel_usb_config_probe_data[USB_CONFIG_DESCRIPTOR_SHORT_LENGTH] __attribute__((aligned(16)));
 static uint8_t g_kernel_usb_config_full_data[USB_CONFIG_DESCRIPTOR_MAX_LENGTH] __attribute__((aligned(16)));
+static struct kernel_usb_hid_runtime g_kernel_usb_hid_runtime[KERNEL_USB_MAX_PROBE_SNAPSHOTS];
+static uint8_t g_kernel_usb_hid_runtime_valid = 0u;
+static volatile uint32_t g_kernel_usb_hid_trace_budget = 16u;
+static struct mouse_state g_kernel_usb_hid_mouse_state = {0};
+static uint8_t g_kernel_usb_hid_mouse_ready = 0u;
 
 static void kernel_usb_host_probe_snapshot_set_status(struct kernel_usb_host_state *state,
                                                       struct kernel_usb_probe_snapshot *snapshot,
@@ -272,6 +307,28 @@ static int kernel_usb_host_prepare_port(const struct kernel_usb_host_controller_
                                         uint32_t port_index);
 static void kernel_usb_host_wait_ticks(uint32_t ticks);
 static void kernel_usb_host_wait_usb_settle(void);
+static void kernel_usb_hid_runtime_rebuild(void);
+static int kernel_usb_host_hid_read_uhci_packet(const struct kernel_usb_probe_dispatch_context *dispatch,
+                                                uint8_t address,
+                                                uint8_t endpoint_address,
+                                                uint16_t max_packet_size,
+                                                uint8_t *data_toggle_io,
+                                                uint8_t *buffer,
+                                                uint32_t buffer_capacity,
+                                                uint32_t *actual_length_out);
+static int kernel_usb_host_hid_read_ohci_packet(const struct kernel_usb_probe_dispatch_context *dispatch,
+                                                uint8_t address,
+                                                uint8_t endpoint_address,
+                                                uint16_t max_packet_size,
+                                                uint8_t *data_toggle_io,
+                                                uint8_t *buffer,
+                                                uint32_t buffer_capacity,
+                                                uint32_t *actual_length_out);
+static int kernel_usb_host_hid_set_boot_protocol(const struct kernel_usb_probe_dispatch_context *dispatch,
+                                                 uint8_t address,
+                                                 uint8_t max_packet_size0,
+                                                 uint8_t interface_number);
+static void kernel_usb_hid_poll_device(struct kernel_usb_hid_runtime *runtime);
 
 static void kernel_usb_host_wait_ticks(uint32_t ticks) {
     uint32_t start;
@@ -1005,6 +1062,7 @@ static void kernel_usb_host_scan_config_descriptor(const uint8_t *descriptor,
     uint32_t offset;
     uint8_t current_interface_class = 0u;
     uint8_t current_interface_subclass = 0u;
+    uint8_t current_interface_protocol = 0u;
     uint8_t current_interface_number = 0xffu;
     uint8_t current_alt_setting = 0u;
     uint8_t pending_audio_channel_count = 0u;
@@ -1017,6 +1075,14 @@ static void kernel_usb_host_scan_config_descriptor(const uint8_t *descriptor,
     }
 
     execution->audio_class_detected = 0u;
+    execution->hid_boot_keyboard_detected = 0u;
+    execution->hid_boot_mouse_detected = 0u;
+    execution->hid_interface_number = 0xffu;
+    execution->hid_interface_protocol = 0u;
+    execution->hid_endpoint_address = 0xffu;
+    execution->hid_endpoint_attributes = 0u;
+    execution->hid_poll_interval = 0u;
+    execution->hid_endpoint_max_packet = 0u;
     execution->interface_count = 0u;
     execution->endpoint_count = 0u;
     execution->audio_control_interface_number = 0xffu;
@@ -1044,11 +1110,13 @@ static void kernel_usb_host_scan_config_descriptor(const uint8_t *descriptor,
             uint8_t alt_setting = descriptor[offset + 3u];
             uint8_t interface_class = descriptor[offset + 5u];
             uint8_t interface_subclass = descriptor[offset + 6u];
+            uint8_t interface_protocol = descriptor[offset + 7u];
 
             current_interface_number = interface_number;
             current_alt_setting = alt_setting;
             current_interface_class = interface_class;
             current_interface_subclass = interface_subclass;
+            current_interface_protocol = interface_protocol;
             pending_audio_channel_count = 0u;
             pending_audio_subframe_size = 0u;
             pending_audio_bit_resolution = 0u;
@@ -1068,6 +1136,17 @@ static void kernel_usb_host_scan_config_descriptor(const uint8_t *descriptor,
                     if (execution->audio_streaming_interface_count != 0xffu) {
                         execution->audio_streaming_interface_count++;
                     }
+                }
+            } else if (interface_class == USB_CLASS_HID &&
+                       interface_subclass == USB_SUBCLASS_HID_BOOT) {
+                if (execution->hid_interface_number == 0xffu) {
+                    execution->hid_interface_number = interface_number;
+                    execution->hid_interface_protocol = interface_protocol;
+                }
+                if (interface_protocol == USB_PROTOCOL_HID_KEYBOARD) {
+                    execution->hid_boot_keyboard_detected = 1u;
+                } else if (interface_protocol == USB_PROTOCOL_HID_MOUSE) {
+                    execution->hid_boot_mouse_detected = 1u;
                 }
             }
         } else if (type == USB_DESCRIPTOR_TYPE_CS_INTERFACE && length >= 3u) {
@@ -1146,6 +1225,20 @@ static void kernel_usb_host_scan_config_descriptor(const uint8_t *descriptor,
                 execution->audio_playback_endpoint_attributes = endpoint_attributes;
                 execution->audio_playback_endpoint_max_packet = endpoint_max_packet;
                 execution->audio_playback_sample_rate = pending_audio_sample_rate;
+            } else if (current_interface_class == USB_CLASS_HID &&
+                       current_interface_subclass == USB_SUBCLASS_HID_BOOT &&
+                       current_interface_number != 0xffu &&
+                       execution->hid_endpoint_address == 0xffu &&
+                       (endpoint_address & USB_ENDPOINT_DIR_IN) != 0u &&
+                       (endpoint_attributes & USB_ENDPOINT_TRANSFER_MASK) == USB_ENDPOINT_TRANSFER_INTERRUPT &&
+                       (current_interface_protocol == USB_PROTOCOL_HID_KEYBOARD ||
+                        current_interface_protocol == USB_PROTOCOL_HID_MOUSE)) {
+                execution->hid_interface_number = current_interface_number;
+                execution->hid_interface_protocol = current_interface_protocol;
+                execution->hid_endpoint_address = endpoint_address;
+                execution->hid_endpoint_attributes = endpoint_attributes;
+                execution->hid_poll_interval = descriptor[offset + 6u];
+                execution->hid_endpoint_max_packet = endpoint_max_packet;
             }
         }
 
@@ -3041,6 +3134,31 @@ void kernel_usb_host_init(void) {
     kernel_debug_printf("usb-host: probe-configured-ready=%u audio-probe-configured-ready=%u\n",
                         (unsigned int)g_kernel_usb_host_state.probe_configured_ready,
                         (unsigned int)g_kernel_usb_host_state.audio_probe_configured_ready);
+    {
+        uint32_t hid_boot_candidates = 0u;
+        uint32_t hid_boot_keyboards = 0u;
+        uint32_t hid_boot_mice = 0u;
+
+        for (uint32_t i = 0u; i < g_kernel_usb_host_state.probe_snapshots; ++i) {
+            const struct kernel_usb_probe_snapshot *snapshot = &g_kernel_usb_host_state.probe_snapshot_entries[i];
+
+            if (snapshot->hid_boot_keyboard_detected == 0u &&
+                snapshot->hid_boot_mouse_detected == 0u) {
+                continue;
+            }
+            hid_boot_candidates++;
+            if (snapshot->hid_boot_keyboard_detected != 0u) {
+                hid_boot_keyboards++;
+            }
+            if (snapshot->hid_boot_mouse_detected != 0u) {
+                hid_boot_mice++;
+            }
+        }
+        kernel_debug_printf("usb-host: hid-boot candidates=%u keyboards=%u mice=%u\n",
+                            (unsigned int)hid_boot_candidates,
+                            (unsigned int)hid_boot_keyboards,
+                            (unsigned int)hid_boot_mice);
+    }
     for (uint32_t i = 0u; i < g_kernel_usb_host_state.devices; ++i) {
         const struct kernel_usb_device_info *device = &g_kernel_usb_host_state.device_entries[i];
 
@@ -3074,6 +3192,24 @@ void kernel_usb_host_init(void) {
                             (unsigned int)snapshot->plan.index,
                             (unsigned int)snapshot->plan.length,
                             (unsigned int)snapshot->status);
+        if (snapshot->hid_boot_keyboard_detected != 0u ||
+            snapshot->hid_boot_mouse_detected != 0u) {
+            kernel_debug_printf("usb-host: hid snapshot=%u device=%u addr=%u controller=%u port=%u if=%u proto=%u keyboard=%u mouse=%u status=%u\n",
+                                (unsigned int)i,
+                                (unsigned int)snapshot->device_index,
+                                (unsigned int)snapshot->assigned_address,
+                                snapshot->plan.device.effective_controller_index == 0xffu ?
+                                    0xffffffffu :
+                                    (unsigned int)snapshot->plan.device.effective_controller_index,
+                                (unsigned int)snapshot->plan.device.port_index,
+                                snapshot->hid_interface_number == 0xffu ?
+                                    0xffffffffu :
+                                    (unsigned int)snapshot->hid_interface_number,
+                                (unsigned int)snapshot->hid_interface_protocol,
+                                (unsigned int)snapshot->hid_boot_keyboard_detected,
+                                (unsigned int)snapshot->hid_boot_mouse_detected,
+                                (unsigned int)snapshot->status);
+        }
         if (snapshot->descriptor_valid) {
             kernel_debug_printf("usb-host: probe descriptor device=%u addr=%u mps0=%u prefix=%x:%x:%x:%x:%x:%x:%x:%x\n",
                                 (unsigned int)snapshot->device_index,
@@ -3607,6 +3743,532 @@ int kernel_usb_audio_playback_write(const uint8_t *data,
     return total_written == 0u ? -1 : 0;
 }
 
+static int kernel_usb_host_hid_set_boot_protocol(const struct kernel_usb_probe_dispatch_context *dispatch,
+                                                 uint8_t address,
+                                                 uint8_t max_packet_size0,
+                                                 uint8_t interface_number) {
+    if (dispatch == 0 ||
+        kernel_usb_host_validate_assigned_address(address) != 0 ||
+        interface_number == 0xffu) {
+        return -1;
+    }
+
+    if (dispatch->transport_kind == KERNEL_USB_HOST_KIND_UHCI) {
+        return kernel_usb_host_probe_execute_uhci_no_data_request(dispatch,
+                                                                  address,
+                                                                  (uint8_t)(USB_REQTYPE_OUT |
+                                                                            USB_REQTYPE_CLASS |
+                                                                            USB_REQTYPE_INTERFACE),
+                                                                  USB_REQUEST_SET_PROTOCOL,
+                                                                  0u,
+                                                                  interface_number);
+    }
+    if (dispatch->transport_kind == KERNEL_USB_HOST_KIND_OHCI) {
+        return kernel_usb_host_probe_execute_ohci_no_data_request(dispatch,
+                                                                  address,
+                                                                  max_packet_size0,
+                                                                  (uint8_t)(USB_REQTYPE_OUT |
+                                                                            USB_REQTYPE_CLASS |
+                                                                            USB_REQTYPE_INTERFACE),
+                                                                  USB_REQUEST_SET_PROTOCOL,
+                                                                  0u,
+                                                                  interface_number);
+    }
+    return -1;
+}
+
+static int kernel_usb_host_hid_read_uhci_packet(const struct kernel_usb_probe_dispatch_context *dispatch,
+                                                uint8_t address,
+                                                uint8_t endpoint_address,
+                                                uint16_t max_packet_size,
+                                                uint8_t *data_toggle_io,
+                                                uint8_t *buffer,
+                                                uint32_t buffer_capacity,
+                                                uint32_t *actual_length_out) {
+    const struct kernel_usb_host_controller_info *controller;
+    uint16_t saved_cmd;
+    uint16_t saved_sts;
+    uint16_t saved_intr;
+    uint16_t saved_frnum;
+    uint32_t saved_flbase;
+    uint32_t td_phys;
+    uint8_t endpoint_number;
+    uint32_t td_status;
+    uint32_t transfer_size;
+    uint32_t actual_length;
+
+    if (dispatch == 0 || data_toggle_io == 0 || buffer == 0 || actual_length_out == 0 ||
+        kernel_usb_host_validate_assigned_address(address) != 0 ||
+        (endpoint_address & USB_ENDPOINT_DIR_IN) == 0u ||
+        max_packet_size == 0u) {
+        return -1;
+    }
+    if (kernel_usb_host_probe_execute_uhci(dispatch) != 0) {
+        return -1;
+    }
+
+    transfer_size = max_packet_size;
+    if (transfer_size > sizeof(g_kernel_usb_uhci_hid_data)) {
+        transfer_size = sizeof(g_kernel_usb_uhci_hid_data);
+    }
+    if (transfer_size > buffer_capacity) {
+        transfer_size = buffer_capacity;
+    }
+    if (transfer_size == 0u) {
+        return -1;
+    }
+
+    controller = &dispatch->effective_controller;
+    endpoint_number = (uint8_t)(endpoint_address & 0x0fu);
+    saved_cmd = kernel_usb_host_read16_io(controller->bar_base, UHCI_CMD);
+    saved_sts = kernel_usb_host_read16_io(controller->bar_base, UHCI_STS);
+    saved_intr = kernel_usb_host_read16_io(controller->bar_base, UHCI_INTR);
+    saved_frnum = kernel_usb_host_read16_io(controller->bar_base, UHCI_FRNUM);
+    saved_flbase = inl((uint16_t)(controller->bar_base + UHCI_FLBASEADDR));
+
+    memset(&g_kernel_usb_uhci_hid_td, 0, sizeof(g_kernel_usb_uhci_hid_td));
+    memset(&g_kernel_usb_uhci_hid_data[0], 0, sizeof(g_kernel_usb_uhci_hid_data));
+    for (uint32_t i = 0u; i < UHCI_FRAMELIST_COUNT; ++i) {
+        g_kernel_usb_uhci_probe_frame_list[i] = UHCI_PTR_T;
+    }
+
+    td_phys = (uint32_t)(uintptr_t)&g_kernel_usb_uhci_hid_td;
+    g_kernel_usb_uhci_probe_frame_list[0] = td_phys | UHCI_PTR_TD;
+    g_kernel_usb_uhci_hid_td.td_link = UHCI_PTR_T;
+    g_kernel_usb_uhci_hid_td.td_status = KERNEL_USB_UHCI_TD_ERRCNT(3) |
+                                         ((dispatch->snapshot.plan.device.speed == KERNEL_USB_HOST_PORT_SPEED_LOW) ?
+                                           UHCI_TD_LS : 0u) |
+                                         UHCI_TD_ACTIVE |
+                                         UHCI_TD_IOC;
+    g_kernel_usb_uhci_hid_td.td_token = KERNEL_USB_UHCI_TD_IN(transfer_size,
+                                                              endpoint_number,
+                                                              address,
+                                                              *data_toggle_io);
+    g_kernel_usb_uhci_hid_td.td_buffer = (uint32_t)(uintptr_t)&g_kernel_usb_uhci_hid_data[0];
+
+    kernel_usb_host_write16_io(controller->bar_base, UHCI_INTR, 0u);
+    kernel_usb_host_write16_io(controller->bar_base, UHCI_STS, UHCI_STS_ALLINTRS);
+    if ((saved_cmd & UHCI_CMD_RS) != 0u) {
+        kernel_usb_host_write16_io(controller->bar_base,
+                                   UHCI_CMD,
+                                   (uint16_t)((saved_cmd & ~UHCI_CMD_RS) & ~UHCI_CMD_HCRESET));
+        kernel_usb_host_wait_usb_settle();
+    }
+    kernel_usb_host_write16_io(controller->bar_base, UHCI_FRNUM, 0u);
+    outl((uint16_t)(controller->bar_base + UHCI_FLBASEADDR),
+         (uint32_t)(uintptr_t)&g_kernel_usb_uhci_probe_frame_list[0]);
+    kernel_usb_host_write16_io(controller->bar_base,
+                               UHCI_CMD,
+                               (uint16_t)((saved_cmd & ~UHCI_CMD_HCRESET) |
+                                          UHCI_CMD_CF |
+                                          UHCI_CMD_RS |
+                                          UHCI_CMD_MAXP));
+
+    for (uint32_t spin = 0u; spin < 2u; ++spin) {
+        if ((g_kernel_usb_uhci_hid_td.td_status & UHCI_TD_ACTIVE) == 0u) {
+            break;
+        }
+        kernel_usb_host_wait_ticks(1u);
+    }
+    kernel_usb_host_wait_usb_settle();
+
+    kernel_usb_host_write16_io(controller->bar_base, UHCI_CMD, saved_cmd);
+    outl((uint16_t)(controller->bar_base + UHCI_FLBASEADDR), saved_flbase);
+    kernel_usb_host_write16_io(controller->bar_base, UHCI_FRNUM, saved_frnum);
+    kernel_usb_host_write16_io(controller->bar_base, UHCI_INTR, saved_intr);
+    kernel_usb_host_write16_io(controller->bar_base, UHCI_STS, saved_sts & UHCI_STS_ALLINTRS);
+
+    td_status = g_kernel_usb_uhci_hid_td.td_status;
+    if ((td_status & UHCI_TD_ACTIVE) != 0u) {
+        return 1;
+    }
+    if ((td_status & 0x007e0000u) != 0u) {
+        return -1;
+    }
+
+    actual_length = KERNEL_USB_UHCI_TD_GET_ACTLEN(td_status);
+    if (actual_length > transfer_size) {
+        actual_length = transfer_size;
+    }
+    memcpy(buffer, &g_kernel_usb_uhci_hid_data[0], actual_length);
+    *actual_length_out = actual_length;
+    *data_toggle_io ^= 0x1u;
+    return 0;
+}
+
+static int kernel_usb_host_hid_read_ohci_packet(const struct kernel_usb_probe_dispatch_context *dispatch,
+                                                uint8_t address,
+                                                uint8_t endpoint_address,
+                                                uint16_t max_packet_size,
+                                                uint8_t *data_toggle_io,
+                                                uint8_t *buffer,
+                                                uint32_t buffer_capacity,
+                                                uint32_t *actual_length_out) {
+    const struct kernel_usb_host_controller_info *controller;
+    uint32_t saved_control;
+    uint32_t saved_intr_status;
+    uint32_t saved_hcca;
+    uint32_t saved_head;
+    uint32_t saved_current;
+    uint32_t cc;
+    uint32_t transfer_size;
+    uint8_t endpoint_number;
+
+    if (dispatch == 0 || data_toggle_io == 0 || buffer == 0 || actual_length_out == 0 ||
+        kernel_usb_host_validate_assigned_address(address) != 0 ||
+        (endpoint_address & USB_ENDPOINT_DIR_IN) == 0u ||
+        max_packet_size == 0u) {
+        return -1;
+    }
+    if (kernel_usb_host_probe_execute_ohci(dispatch) != 0) {
+        return -1;
+    }
+
+    transfer_size = max_packet_size;
+    if (transfer_size > sizeof(g_kernel_usb_ohci_hid_data)) {
+        transfer_size = sizeof(g_kernel_usb_ohci_hid_data);
+    }
+    if (transfer_size > buffer_capacity) {
+        transfer_size = buffer_capacity;
+    }
+    if (transfer_size == 0u) {
+        return -1;
+    }
+
+    controller = &dispatch->effective_controller;
+    endpoint_number = (uint8_t)(endpoint_address & 0x0fu);
+    saved_control = kernel_usb_host_read32(controller->bar_base, OHCI_CONTROL);
+    saved_intr_status = kernel_usb_host_read32(controller->bar_base, OHCI_INTERRUPT_STATUS);
+    saved_hcca = kernel_usb_host_read32(controller->bar_base, OHCI_HCCA);
+    saved_head = kernel_usb_host_read32(controller->bar_base, OHCI_CONTROL_HEAD_ED);
+    saved_current = kernel_usb_host_read32(controller->bar_base, OHCI_CONTROL_CURRENT_ED);
+
+    memset(&g_kernel_usb_ohci_probe_hcca, 0, sizeof(g_kernel_usb_ohci_probe_hcca));
+    memset(&g_kernel_usb_ohci_probe_ed, 0, sizeof(g_kernel_usb_ohci_probe_ed));
+    memset(&g_kernel_usb_ohci_probe_data_td, 0, sizeof(g_kernel_usb_ohci_probe_data_td));
+    memset(&g_kernel_usb_ohci_probe_tail_td, 0, sizeof(g_kernel_usb_ohci_probe_tail_td));
+    memset(&g_kernel_usb_ohci_hid_data[0], 0, sizeof(g_kernel_usb_ohci_hid_data));
+
+    g_kernel_usb_ohci_probe_ed.ed_flags = OHCI_ED_SET_FA(address) |
+                                          OHCI_ED_SET_EN(endpoint_number) |
+                                          ((dispatch->snapshot.plan.device.speed == KERNEL_USB_HOST_PORT_SPEED_LOW) ?
+                                            OHCI_ED_SPEED : 0u) |
+                                          OHCI_ED_SET_MAXP(max_packet_size);
+    g_kernel_usb_ohci_probe_ed.ed_tailp = (uint32_t)(uintptr_t)&g_kernel_usb_ohci_probe_tail_td;
+    g_kernel_usb_ohci_probe_ed.ed_headp = (uint32_t)(uintptr_t)&g_kernel_usb_ohci_probe_data_td;
+    g_kernel_usb_ohci_probe_ed.ed_nexted = 0u;
+
+    g_kernel_usb_ohci_probe_data_td.td_flags = OHCI_TD_IN |
+                                               OHCI_TD_NOCC |
+                                               (*data_toggle_io != 0u ? OHCI_TD_TOGGLE_1 : OHCI_TD_TOGGLE_0) |
+                                               OHCI_TD_SET_DI(1u);
+    g_kernel_usb_ohci_probe_data_td.td_cbp = (uint32_t)(uintptr_t)&g_kernel_usb_ohci_hid_data[0];
+    g_kernel_usb_ohci_probe_data_td.td_nexttd = (uint32_t)(uintptr_t)&g_kernel_usb_ohci_probe_tail_td;
+    g_kernel_usb_ohci_probe_data_td.td_be = g_kernel_usb_ohci_probe_data_td.td_cbp + transfer_size - 1u;
+
+    kernel_usb_host_write32(controller->bar_base, OHCI_INTERRUPT_DISABLE, (uint32_t)(OHCI_MIE | OHCI_ALL_INTRS));
+    kernel_usb_host_write32(controller->bar_base, OHCI_INTERRUPT_STATUS, OHCI_ALL_INTRS);
+    kernel_usb_host_write32(controller->bar_base,
+                            OHCI_HCCA,
+                            (uint32_t)(uintptr_t)&g_kernel_usb_ohci_probe_hcca);
+    kernel_usb_host_write32(controller->bar_base,
+                            OHCI_CONTROL_HEAD_ED,
+                            (uint32_t)(uintptr_t)&g_kernel_usb_ohci_probe_ed);
+    kernel_usb_host_write32(controller->bar_base, OHCI_CONTROL_CURRENT_ED, 0u);
+    kernel_usb_host_write32(controller->bar_base,
+                            OHCI_CONTROL,
+                            (saved_control & ~OHCI_HCFS_MASK) | OHCI_HCFS_OPERATIONAL | OHCI_CLE);
+    kernel_usb_host_write32(controller->bar_base, OHCI_COMMAND_STATUS, OHCI_CLF);
+
+    for (uint32_t spin = 0u; spin < 2u; ++spin) {
+        if (OHCI_TD_GET_CC(g_kernel_usb_ohci_probe_data_td.td_flags) != 0x0fu) {
+            break;
+        }
+        kernel_usb_host_wait_ticks(1u);
+    }
+    kernel_usb_host_wait_usb_settle();
+
+    kernel_usb_host_write32(controller->bar_base, OHCI_CONTROL, saved_control);
+    kernel_usb_host_write32(controller->bar_base, OHCI_CONTROL_HEAD_ED, saved_head);
+    kernel_usb_host_write32(controller->bar_base, OHCI_CONTROL_CURRENT_ED, saved_current);
+    kernel_usb_host_write32(controller->bar_base, OHCI_HCCA, saved_hcca);
+    kernel_usb_host_write32(controller->bar_base, OHCI_INTERRUPT_STATUS, saved_intr_status & OHCI_ALL_INTRS);
+
+    cc = OHCI_TD_GET_CC(g_kernel_usb_ohci_probe_data_td.td_flags);
+    if (cc == 0x0fu) {
+        return 1;
+    }
+    if (cc != 0u) {
+        return -1;
+    }
+
+    memcpy(buffer, &g_kernel_usb_ohci_hid_data[0], transfer_size);
+    *actual_length_out = transfer_size;
+    *data_toggle_io ^= 0x1u;
+    return 0;
+}
+
+static int kernel_usb_hid_keyboard_report_contains(const uint8_t *report,
+                                                   uint32_t length,
+                                                   uint8_t usage) {
+    if (report == 0 || usage == 0u) {
+        return 0;
+    }
+    for (uint32_t i = 2u; i < length; ++i) {
+        if (report[i] == usage) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void kernel_usb_hid_mouse_clamp(struct mouse_state *state) {
+    struct video_mode *mode;
+
+    if (state == 0) {
+        return;
+    }
+    mode = kernel_video_get_mode();
+    if (mode == 0 || mode->width == 0u || mode->height == 0u) {
+        state->x = 0;
+        state->y = 0;
+        return;
+    }
+    if (state->x < 0) {
+        state->x = 0;
+    } else if (state->x >= (int)mode->width) {
+        state->x = (int)mode->width - 1;
+    }
+    if (state->y < 0) {
+        state->y = 0;
+    } else if (state->y >= (int)mode->height) {
+        state->y = (int)mode->height - 1;
+    }
+}
+
+static void kernel_usb_hid_handle_keyboard_report(struct kernel_usb_hid_runtime *runtime,
+                                                  const uint8_t *report,
+                                                  uint32_t length) {
+    uint8_t modifiers;
+
+    if (runtime == 0 || report == 0 || length < 3u) {
+        return;
+    }
+
+    modifiers = report[0];
+    for (uint32_t i = 2u; i < length; ++i) {
+        int key;
+        uint8_t usage = report[i];
+
+        if (usage == 0u || usage == 1u ||
+            kernel_usb_hid_keyboard_report_contains(runtime->last_report,
+                                                    sizeof(runtime->last_report),
+                                                    usage)) {
+            continue;
+        }
+        key = kernel_keyboard_translate_hid_usage(usage, modifiers);
+        if (key != 0) {
+            kernel_input_key_event_enqueue(key);
+        }
+    }
+
+    memset(runtime->last_report, 0, sizeof(runtime->last_report));
+    if (length > sizeof(runtime->last_report)) {
+        length = sizeof(runtime->last_report);
+    }
+    memcpy(runtime->last_report, report, length);
+}
+
+static void kernel_usb_hid_handle_mouse_report(const uint8_t *report, uint32_t length) {
+    struct video_mode *mode;
+    struct mouse_state state;
+    int buttons;
+
+    if (report == 0 || length < 3u) {
+        return;
+    }
+
+    mode = kernel_video_get_mode();
+    if (!g_kernel_usb_hid_mouse_ready) {
+        memset(&g_kernel_usb_hid_mouse_state, 0, sizeof(g_kernel_usb_hid_mouse_state));
+        if (mode != 0 && mode->width != 0u && mode->height != 0u) {
+            g_kernel_usb_hid_mouse_state.x = (int)(mode->width / 2u);
+            g_kernel_usb_hid_mouse_state.y = (int)(mode->height / 2u);
+        }
+        g_kernel_usb_hid_mouse_ready = 1u;
+    }
+
+    buttons = (int)(report[0] & 0x07u);
+    state = g_kernel_usb_hid_mouse_state;
+    state.dx = (int)(int8_t)report[1];
+    state.dy = -((int)(int8_t)report[2]);
+    state.wheel = 0;
+    if (length >= 4u) {
+        state.wheel = -((int)((int8_t)(report[3] << 4)) >> 4);
+    }
+    if (state.dx == 0 && state.dy == 0 && state.wheel == 0 &&
+        buttons == (int)g_kernel_usb_hid_mouse_state.buttons) {
+        return;
+    }
+    state.x += state.dx;
+    state.y += state.dy;
+    state.buttons = (uint8_t)buttons;
+    kernel_usb_hid_mouse_clamp(&state);
+    g_kernel_usb_hid_mouse_state = state;
+    kernel_input_mouse_event_enqueue(&state);
+    if (g_kernel_usb_hid_trace_budget > 0u) {
+        g_kernel_usb_hid_trace_budget -= 1u;
+        kernel_debug_printf("usb-host: hid mouse x=%d y=%d dx=%d dy=%d wheel=%d b=%u\n",
+                            state.x,
+                            state.y,
+                            state.dx,
+                            state.dy,
+                            state.wheel,
+                            (unsigned)state.buttons);
+    }
+}
+
+static void kernel_usb_hid_runtime_rebuild(void) {
+    memset(&g_kernel_usb_hid_runtime[0], 0, sizeof(g_kernel_usb_hid_runtime));
+    g_kernel_usb_hid_mouse_ready = 0u;
+
+    for (uint32_t i = 0u; i < g_kernel_usb_host_state.probe_snapshots; ++i) {
+        struct kernel_usb_hid_runtime *runtime;
+        struct kernel_usb_probe_snapshot *snapshot = &g_kernel_usb_host_state.probe_snapshot_entries[i];
+        struct kernel_usb_probe_dispatch_context dispatch;
+        uint32_t interval_ticks;
+
+        if (snapshot->status != KERNEL_USB_PROBE_STATUS_CONFIGURED_READY &&
+            snapshot->status != KERNEL_USB_PROBE_STATUS_ATTACHED_READY) {
+            continue;
+        }
+        if (kernel_usb_host_validate_assigned_address(snapshot->assigned_address) != 0 ||
+            (snapshot->hid_boot_keyboard_detected == 0u &&
+             snapshot->hid_boot_mouse_detected == 0u) ||
+            snapshot->hid_interface_number == 0xffu ||
+            snapshot->hid_endpoint_address == 0xffu ||
+            snapshot->hid_endpoint_max_packet == 0u ||
+            (snapshot->hid_endpoint_address & USB_ENDPOINT_DIR_IN) == 0u ||
+            (snapshot->hid_endpoint_attributes & USB_ENDPOINT_TRANSFER_MASK) != USB_ENDPOINT_TRANSFER_INTERRUPT) {
+            continue;
+        }
+        if (kernel_usb_host_probe_dispatch_context_for_snapshot(i, &dispatch) != 0 ||
+            !dispatch.transport_available ||
+            (dispatch.transport_kind != KERNEL_USB_HOST_KIND_UHCI &&
+             dispatch.transport_kind != KERNEL_USB_HOST_KIND_OHCI)) {
+            continue;
+        }
+
+        runtime = &g_kernel_usb_hid_runtime[i];
+        interval_ticks = snapshot->hid_poll_interval == 0u ?
+            1u : ((uint32_t)snapshot->hid_poll_interval + 9u) / 10u;
+        if (interval_ticks == 0u) {
+            interval_ticks = 1u;
+        }
+        runtime->active = 1u;
+        runtime->snapshot_index = (uint8_t)i;
+        runtime->protocol = snapshot->hid_boot_keyboard_detected != 0u ?
+            USB_PROTOCOL_HID_KEYBOARD : USB_PROTOCOL_HID_MOUSE;
+        runtime->address = snapshot->assigned_address;
+        runtime->interface_number = snapshot->hid_interface_number;
+        runtime->endpoint_address = snapshot->hid_endpoint_address;
+        runtime->endpoint_attributes = snapshot->hid_endpoint_attributes;
+        runtime->poll_interval_ticks = (uint8_t)interval_ticks;
+        runtime->data_toggle = 0u;
+        runtime->protocol_armed = 0u;
+        runtime->max_packet_size = snapshot->hid_endpoint_max_packet;
+        runtime->next_poll_tick = 0u;
+        memset(runtime->last_report, 0, sizeof(runtime->last_report));
+    }
+
+    g_kernel_usb_hid_runtime_valid = 1u;
+}
+
+static void kernel_usb_hid_poll_device(struct kernel_usb_hid_runtime *runtime) {
+    struct kernel_usb_probe_dispatch_context dispatch;
+    struct kernel_usb_probe_snapshot snapshot;
+    uint8_t report[KERNEL_USB_HID_REPORT_MAX];
+    uint32_t actual_length = 0u;
+    uint32_t now;
+    int status;
+
+    if (runtime == 0 || runtime->active == 0u) {
+        return;
+    }
+
+    now = kernel_timer_get_ticks();
+    if (runtime->next_poll_tick != 0u &&
+        (int32_t)(now - runtime->next_poll_tick) < 0) {
+        return;
+    }
+    runtime->next_poll_tick = now + (runtime->poll_interval_ticks == 0u ? 1u : runtime->poll_interval_ticks);
+
+    if (runtime->snapshot_index >= g_kernel_usb_host_state.probe_snapshots) {
+        runtime->active = 0u;
+        return;
+    }
+    snapshot = g_kernel_usb_host_state.probe_snapshot_entries[runtime->snapshot_index];
+    if (kernel_usb_host_probe_dispatch_context_for_snapshot(runtime->snapshot_index, &dispatch) != 0 ||
+        !dispatch.transport_available ||
+        kernel_usb_host_probe_port_ready(&dispatch) != 0) {
+        return;
+    }
+
+    if (runtime->protocol_armed == 0u) {
+        (void)kernel_usb_host_hid_set_boot_protocol(&dispatch,
+                                                    snapshot.assigned_address,
+                                                    (uint8_t)snapshot.max_packet_size0,
+                                                    snapshot.hid_interface_number);
+        runtime->protocol_armed = 1u;
+        kernel_usb_host_wait_usb_settle();
+    }
+
+    memset(report, 0, sizeof(report));
+    if (dispatch.transport_kind == KERNEL_USB_HOST_KIND_UHCI) {
+        status = kernel_usb_host_hid_read_uhci_packet(&dispatch,
+                                                      snapshot.assigned_address,
+                                                      runtime->endpoint_address,
+                                                      runtime->max_packet_size,
+                                                      &runtime->data_toggle,
+                                                      report,
+                                                      sizeof(report),
+                                                      &actual_length);
+    } else if (dispatch.transport_kind == KERNEL_USB_HOST_KIND_OHCI) {
+        status = kernel_usb_host_hid_read_ohci_packet(&dispatch,
+                                                      snapshot.assigned_address,
+                                                      runtime->endpoint_address,
+                                                      runtime->max_packet_size,
+                                                      &runtime->data_toggle,
+                                                      report,
+                                                      sizeof(report),
+                                                      &actual_length);
+    } else {
+        return;
+    }
+    if (status != 0 || actual_length == 0u) {
+        return;
+    }
+
+    if (runtime->protocol == USB_PROTOCOL_HID_KEYBOARD) {
+        kernel_usb_hid_handle_keyboard_report(runtime, report, actual_length);
+    } else if (runtime->protocol == USB_PROTOCOL_HID_MOUSE) {
+        kernel_usb_hid_handle_mouse_report(report, actual_length);
+    }
+}
+
+void kernel_usb_hid_poll(void) {
+    if (g_kernel_usb_hid_runtime_valid == 0u) {
+        kernel_usb_hid_runtime_rebuild();
+    }
+
+    for (uint32_t i = 0u; i < g_kernel_usb_host_state.probe_snapshots; ++i) {
+        if (g_kernel_usb_hid_runtime[i].active == 0u) {
+            continue;
+        }
+        kernel_usb_hid_poll_device(&g_kernel_usb_hid_runtime[i]);
+    }
+}
+
 int kernel_usb_probe_dispatch_next(uint8_t audio_only,
                                    struct kernel_usb_probe_snapshot *info_out,
                                    uint32_t *match_index_out) {
@@ -3784,6 +4446,14 @@ int kernel_usb_probe_execute_next(uint8_t audio_only,
                    sizeof(snapshot->config_descriptor_prefix));
             snapshot->config_valid = info_out->config_valid;
             snapshot->audio_class_detected = info_out->audio_class_detected;
+            snapshot->hid_boot_keyboard_detected = info_out->hid_boot_keyboard_detected;
+            snapshot->hid_boot_mouse_detected = info_out->hid_boot_mouse_detected;
+            snapshot->hid_interface_number = info_out->hid_interface_number;
+            snapshot->hid_interface_protocol = info_out->hid_interface_protocol;
+            snapshot->hid_endpoint_address = info_out->hid_endpoint_address;
+            snapshot->hid_endpoint_attributes = info_out->hid_endpoint_attributes;
+            snapshot->hid_poll_interval = info_out->hid_poll_interval;
+            snapshot->hid_endpoint_max_packet = info_out->hid_endpoint_max_packet;
             snapshot->config_total_length = info_out->config_total_length;
             snapshot->configuration_value = info_out->configuration_value;
             snapshot->interface_count = info_out->interface_count;
@@ -3808,6 +4478,14 @@ int kernel_usb_probe_execute_next(uint8_t audio_only,
             memset(snapshot->config_descriptor_prefix, 0, sizeof(snapshot->config_descriptor_prefix));
             snapshot->config_valid = 0u;
             snapshot->audio_class_detected = 0u;
+            snapshot->hid_boot_keyboard_detected = 0u;
+            snapshot->hid_boot_mouse_detected = 0u;
+            snapshot->hid_interface_number = 0xffu;
+            snapshot->hid_interface_protocol = 0u;
+            snapshot->hid_endpoint_address = 0xffu;
+            snapshot->hid_endpoint_attributes = 0u;
+            snapshot->hid_poll_interval = 0u;
+            snapshot->hid_endpoint_max_packet = 0u;
             snapshot->config_total_length = 0u;
             snapshot->configuration_value = 0u;
             snapshot->interface_count = 0u;
@@ -3827,6 +4505,7 @@ int kernel_usb_probe_execute_next(uint8_t audio_only,
         kernel_usb_host_probe_snapshot_set_status(&g_kernel_usb_host_state,
                                                   snapshot,
                                                   snapshot_status);
+        g_kernel_usb_hid_runtime_valid = 0u;
     }
 
     return 0;

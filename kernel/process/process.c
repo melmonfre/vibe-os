@@ -26,7 +26,10 @@ static uint32_t process_priority_for(enum process_kind kind,
                                      uint32_t service_type,
                                      uint32_t launch_flags) {
     if (kind == PROCESS_KIND_USER) {
-        if ((launch_flags & (MK_LAUNCH_FLAG_USER_SHELL | MK_LAUNCH_FLAG_USER_DESKTOP)) != 0u) {
+        if ((launch_flags & (MK_LAUNCH_FLAG_USER_SHELL |
+                             MK_LAUNCH_FLAG_USER_DESKTOP |
+                             MK_LAUNCH_FLAG_BOOTSTRAP |
+                             MK_LAUNCH_FLAG_CRITICAL)) != 0u) {
             return PROCESS_PRIORITY_DESKTOP_USER;
         }
         return PROCESS_PRIORITY_APP;
@@ -34,9 +37,9 @@ static uint32_t process_priority_for(enum process_kind kind,
     if (kind == PROCESS_KIND_SERVICE) {
         switch (service_type) {
         case MK_SERVICE_INPUT:
+        case MK_SERVICE_CONSOLE:
             return PROCESS_PRIORITY_INPUT;
         case MK_SERVICE_VIDEO:
-        case MK_SERVICE_CONSOLE:
             return PROCESS_PRIORITY_VIDEO;
         case MK_SERVICE_STORAGE:
         case MK_SERVICE_FILESYSTEM:

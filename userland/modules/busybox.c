@@ -141,6 +141,9 @@ static const char *const g_builtin_help_commands[] = {
     "pwd",
     "ls",
     "cd",
+    "spawn",
+    "ps",
+    "kill",
     "mkdir",
     "touch",
     "rm",
@@ -407,49 +410,149 @@ static const char *path_basename(const char *path) {
     return last;
 }
 
-static int try_run_external(int argc, char **argv) {
-    busybox_debug_cmd("busybox: try external ", (argc > 0 && argv) ? argv[0] : "(null)");
-    if (has_slash(argv[0])) {
-        int node = fs_resolve(argv[0]);
-        if (node >= 0 && !g_fs_nodes[node].is_dir) {
-            int rc;
-            char *patched_argv[32];
-            int patched_argc = argc;
+static int busybox_task_pid_alive(uint32_t pid) {
+    struct task_snapshot_summary summary;
+    struct task_snapshot_entry entries[TASK_SNAPSHOT_MAX];
+    uint32_t count;
 
-            if (patched_argc > 31) {
-                patched_argc = 31;
-            }
-            for (int i = 0; i < patched_argc; ++i) {
-                patched_argv[i] = argv[i];
-            }
-            patched_argv[0] = (char *)path_basename(argv[0]);
-            patched_argv[patched_argc] = 0;
-            rc = lang_try_run(patched_argc, patched_argv);
-            if (rc >= 0) {
-                busybox_debug_cmd("busybox: external ok ", patched_argv[0]);
-                return rc;
+    if (pid == 0u) {
+        return 0;
+    }
+    if (sys_task_snapshot(&summary, entries, TASK_SNAPSHOT_MAX) != 0) {
+        return 1;
+    }
+
+    count = summary.total_tasks;
+    if (count > TASK_SNAPSHOT_MAX) {
+        count = TASK_SNAPSHOT_MAX;
+    }
+
+    for (uint32_t i = 0; i < count; ++i) {
+        if (entries[i].pid == pid && entries[i].state != 3u) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int busybox_wait_for_task_exit(uint32_t pid) {
+    struct mk_task_event event;
+
+    if (pid == 0u) {
+        return -1;
+    }
+    if (sys_task_event_subscribe() != 0) {
+        return -1;
+    }
+
+    for (;;) {
+        while (sys_task_event_receive(&event, 8u) == 0) {
+            if (event.pid == pid &&
+                event.event_type == MK_TASK_EVENT_TERMINATED) {
+                return 0;
             }
         }
+        if (!busybox_task_pid_alive(pid)) {
+            return 0;
+        }
+        fs_tick();
+        sys_yield();
+    }
+}
+
+static int busybox_prepare_external_argv(int argc,
+                                         char **argv,
+                                         char **patched_argv,
+                                         int *patched_argc_out) {
+    int patched_argc;
+
+    if (argc <= 0 || argv == 0 || argv[0] == 0 || patched_argv == 0 || patched_argc_out == 0) {
+        return -1;
+    }
+
+    patched_argc = argc;
+    if (patched_argc > 31) {
+        patched_argc = 31;
+    }
+    for (int i = 0; i < patched_argc; ++i) {
+        patched_argv[i] = argv[i];
+    }
+
+    if (has_slash(argv[0])) {
+        int node = fs_resolve(argv[0]);
+
+        if (node < 0 || g_fs_nodes[node].is_dir) {
+            return -1;
+        }
+        patched_argv[0] = (char *)path_basename(argv[0]);
+    }
+
+    patched_argv[patched_argc] = 0;
+    *patched_argc_out = patched_argc;
+    return 0;
+}
+
+static int busybox_launch_external_task(int argc, char **argv, int wait_for_exit) {
+    int pid;
+
+    if (argc <= 0 || argv == 0 || argv[0] == 0) {
+        return -1;
+    }
+    if (argc > (int)USERLAND_LAUNCH_ARGC_MAX) {
+        return -1;
+    }
+
+    pid = sys_launch_app_argv(argc, argv);
+    if (pid <= 0) {
+        return -1;
+    }
+    if (!wait_for_exit) {
+        return 0;
+    }
+    return busybox_wait_for_task_exit((uint32_t)pid);
+}
+
+static int try_run_external_prepared(int argc, char **argv) {
+    int rc;
+
+    if (argc <= 0 || argv == 0 || argv[0] == 0) {
+        return -1;
+    }
+    if (!lang_can_run(argv[0])) {
         busybox_debug_cmd("busybox: external miss ", argv[0]);
         return -1;
     }
 
-    {
-        int rc = lang_try_run(argc, argv);
-        if (rc >= 0) {
-            busybox_debug_cmd("busybox: external ok ", argv[0]);
-            return rc;
-        }
+    if (busybox_launch_external_task(argc, argv, 1) == 0) {
+        busybox_debug_cmd("busybox: external ok ", argv[0]);
+        return 0;
     }
 
+    rc = lang_try_run(argc, argv);
+    if (rc >= 0) {
+        busybox_debug_cmd("busybox: external ok ", argv[0]);
+        return rc;
+    }
     busybox_debug_cmd("busybox: external miss ", argv[0]);
     return -1;
+}
+
+static int try_run_external(int argc, char **argv) {
+    char *patched_argv[32];
+    int patched_argc;
+
+    busybox_debug_cmd("busybox: try external ", (argc > 0 && argv) ? argv[0] : "(null)");
+    if (busybox_prepare_external_argv(argc, argv, patched_argv, &patched_argc) != 0) {
+        busybox_debug_cmd("busybox: external miss ", (argc > 0 && argv) ? argv[0] : "(null)");
+        return -1;
+    }
+
+    return try_run_external_prepared(patched_argc, patched_argv);
 }
 
 static int try_run_external_as(int argc, char **argv, const char *name) {
     char *patched_argv[32];
     int patched_argc = argc;
-    int rc;
 
     if (!name || name[0] == '\0') {
         return -1;
@@ -463,11 +566,7 @@ static int try_run_external_as(int argc, char **argv, const char *name) {
     }
     patched_argv[0] = (char *)name;
     patched_argv[patched_argc] = 0;
-    rc = lang_try_run(patched_argc, patched_argv);
-    if (rc >= 0) {
-        busybox_debug_cmd("busybox: external ok ", patched_argv[0]);
-    }
-    return rc;
+    return try_run_external_prepared(patched_argc, patched_argv);
 }
 
 static int should_prefer_external(const char *cmd) {
@@ -947,6 +1046,317 @@ static int parse_u32_arg(const char *text, uint32_t *value) {
     }
 
     *value = result;
+    return 0;
+}
+
+static const char *task_snapshot_kind_name(uint32_t kind) {
+    switch (kind) {
+    case 0u:
+        return "user";
+    case 1u:
+        return "service";
+    case 2u:
+        return "kernel";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *task_snapshot_state_name(uint32_t state) {
+    switch (state) {
+    case 0u:
+        return "ready";
+    case 1u:
+        return "running";
+    case 2u:
+        return "blocked";
+    case 3u:
+        return "terminated";
+    default:
+        return "unknown";
+    }
+}
+
+static const char *task_snapshot_priority_name(uint32_t tier) {
+    switch (tier) {
+    case 0u:
+        return "desktop";
+    case 1u:
+        return "input";
+    case 2u:
+        return "video";
+    case 3u:
+        return "storage";
+    case 4u:
+        return "audio";
+    case 5u:
+        return "network";
+    case 6u:
+        return "apps";
+    default:
+        return "background";
+    }
+}
+
+static const char *task_snapshot_service_name(uint32_t service_type) {
+    switch (service_type) {
+    case 1u:
+        return "init";
+    case 2u:
+        return "storage";
+    case 3u:
+        return "filesystem";
+    case 4u:
+        return "video";
+    case 5u:
+        return "input";
+    case 6u:
+        return "console";
+    case 7u:
+        return "network";
+    case 8u:
+        return "audio";
+    default:
+        return "-";
+    }
+}
+
+static uint32_t task_snapshot_service_type_from_name(const char *name) {
+    if (name == 0 || *name == '\0') {
+        return 0u;
+    }
+    if (strcmp(name, "init") == 0) {
+        return 1u;
+    }
+    if (strcmp(name, "storage") == 0) {
+        return 2u;
+    }
+    if (strcmp(name, "filesystem") == 0) {
+        return 3u;
+    }
+    if (strcmp(name, "video") == 0) {
+        return 4u;
+    }
+    if (strcmp(name, "input") == 0) {
+        return 5u;
+    }
+    if (strcmp(name, "console") == 0) {
+        return 6u;
+    }
+    if (strcmp(name, "network") == 0) {
+        return 7u;
+    }
+    if (strcmp(name, "audio") == 0) {
+        return 8u;
+    }
+    return 0u;
+}
+
+static int task_snapshot_find_named(const char *name,
+                                    struct task_snapshot_entry *match,
+                                    int *ambiguous) {
+    struct task_snapshot_summary summary;
+    struct task_snapshot_entry entries[TASK_SNAPSHOT_MAX];
+    uint32_t count;
+    uint32_t i;
+    int found = 0;
+
+    if (name == 0 || *name == '\0' || match == 0) {
+        return -1;
+    }
+
+    if (sys_task_snapshot(&summary, entries, TASK_SNAPSHOT_MAX) != 0) {
+        return -1;
+    }
+
+    count = summary.total_tasks;
+    if (count > TASK_SNAPSHOT_MAX) {
+        count = TASK_SNAPSHOT_MAX;
+    }
+
+    for (i = 0; i < count; ++i) {
+        if (entries[i].pid == 0u || entries[i].state == 3u) {
+            continue;
+        }
+        if (strcmp(entries[i].name, name) == 0 ||
+            (entries[i].service_type != 0u &&
+             strcmp(task_snapshot_service_name(entries[i].service_type), name) == 0)) {
+            if (found) {
+                if (ambiguous != 0) {
+                    *ambiguous = 1;
+                }
+                return 0;
+            }
+            *match = entries[i];
+            found = 1;
+        }
+    }
+
+    if (ambiguous != 0) {
+        *ambiguous = 0;
+    }
+    return found ? 0 : -1;
+}
+
+static int cmd_ps(int argc, char **argv) {
+    struct task_snapshot_summary summary;
+    struct task_snapshot_entry entries[TASK_SNAPSHOT_MAX];
+    uint32_t count;
+    uint32_t i;
+    const char *filter = 0;
+
+    if (argc > 1) {
+        filter = argv[1];
+    }
+
+    if (sys_task_snapshot(&summary, entries, TASK_SNAPSHOT_MAX) != 0) {
+        console_write("ps: snapshot failed\n");
+        return 0;
+    }
+
+    count = summary.total_tasks;
+    if (count > TASK_SNAPSHOT_MAX) {
+        count = TASK_SNAPSHOT_MAX;
+    }
+
+    console_write("pid kind state prio service restarts name\n");
+    for (i = 0; i < count; ++i) {
+        char line[160];
+
+        if (entries[i].pid == 0u || entries[i].state == 3u) {
+            continue;
+        }
+        if (filter != 0 && *filter != '\0' &&
+            strcmp(entries[i].name, filter) != 0 &&
+            strcmp(task_snapshot_service_name(entries[i].service_type), filter) != 0) {
+            continue;
+        }
+
+        line[0] = '\0';
+        append_uint(line, entries[i].pid, (int)sizeof(line));
+        str_append(line, " ", (int)sizeof(line));
+        str_append(line, task_snapshot_kind_name(entries[i].kind), (int)sizeof(line));
+        str_append(line, " ", (int)sizeof(line));
+        str_append(line, task_snapshot_state_name(entries[i].state), (int)sizeof(line));
+        str_append(line, " ", (int)sizeof(line));
+        str_append(line, task_snapshot_priority_name(entries[i].priority_tier), (int)sizeof(line));
+        str_append(line, " ", (int)sizeof(line));
+        str_append(line, task_snapshot_service_name(entries[i].service_type), (int)sizeof(line));
+        str_append(line, " ", (int)sizeof(line));
+        append_uint(line, entries[i].service_restart_count, (int)sizeof(line));
+        str_append(line, " ", (int)sizeof(line));
+        str_append(line, entries[i].name, (int)sizeof(line));
+        str_append(line, "\n", (int)sizeof(line));
+        console_write(line);
+    }
+    return 0;
+}
+
+static int cmd_kill(int argc, char **argv) {
+    struct task_snapshot_entry match;
+    uint32_t pid = 0u;
+    int ambiguous = 0;
+    char line[128];
+
+    if (argc < 2) {
+        console_write("usage: kill <pid|name>\n");
+        sys_write_debug("kill: usage\n");
+        return 0;
+    }
+
+    line[0] = '\0';
+    str_append(line, "kill: request target=", (int)sizeof(line));
+    str_append(line, argv[1], (int)sizeof(line));
+    str_append(line, "\n", (int)sizeof(line));
+    sys_write_debug(line);
+
+    if (parse_u32_arg(argv[1], &pid) != 0) {
+        uint32_t service_type = task_snapshot_service_type_from_name(argv[1]);
+
+        if (service_type != 0u) {
+            int service_pid = sys_service_pid(service_type);
+
+            if (service_pid > 0) {
+                pid = (uint32_t)service_pid;
+            }
+            if (sys_service_restart(service_type) == 0) {
+                line[0] = '\0';
+                str_append(line, "kill: terminated pid=", (int)sizeof(line));
+                append_uint(line, pid, (int)sizeof(line));
+                str_append(line, " target=", (int)sizeof(line));
+                str_append(line, argv[1], (int)sizeof(line));
+                str_append(line, "\n", (int)sizeof(line));
+                console_write(line);
+                sys_write_debug(line);
+                return 0;
+            }
+        }
+    }
+
+    if (pid == 0u && parse_u32_arg(argv[1], &pid) != 0) {
+        if (task_snapshot_find_named(argv[1], &match, &ambiguous) != 0) {
+            console_write("kill: task not found\n");
+            sys_write_debug("kill: task not found\n");
+            return 0;
+        }
+        if (ambiguous) {
+            console_write("kill: ambiguous task name\n");
+            sys_write_debug("kill: ambiguous task name\n");
+            return 0;
+        }
+        pid = match.pid;
+    }
+
+    if (sys_task_terminate(pid) != 0) {
+        console_write("kill: terminate failed\n");
+        sys_write_debug("kill: terminate failed\n");
+        return 0;
+    }
+
+    line[0] = '\0';
+    str_append(line, "kill: terminated pid=", (int)sizeof(line));
+    append_uint(line, pid, (int)sizeof(line));
+    if (argc > 1 && parse_u32_arg(argv[1], &match.pid) != 0) {
+        str_append(line, " target=", (int)sizeof(line));
+        str_append(line, argv[1], (int)sizeof(line));
+    }
+    str_append(line, "\n", (int)sizeof(line));
+    console_write(line);
+    sys_write_debug(line);
+    return 0;
+}
+
+static int cmd_spawn(int argc, char **argv) {
+    char *patched_argv[32];
+    int patched_argc;
+    int pid;
+    char line[128];
+
+    if (argc < 2 || argv[1] == 0 || argv[1][0] == '\0') {
+        console_write("usage: spawn <app> [args...]\n");
+        return 0;
+    }
+
+    if (busybox_prepare_external_argv(argc - 1, &argv[1], patched_argv, &patched_argc) != 0 ||
+        !lang_can_run(patched_argv[0])) {
+        console_write("spawn: app not found\n");
+        return 0;
+    }
+
+    pid = patched_argc == 1 ? sys_launch_app(patched_argv[0]) : sys_launch_app_argv(patched_argc, patched_argv);
+    if (pid <= 0) {
+        console_write("spawn: launch failed\n");
+        return 0;
+    }
+
+    line[0] = '\0';
+    str_append(line, "spawn: launched pid=", (int)sizeof(line));
+    append_uint(line, (uint32_t)pid, (int)sizeof(line));
+    str_append(line, " app=", (int)sizeof(line));
+    str_append(line, patched_argv[0], (int)sizeof(line));
+    str_append(line, "\n", (int)sizeof(line));
+    console_write(line);
+    sys_write_debug(line);
     return 0;
 }
 
@@ -3409,6 +3819,9 @@ static void append_vidreport_boot_flags(char *buf, int max_len, uint32_t boot_fl
 
 static void append_vidreport_launch_info(char *buf, int max_len) {
     struct userland_launch_info info;
+    uint32_t arg_index = 0u;
+    uint32_t offset = 0u;
+    char argv_line[160];
 
     if (buf == 0) {
         return;
@@ -3424,7 +3837,33 @@ static void append_vidreport_launch_info(char *buf, int max_len) {
     append_vidbench_line(buf, max_len, "kind", info.kind);
     append_vidbench_line(buf, max_len, "service_type", info.service_type);
     append_vidbench_line(buf, max_len, "flags", info.flags);
+    append_vidbench_line(buf, max_len, "argc", info.argc);
     append_vidstress_line(buf, max_len, "name", info.name);
+    argv_line[0] = '\0';
+    while (arg_index < info.argc && offset < USERLAND_LAUNCH_ARGV_BYTES) {
+        const char *arg = &info.argv_data[offset];
+        int arg_len = 0;
+
+        if (arg[0] == '\0') {
+            break;
+        }
+        while ((offset + (uint32_t)arg_len) < USERLAND_LAUNCH_ARGV_BYTES &&
+               arg[arg_len] != '\0') {
+            arg_len += 1;
+        }
+        if (arg_len == 0 || (offset + (uint32_t)arg_len) >= USERLAND_LAUNCH_ARGV_BYTES) {
+            break;
+        }
+        if (argv_line[0] != '\0') {
+            str_append(argv_line, " | ", (int)sizeof(argv_line));
+        }
+        str_append(argv_line, arg, (int)sizeof(argv_line));
+        offset += (uint32_t)arg_len + 1u;
+        arg_index += 1u;
+    }
+    if (argv_line[0] != '\0') {
+        append_vidstress_line(buf, max_len, "argv", argv_line);
+    }
     append_vidreport_boot_flags(buf, max_len, info.boot_flags);
     str_append(buf, "\n", max_len);
 }
@@ -3823,6 +4262,9 @@ static const struct command g_commands[] = {
     {"pwd", cmd_pwd},
     {"ls", cmd_ls},
     {"cd", cmd_cd},
+    {"spawn", cmd_spawn},
+    {"ps", cmd_ps},
+    {"kill", cmd_kill},
     {"mkdir", cmd_mkdir},
     {"touch", cmd_touch},
     {"rm", cmd_rm},

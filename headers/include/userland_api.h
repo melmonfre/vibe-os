@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#define USERLAND_LAUNCH_NAME_MAX 16u
+#define USERLAND_LAUNCH_ARGC_MAX 8u
+#define USERLAND_LAUNCH_ARGV_BYTES 192u
+
 enum syscall_id {
     SYSCALL_GFX_CLEAR = 1,
     SYSCALL_GFX_RECT = 2,
@@ -91,7 +95,12 @@ enum syscall_id {
     SYSCALL_VIDEO_EVENT_RECV = 84,
     SYSCALL_VIDEO_PRESENT_SUBMIT = 85,
     SYSCALL_NETWORK_EVENT_SUBSCRIBE = 86,
-    SYSCALL_NETWORK_EVENT_RECV = 87
+    SYSCALL_NETWORK_EVENT_RECV = 87,
+    SYSCALL_TASK_EVENT_SUBSCRIBE = 88,
+    SYSCALL_TASK_EVENT_RECV = 89,
+    SYSCALL_SERVICE_PID = 90,
+    SYSCALL_SERVICE_RESTART = 91,
+    SYSCALL_LAUNCH_APP = 92
 };
 
 enum userland_builtin_target {
@@ -99,7 +108,8 @@ enum userland_builtin_target {
     USERLAND_BUILTIN_SHELL = 1,
     USERLAND_BUILTIN_DESKTOP = 2,
     USERLAND_BUILTIN_STARTX = 3,
-    USERLAND_BUILTIN_DESKTOP_AUDIO = 4
+    USERLAND_BUILTIN_DESKTOP_AUDIO = 4,
+    USERLAND_BUILTIN_BOOT_AUDIO = 5
 };
 
 enum input_keycode {
@@ -201,7 +211,9 @@ enum mk_video_event_type {
     MK_VIDEO_EVENT_NONE = 0,
     MK_VIDEO_EVENT_PRESENT = 1,
     MK_VIDEO_EVENT_MODE_SET = 2,
-    MK_VIDEO_EVENT_LEAVE = 3
+    MK_VIDEO_EVENT_LEAVE = 3,
+    MK_VIDEO_EVENT_OVERFLOW = 4,
+    MK_VIDEO_EVENT_PRESENT_SUBMITTED = 5
 };
 
 struct mk_video_event {
@@ -209,8 +221,11 @@ struct mk_video_event {
     uint32_t event_type;
     uint32_t present_mode;
     uint32_t sequence;
+    uint32_t completed_sequence;
+    uint32_t pending_depth;
     uint32_t active_width;
     uint32_t active_height;
+    uint32_t dropped_events;
     uint32_t tick;
 };
 
@@ -273,7 +288,9 @@ struct userland_launch_info {
     uint32_t boot_partition_sectors;
     uint32_t data_partition_lba;
     uint32_t data_partition_sectors;
-    char name[16];
+    uint32_t argc;
+    char name[USERLAND_LAUNCH_NAME_MAX];
+    char argv_data[USERLAND_LAUNCH_ARGV_BYTES];
 };
 
 enum mk_service_event_type {
@@ -299,7 +316,8 @@ enum mk_audio_event_type {
     MK_AUDIO_EVENT_NONE = 0,
     MK_AUDIO_EVENT_QUEUED = 1,
     MK_AUDIO_EVENT_IDLE = 2,
-    MK_AUDIO_EVENT_UNDERRUN = 3
+    MK_AUDIO_EVENT_UNDERRUN = 3,
+    MK_AUDIO_EVENT_OVERFLOW = 4
 };
 
 struct mk_audio_event {
@@ -308,6 +326,7 @@ struct mk_audio_event {
     uint32_t backend_kind;
     uint32_t queued_bytes;
     uint32_t underruns;
+    uint32_t dropped_events;
     uint32_t tick;
 };
 
@@ -317,7 +336,10 @@ enum mk_network_event_type {
     MK_NETWORK_EVENT_SOCKET_RECV = 2,
     MK_NETWORK_EVENT_SOCKET_ACCEPT = 3,
     MK_NETWORK_EVENT_SOCKET_SEND = 4,
-    MK_NETWORK_EVENT_SOCKET_CLOSED = 5
+    MK_NETWORK_EVENT_SOCKET_CLOSED = 5,
+    MK_NETWORK_EVENT_BACKEND_RX = 6,
+    MK_NETWORK_EVENT_BACKEND_TX = 7,
+    MK_NETWORK_EVENT_OVERFLOW = 8
 };
 
 struct mk_network_event {
@@ -328,6 +350,27 @@ struct mk_network_event {
     uint32_t sequence;
     uint32_t link_state;
     uint32_t byte_count;
+    uint32_t dropped_events;
+    uint32_t tick;
+};
+
+enum mk_task_event_type {
+    MK_TASK_EVENT_NONE = 0,
+    MK_TASK_EVENT_LAUNCHED = 1,
+    MK_TASK_EVENT_TERMINATED = 2,
+    MK_TASK_EVENT_BLOCKED = 3,
+    MK_TASK_EVENT_WOKE = 4,
+    MK_TASK_EVENT_RESTART_REQUESTED = 5
+};
+
+struct mk_task_event {
+    uint32_t abi_version;
+    uint32_t event_type;
+    uint32_t pid;
+    uint32_t kind;
+    uint32_t service_type;
+    uint32_t priority_tier;
+    uint32_t flags;
     uint32_t tick;
 };
 

@@ -926,10 +926,12 @@ static void mk_audio_enqueue_event(struct mk_audio_event_subscription *subscript
     event.backend_kind = g_audio_state.backend_kind;
     event.queued_bytes = queued_bytes;
     event.underruns = underruns;
+    event.dropped_events = subscription->dropped_events;
     event.tick = kernel_timer_get_ticks();
     subscription->events[subscription->tail] = event;
     subscription->tail = (subscription->tail + 1u) % MK_AUDIO_EVENT_QUEUE_SIZE;
     subscription->count += 1u;
+    subscription->dropped_events = 0u;
     kernel_waitable_signal(&subscription->waitable, 1u);
 }
 
@@ -10001,6 +10003,18 @@ int mk_audio_service_event_receive(process_t *subscriber,
             *event = subscription->events[subscription->head];
             subscription->head = (subscription->head + 1u) % MK_AUDIO_EVENT_QUEUE_SIZE;
             subscription->count -= 1u;
+            return 0;
+        }
+        if (subscription->dropped_events != 0u) {
+            memset(event, 0, sizeof(*event));
+            event->abi_version = 1u;
+            event->event_type = MK_AUDIO_EVENT_OVERFLOW;
+            event->backend_kind = g_audio_state.backend_kind;
+            event->queued_bytes = g_audio_state.audio_event_last_queued_bytes;
+            event->underruns = g_audio_state.audio_event_last_underruns;
+            event->dropped_events = subscription->dropped_events;
+            subscription->dropped_events = 0u;
+            event->tick = kernel_timer_get_ticks();
             return 0;
         }
         if (timeout_ticks == 0u) {

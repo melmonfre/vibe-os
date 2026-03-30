@@ -301,10 +301,12 @@ static void mk_network_enqueue_event(struct mk_network_event_subscription *subsc
     event.sequence = sequence;
     event.link_state = link_state;
     event.byte_count = byte_count;
+    event.dropped_events = subscription->dropped_events;
     event.tick = kernel_timer_get_ticks();
     subscription->events[subscription->tail] = event;
     subscription->tail = (subscription->tail + 1u) % MK_NETWORK_EVENT_QUEUE_SIZE;
     subscription->count += 1u;
+    subscription->dropped_events = 0u;
     kernel_waitable_signal(&subscription->waitable, 1u);
 }
 
@@ -532,6 +534,11 @@ static void mk_network_virtio_handle_rx_frame(uint16_t head_desc,
                                               uint32_t payload_len) {
     g_network_virtio_link.rx_activity_seen = 1;
     g_network_virtio_link.rx_frames_completed += 1u;
+    (void)mk_network_publish_event(MK_NETWORK_EVENT_BACKEND_RX,
+                                   0,
+                                   0,
+                                   g_network_state.status.link_state,
+                                   payload_len);
 
     if (!g_network_virtio_link.rx_activity_logged) {
         kernel_debug_printf("network: virtio rx activity len=%u head=%u\n",
@@ -677,6 +684,11 @@ static void mk_network_virtio_drain_tx_queue(struct mk_network_pci_probe_state *
         tx_queue->last_used_idx = (uint16_t)(tx_queue->last_used_idx + 1u);
         g_network_virtio_link.tx_busy = 0;
         g_network_virtio_link.tx_frames_completed += 1u;
+        (void)mk_network_publish_event(MK_NETWORK_EVENT_BACKEND_TX,
+                                       0,
+                                       0,
+                                       g_network_state.status.link_state,
+                                       g_network_virtio_link.last_tx_frame_bytes);
         if ((int)elem->id == 0) {
             g_network_virtio_link.tx_smoke_done = 1;
             if (!g_network_virtio_link.tx_smoke_logged) {
@@ -1901,6 +1913,17 @@ int mk_network_service_event_receive(struct process *subscriber,
             *event = subscription->events[subscription->head];
             subscription->head = (subscription->head + 1u) % MK_NETWORK_EVENT_QUEUE_SIZE;
             subscription->count -= 1u;
+            return 0;
+        }
+        if (subscription->dropped_events != 0u) {
+            memset(event, 0, sizeof(*event));
+            event->abi_version = 1u;
+            event->event_type = MK_NETWORK_EVENT_OVERFLOW;
+            event->sequence = ++g_network_event_sequence;
+            event->link_state = g_network_state.status.link_state;
+            event->dropped_events = subscription->dropped_events;
+            subscription->dropped_events = 0u;
+            event->tick = kernel_timer_get_ticks();
             return 0;
         }
         if (timeout_ticks == 0u) {

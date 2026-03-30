@@ -2,6 +2,7 @@
 #include <kernel/kernel_string.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/ipc.h>
+#include <kernel/lock.h>
 #include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/process.h>
@@ -20,6 +21,8 @@ static int g_unexpected_reply_budget = 16;
 static int g_storage_request_trace_budget = 8;
 static int g_storage_worker_trace_budget = 8;
 static int g_storage_reply_trace_budget = 8;
+static int g_interactive_request_trace_budget = 24;
+static spinlock_t g_service_event_lock;
 
 static void mk_service_worker_entry(void);
 static void mk_service_publish_event(struct mk_service_record *service, uint32_t event_type);
@@ -29,6 +32,7 @@ static void mk_service_enqueue_event(struct mk_service_record *service,
 
 void mk_service_init(void) {
     memset(g_services, 0, sizeof(g_services));
+    spinlock_init(&g_service_event_lock);
 }
 
 static int mk_service_name_equals(const char *lhs, const char *rhs) {
@@ -225,11 +229,13 @@ static int mk_service_restart_worker_record(struct mk_service_record *service) {
 
 static void mk_service_publish_event(struct mk_service_record *service, uint32_t event_type) {
     uint32_t index;
+    uint32_t flags;
 
     if (service == 0 || service->type == MK_SERVICE_NONE || event_type == MK_SERVICE_EVENT_NONE) {
         return;
     }
 
+    flags = spinlock_lock_irqsave(&g_service_event_lock);
     for (index = 0; index < MK_SERVICE_EVENT_SUBSCRIBERS; ++index) {
         struct mk_service_event_subscription *subscription = &service->subscribers[index];
 
@@ -250,6 +256,7 @@ static void mk_service_publish_event(struct mk_service_record *service, uint32_t
         }
         mk_service_enqueue_event(service, subscription, event_type);
     }
+    spinlock_unlock_irqrestore(&g_service_event_lock, flags);
 }
 
 static void mk_service_enqueue_event(struct mk_service_record *service,
@@ -400,6 +407,18 @@ static void mk_service_worker_step(const struct mk_service_record *service) {
                             (int)request.type,
                             (int)request.source_pid);
     }
+    if ((service->type == MK_SERVICE_VIDEO ||
+         service->type == MK_SERVICE_AUDIO ||
+         service->type == MK_SERVICE_NETWORK ||
+         service->type == MK_SERVICE_INPUT) &&
+        g_interactive_request_trace_budget > 0) {
+        g_interactive_request_trace_budget -= 1;
+        kernel_debug_printf("service: worker svc=%d pid=%d type=%d src=%d\n",
+                            (int)service->type,
+                            current->pid,
+                            (int)request.type,
+                            (int)request.source_pid);
+    }
 
     if (service->local_handler(&request, &reply, service->context) != 0) {
         mk_message_init(&reply, request.type);
@@ -519,12 +538,34 @@ int mk_service_ensure(uint32_t type) {
     return mk_service_restart_worker_record(service);
 }
 
+int mk_service_restart(uint32_t type) {
+    struct mk_service_record *service = mk_service_find_mutable_by_type(type);
+
+    if (service == 0) {
+        return -1;
+    }
+    if (service->type == MK_SERVICE_INIT) {
+        return -1;
+    }
+    if (service->process == 0 && service->pid == 0) {
+        return mk_service_restart_worker_record(service);
+    }
+
+    if (service->process != 0) {
+        scheduler_publish_lifecycle_event(MK_TASK_EVENT_RESTART_REQUESTED,
+                                          service->process);
+    }
+    service->transport_degraded = 1u;
+    return mk_service_restart_worker_record(service);
+}
+
 static int mk_service_request_process(const struct mk_service_record *service,
                                       const struct mk_message *request,
                                       struct mk_message *reply) {
     process_t *current;
     struct mk_message request_copy;
     struct mk_message response;
+    uint32_t waiting_pid;
 
     if (service == 0 || request == 0 || reply == 0) {
         return -1;
@@ -543,88 +584,143 @@ static int mk_service_request_process(const struct mk_service_record *service,
         request_copy.abi_version = MK_MESSAGE_ABI_VERSION;
     }
     request_copy.source_pid = (uint32_t)current->pid;
-    request_copy.target_pid = (uint32_t)service->pid;
-
-    if (service->type == MK_SERVICE_CONSOLE && !g_console_request_trace_emitted) {
-        g_console_request_trace_emitted = 1;
-        kernel_debug_printf("service: send request type=%d from pid=%d to console pid=%d\n",
-                            (int)request_copy.type,
-                            current->pid,
-                            service->pid);
-    }
-    if (service->type == MK_SERVICE_STORAGE && g_storage_request_trace_budget > 0) {
-        g_storage_request_trace_budget -= 1;
-        kernel_debug_printf("service: storage request type=%d from pid=%d to pid=%d\n",
-                            (int)request_copy.type,
-                            current->pid,
-                            service->pid);
-    }
-
-    if (ipc_send(service->process, &request_copy, sizeof(request_copy)) != 0) {
-        if (service->local_handler != 0) {
-            struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
-
-            if (mutable_service != 0) {
-                if (mutable_service->transport_degraded == 0u) {
-                    mutable_service->transport_degraded = 1u;
-                    mk_service_publish_event(mutable_service, MK_SERVICE_EVENT_DEGRADED);
-                }
-            }
-            if (g_transport_fallback_budget > 0) {
-                g_transport_fallback_budget -= 1;
-                kernel_debug_printf("service: transport fallback type=%d src=%d dst=%d service=%d\n",
-                                    (int)request_copy.type,
-                                    (int)request_copy.source_pid,
-                                    (int)request_copy.target_pid,
-                                    (int)service->type);
-            }
-            return service->local_handler(&request_copy, reply, service->context);
-        }
-        if (g_request_send_fail_budget > 0) {
-            g_request_send_fail_budget -= 1;
-            kernel_debug_printf("service: request send failed type=%d src=%d dst=%d\n",
-                                (int)request_copy.type,
-                                (int)request_copy.source_pid,
-                                (int)request_copy.target_pid);
-        }
-        return -1;
-    }
-
     for (;;) {
-        int received = ipc_receive_wait(current, &response, sizeof(response));
+        const struct mk_service_record *live_service = mk_service_find_by_type(service->type);
 
-        if (received == (int)sizeof(response)) {
-            if (response.source_pid == (uint32_t)service->pid &&
-                response.target_pid == (uint32_t)current->pid) {
-                if (service->type == MK_SERVICE_CONSOLE && !g_console_reply_trace_emitted) {
-                    g_console_reply_trace_emitted = 1;
-                    kernel_debug_printf("service: console reply type=%d src=%d dst=%d\n",
-                                        (int)response.type,
-                                        (int)response.source_pid,
-                                        (int)response.target_pid);
-                }
-                {
-                    struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
+        if (live_service != 0) {
+            service = live_service;
+        }
+        if (service == 0 || service->process == 0 || service->pid <= 0) {
+            if (service != 0 && service->local_handler != 0) {
+                return service->local_handler(&request_copy, reply, service->context);
+            }
+            return -1;
+        }
 
-                    if (mutable_service != 0) {
-                        if (mutable_service->transport_degraded != 0u) {
-                            mutable_service->transport_degraded = 0u;
-                            mk_service_publish_event(mutable_service, MK_SERVICE_EVENT_RECOVERED);
-                        }
+        request_copy.target_pid = (uint32_t)service->pid;
+        waiting_pid = request_copy.target_pid;
+
+        if (service->type == MK_SERVICE_CONSOLE && !g_console_request_trace_emitted) {
+            g_console_request_trace_emitted = 1;
+            kernel_debug_printf("service: send request type=%d from pid=%d to console pid=%d\n",
+                                (int)request_copy.type,
+                                current->pid,
+                                service->pid);
+        }
+        if (service->type == MK_SERVICE_STORAGE && g_storage_request_trace_budget > 0) {
+            g_storage_request_trace_budget -= 1;
+            kernel_debug_printf("service: storage request type=%d from pid=%d to pid=%d\n",
+                                (int)request_copy.type,
+                                current->pid,
+                                service->pid);
+        }
+        if ((service->type == MK_SERVICE_VIDEO ||
+             service->type == MK_SERVICE_AUDIO ||
+             service->type == MK_SERVICE_NETWORK ||
+             service->type == MK_SERVICE_INPUT) &&
+            g_interactive_request_trace_budget > 0) {
+            g_interactive_request_trace_budget -= 1;
+            kernel_debug_printf("service: request svc=%d type=%d src=%d dst=%d\n",
+                                (int)service->type,
+                                (int)request_copy.type,
+                                current->pid,
+                                service->pid);
+        }
+
+        if (ipc_send(service->process, &request_copy, sizeof(request_copy)) != 0) {
+            if (service->local_handler != 0) {
+                struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
+
+                if (mutable_service != 0) {
+                    if (mutable_service->transport_degraded == 0u) {
+                        mutable_service->transport_degraded = 1u;
+                        mk_service_publish_event(mutable_service, MK_SERVICE_EVENT_DEGRADED);
                     }
                 }
-                *reply = response;
-                return 0;
+                if (g_transport_fallback_budget > 0) {
+                    g_transport_fallback_budget -= 1;
+                    kernel_debug_printf("service: transport fallback type=%d src=%d dst=%d service=%d\n",
+                                        (int)request_copy.type,
+                                        (int)request_copy.source_pid,
+                                        (int)request_copy.target_pid,
+                                        (int)service->type);
+                }
+                return service->local_handler(&request_copy, reply, service->context);
             }
-            if (g_unexpected_reply_budget > 0) {
-                g_unexpected_reply_budget -= 1;
-                kernel_debug_printf("service: unexpected reply src=%d dst=%d waiting_src=%d waiting_dst=%d\n",
-                                    (int)response.source_pid,
-                                    (int)response.target_pid,
-                                    service->pid,
-                                    current->pid);
+            if (g_request_send_fail_budget > 0) {
+                g_request_send_fail_budget -= 1;
+                kernel_debug_printf("service: request send failed type=%d src=%d dst=%d\n",
+                                    (int)request_copy.type,
+                                    (int)request_copy.source_pid,
+                                    (int)request_copy.target_pid);
             }
-            (void)mk_service_requeue_message(current, &response);
+            return -1;
+        }
+
+        for (;;) {
+            int received = ipc_receive_wait_timeout(current, &response, sizeof(response), 1u);
+
+            if (received == (int)sizeof(response)) {
+                if (response.source_pid == waiting_pid &&
+                    response.target_pid == (uint32_t)current->pid) {
+                    if (service->type == MK_SERVICE_CONSOLE && !g_console_reply_trace_emitted) {
+                        g_console_reply_trace_emitted = 1;
+                        kernel_debug_printf("service: console reply type=%d src=%d dst=%d\n",
+                                            (int)response.type,
+                                            (int)response.source_pid,
+                                            (int)response.target_pid);
+                    }
+                    {
+                        struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
+
+                        if (mutable_service != 0) {
+                            if (mutable_service->transport_degraded != 0u) {
+                                mutable_service->transport_degraded = 0u;
+                                mk_service_publish_event(mutable_service, MK_SERVICE_EVENT_RECOVERED);
+                            }
+                        }
+                    }
+                    if (service->type == MK_SERVICE_VIDEO ||
+                        service->type == MK_SERVICE_AUDIO ||
+                        service->type == MK_SERVICE_NETWORK ||
+                        service->type == MK_SERVICE_INPUT) {
+                        kernel_debug_printf("service: reply svc=%d type=%d src=%d dst=%d\n",
+                                            (int)service->type,
+                                            (int)response.type,
+                                            (int)response.source_pid,
+                                            (int)response.target_pid);
+                    }
+                    *reply = response;
+                    return 0;
+                }
+                if (g_unexpected_reply_budget > 0) {
+                    g_unexpected_reply_budget -= 1;
+                    kernel_debug_printf("service: unexpected reply src=%d dst=%d waiting_src=%d waiting_dst=%d\n",
+                                        (int)response.source_pid,
+                                        (int)response.target_pid,
+                                        (int)waiting_pid,
+                                        current->pid);
+                }
+                (void)mk_service_requeue_message(current, &response);
+                continue;
+            }
+
+            live_service = mk_service_find_by_type(service->type);
+            if (live_service == 0) {
+                return -1;
+            }
+            if (live_service->transport_degraded != 0u && live_service->process != 0) {
+                (void)mk_service_ensure(service->type);
+                live_service = mk_service_find_by_type(service->type);
+                if (live_service == 0) {
+                    return -1;
+                }
+            }
+            if (live_service->pid != (int)waiting_pid ||
+                !mk_service_process_online(live_service)) {
+                service = live_service;
+                break;
+            }
         }
     }
 }
@@ -696,6 +792,8 @@ int mk_service_backend_handle_current(const struct mk_message *request, struct m
 int mk_service_subscribe(uint32_t type, struct process *subscriber) {
     struct mk_service_record *service;
     struct mk_service_event_subscription *subscription;
+    uint32_t flags;
+    int rc = -1;
 
     if (subscriber == 0) {
         return -1;
@@ -705,14 +803,17 @@ int mk_service_subscribe(uint32_t type, struct process *subscriber) {
     if (service == 0) {
         return -1;
     }
+
+    flags = spinlock_lock_irqsave(&g_service_event_lock);
     subscription = mk_service_find_subscription(service, subscriber);
     if (subscription != 0) {
-        return 0;
+        rc = 0;
+        goto done;
     }
 
     subscription = mk_service_alloc_subscription(service, subscriber);
     if (subscription == 0) {
-        return -1;
+        goto done;
     }
 
     if (service->transport_degraded != 0u) {
@@ -722,12 +823,18 @@ int mk_service_subscribe(uint32_t type, struct process *subscriber) {
     } else {
         mk_service_enqueue_event(service, subscription, MK_SERVICE_EVENT_OFFLINE);
     }
-    return 0;
+    rc = 0;
+
+done:
+    spinlock_unlock_irqrestore(&g_service_event_lock, flags);
+    return rc;
 }
 
 int mk_service_unsubscribe(uint32_t type, struct process *subscriber) {
     struct mk_service_record *service;
     struct mk_service_event_subscription *subscription;
+    uint32_t flags;
+    int rc = -1;
 
     if (subscriber == 0) {
         return -1;
@@ -738,13 +845,18 @@ int mk_service_unsubscribe(uint32_t type, struct process *subscriber) {
         return -1;
     }
 
+    flags = spinlock_lock_irqsave(&g_service_event_lock);
     subscription = mk_service_find_subscription(service, subscriber);
     if (subscription == 0) {
-        return -1;
+        goto done;
     }
 
     memset(subscription, 0, sizeof(*subscription));
-    return 0;
+    rc = 0;
+
+done:
+    spinlock_unlock_irqrestore(&g_service_event_lock, flags);
+    return rc;
 }
 
 int mk_service_event_receive(uint32_t type,
@@ -753,6 +865,7 @@ int mk_service_event_receive(uint32_t type,
                              uint32_t timeout_ticks) {
     struct mk_service_record *service;
     struct mk_service_event_subscription *subscription;
+    uint32_t flags;
 
     if (subscriber == 0 || event == 0) {
         return -1;
@@ -769,12 +882,20 @@ int mk_service_event_receive(uint32_t type,
     }
 
     for (;;) {
+        flags = spinlock_lock_irqsave(&g_service_event_lock);
+        subscription = mk_service_find_subscription(service, subscriber);
+        if (subscription == 0) {
+            spinlock_unlock_irqrestore(&g_service_event_lock, flags);
+            return -1;
+        }
         if (subscription->count != 0u) {
             *event = subscription->events[subscription->head];
             subscription->head = (subscription->head + 1u) % MK_SERVICE_EVENT_QUEUE_SIZE;
             subscription->count -= 1u;
+            spinlock_unlock_irqrestore(&g_service_event_lock, flags);
             return 0;
         }
+        spinlock_unlock_irqrestore(&g_service_event_lock, flags);
         if (timeout_ticks == 0u) {
             return -1;
         }

@@ -12,6 +12,16 @@ static struct terminal_state *g_term_capture_ctx = 0;
 static char g_output_line_buffer[256];
 static int g_output_line_pos = 0;
 
+static void terminal_debug_cmd(const char *prefix, const char *cmd) {
+    char msg[96];
+
+    msg[0] = '\0';
+    str_append(msg, prefix, (int)sizeof(msg));
+    str_append(msg, cmd ? cmd : "(null)", (int)sizeof(msg));
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
+}
+
 /* Callback that receives console output and adds to terminal */
 static void terminal_output_callback(const char *buf, int len) {
     int i;
@@ -134,6 +144,9 @@ int terminal_execute_command(struct terminal_state *t) {
         return 0;
     }
 
+    terminal_debug_cmd("shell: command ", argv[0]);
+    terminal_debug_cmd("terminal: command start ", argv[0]);
+
     /* Set up output capture */
     g_term_capture_ctx = t;
     g_output_line_pos = 0;
@@ -152,6 +165,8 @@ int terminal_execute_command(struct terminal_state *t) {
     /* Restore console output */
     console_set_output_handler(0);
     g_term_capture_ctx = 0;
+
+    terminal_debug_cmd("terminal: command done ", argv[0]);
 
     terminal_reset_input(t);
     return 0;

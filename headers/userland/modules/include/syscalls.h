@@ -61,6 +61,10 @@ int sys_task_snapshot(struct task_snapshot_summary *summary,
                       struct task_snapshot_entry *entries,
                       uint32_t max_entries);
 int sys_task_terminate(uint32_t pid);
+int sys_launch_app(const char *name);
+int sys_launch_app_argv(int argc, char **argv);
+int sys_task_event_subscribe(void);
+int sys_task_event_receive(struct mk_task_event *event, uint32_t timeout_ticks);
 void sys_sleep(void);
 uint32_t sys_ticks(void);
 int sys_gfx_info(struct video_mode *mode);
@@ -107,6 +111,8 @@ int sys_service_receive(struct mk_message *message);
 int sys_service_send(const struct mk_message *message);
 int sys_service_backend(const struct mk_message *request, struct mk_message *reply);
 int sys_service_subscribe(uint32_t service_type);
+int sys_service_pid(uint32_t service_type);
+int sys_service_restart(uint32_t service_type);
 int sys_service_event_receive(uint32_t service_type,
                               struct mk_service_event *event,
                               uint32_t timeout_ticks);

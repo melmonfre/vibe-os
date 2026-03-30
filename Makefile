@@ -1832,12 +1832,12 @@ validate-gpu-boot-1920x1080:
 validate-startx-800x600:
 	rm -f $(STAGE2_BIN) $(IMAGE)
 	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=800 -DBOOT_PREFERRED_VIDEO_HEIGHT=600" $(IMAGE)
-	$(PYTHON) tools/validate_modular_apps.py --scenario startx-autoboot-desktop --scenario vidmodes-shell --expect-boot-mode 800x600 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+	$(PYTHON) tools/validate_modular_apps.py --scenario startx-autoboot-desktop --scenario vidmodes-shell --scenario input-restart-desktop --expect-boot-mode 800x600 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
 validate-startx-1024x768:
 	rm -f $(STAGE2_BIN) $(IMAGE)
 	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=1024 -DBOOT_PREFERRED_VIDEO_HEIGHT=768" $(IMAGE)
-	$(PYTHON) tools/validate_modular_apps.py --scenario startx-autoboot-desktop --scenario vidmodes-shell --expect-boot-mode 1024x768 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+	$(PYTHON) tools/validate_modular_apps.py --scenario startx-autoboot-desktop --scenario vidmodes-shell --scenario input-restart-desktop --expect-boot-mode 1024x768 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
 validate-doom-800x600:
 	rm -f $(STAGE2_BIN) $(IMAGE)

@@ -155,6 +155,14 @@ Checklist minimo para dizer "agora esta na arquitetura certa":
 - [ ] queda/restart de um servico nao congela desktop
 - [ ] `backend-shim` sai do caminho principal e fica no maximo como rescue/boot bridge
 
+Avanco atual em desktop/startx:
+- [~] supervisao de sessao desktop/startx saiu do poll por snapshot e entrou em espera por evento de ciclo de vida de tarefa
+: o scheduler agora publica eventos `launched/terminated`, o `desktop-host` reaprende a sessao `startx` bloqueando em `task_event_receive()` em vez de rodar `sys_task_snapshot()` em loop, e o shell foreground agora tambem prefere subir apps modulares em um `app-host` dedicado e esperar a saida pelo mesmo stream; ainda falta estender o mesmo modelo para payloads maiores/richer argv, callsites do desktop que ainda fazem fallback inline e para restart/isolamento de servicos fora do host do desktop
+- [~] restart de `inputsvc` ja nao prende o desktop no PID morto nem deixa `app-hosts` novos sem primeiro slice
+: o request/reply agora reenvia quando o PID do servico muda, o contexto de launch fica publicado antes da task entrar no scheduler, e os workers interativos recem-lancados ganham janela curta de bootstrap; falta transformar isso em gate verde estavel de validacao e fechar o caminho de teclado/mouse em hardware real
+- [~] smoke de restart/launch modular no desktop agora prefere atalhos curtos dedicados (`ctrl+k` / `ctrl+l`) em vez de depender de digitacao longa no terminal
+: isso reduz a fragilidade do `-display none` no QEMU e acelera o fechamento do gate, mas nao substitui a prova final no notebook/alvo real
+
 Hierarquia de prioridade obrigatoria:
 1. desktop
 2. teclado
