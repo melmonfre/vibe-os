@@ -401,6 +401,9 @@ struct mk_task_event {
     uint32_t task_class;
     uint32_t priority_tier;
     uint32_t flags;
+    uint32_t sequence;
+    uint32_t class_pending_depth;
+    uint32_t class_dropped_events;
     uint32_t tick;
 };
 
@@ -422,7 +425,7 @@ struct mk_task_event {
 
 #define MK_TASK_EVENT_WAIT_FOREVER 0xffffffffu
 
-#define TASK_SNAPSHOT_ABI_VERSION 4u
+#define TASK_SNAPSHOT_ABI_VERSION 5u
 #define TASK_SNAPSHOT_NAME_MAX 16u
 #define TASK_SNAPSHOT_MAX 32u
 
@@ -482,6 +485,11 @@ struct task_snapshot_entry {
     uint32_t wait_owner_service;
     uint32_t wait_deadline;
     uint32_t wait_pending_signals;
+    uint32_t last_task_event_sequence;
+    uint32_t last_task_event_type;
+    uint32_t last_task_event_tick;
+    uint32_t task_class_pending_events;
+    uint32_t task_class_dropped_events;
     char name[TASK_SNAPSHOT_NAME_MAX];
 };
 
@@ -502,6 +510,9 @@ struct task_snapshot_summary {
     uint32_t timed_out_waits;
     uint32_t canceled_waits;
     uint32_t pending_event_signals;
+    uint32_t latest_task_event_sequence;
+    uint32_t task_class_pending_events;
+    uint32_t task_class_dropped_events;
 };
 
 typedef void (*userland_entry_t)(void);

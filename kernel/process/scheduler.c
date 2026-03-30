@@ -28,6 +28,8 @@ static volatile int g_scheduler_preemption_ready = 0;
 
 #define SCHEDULER_TASK_EVENT_SUBSCRIBERS 8u
 #define SCHEDULER_TASK_EVENT_QUEUE_SIZE 32u
+#define SCHEDULER_TASK_CLASS_EVENT_QUEUE_SIZE 32u
+#define SCHEDULER_TASK_CLASS_STREAM_COUNT (MK_TASK_CLASS_VIDEO_CONTROL + 1u)
 
 #define SCHEDULER_TIMESLICE_TICKS 4u
 
@@ -39,14 +41,27 @@ struct scheduler_task_event_subscription {
     struct mk_task_event events[SCHEDULER_TASK_EVENT_QUEUE_SIZE];
 };
 
+struct scheduler_task_class_stream {
+    kernel_mailbox_t mailbox;
+    struct mk_task_event events[SCHEDULER_TASK_CLASS_EVENT_QUEUE_SIZE];
+};
+
 static struct scheduler_task_event_subscription
     g_task_event_subscriptions[SCHEDULER_TASK_EVENT_SUBSCRIBERS];
+static struct scheduler_task_class_stream
+    g_task_class_streams[SCHEDULER_TASK_CLASS_STREAM_COUNT];
+static uint32_t g_task_event_sequence = 0u;
 
 static void scheduler_timeout_tick_hook(uint32_t tick);
 static void scheduler_task_event_init(void);
 static void scheduler_publish_task_event(uint32_t event_type, const process_t *task);
 static uint32_t scheduler_task_event_mask_for_type(uint32_t event_type);
 static uint32_t scheduler_task_class_mask_for_task(const process_t *task);
+static uint32_t scheduler_wait_class_for_task_class(uint32_t task_class);
+static struct scheduler_task_class_stream *
+scheduler_task_class_stream_for_class(uint32_t task_class);
+static uint32_t scheduler_task_class_pending_events(uint32_t task_class);
+static uint32_t scheduler_task_class_dropped_events(uint32_t task_class);
 static struct scheduler_task_event_subscription *
 scheduler_find_task_event_subscription_locked(process_t *subscriber);
 static struct scheduler_task_event_subscription *
@@ -321,6 +336,7 @@ static void scheduler_task_event_init(void) {
     uint32_t index;
 
     spinlock_init(&g_task_event_lock);
+    g_task_event_sequence = 0u;
     for (index = 0u; index < SCHEDULER_TASK_EVENT_SUBSCRIBERS; ++index) {
         struct scheduler_task_event_subscription *subscription =
             &g_task_event_subscriptions[index];
@@ -332,6 +348,18 @@ static void scheduler_task_event_init(void) {
                             SCHEDULER_TASK_EVENT_QUEUE_SIZE,
                             KERNEL_MAILBOX_DROP_OLDEST,
                             TASK_WAIT_CLASS_SUPERVISION,
+                            0u);
+    }
+    for (index = 0u; index < SCHEDULER_TASK_CLASS_STREAM_COUNT; ++index) {
+        struct scheduler_task_class_stream *stream = &g_task_class_streams[index];
+
+        memset(stream, 0, sizeof(*stream));
+        kernel_mailbox_init(&stream->mailbox,
+                            stream->events,
+                            sizeof(stream->events[0]),
+                            SCHEDULER_TASK_CLASS_EVENT_QUEUE_SIZE,
+                            KERNEL_MAILBOX_DROP_OLDEST,
+                            scheduler_wait_class_for_task_class(index),
                             0u);
     }
 }
@@ -358,6 +386,58 @@ static uint32_t scheduler_task_class_mask_for_task(const process_t *task) {
         return 0u;
     }
     return MK_TASK_CLASS_MASK(task->task_class);
+}
+
+static uint32_t scheduler_wait_class_for_task_class(uint32_t task_class) {
+    switch (task_class) {
+    case MK_TASK_CLASS_INPUT:
+        return TASK_WAIT_CLASS_INPUT;
+    case MK_TASK_CLASS_VIDEO_PRESENT:
+    case MK_TASK_CLASS_VIDEO_CONTROL:
+        return TASK_WAIT_CLASS_VIDEO;
+    case MK_TASK_CLASS_STORAGE_IO:
+        return TASK_WAIT_CLASS_STORAGE;
+    case MK_TASK_CLASS_FILESYSTEM_IO:
+        return TASK_WAIT_CLASS_FILESYSTEM;
+    case MK_TASK_CLASS_AUDIO_IO:
+        return TASK_WAIT_CLASS_AUDIO;
+    case MK_TASK_CLASS_NETWORK_IO:
+        return TASK_WAIT_CLASS_NETWORK;
+    case MK_TASK_CLASS_SUPERVISION:
+    case MK_TASK_CLASS_DESKTOP:
+    case MK_TASK_CLASS_SHELL:
+    case MK_TASK_CLASS_APP_RUNTIME:
+    case MK_TASK_CLASS_CONSOLE_IO:
+    default:
+        return TASK_WAIT_CLASS_SUPERVISION;
+    }
+}
+
+static struct scheduler_task_class_stream *
+scheduler_task_class_stream_for_class(uint32_t task_class) {
+    if (task_class == MK_TASK_CLASS_NONE || task_class >= SCHEDULER_TASK_CLASS_STREAM_COUNT) {
+        return NULL;
+    }
+
+    return &g_task_class_streams[task_class];
+}
+
+static uint32_t scheduler_task_class_pending_events(uint32_t task_class) {
+    struct scheduler_task_class_stream *stream = scheduler_task_class_stream_for_class(task_class);
+
+    if (stream == NULL) {
+        return 0u;
+    }
+    return kernel_mailbox_count(&stream->mailbox);
+}
+
+static uint32_t scheduler_task_class_dropped_events(uint32_t task_class) {
+    struct scheduler_task_class_stream *stream = scheduler_task_class_stream_for_class(task_class);
+
+    if (stream == NULL) {
+        return 0u;
+    }
+    return kernel_mailbox_dropped(&stream->mailbox);
 }
 
 static struct scheduler_task_event_subscription *
@@ -424,6 +504,8 @@ static void scheduler_publish_task_event(uint32_t event_type, const process_t *t
     uint32_t event_mask;
     uint32_t task_class_mask;
     const struct mk_launch_context *context;
+    process_t *mutable_task;
+    struct scheduler_task_class_stream *class_stream;
     struct mk_task_event event_buf;
 
     if (task == NULL || task->pid <= 0 || event_type == MK_TASK_EVENT_NONE) {
@@ -440,12 +522,35 @@ static void scheduler_publish_task_event(uint32_t event_type, const process_t *t
     }
 
     context = mk_launch_context_for_pid(task->pid);
+    mutable_task = (process_t *)task;
     flags = spinlock_lock_irqsave(&g_task_event_lock);
+
+    memset(&event_buf, 0, sizeof(event_buf));
+    event_buf.abi_version = 1u;
+    event_buf.event_type = event_type;
+    event_buf.pid = (uint32_t)task->pid;
+    event_buf.kind = (uint32_t)task->kind;
+    event_buf.service_type = task->service_type;
+    event_buf.task_class = task->task_class;
+    event_buf.priority_tier = task->priority_tier;
+    event_buf.flags = context != 0 ? context->flags : 0u;
+    event_buf.sequence = ++g_task_event_sequence;
+    event_buf.tick = kernel_timer_get_ticks();
+
+    class_stream = scheduler_task_class_stream_for_class(task->task_class);
+    if (class_stream != NULL) {
+        (void)kernel_mailbox_try_send(&class_stream->mailbox, &event_buf);
+        event_buf.class_pending_depth = kernel_mailbox_count(&class_stream->mailbox);
+        event_buf.class_dropped_events = kernel_mailbox_dropped(&class_stream->mailbox);
+    }
+
+    mutable_task->last_task_event_sequence = event_buf.sequence;
+    mutable_task->last_task_event_type = event_buf.event_type;
+    mutable_task->last_task_event_tick = event_buf.tick;
 
     for (index = 0u; index < SCHEDULER_TASK_EVENT_SUBSCRIBERS; ++index) {
         struct scheduler_task_event_subscription *subscription =
             &g_task_event_subscriptions[index];
-        struct mk_task_event *event;
 
         if (subscription->pid == 0u) {
             continue;
@@ -467,19 +572,7 @@ static void scheduler_publish_task_event(uint32_t event_type, const process_t *t
         if ((subscription->task_class_mask & task_class_mask) == 0u) {
             continue;
         }
-
-        event = &event_buf;
-        memset(event, 0, sizeof(*event));
-        event->abi_version = 1u;
-        event->event_type = event_type;
-        event->pid = (uint32_t)task->pid;
-        event->kind = (uint32_t)task->kind;
-        event->service_type = task->service_type;
-        event->task_class = task->task_class;
-        event->priority_tier = task->priority_tier;
-        event->flags = context != 0 ? context->flags : 0u;
-        event->tick = kernel_timer_get_ticks();
-        (void)kernel_mailbox_try_send(&subscription->mailbox, event);
+        (void)kernel_mailbox_try_send(&subscription->mailbox, &event_buf);
     }
     spinlock_unlock_irqrestore(&g_task_event_lock, flags);
 }
@@ -595,6 +688,17 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
     if (current && current->state == PROCESS_RUNNING && current->current_cpu == (int)cpu_index) {
         current->context = frame;
         scheduler_account_runtime(current, now_ticks);
+        if (current->wait_result != TASK_WAIT_RESULT_NONE) {
+            /*
+             * Wakeup priority should buy the task its first resumed slice, not
+             * permanently bias every later reschedule after the wait was
+             * already consumed in userland/kernel code.
+             */
+            current->wait_result = TASK_WAIT_RESULT_NONE;
+            current->wait_event_kind = TASK_WAIT_EVENT_NONE;
+            current->wait_event_class = TASK_WAIT_CLASS_NONE;
+            current->wait_owner_service = 0u;
+        }
         current->state = PROCESS_READY;
         current->current_cpu = -1;
         current->last_cpu = (int)cpu_index;
@@ -1074,10 +1178,28 @@ uint32_t scheduler_snapshot(struct task_snapshot_entry *entries,
             entry->wait_deadline = task->wait_deadline;
             entry->wait_pending_signals =
                 task->wait_channel != 0 ? ((const kernel_waitable_t *)task->wait_channel)->pending_signals : 0u;
+            entry->last_task_event_sequence = task->last_task_event_sequence;
+            entry->last_task_event_type = task->last_task_event_type;
+            entry->last_task_event_tick = task->last_task_event_tick;
+            entry->task_class_pending_events = scheduler_task_class_pending_events(task->task_class);
+            entry->task_class_dropped_events = scheduler_task_class_dropped_events(task->task_class);
             count += 1u;
         }
     }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+
+    if (summary != NULL) {
+        uint32_t event_flags;
+
+        event_flags = spinlock_lock_irqsave(&g_task_event_lock);
+        summary->latest_task_event_sequence = g_task_event_sequence;
+        spinlock_unlock_irqrestore(&g_task_event_lock, event_flags);
+
+        for (uint32_t task_class = 1u; task_class < SCHEDULER_TASK_CLASS_STREAM_COUNT; ++task_class) {
+            summary->task_class_pending_events += scheduler_task_class_pending_events(task_class);
+            summary->task_class_dropped_events += scheduler_task_class_dropped_events(task_class);
+        }
+    }
 
     return count;
 }

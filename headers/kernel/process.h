@@ -66,6 +66,9 @@ typedef struct process {
     uint32_t runtime_ticks;
     uint32_t last_start_tick;
     uint32_t context_switches;
+    uint32_t last_task_event_sequence;
+    uint32_t last_task_event_type;
+    uint32_t last_task_event_tick;
     const void *wait_channel;
     uint32_t wait_deadline;
     uint32_t wait_result;

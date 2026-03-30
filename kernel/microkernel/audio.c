@@ -9767,7 +9767,8 @@ void mk_audio_service_init(void) {
                                  userland_audio_service_entry,
                                  8192u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
-                                 MK_LAUNCH_FLAG_BUILTIN);
+                                 MK_LAUNCH_FLAG_BUILTIN |
+                                 MK_LAUNCH_FLAG_CRITICAL);
 }
 
 int mk_audio_service_ready(void) {

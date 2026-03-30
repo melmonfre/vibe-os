@@ -735,6 +735,10 @@ static int open_imageviewer_window_for_node(int node, int *focused);
 static int open_audioplayer_window_for_node(int node, int *focused);
 static int open_window_or_focus_existing(enum app_type type, int *focused);
 static int launch_start_menu_entry(const struct start_menu_entry *entry, int *focused);
+static void desktop_request_open_terminal_command(const char *command);
+static void desktop_arm_restart_smoke(uint32_t service_type,
+                                      const char *command,
+                                      int *focused);
 static int topmost_window_at(int x, int y);
 static struct rect window_title_bar(const struct rect *w);
 static struct rect taskbar_button_rect_for_window(int win_index);
@@ -1359,13 +1363,19 @@ static int desktop_collect_input_batch(struct desktop_input_batch *batch,
         g_desktop_input_compat_mode = 0;
         g_desktop_input_stream_idle_polls = 0u;
     } else if (!g_desktop_input_stream_seen || g_desktop_input_compat_mode) {
+        /*
+         * If the aggregated input stream stalls after an input-service cycle,
+         * temporarily fall back to the service-backed per-device requests until
+         * the stream resumes. This keeps desktop steady-state ownership on the
+         * service boundary without waiting for a full desktop restart.
+         */
         g_desktop_input_stream_idle_polls += 1u;
         if ((g_desktop_input_compat_mode != 0 ||
              g_desktop_input_stream_idle_polls >= DESKTOP_INPUT_STREAM_STALL_THRESHOLD) &&
             desktop_collect_compat_input_batch(batch, mouse)) {
             if (g_desktop_input_compat_mode == 0 && g_desktop_input_compat_log_budget > 0) {
                 g_desktop_input_compat_log_budget -= 1;
-                sys_write_debug("desktop: input compat fallback armed\n");
+                sys_write_debug("desktop: input per-device compat path armed\n");
             }
             g_desktop_input_compat_mode = 1;
             g_desktop_input_stream_idle_polls = 0u;
@@ -5299,12 +5309,38 @@ static int find_window_by_type(enum app_type type) {
     return -1;
 }
 
+static uint32_t start_menu_entry_restart_service_type(const struct start_menu_entry *entry) {
+    if (!entry || entry->command == 0) {
+        return MK_SERVICE_NONE;
+    }
+    if (str_eq(entry->command, "kill input")) {
+        return MK_SERVICE_INPUT;
+    }
+    if (str_eq(entry->command, "kill audio")) {
+        return MK_SERVICE_AUDIO;
+    }
+    if (str_eq(entry->command, "kill video")) {
+        return MK_SERVICE_VIDEO;
+    }
+    if (str_eq(entry->command, "kill network")) {
+        return MK_SERVICE_NETWORK;
+    }
+    return MK_SERVICE_NONE;
+}
+
 static int launch_start_menu_entry(const struct start_menu_entry *entry, int *focused) {
+    uint32_t restart_service_type;
+
     if (!entry) {
         return -1;
     }
     if (entry->command && entry->command[0] != '\0') {
-        desktop_request_open_terminal_command(entry->command);
+        restart_service_type = start_menu_entry_restart_service_type(entry);
+        if (restart_service_type != MK_SERVICE_NONE) {
+            desktop_arm_restart_smoke(restart_service_type, entry->command, focused);
+        } else {
+            desktop_request_open_terminal_command(entry->command);
+        }
         return 0;
     }
     return open_window_or_focus_existing(entry->type, focused);

@@ -4,6 +4,7 @@
 #include <userland/modules/include/utils.h>
 #include <kernel/bootinfo.h>
 #include <kernel/drivers/storage/ata.h>
+#include <kernel/microkernel/audio.h>
 
 #define BOOTSTRAP_STORAGE_SMOKE_SECTOR (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT - 1u)
 #define BOOTSTRAP_STORAGE_SMOKE_SIZE 512u
@@ -169,7 +170,7 @@ static const char *bootstrap_task_class_name(uint32_t task_class) {
 }
 
 static void bootstrap_log_task_event(const struct mk_task_event *event) {
-    char buffer[192];
+    char buffer[224];
 
     if (event == 0 || event->event_type == MK_TASK_EVENT_NONE) {
         return;
@@ -186,6 +187,12 @@ static void bootstrap_log_task_event(const struct mk_task_event *event) {
     str_append(buffer, bootstrap_task_class_name(event->task_class), (int)sizeof(buffer));
     str_append(buffer, " service=", (int)sizeof(buffer));
     str_append(buffer, bootstrap_service_name(event->service_type), (int)sizeof(buffer));
+    str_append(buffer, " seq=", (int)sizeof(buffer));
+    bootstrap_append_u32(buffer, (int)sizeof(buffer), event->sequence);
+    str_append(buffer, " q=", (int)sizeof(buffer));
+    bootstrap_append_u32(buffer, (int)sizeof(buffer), event->class_pending_depth);
+    str_append(buffer, " drop=", (int)sizeof(buffer));
+    bootstrap_append_u32(buffer, (int)sizeof(buffer), event->class_dropped_events);
     str_append(buffer, " tick=", (int)sizeof(buffer));
     bootstrap_append_u32(buffer, (int)sizeof(buffer), event->tick);
     str_append(buffer, "\n", (int)sizeof(buffer));
@@ -272,20 +279,35 @@ static void bootstrap_storage_smoke_test(void) {
     kernel_debug_puts("init: storage smoke ok\n");
 }
 
+static void bootstrap_prime_kernel_service_stack(void) {
+    struct video_capabilities caps = {0};
+    struct mk_audio_info audio_info = {0};
+
+    if (sys_gfx_caps(&caps) == 0) {
+        sys_write_debug("init: video service primed\n");
+    } else {
+        sys_write_debug("init: video service prime failed\n");
+    }
+
+    if (sys_audio_get_info(&audio_info) == 0) {
+        sys_write_debug("init: audio service primed\n");
+    } else {
+        sys_write_debug("init: audio service prime failed\n");
+    }
+}
+
 static void bootstrap_try_play_boot_sound(void) {
     if (sys_launch_builtin_user(USERLAND_BUILTIN_BOOT_AUDIO) > 0) {
         sys_write_debug("init: boot audio host launched\n");
         return;
     }
-
-    (void)audio_play_wav_best_effort("/assets/vibe_os_boot.wav", "boot");
-    sys_write_debug("init: boot sound returned\n");
+    sys_write_debug("init: boot audio host launch failed\n");
 }
 
 __attribute__((section(".entry"))) void userland_entry(void) {
     extern void kernel_debug_puts(const char *);
     int rc;
-    struct userland_launch_info info;
+    struct userland_launch_info info = {0};
     struct mk_service_event event;
 
     kernel_debug_puts("init: entered builtin entry\n");
@@ -306,6 +328,7 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     fs_init();
     kernel_debug_puts("init: fs_init returned\n");
     bootstrap_storage_smoke_test();
+    bootstrap_prime_kernel_service_stack();
     if ((info.boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) == 0u ||
         (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) != 0u) {
         bootstrap_try_play_boot_sound();
@@ -359,8 +382,12 @@ __attribute__((section(".entry"))) void userland_entry(void) {
             bootstrap_log_task_event(&task_event);
             handled = 1;
         }
-        if (!handled) {
-            sys_yield();
-        }
+        /*
+         * Supervision must stay observational: once we drained the current
+         * burst of lifecycle/service events, hand control back so freshly woke
+         * desktop or service tasks can consume their pending IPC immediately.
+         */
+        (void)handled;
+        sys_yield();
     }
 }

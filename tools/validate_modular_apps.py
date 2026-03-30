@@ -45,6 +45,9 @@ BASE_HEIGHT = 480
 TASKBAR_HEIGHT = 22
 START_MENU_HEIGHT = 404
 START_MENU_WIDTH = 336
+START_MENU_LIST_PANEL_HEIGHT = START_MENU_HEIGHT - 146
+START_MENU_LIST_VIEW_HEIGHT = START_MENU_LIST_PANEL_HEIGHT - 8
+START_MENU_ENTRY_STEP = 36
 
 
 @dataclass
@@ -540,6 +543,28 @@ class QemuSession:
         self.mouse_x -= 1
         time.sleep(pause)
 
+    def mouse_wheel(self, delta: int, pause: float = 0.08) -> None:
+        if delta == 0:
+            return
+
+        button = "wheel-up" if delta > 0 else "wheel-down"
+        for _ in range(abs(delta)):
+            response = self.qmp(
+                {
+                    "execute": "input-send-event",
+                    "arguments": {
+                        "head": 0,
+                        "events": [
+                            {"type": "btn", "data": {"button": button, "down": True}},
+                            {"type": "btn", "data": {"button": button, "down": False}},
+                        ],
+                    },
+                }
+            )
+            if "error" in response:
+                raise RuntimeError(f"QMP mouse wheel failed: {response['error']}")
+            time.sleep(pause)
+
 
 def scaled_point(session: QemuSession, point: Tuple[int, int]) -> Tuple[int, int]:
     mode = session.boot_mode_size()
@@ -576,41 +601,48 @@ def start_button_center(session: QemuSession) -> Tuple[int, int]:
     return (35, height - 11)
 
 
-def start_menu_terminal_center(session: QemuSession) -> Tuple[int, int]:
+def start_menu_terminal_center(session: QemuSession) -> Tuple[int, int, int]:
+    return start_menu_list_entry_center(session, 0)
+
+
+def start_menu_visible_count() -> int:
+    return max(1, START_MENU_LIST_VIEW_HEIGHT // START_MENU_ENTRY_STEP)
+
+
+def start_menu_list_entry_center(session: QemuSession, slot: int) -> Tuple[int, int, int]:
     mode = session.boot_mode_size()
+    visible_count = start_menu_visible_count()
+    scroll_steps = 0
+    visible_slot = slot
+
+    if visible_slot >= visible_count:
+        scroll_steps = visible_slot - (visible_count - 1)
+        visible_slot = visible_count - 1
+
     if not mode:
-        return (274, 203)
+        return (110, 282 + (visible_slot * START_MENU_ENTRY_STEP), scroll_steps)
     _, height = mode
     menu_y = height - TASKBAR_HEIGHT - START_MENU_HEIGHT
-    return (274, menu_y + 149)
+    return (110, menu_y + 108 + (visible_slot * START_MENU_ENTRY_STEP), scroll_steps)
 
 
-def start_menu_list_entry_center(session: QemuSession, slot: int) -> Tuple[int, int]:
-    mode = session.boot_mode_size()
-    if not mode:
-        return (110, 282 + (slot * 36))
-    _, height = mode
-    menu_y = height - TASKBAR_HEIGHT - START_MENU_HEIGHT
-    return (110, menu_y + 108 + (slot * 36))
-
-
-def start_menu_input_restart_center(session: QemuSession) -> Tuple[int, int]:
+def start_menu_input_restart_center(session: QemuSession) -> Tuple[int, int, int]:
     return start_menu_list_entry_center(session, 5)
 
 
-def start_menu_audio_restart_center(session: QemuSession) -> Tuple[int, int]:
+def start_menu_audio_restart_center(session: QemuSession) -> Tuple[int, int, int]:
     return start_menu_list_entry_center(session, 6)
 
 
-def start_menu_video_restart_center(session: QemuSession) -> Tuple[int, int]:
+def start_menu_video_restart_center(session: QemuSession) -> Tuple[int, int, int]:
     return start_menu_list_entry_center(session, 7)
 
 
-def start_menu_network_restart_center(session: QemuSession) -> Tuple[int, int]:
+def start_menu_network_restart_center(session: QemuSession) -> Tuple[int, int, int]:
     return start_menu_list_entry_center(session, 8)
 
 
-def start_menu_spawn_clock_center(session: QemuSession) -> Tuple[int, int]:
+def start_menu_spawn_clock_center(session: QemuSession) -> Tuple[int, int, int]:
     return start_menu_list_entry_center(session, 9)
 
 
@@ -618,8 +650,30 @@ def safe_wallpaper_point(session: QemuSession) -> Tuple[int, int]:
     return scaled_point(session, SAFE_WALLPAPER_POINT)
 
 
-def log_contains(session: QemuSession, marker: str) -> bool:
-    return marker in session.read_log()
+def log_contains(session: QemuSession, marker: str, start_offset: int = 0) -> bool:
+    log = session.read_log()
+    if start_offset > 0:
+        log = log[start_offset:]
+    return marker in log
+
+
+def wait_for_all_since(session: QemuSession,
+                       markers: List[str],
+                       timeout: float,
+                       start_offset: int = 0) -> None:
+    deadline = time.time() + timeout
+    pending = list(markers)
+    while time.time() < deadline and pending:
+        log = session.read_log()
+        if start_offset > 0:
+            log = log[start_offset:]
+        pending = [marker for marker in pending if marker not in log]
+        if not pending:
+            return
+        if session.proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    raise RuntimeError("Timed out waiting for markers: " + ", ".join(pending))
 
 
 def click_until_log(session: QemuSession,
@@ -695,12 +749,13 @@ def send_shortcut_until_log(session: QemuSession,
 
 
 def open_start_menu_entry_until_log(session: QemuSession,
-                                    point_fn: Callable[[QemuSession], Tuple[int, int]],
+                                    point_fn: Callable[[QemuSession], Tuple[int, int, int]],
                                     marker: str,
+                                    start_offset: int = 0,
                                     attempts: int = 4,
                                     settle: float = 0.4,
                                     timeout_per_attempt: float = 4.0) -> None:
-    if log_contains(session, marker):
+    if log_contains(session, marker, start_offset):
         return
 
     last_error: Optional[Exception] = None
@@ -718,8 +773,12 @@ def open_start_menu_entry_until_log(session: QemuSession,
             session.left_click(pause=0.08)
 
             session.reset_mouse_to_center()
-            x, y = point_fn(session)
+            x, y, scroll_steps = point_fn(session)
             session.move_mouse_to(x, y, pause=0.03)
+            if scroll_steps > 0:
+                session.mouse_wheel(-scroll_steps, pause=0.06)
+                time.sleep(0.08)
+                session.move_mouse_to(x, y, pause=0.03)
             session.left_click(pause=0.08)
         except Exception as exc:
             last_error = exc
@@ -730,7 +789,7 @@ def open_start_menu_entry_until_log(session: QemuSession,
 
         deadline = time.time() + timeout_per_attempt
         while time.time() < deadline:
-            if log_contains(session, marker):
+            if log_contains(session, marker, start_offset):
                 return
             if session.proc.poll() is not None:
                 break
@@ -899,6 +958,35 @@ def scenario_service_restart_shortcut(session: QemuSession,
     session.wait_for_all(markers, timeout=20.0)
 
 
+def scenario_service_restart_menu_click(session: QemuSession,
+                                        restart_point_fn: Callable[[QemuSession], Tuple[int, int, int]],
+                                        kill_marker: str,
+                                        restart_marker: str,
+                                        recovery_markers: Optional[List[str]] = None) -> None:
+    session.wait_for_all(["desktop.app: launch startx", DESKTOP_READY_MARKER], timeout=45.0)
+    open_start_menu_entry_until_log(session,
+                                    restart_point_fn,
+                                    "shell: command kill",
+                                    attempts=6,
+                                    settle=0.8,
+                                    timeout_per_attempt=6.0)
+
+    markers = [
+        "shell: command kill",
+        "terminal: command start kill",
+        kill_marker,
+        restart_marker,
+        "kill: terminated pid=",
+        "terminal: command done kill",
+        "desktop: restart smoke followup",
+        "shell: command spawn",
+        "terminal: command done spawn",
+    ]
+    if recovery_markers:
+        markers.extend(recovery_markers)
+    session.wait_for_all(markers, timeout=20.0)
+
+
 def scenario_input_restart(session: QemuSession) -> None:
     scenario_service_restart_shortcut(session,
                                       shortcut="ctrl-k",
@@ -930,6 +1018,35 @@ def scenario_network_restart(session: QemuSession) -> None:
                                       key_marker="desktop: key 23",
                                       kill_marker="kill: request target=network",
                                       restart_marker="service: restarting type=7")
+
+
+def scenario_input_restart_mouse(session: QemuSession) -> None:
+    scenario_service_restart_menu_click(session,
+                                        restart_point_fn=start_menu_input_restart_center,
+                                        kill_marker="kill: request target=input",
+                                        restart_marker="service: restarting type=5",
+                                        recovery_markers=["desktop: input reset"])
+
+
+def scenario_audio_restart_mouse(session: QemuSession) -> None:
+    scenario_service_restart_menu_click(session,
+                                        restart_point_fn=start_menu_audio_restart_center,
+                                        kill_marker="kill: request target=audio",
+                                        restart_marker="service: restarting type=8")
+
+
+def scenario_video_restart_mouse(session: QemuSession) -> None:
+    scenario_service_restart_menu_click(session,
+                                        restart_point_fn=start_menu_video_restart_center,
+                                        kill_marker="kill: request target=video",
+                                        restart_marker="service: restarting type=4")
+
+
+def scenario_network_restart_mouse(session: QemuSession) -> None:
+    scenario_service_restart_menu_click(session,
+                                        restart_point_fn=start_menu_network_restart_center,
+                                        kill_marker="kill: request target=network",
+                                        restart_marker="service: restarting type=7")
 
 
 def scenario_spawn_clock_shell(session: QemuSession) -> None:
@@ -1204,6 +1321,49 @@ SCENARIOS = [
         action=scenario_audio_restart,
     ),
     Scenario(
+        name="input-restart-mouse-desktop",
+        description="Desktop autostart clicks the start-menu restart entry for inputsvc and confirms the async recovery followup still runs under pointer-driven control",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "shell: command kill",
+            "kill: request target=input",
+            "kill: terminated pid=",
+            "service: restarting type=5",
+            "terminal: command done kill",
+            "desktop: input reset",
+            "desktop: restart smoke followup",
+            "shell: command spawn",
+            "terminal: command done spawn",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_input_restart_mouse,
+    ),
+    Scenario(
+        name="audio-restart-mouse-desktop",
+        description="Desktop autostart clicks the start-menu restart entry for audiosvc and confirms the async recovery followup still runs under pointer-driven control",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "shell: command kill",
+            "kill: request target=audio",
+            "kill: terminated pid=",
+            "service: restarting type=8",
+            "terminal: command done kill",
+            "desktop: restart smoke followup",
+            "shell: command spawn",
+            "terminal: command done spawn",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_audio_restart_mouse,
+    ),
+    Scenario(
         name="network-restart-desktop",
         description="Desktop autostart uses a single shortcut to restart network, waits for the async recovery followup, then launches clock in a detached app context",
         command=None,
@@ -1230,6 +1390,27 @@ SCENARIOS = [
         action=scenario_network_restart,
     ),
     Scenario(
+        name="network-restart-mouse-desktop",
+        description="Desktop autostart clicks the start-menu restart entry for network and confirms the async recovery followup still runs under pointer-driven control",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "shell: command kill",
+            "kill: request target=network",
+            "kill: terminated pid=",
+            "service: restarting type=7",
+            "terminal: command done kill",
+            "desktop: restart smoke followup",
+            "shell: command spawn",
+            "terminal: command done spawn",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_network_restart_mouse,
+    ),
+    Scenario(
         name="video-restart-desktop",
         description="Desktop autostart uses a single shortcut to restart videosvc, waits for the async recovery followup, then launches clock in a detached app context",
         command=None,
@@ -1254,6 +1435,27 @@ SCENARIOS = [
             *AUTODESKTOP_BOOT_MARKERS,
         ],
         action=scenario_video_restart,
+    ),
+    Scenario(
+        name="video-restart-mouse-desktop",
+        description="Desktop autostart clicks the start-menu restart entry for videosvc and confirms the async recovery followup still runs under pointer-driven control",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "shell: command kill",
+            "kill: request target=video",
+            "kill: terminated pid=",
+            "service: restarting type=4",
+            "terminal: command done kill",
+            "desktop: restart smoke followup",
+            "shell: command spawn",
+            "terminal: command done spawn",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_video_restart_mouse,
     ),
     Scenario(
         name="spawn-clock-shell",

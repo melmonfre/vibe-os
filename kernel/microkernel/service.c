@@ -57,10 +57,6 @@ static int mk_service_current_prefers_local_handler(const struct mk_service_reco
         return 0;
     }
 
-    if (service->type == MK_SERVICE_INPUT) {
-        return 1;
-    }
-
     if (service->type == MK_SERVICE_VIDEO) {
         /*
          * Keep the desktop-class fast path for lightweight video IPC, but let
@@ -72,6 +68,34 @@ static int mk_service_current_prefers_local_handler(const struct mk_service_reco
     }
 
     return 0;
+}
+
+static int mk_service_current_allows_local_fallback(const struct mk_service_record *service,
+                                                    const struct mk_message *request) {
+    const struct mk_launch_context *context;
+
+    if (service == 0) {
+        return 0;
+    }
+
+    context = mk_launch_context_current();
+    if (context == 0) {
+        return 1;
+    }
+
+    /*
+     * The desktop session must keep using the explicit input service boundary
+     * during steady-state restart/degradation handling so input resets and
+     * re-subscribe logic are exercised instead of silently tunneling back to
+     * the legacy kernel handler.
+     */
+    if (service->type == MK_SERVICE_INPUT &&
+        request != 0 &&
+        (context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) != 0u) {
+        return 0;
+    }
+
+    return 1;
 }
 
 static uint32_t mk_service_request_timeout_ticks(const struct mk_service_record *service,
@@ -678,7 +702,9 @@ static int mk_service_request_process(const struct mk_service_record *service,
             service = live_service;
         }
         if (service == 0 || service->process == 0 || service->pid <= 0) {
-            if (service != 0 && service->local_handler != 0) {
+            if (service != 0 &&
+                service->local_handler != 0 &&
+                mk_service_current_allows_local_fallback(service, &request_copy)) {
                 return service->local_handler(&request_copy, reply, service->context);
             }
             return -1;
@@ -717,7 +743,8 @@ static int mk_service_request_process(const struct mk_service_record *service,
         }
 
         if (ipc_send(service->process, &request_copy, sizeof(request_copy)) != 0) {
-            if (service->local_handler != 0) {
+            if (service->local_handler != 0 &&
+                mk_service_current_allows_local_fallback(service, &request_copy)) {
                 struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
 
                 if (mutable_service != 0) {
@@ -787,16 +814,6 @@ static int mk_service_request_process(const struct mk_service_record *service,
                             }
                         }
                     }
-                    if (service->type == MK_SERVICE_VIDEO ||
-                        service->type == MK_SERVICE_AUDIO ||
-                        service->type == MK_SERVICE_NETWORK ||
-                        service->type == MK_SERVICE_INPUT) {
-                        kernel_debug_printf("service: reply svc=%d type=%d src=%d dst=%d\n",
-                                            (int)service->type,
-                                            (int)response.type,
-                                            (int)response.source_pid,
-                                            (int)response.target_pid);
-                    }
                     *reply = response;
                     return 0;
                 }
@@ -839,7 +856,8 @@ static int mk_service_request_process(const struct mk_service_record *service,
                         mk_service_publish_event(mutable_service, MK_SERVICE_EVENT_DEGRADED);
                     }
                     (void)mk_service_restart_worker_record(mutable_service);
-                    if (mutable_service->local_handler != 0) {
+                    if (mutable_service->local_handler != 0 &&
+                        mk_service_current_allows_local_fallback(mutable_service, &request_copy)) {
                         if (g_transport_fallback_budget > 0) {
                             g_transport_fallback_budget -= 1;
                             kernel_debug_printf("service: timeout fallback type=%d src=%d dst=%d service=%d\n",
@@ -907,7 +925,9 @@ int mk_service_request(uint32_t type, const struct mk_message *request, struct m
         }
     }
 
-    if (service->transport_degraded != 0u && service->local_handler != 0) {
+    if (service->transport_degraded != 0u &&
+        service->local_handler != 0 &&
+        mk_service_current_allows_local_fallback(service, request)) {
         return service->local_handler(request, reply, service->context);
     }
 
@@ -922,7 +942,8 @@ int mk_service_request(uint32_t type, const struct mk_message *request, struct m
         return mk_service_request_process(service, request, reply);
     }
 
-    if (service->local_handler != 0) {
+    if (service->local_handler != 0 &&
+        mk_service_current_allows_local_fallback(service, request)) {
         return service->local_handler(request, reply, service->context);
     }
 

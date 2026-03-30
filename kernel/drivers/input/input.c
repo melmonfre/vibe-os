@@ -1,6 +1,5 @@
 #include <kernel/drivers/input/input.h>
 
-#include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/usb/usb_host.h>
 #include <kernel/event.h>
 #include <kernel/kernel_string.h>
@@ -90,7 +89,6 @@ void kernel_input_event_enqueue_key(int key) {
     if (key == 0) {
         return;
     }
-
     memset(&event, 0, sizeof(event));
     event.type = INPUT_EVENT_KEY;
     event.value = key;

@@ -532,12 +532,12 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_text_puts("Initializing VFS...\n");
     vfs_init();
     mk_storage_service_init();
-    mk_filesystem_service_init();
     mk_video_service_init();
+    mk_audio_service_init();
+    mk_filesystem_service_init();
     mk_input_service_init();
     mk_console_service_init();
     mk_network_service_init();
-    mk_audio_service_init();
     kernel_text_puts("VFS OK\n");
 
     kernel_text_puts("Initializing syscalls...\n");

@@ -230,7 +230,12 @@ static int audio_backend_kind(void) {
 }
 
 int audio_desktop_startup_wav_allowed(void) {
-    int backend_kind = audio_backend_kind();
+    int backend_kind;
+
+    backend_kind = audio_backend_kind();
+    if (backend_kind < 0) {
+        return 0;
+    }
 
     return backend_kind != AUDIO_BACKEND_PCSPKR &&
            backend_kind != AUDIO_BACKEND_COMPAT_UAUDIO;

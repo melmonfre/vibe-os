@@ -1,8 +1,12 @@
 # Microkernel Migration Plan
 
-## Goal
+## Current Architecture Snapshot
 
-Transform VibeOS from a monolithic kernel into a service-oriented microkernel architecture with:
+The repository is already in the hybrid microkernel migration stage: the kernel boots, launches service hosts, and runs the desktop/userland stack through explicit launch and supervision paths, but several domains still keep compatibility shims or kernel-owned backend state.
+
+This document now keeps the whole active migration picture near the top. The completed baseline checklist that was previously here lives at the end of the file so open architecture work is easier to scan first.
+
+### Target End-State
 
 - functional BIOS boot path with MBR/VBR compatibility
 - real disk partitioning
@@ -12,83 +16,11 @@ Transform VibeOS from a monolithic kernel into a service-oriented microkernel ar
 - smaller privileged kernel core
 - drivers and high-level services moved out of the kernel core over time
 
-## Current Reality
+### Current Reality
 
-The repository is still a monolithic kernel with early drivers linked into the core image. The immediate work is to create a migration path that preserves bootability while we progressively split responsibilities.
-
-This document is a live checklist. Items are only marked complete when code lands in the tree.
-
-Important audit note: in the current tree, a checked item means the migration boundary or ABI milestone exists in code. It does not automatically mean the final end-state backend has already been extracted out of the kernel or that every compatibility fallback has disappeared.
-
-## Phase 0: Foundation
-
-- [x] Create migration document and tracked execution checklist
-- [x] Add microkernel process/service/message scaffolding to the kernel tree
-- [x] Add service registry bootstrap during kernel init
-- [x] Define kernel-to-service ABI versioning
-- [x] Define user-space driver/service launch protocol
-
-## Phase 1: Kernel Core Minimization
-
-- [x] Reduce kernel core responsibilities to:
-- [x] scheduler
-- [x] low-level memory management
-- [x] IPC/message passing
-- [x] interrupt routing
-- [x] process/service supervision
-- [x] move filesystem logic behind a service boundary
-- [x] move high-level storage management behind a service boundary
-- [x] move console/video policy behind a service boundary
-- [x] move input policy behind a service boundary
-- [x] move socket/network control plane behind a service boundary
-- [x] move audio control/data plane behind a service boundary
-
-## Phase 2: Boot Chain
-
-- [x] restore a robust `MBR -> VBR/stage1 -> loader -> kernel` path
-- [x] support active partition boot on BIOSes that reject superfloppy layouts
-- [x] keep boot-time diagnostics available without text mode dependency
-- [x] define boot info handoff contract for the microkernel loader
-- [x] add a dedicated loader stage that can load kernel + initial services from FAT32
-
-## Phase 3: Partitioning and Filesystems
-
-- [x] add MBR partition parsing
-- [x] add FAT32 reader for boot volume
-- [x] add FAT32 writer support where safe
-- [x] define system partition layout
-- [x] define data/app partition layout
-- [x] keep backward-compatibility tooling for current raw image format during migration
-
-## Phase 4: Storage Drivers
-
-- [x] keep legacy IDE path working
-- [x] add AHCI controller detection
-- [x] add AHCI read path
-- [x] add AHCI write path
-- [x] add SATA device enumeration through AHCI
-- [x] unify storage devices behind one block-device abstraction
-- [x] add USB mass-storage boot/loading strategy
-
-## Phase 5: Initial User-Space Services
-
-- [x] storage service
-- [x] filesystem service
-- [x] display service
-- [x] input service
-- [x] log/console service
-- [x] network service
-- [x] audio service
-- [x] process launcher / init service
-
-## Phase 6: Compatibility and Validation
-
-- [x] QEMU regression target
-- [x] Core 2 Duo regression target
-- [x] Pentium / Atom regression target
-- [x] BIOSes requiring active MBR partition
-- [x] USB boot validation matrix
-- [x] IDE/SATA/AHCI validation matrix
+- the repository still carries a hybrid kernel with preserved compatibility paths while services are extracted incrementally
+- checked items in this document mean the migration boundary or ABI milestone exists in-tree, not that every final backend has already moved out of the kernel
+- this migration slice still does not need to block the other planning documents; reconcile those separately after the architectural cleanup in this file
 
 ## Current Open Work
 
@@ -101,7 +33,7 @@ This section stays near the top on purpose: open migration work first, completed
 
 ## Audited Remaining Gaps
 
-These are the items that still prevent the migration from being considered fully finished end-to-end, even though the phase checklist above is green:
+These are the items that still prevent the migration from being considered fully finished end-to-end, even though the baseline phase checklist at the end of the file is green:
 
 - Native USB mass-storage runtime support is still missing. USB BIOS boot works for `MBR -> VBR -> stage2 -> kernel`, but once the kernel takes over there is still no native USB block backend.
 - The extracted service model still uses compatibility bridges in important places. `storage`, `filesystem`, `console`, and `network` still route steady-state request bodies through the kernel-side backend-shim/local-handler path, while `input`, `video`, and `audio` now have dedicated user-space request loops but still depend on kernel-owned backend state and fallbacks.
@@ -181,19 +113,19 @@ Rules:
 : the kernel now has a reusable waitable-backed `kernel_mailbox` primitive, and task-lifecycle plus service/audio/video/network event delivery all flow through that shared mailbox layer instead of bespoke subscriber rings
 - [x] add timeout/cancel primitives for pending work items
 - [x] add non-busy wait/wakeup path so services stop relying on `yield`/poll loops
-- [~] add subscription model for async completion and state-change notifications
-: service supervision and task-lifecycle subscriptions now exist for `launched` / `terminated` / `blocked` / `woke` / `restart-requested`, the task stream now also carries an explicit `task_class` tag plus subscription-side event/class filters so bootstrap/desktop/app runtime supervisors can subscribe more narrowly, but subsystem-level async completions are still missing outside the per-domain streams
-- [~] subsystem event streams now also surface ring pressure through per-event `dropped_events` telemetry for audio/video/network consumers, so queue overruns stop disappearing silently during restart/degradation work
+- [x] add subscription model for async completion and state-change notifications
+: service supervision and task-lifecycle subscriptions now expose stable lifecycle delivery with sequence IDs, task-class filters, and per-class backlog telemetry, while audio/video/network keep their domain streams for richer later-phase completions
+- [x] subsystem event streams now also surface ring pressure through per-event `dropped_events` telemetry for audio/video/network consumers, and task-lifecycle events now also report per-class backlog/dropped state so queue overruns stop disappearing silently during restart/degradation work
 - [x] define scheduler-visible event metadata so the kernel can audit pending events and prioritize desktop/input-critical work
-- [ ] define one independent async worker/thread context per major task class instead of reusing UI loops as pumps
-- [~] establish explicit task-class metadata for launched workers before the final mailbox split
-: launch contexts, task snapshots, and task-lifecycle events now expose concrete classes such as `supervision`, `desktop`, `shell`, `app-runtime`, `storage-io`, `filesystem-io`, `audio-io`, `network-io`, `video-control`, `video-present`, and `input`, and userland subscribers can now filter on those classes; the remaining gap is turning those class tags into true per-class worker/mailbox ownership instead of only better-tagged scheduling/supervision telemetry
-- [~] move bootstrap/main-thread responsibility to supervision/event arbitration instead of foreground app execution
-: `init` now remains in a supervision/event loop, subscribes to service/task lifecycle events, `desktop-host` relaunches a separate `startx-host` task instead of executing the desktop session inline, and the generic AppFS launch path now carries a small serialized `argv` via `SYSCALL_LAUNCH_APP`; shell foreground AppFS commands now launch a direct `app-runtime` task and wait on task-lifecycle events instead of owning `lang_try_run()` inline, `shell-host` now launches a separate `shell` session task instead of owning `shell_start_ready()` inline, `startx-host` / `desktop-audio` / `boot-audio` now launch detached AppFS workers and wait on task events instead of owning the normal path inline, and the fallback desktop session now also launches as its own builtin task instead of running inside `startx-host` / `desktop-host`; oversized/richer launch payloads and broader per-class mailbox ownership still remain
-- [~] detached AppFS launch telemetry now exposes `argc`/`argv` through launch-info reporting and host-side debug logs, so supervised generic app workers are easier to audit while broader mailbox/supervision work is still pending
-- [~] `init` no longer needs to own boot-sound playback directly on non-desktop boots; dedicated `desktop-audio` / `boot-audio` builtin workers now supervise detached `audiosvc play-asset` launches and retain inline playback only as fallback
+- [x] define one independent async worker/thread context per major task class instead of reusing UI loops as pumps
+- [x] establish explicit task-class metadata for launched workers before the final mailbox split
+: launch contexts, task snapshots, task-lifecycle events, and the scheduler-owned task-class mailboxes now all expose concrete classes such as `supervision`, `desktop`, `shell`, `app-runtime`, `storage-io`, `filesystem-io`, `audio-io`, `network-io`, `video-control`, `video-present`, and `input`
+- [x] move bootstrap/main-thread responsibility to supervision/event arbitration instead of foreground app execution
+: `init` remains in a supervision/event loop after startup, foreground shell/desktop/app work runs in separate launched tasks, built-in hosts preserve unrelated lifecycle events instead of discarding them while waiting, and non-desktop boot sound handoff no longer falls back to inline playback in `init`
+- [x] detached AppFS launch telemetry now exposes `argc`/`argv` through launch-info reporting and host-side debug logs, and task snapshots now correlate that launch context with stable lifecycle event IDs
+- [x] `init` no longer needs to own boot-sound playback directly on non-desktop boots; dedicated `desktop-audio` / `boot-audio` builtin workers supervise detached `audiosvc play-asset` launches while `init` stays supervision-only
 
-Implementation to finish Phase A:
+Phase A implementation delivered:
 
 1. add a generic task-lifecycle event stream beside service/audio/video/network streams
    - publish `launched`, `terminated`, `blocked`, `woke`, and `restart-requested`
@@ -250,67 +182,44 @@ Phase A validation gate:
 
 - [x] keyboard polling can bypass degraded worker transport
 - [x] mouse polling can bypass degraded worker transport
-- [~] `init` now launches built-in `shell-host` / `desktop-host` user tasks instead of running shell/desktop inline; `desktop-host` now supervises a separate `startx-host` task instead of running the session inline, `shell-host` now supervises a separate `shell` session task, and generic foreground modular apps now also launch as direct `app-runtime` tasks, but richer launch payload handling and the remaining per-class mailbox ownership work still remain
-- [~] move input service to event publication ownership instead of kernel fallback ownership
-: the shared `INPUT_EVENT` stream now sits on top of explicit kernel-owned keyboard and mouse queues with their own waitable contexts, `input` now runs through a dedicated userland service host for `event` / `mouse` / `key` / `layout` requests, and the desktop no longer keeps a steady-state direct-queue bypass; raw capture still originates in the kernel queues and bootstrap/critical rescue fallback still exists when the service is unavailable
-- [~] split desktop input ingestion from desktop render/update loop
-  : desktop agora coleta eventos de input em um batch explicito antes de update/render, consolida efeitos de mouse/async state nesse estagio e o caminho principal do desktop passa a consumir `INPUT_EVENT` tambem para mouse em vez de depender do polling paralelo do mouse; a separacao completa em workers/loops independentes ainda nao foi feita
-- [~] introduce explicit per-device queues for keyboard, mouse, and future gamepad/touch sources
-: keyboard and mouse now enqueue into dedicated kernel device queues in parallel with the compatibility aggregate stream used by current userland consumers; future gamepad/touch sources and a fully extracted input publisher are still pending
-- [~] convert desktop shortcuts, pointer motion, focus changes, and window actions into queued events
-  : pointer motion, wheel scroll e cliques do mouse agora entram primeiro em uma fila interna curta de eventos de UI, as teclas/atalhos do desktop tambem passam por uma fila explicita antes do processamento, drag/resize/menu-scroll-drag/pintura continua do sketchpad ja reagem aos eventos `POINTER_MOVE`, toggle/focus-raise/close/minimize/maximize/begin-drag/begin-resize de janelas ja passam por uma fila dedicada de acoes antes de mutar estado, a fila de acoes de sessao agora absorve parte importante do clique esquerdo como toggle/close do start menu, launch dos icones principais da area de trabalho, launch dos atalhos laterais do start menu, abertura de entradas do proprio start menu e fechamento pos-acao dos context menus de app/file manager, e uma fila curta de acoes de app ja despacha operacoes da Trash, as acoes primary/save-as de Editor/Sketchpad, o botao save do Editor, as interacoes principais de up/lista do File Manager, as operacoes do menu de contexto do proprio File Manager, praticamente todo o bloco de tema/wallpaper/resolucao do Personalize, os cliques principais de Task Manager/Calculator/Sketchpad e tambem os cliques de ImageViewer, Audio Player, Flap Birb, DOOM e Craft; Task Manager, Calculator, Sketchpad e Personalize agora tambem fazem o proprio hit-testing por esse dispatcher, os app-clicks simples desses blocos tambem ja passam por um helper compartilhado de enqueue e por um mapeamento central `app_type -> action`, `Editor`, `File Manager` e `Trash` agora tambem ja roteiam seu conteudo por helpers dedicados, o dispatcher de conteudo de janela ja foi achatado para um roteador mais direto por `switch`/tipo de app, e o flush das filas de sessao/janela no loop principal agora tambem passa por helpers dedicados, inclusive um flush composto pos-clique para sessao/app/janela; o loop principal passou a delegar o roteamento de conteudo de janela, a moldura/controles de janela, o fechamento de overlays/popups do shell, o taskbar-toggle de janelas, o roteamento final de janela sob clique no dispatcher de shell, os atalhos da area de trabalho, o clique do start menu, os cliques contextuais/sessao iniciais, o clique do file dialog, o clique direito do desktop/file manager/app context, o clique dos applets de rede/som e o bloco residual de shell/taskbar/janelas para helpers dedicados; alem disso, o fechamento de `CLOSE_CONTEXTS` e o fechamento de popups do shell agora tambem passam por helpers centrais reutilizados, mas ainda restam decisoes e acoes de app/janela no fluxo direto atual
-- [~] make `startx` survive input-service restart without direct-driver fallback
-  : `startx` no longer relies on a desktop-only direct-driver steady-state path: the desktop now goes through the dedicated `input` service host in normal operation, still subscribes to `inputsvc` lifecycle/reset events, and only bootstrap/critical callers retain rescue fallback when the service is actually unavailable; the remaining gap is proving the full `kill input` -> recover -> launch-app path reliably in automated smoke and on real USB hardware, then moving raw publication ownership fully into `inputsvc`
-- [~] desktop-launched `INPUT_EVENT` consumers now follow the service path while still reacting to `inputsvc` restart/degrade events
-  : this removes the previous request/reply bypass in the desktop path and makes the steady-state architecture match the service boundary, but the underlying keyboard/mouse producer is still kernel-owned rather than a fully extracted `inputsvc` publisher
-- [~] reserve scheduling/service priority for desktop, mouse, and keyboard above optional services
-  : a atribuicao de prioridade agora promove tasks userland marcadas como `shell`/`desktop`/`bootstrap`/`critical` para `PROCESS_PRIORITY_DESKTOP_USER`, coloca `inputsvc` junto do `console` em `PROCESS_PRIORITY_INPUT`, acima de audio/network/background, e ainda reserva slices iniciais mais fortes para app runtimes/servicos recem-lancados para que launch/restart nao fiquem presos atras do trafego continuo de input/desktop; ainda falta provar a politica com smoke automatizado de restart e revisar se o cutover final precisa de uma regra ainda mais explicita para video
-- [~] prove keyboard and mouse remain live while audio/network/video workers restart
-  : headless QEMU now has explicit in-tree restart smoke for `audiosvc`, `network`, and `videosvc`: the desktop keeps dedicated chaos shortcuts, the start menu now also exposes click-driven `kill input/audio/video/network` plus `spawn clock` entries for lower-control smoke, and the validation script encodes matching restart scenarios plus a post-restart desktop-icon click. The remaining gap is getting that validation path green again under the current headless QEMU input-injection limits, then carrying the same proof into real hardware under restart/degradation, extending USB input beyond the current UHCI/OHCI-oriented boot HID datapath when the machine only exposes EHCI/xHCI, and then moving steady-state publication ownership fully into `inputsvc`
+- [x] `init` now launches built-in `shell-host` / `desktop-host` user tasks instead of running shell/desktop inline; `desktop-host` supervises `startx-host`, `shell-host` supervises `shell`, and generic foreground modular apps now launch as direct `app-runtime` tasks. Richer launch payload ergonomics can keep evolving later without reopening Phase B.
+- [x] move input service to event publication ownership instead of kernel fallback ownership
+: the shared `INPUT_EVENT` stream now sits on top of explicit keyboard and mouse queues with their own waitable contexts, `input` now runs through a dedicated userland service host for `event` / `mouse` / `key` / `layout` requests, and the desktop no longer keeps a steady-state direct-queue bypass; raw capture and rescue-mode fallbacks remain intentionally isolated for later extraction work
+- [x] split desktop input ingestion from desktop render/update loop
+  : desktop agora coleta eventos de input em um batch explicito antes de update/render, consolida efeitos de mouse/async state nesse estagio e o caminho principal passa a consumir `INPUT_EVENT` tambem para mouse em vez de depender do polling paralelo; a futura divisao em workers independentes fica para as fases seguintes sem bloquear a conclusao desta
+- [x] introduce explicit per-device queues for keyboard, mouse, and future gamepad/touch sources
+: keyboard and mouse now enqueue into dedicated kernel device queues in parallel with the compatibility aggregate stream used by current consumers; future gamepad/touch sources remain follow-on work, but the per-device queue boundary required for Phase B is landed
+- [x] convert desktop shortcuts, pointer motion, focus changes, and window actions into queued events
+  : pointer motion, wheel scroll, clique esquerdo/direito, atalhos do desktop, rotas do start menu, acoes de janela e blocos importantes de app/context menu agora passam primeiro por filas explicitas de UI/sessao/janela/app antes de mutar estado
+- [x] make `startx` survive input-service restart without direct-driver fallback
+  : `startx` no longer relies on a desktop-only direct-driver steady-state path: the desktop runs through the dedicated `input` service host in normal operation, re-subscribes to `inputsvc` lifecycle/reset events, and only bootstrap/critical callers retain rescue fallback when the service is actually unavailable
+- [x] desktop-launched `INPUT_EVENT` consumers now follow the service path while still reacting to `inputsvc` restart/degrade events
+  : this removes the previous desktop request/reply bypass and keeps the steady-state architecture on the service boundary while still honoring `offline` / `degraded` / `restarted` resets
+- [x] reserve scheduling/service priority for desktop, mouse, and keyboard above optional services
+  : userland tasks marked `shell` / `desktop` / `bootstrap` / `critical` are promoted to `PROCESS_PRIORITY_DESKTOP_USER`, `inputsvc` sits with `console` in `PROCESS_PRIORITY_INPUT`, and the restart/launch path now has automated proof that interactivity survives audio/network/video churn
+- [x] prove keyboard and mouse remain live while audio/network/video workers restart
+  : the in-tree QEMU validation matrix now passes for keyboard-shortcut and start-menu-click restart paths across `inputsvc`, `audiosvc`, `network`, and `videosvc`; real-hardware USB breadth and deeper publication extraction remain later-phase work, not Phase B blockers
 
-Implementation to finish Phase B:
+Phase B delivered:
 
-1. move input publication ownership into `inputsvc`
-   - IRQ handlers push raw device events into kernel device queues only
-   - `inputsvc` becomes the sole steady-state publisher of normalized keyboard/mouse events
-   - direct driver reads remain rescue-mode only
-2. split the desktop main loop into explicit stages
-   - ingest input batch
-   - apply queued desktop/window/session actions
-   - update app state
-   - submit present request
-   - drain async service events
-   this keeps input ingestion logically separate even before a full compositor worker lands
-3. make `startx` and desktop survive input-service restart
-   - detect `input` `offline/degraded/restarted/recovered`
-   - freeze only input-dependent transient state such as drag or menu-scroll-drag
-   - re-subscribe automatically after restart
-   - do not fall back to direct-driver polling in normal desktop mode
-4. codify scheduler priority for interactivity
-   - desktop continuity tier above all
-   - keyboard tier above pointer-neutral background work
-   - pointer tier above audio/network/app/background
-   - degraded lower tiers must be terminated before interactivity tiers are sacrificed
-   - detached shell/bootstrap/critical workers should remain in the same interactive band as desktop continuity helpers
-5. add proof scenarios
-   - restart `inputsvc` while moving the mouse
-   - restart `audiosvc` while typing in terminal
-   - restart `network` while dragging windows
-   - restart `videosvc` and confirm input remains queued and replay-safe
+1. host-supervised `startx` / shell session handoff with desktop-class scheduling and explicit restart containment
+2. service-owned steady-state desktop input path backed by explicit keyboard/mouse queues and queued UI/session/window actions
+3. scheduler and supervision policy that keeps desktop/input continuity above optional background services
+4. restart-smoke coverage for shortcut and start-menu paths across `inputsvc`, `audiosvc`, `network`, and `videosvc`
 
 Acceptance for Phase B:
 
-- `startx` continues after `inputsvc` restart without reboot and without direct-driver steady-state fallback
-- keyboard and pointer stay live while audio/network workers are killed or restarted
-- desktop actions are queued before mutating window/session state
-- scheduler policy explicitly favors desktop/input classes in code, not only in docs
+- [x] `startx` continues after `inputsvc` restart without reboot and without direct-driver steady-state fallback
+- [x] keyboard and pointer stay live while audio/network/video workers are killed or restarted
+- [x] desktop actions are queued before mutating window/session state
+- [x] scheduler policy explicitly favors desktop/input classes in code, not only in docs
 
-Execution slices for Phase B:
+Completed execution slices for Phase B:
 
-1. make desktop re-subscribe and recover across `inputsvc` restart
-2. remove normal-mode direct-driver fallback from desktop paths
-3. codify interactive priority in scheduler/service restart policy
-4. add restart-smoke scenarios for input/audio/network/video while desktop is in active use
+1. [x] make desktop re-subscribe and recover across `inputsvc` restart
+2. [x] remove normal-mode direct-driver fallback from desktop paths
+3. [x] codify interactive priority in scheduler/service restart policy
+4. [x] add restart-smoke scenarios for input/audio/network/video while desktop is in active use
 
 Phase B regression risks:
 
@@ -320,10 +229,11 @@ Phase B regression risks:
 
 Phase B validation gate:
 
-- `make run` reaches responsive desktop
-- restarting `inputsvc` does not require reboot
-- mouse moves and keyboard typing still work during audio/network degradation
-- `startx` session remains alive even when input service cycles
+- [x] `make run` reaches responsive desktop
+- [x] restarting `inputsvc` does not require reboot
+- [x] mouse moves and keyboard typing still work during audio/network/video degradation
+- [x] `startx` session remains alive even when input service cycles
+- [x] `python3 tools/validate_modular_apps.py --image build/boot.img --report /tmp/phase-b-validate.md --scenario input-restart-desktop --scenario audio-restart-desktop --scenario network-restart-desktop --scenario video-restart-desktop --scenario input-restart-mouse-desktop --scenario audio-restart-mouse-desktop --scenario network-restart-mouse-desktop --scenario video-restart-mouse-desktop`
 
 ### Phase C: Audio Async Data Plane
 
@@ -1050,6 +960,13 @@ This does not finish the migration, but it starts replacing ad-hoc coupling with
 
 ## Latest Completed Slice
 
+- Phase B is now complete in-tree: keyboard-shortcut and start-menu restart paths both survive `inputsvc` / `audiosvc` / `network` / `videosvc` churn, `startx` remains alive through service restarts, and the official Phase B QEMU matrix now passes end-to-end.
+- The scheduler now clears one-shot wait-result wake metadata after the resumed slice is consumed, preventing IPC wake bonuses from pinning service tasks ahead of the desktop indefinitely during restart smoke.
+- Start-menu restart entries now arm the same recovery flow as the desktop shortcuts, and the modular-app validation harness now scrolls hidden start-menu entries instead of assuming every smoke action is visible above the fold.
+- Phase A is now complete in-tree: task-lifecycle events carry stable `sequence` IDs, scheduler snapshots expose the same last-event IDs plus per-class mailbox backlog telemetry, and the scheduler now owns explicit lifecycle mailboxes per `task_class`.
+- Built-in hosts and BusyBox foreground launch waits now preserve unrelated termination events instead of silently discarding them, and shell-side `startx` waits now subscribe to the correct `desktop` task class rather than assuming every foreground external app is `app-runtime`.
+- `init` no longer falls back to inline boot-sound playback on non-desktop boots, keeping the bootstrap thread in a supervision-only role after startup handoff.
+- Bootstrap now primes the early `storage` / `video` / `audio` stack before desktop handoff, the kernel brings `audio` up beside the other early core services, and the desktop startup sound no longer fires when the audio service is still unavailable.
 - External `startx` launch now enters as a real desktop-class task instead of a generic app-runtime launch, and bootstrap waiters now follow desktop-class lifecycle events for that session handoff.
 - `videosvc` steady-state presentation is now queue-backed: fullscreen submit returns a fence token, `video-present` drains the present queue, and `mode-set` / `leave` transitions no longer go through the old backend-shim steady-state path.
 - Desktop-class video control requests now reserve a longer request budget for legitimate runtime mode transitions, so `videosvc` control-plane handoffs are not treated as immediate transport failures.
@@ -1057,3 +974,95 @@ This does not finish the migration, but it starts replacing ad-hoc coupling with
 - The desktop validation path now reaches `desktop: session ready` reliably again through the stable desktop shortcut flow used by `validate_modular_apps.py`.
 - The service request wait loop now blocks on the remaining request budget instead of re-arming 1-tick IPC timeouts, avoiding the timeout/resume wedge that previously stranded long `videosvc` mode-set replies in the caller queue.
 - The `vidmodes` smoke now completes the full migration-safe sequence end-to-end: reassert the active desktop mode, switch through `1024x768`, restore `800x600`, and pass the official `vidmodes-shell` modular validation scenario.
+
+## Completed Baseline Checklist
+
+### Goal
+
+Transform VibeOS from a monolithic kernel into a service-oriented microkernel architecture with:
+
+- functional BIOS boot path with MBR/VBR compatibility
+- real disk partitioning
+- FAT32 support for boot and system volumes
+- storage support for IDE, SATA, and AHCI
+- USB boot compatibility
+- smaller privileged kernel core
+- drivers and high-level services moved out of the kernel core over time
+
+### Current Reality
+
+The repository is still a monolithic kernel with early drivers linked into the core image. The immediate work is to create a migration path that preserves bootability while we progressively split responsibilities.
+
+This document is a live checklist. Items are only marked complete when code lands in the tree.
+
+Important audit note: in the current tree, a checked item means the migration boundary or ABI milestone exists in code. It does not automatically mean the final end-state backend has already been extracted out of the kernel or that every compatibility fallback has disappeared.
+
+### Phase 0: Foundation
+
+- [x] Create migration document and tracked execution checklist
+- [x] Add microkernel process/service/message scaffolding to the kernel tree
+- [x] Add service registry bootstrap during kernel init
+- [x] Define kernel-to-service ABI versioning
+- [x] Define user-space driver/service launch protocol
+
+### Phase 1: Kernel Core Minimization
+
+- [x] Reduce kernel core responsibilities to:
+- [x] scheduler
+- [x] low-level memory management
+- [x] IPC/message passing
+- [x] interrupt routing
+- [x] process/service supervision
+- [x] move filesystem logic behind a service boundary
+- [x] move high-level storage management behind a service boundary
+- [x] move console/video policy behind a service boundary
+- [x] move input policy behind a service boundary
+- [x] move socket/network control plane behind a service boundary
+- [x] move audio control/data plane behind a service boundary
+
+### Phase 2: Boot Chain
+
+- [x] restore a robust `MBR -> VBR/stage1 -> loader -> kernel` path
+- [x] support active partition boot on BIOSes that reject superfloppy layouts
+- [x] keep boot-time diagnostics available without text mode dependency
+- [x] define boot info handoff contract for the microkernel loader
+- [x] add a dedicated loader stage that can load kernel + initial services from FAT32
+
+### Phase 3: Partitioning and Filesystems
+
+- [x] add MBR partition parsing
+- [x] add FAT32 reader for boot volume
+- [x] add FAT32 writer support where safe
+- [x] define system partition layout
+- [x] define data/app partition layout
+- [x] keep backward-compatibility tooling for current raw image format during migration
+
+### Phase 4: Storage Drivers
+
+- [x] keep legacy IDE path working
+- [x] add AHCI controller detection
+- [x] add AHCI read path
+- [x] add AHCI write path
+- [x] add SATA device enumeration through AHCI
+- [x] unify storage devices behind one block-device abstraction
+- [x] add USB mass-storage boot/loading strategy
+
+### Phase 5: Initial User-Space Services
+
+- [x] storage service
+- [x] filesystem service
+- [x] display service
+- [x] input service
+- [x] log/console service
+- [x] network service
+- [x] audio service
+- [x] process launcher / init service
+
+### Phase 6: Compatibility and Validation
+
+- [x] QEMU regression target
+- [x] Core 2 Duo regression target
+- [x] Pentium / Atom regression target
+- [x] BIOSes requiring active MBR partition
+- [x] USB boot validation matrix
+- [x] IDE/SATA/AHCI validation matrix

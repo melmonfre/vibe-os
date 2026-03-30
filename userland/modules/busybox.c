@@ -13,6 +13,7 @@
 #include <stddef.h> /* for size_t */
 
 void *memcpy(void *dst, const void *src, size_t count);
+void *memmove(void *dst, const void *src, size_t count);
 
 struct kernel_cpu_topology {
     uint32_t cpu_count;
@@ -477,11 +478,69 @@ static int busybox_task_pid_alive(uint32_t pid) {
     return 0;
 }
 
+#define BUSYBOX_PENDING_TASK_EVENTS_MAX 8u
+
+static struct mk_task_event g_busybox_pending_task_events[BUSYBOX_PENDING_TASK_EVENTS_MAX];
+static uint32_t g_busybox_pending_task_event_count = 0u;
+
+static uint32_t busybox_external_task_class_mask(int argc, char **argv) {
+    if (argc > 0 && argv != 0 && argv[0] != 0 && strcmp(argv[0], "startx") == 0) {
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP);
+    }
+
+    return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
+}
+
+static void busybox_stash_task_event(const struct mk_task_event *event) {
+    if (event == 0 || event->event_type != MK_TASK_EVENT_TERMINATED) {
+        return;
+    }
+
+    if (g_busybox_pending_task_event_count >= BUSYBOX_PENDING_TASK_EVENTS_MAX) {
+        memmove(&g_busybox_pending_task_events[0],
+                &g_busybox_pending_task_events[1],
+                sizeof(g_busybox_pending_task_events[0]) * (BUSYBOX_PENDING_TASK_EVENTS_MAX - 1u));
+        g_busybox_pending_task_event_count = BUSYBOX_PENDING_TASK_EVENTS_MAX - 1u;
+    }
+
+    g_busybox_pending_task_events[g_busybox_pending_task_event_count++] = *event;
+}
+
+static int busybox_take_stashed_task_exit(uint32_t pid, struct mk_task_event *event_out) {
+    uint32_t index;
+
+    if (pid == 0u) {
+        return -1;
+    }
+
+    for (index = 0u; index < g_busybox_pending_task_event_count; ++index) {
+        if (g_busybox_pending_task_events[index].pid != pid ||
+            g_busybox_pending_task_events[index].event_type != MK_TASK_EVENT_TERMINATED) {
+            continue;
+        }
+        if (event_out != 0) {
+            *event_out = g_busybox_pending_task_events[index];
+        }
+        if (index + 1u < g_busybox_pending_task_event_count) {
+            memmove(&g_busybox_pending_task_events[index],
+                    &g_busybox_pending_task_events[index + 1u],
+                    sizeof(g_busybox_pending_task_events[0]) * (g_busybox_pending_task_event_count - index - 1u));
+        }
+        g_busybox_pending_task_event_count -= 1u;
+        return 0;
+    }
+
+    return -1;
+}
+
 static int busybox_wait_for_task_exit(uint32_t pid) {
     struct mk_task_event event;
 
     if (pid == 0u) {
         return -1;
+    }
+    if (busybox_take_stashed_task_exit(pid, &event) == 0) {
+        return 0;
     }
 
     for (;;) {
@@ -490,6 +549,7 @@ static int busybox_wait_for_task_exit(uint32_t pid) {
                 event.event_type == MK_TASK_EVENT_TERMINATED) {
                 return 0;
             }
+            busybox_stash_task_event(&event);
             continue;
         }
         if (!busybox_task_pid_alive(pid)) {
@@ -543,7 +603,7 @@ static int busybox_launch_external_task(int argc, char **argv, int wait_for_exit
 
     if (wait_for_exit &&
         sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,
-                                      MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME)) != 0) {
+                                      busybox_external_task_class_mask(argc, argv)) != 0) {
         return -1;
     }
 
@@ -1329,9 +1389,9 @@ static int cmd_ps(int argc, char **argv) {
         count = TASK_SNAPSHOT_MAX;
     }
 
-    console_write("pid kind state prio class service restarts name\n");
+    console_write("pid kind state prio class service restarts lastevt name\n");
     for (i = 0; i < count; ++i) {
-        char line[160];
+        char line[192];
 
         if (entries[i].pid == 0u || entries[i].state == 3u) {
             continue;
@@ -1356,6 +1416,8 @@ static int cmd_ps(int argc, char **argv) {
         str_append(line, task_snapshot_service_name(entries[i].service_type), (int)sizeof(line));
         str_append(line, " ", (int)sizeof(line));
         append_uint(line, entries[i].service_restart_count, (int)sizeof(line));
+        str_append(line, " ", (int)sizeof(line));
+        append_uint(line, entries[i].last_task_event_sequence, (int)sizeof(line));
         str_append(line, " ", (int)sizeof(line));
         str_append(line, entries[i].name, (int)sizeof(line));
         str_append(line, "\n", (int)sizeof(line));

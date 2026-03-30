@@ -9,6 +9,11 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/utils.h>
 
+#define HOST_PENDING_TASK_EVENTS_MAX 8u
+
+static struct mk_task_event g_host_pending_task_events[HOST_PENDING_TASK_EVENTS_MAX];
+static uint32_t g_host_pending_task_event_count = 0u;
+
 static void host_debug(const char *prefix, const char *suffix) {
     char msg[96];
 
@@ -19,6 +24,73 @@ static void host_debug(const char *prefix, const char *suffix) {
     }
     str_append(msg, "\n", (int)sizeof(msg));
     sys_write_debug(msg);
+}
+
+static void host_stash_task_event(const struct mk_task_event *event) {
+    if (event == 0 || event->event_type != MK_TASK_EVENT_TERMINATED) {
+        return;
+    }
+
+    if (g_host_pending_task_event_count >= HOST_PENDING_TASK_EVENTS_MAX) {
+        memmove(&g_host_pending_task_events[0],
+                &g_host_pending_task_events[1],
+                sizeof(g_host_pending_task_events[0]) * (HOST_PENDING_TASK_EVENTS_MAX - 1u));
+        g_host_pending_task_event_count = HOST_PENDING_TASK_EVENTS_MAX - 1u;
+    }
+
+    g_host_pending_task_events[g_host_pending_task_event_count++] = *event;
+}
+
+static int host_take_stashed_task_exit(uint32_t pid, struct mk_task_event *event_out) {
+    uint32_t index;
+
+    if (pid == 0u) {
+        return -1;
+    }
+
+    for (index = 0u; index < g_host_pending_task_event_count; ++index) {
+        if (g_host_pending_task_events[index].pid != pid ||
+            g_host_pending_task_events[index].event_type != MK_TASK_EVENT_TERMINATED) {
+            continue;
+        }
+        if (event_out != 0) {
+            *event_out = g_host_pending_task_events[index];
+        }
+        if (index + 1u < g_host_pending_task_event_count) {
+            memmove(&g_host_pending_task_events[index],
+                    &g_host_pending_task_events[index + 1u],
+                    sizeof(g_host_pending_task_events[0]) * (g_host_pending_task_event_count - index - 1u));
+        }
+        g_host_pending_task_event_count -= 1u;
+        return 0;
+    }
+
+    return -1;
+}
+
+static int host_task_pid_alive(uint32_t pid) {
+    struct task_snapshot_summary summary;
+    struct task_snapshot_entry entries[TASK_SNAPSHOT_MAX];
+    uint32_t count;
+
+    if (pid == 0u) {
+        return 0;
+    }
+    if (sys_task_snapshot(&summary, entries, TASK_SNAPSHOT_MAX) != 0) {
+        return 1;
+    }
+
+    count = summary.total_tasks;
+    if (count > TASK_SNAPSHOT_MAX) {
+        count = TASK_SNAPSHOT_MAX;
+    }
+
+    for (uint32_t i = 0u; i < count; ++i) {
+        if (entries[i].pid == pid && entries[i].state != 3u) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static void host_debug_argv(int argc, char **argv) {
@@ -45,12 +117,19 @@ static int host_wait_for_task_exit(uint32_t pid) {
     if (pid == 0u) {
         return -1;
     }
+    if (host_take_stashed_task_exit(pid, &event) == 0) {
+        return 0;
+    }
 
     for (;;) {
         if (sys_task_event_receive(&event, MK_TASK_EVENT_WAIT_FOREVER) != 0) {
+            if (!host_task_pid_alive(pid)) {
+                return 0;
+            }
             return -1;
         }
         if (event.pid != pid) {
+            host_stash_task_event(&event);
             continue;
         }
         if (event.event_type == MK_TASK_EVENT_TERMINATED) {
