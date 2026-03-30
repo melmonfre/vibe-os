@@ -1,4 +1,5 @@
 #include <include/userland_api.h>
+#include <kernel/event.h>
 #include <kernel/drivers/video/video.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/kernel_string.h>
@@ -13,6 +14,8 @@
 #define MK_VIDEO_PALETTE_CACHE_SLOTS 4u
 #define MK_VIDEO_EVENT_SUBSCRIBERS 8u
 #define MK_VIDEO_EVENT_QUEUE_SIZE 16u
+#define MK_VIDEO_PRESENT_QUEUE_SIZE 16u
+#define MK_VIDEO_CONTROL_QUEUE_SIZE 8u
 
 struct mk_video_upload_cache {
     uint32_t owner_pid;
@@ -32,16 +35,47 @@ struct mk_video_event_subscription {
     struct mk_video_event events[MK_VIDEO_EVENT_QUEUE_SIZE];
 };
 
+struct mk_video_present_job {
+    uint32_t sequence;
+    uint32_t present_mode;
+};
+
+enum mk_video_control_job_type {
+    MK_VIDEO_CONTROL_JOB_NONE = 0,
+    MK_VIDEO_CONTROL_JOB_LEAVE = 1,
+    MK_VIDEO_CONTROL_JOB_MODE_SET = 2
+};
+
+struct mk_video_control_job {
+    uint32_t job_type;
+    uint32_t width;
+    uint32_t height;
+    int *result_out;
+    kernel_completion_t *completion;
+};
+
 static struct mk_video_upload_cache g_video_upload_cache[MK_VIDEO_UPLOAD_CACHE_SLOTS];
 static struct mk_video_palette_cache g_video_palette_cache[MK_VIDEO_PALETTE_CACHE_SLOTS];
 static struct mk_video_event_subscription g_video_event_subscribers[MK_VIDEO_EVENT_SUBSCRIBERS];
+static kernel_mailbox_t g_video_present_mailbox;
+static struct mk_video_present_job g_video_present_jobs[MK_VIDEO_PRESENT_QUEUE_SIZE];
+static kernel_mailbox_t g_video_control_mailbox;
+static struct mk_video_control_job g_video_control_jobs[MK_VIDEO_CONTROL_QUEUE_SIZE];
 static uint32_t g_video_event_sequence = 0u;
+static uint32_t g_video_present_next_sequence = 0u;
 static uint32_t g_video_present_last_submitted_sequence = 0u;
 static uint32_t g_video_present_last_completed_sequence = 0u;
 static uint32_t g_video_present_pending_depth = 0u;
+static int g_video_present_worker_pid = 0;
+static int g_video_control_worker_pid = 0;
+static int g_video_backend_faulted = 0;
 
 static int mk_video_current_process_is_service_worker(void);
 static void mk_video_event_init_subscribers(void);
+static uint32_t mk_video_next_event_sequence(void);
+static uint32_t mk_video_publish_event_with_sequence(uint32_t event_type,
+                                                     uint32_t present_mode,
+                                                     uint32_t sequence);
 static uint32_t mk_video_publish_event(uint32_t event_type, uint32_t present_mode);
 static struct mk_video_event_subscription *mk_video_find_subscription(const process_t *subscriber);
 static struct mk_video_event_subscription *mk_video_alloc_subscription(process_t *subscriber);
@@ -49,14 +83,43 @@ static void mk_video_enqueue_event(struct mk_video_event_subscription *subscript
                                    uint32_t event_type,
                                    uint32_t present_mode,
                                    uint32_t sequence);
+static void mk_video_present_worker_entry(void);
+static int mk_video_present_worker_online(void);
+static int mk_video_ensure_present_worker(void);
+static int mk_video_submit_present_job(uint32_t present_mode, uint32_t *sequence_out);
+static uint32_t mk_video_complete_present_job(uint32_t present_mode, uint32_t sequence);
+static void mk_video_mark_backend_failed(void);
+static void mk_video_mark_backend_recovered(void);
+static void mk_video_control_worker_entry(void);
+static int mk_video_control_worker_online(void);
+static int mk_video_ensure_control_worker(void);
+static int mk_video_execute_control_job(uint32_t job_type, uint32_t width, uint32_t height);
 
 static void mk_video_event_init_subscribers(void) {
     uint32_t index;
 
     g_video_event_sequence = 0u;
+    g_video_present_next_sequence = 0u;
     g_video_present_last_submitted_sequence = 0u;
     g_video_present_last_completed_sequence = 0u;
     g_video_present_pending_depth = 0u;
+    g_video_present_worker_pid = 0;
+    g_video_control_worker_pid = 0;
+    g_video_backend_faulted = 0;
+    kernel_mailbox_init(&g_video_present_mailbox,
+                        g_video_present_jobs,
+                        sizeof(g_video_present_jobs[0]),
+                        MK_VIDEO_PRESENT_QUEUE_SIZE,
+                        KERNEL_MAILBOX_DROP_NEWEST,
+                        TASK_WAIT_CLASS_VIDEO,
+                        MK_SERVICE_VIDEO);
+    kernel_mailbox_init(&g_video_control_mailbox,
+                        g_video_control_jobs,
+                        sizeof(g_video_control_jobs[0]),
+                        MK_VIDEO_CONTROL_QUEUE_SIZE,
+                        KERNEL_MAILBOX_DROP_NEWEST,
+                        TASK_WAIT_CLASS_VIDEO,
+                        MK_SERVICE_VIDEO);
     for (index = 0; index < MK_VIDEO_EVENT_SUBSCRIBERS; ++index) {
         struct mk_video_event_subscription *subscription = &g_video_event_subscribers[index];
 
@@ -146,14 +209,22 @@ static void mk_video_enqueue_event(struct mk_video_event_subscription *subscript
     }
 }
 
-static uint32_t mk_video_publish_event(uint32_t event_type, uint32_t present_mode) {
+static uint32_t mk_video_next_event_sequence(void) {
+    g_video_event_sequence += 1u;
+    return g_video_event_sequence;
+}
+
+static uint32_t mk_video_publish_event_with_sequence(uint32_t event_type,
+                                                     uint32_t present_mode,
+                                                     uint32_t sequence) {
     uint32_t index;
-    uint32_t sequence;
 
     if (event_type == MK_VIDEO_EVENT_NONE) {
         return 0u;
     }
-    sequence = ++g_video_event_sequence;
+    if (sequence == 0u) {
+        sequence = mk_video_next_event_sequence();
+    }
 
     for (index = 0; index < MK_VIDEO_EVENT_SUBSCRIBERS; ++index) {
         struct mk_video_event_subscription *subscription = &g_video_event_subscribers[index];
@@ -170,24 +241,242 @@ static uint32_t mk_video_publish_event(uint32_t event_type, uint32_t present_mod
     return sequence;
 }
 
-static uint32_t mk_video_begin_present_submission(uint32_t present_mode) {
-    uint32_t sequence;
-
-    g_video_present_pending_depth += 1u;
-    sequence = mk_video_publish_event(MK_VIDEO_EVENT_PRESENT_SUBMITTED, present_mode);
-    g_video_present_last_submitted_sequence = sequence;
-    return sequence;
+static uint32_t mk_video_publish_event(uint32_t event_type, uint32_t present_mode) {
+    return mk_video_publish_event_with_sequence(event_type, present_mode, 0u);
 }
 
-static uint32_t mk_video_complete_present_submission(uint32_t present_mode) {
+static int mk_video_present_worker_online(void) {
+    if (g_video_present_worker_pid <= 0) {
+        return 0;
+    }
+    if (scheduler_find_task_by_pid(g_video_present_worker_pid) == 0) {
+        mk_launch_release_pid(g_video_present_worker_pid);
+        g_video_present_worker_pid = 0;
+        return 0;
+    }
+    return 1;
+}
+
+static int mk_video_ensure_present_worker(void) {
+    struct mk_launch_descriptor descriptor;
+    int pid;
+
+    if (mk_video_present_worker_online()) {
+        return 0;
+    }
+
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.abi_version = MK_LAUNCH_ABI_VERSION;
+    descriptor.kind = MK_LAUNCH_KIND_DRIVER;
+    descriptor.flags = MK_LAUNCH_FLAG_BOOTSTRAP |
+                       MK_LAUNCH_FLAG_BUILTIN |
+                       MK_LAUNCH_FLAG_CRITICAL;
+    descriptor.task_class = MK_TASK_CLASS_VIDEO_PRESENT;
+    descriptor.stack_size = 8192u;
+    strncpy(descriptor.name, "video-present", MK_LAUNCH_NAME_MAX - 1u);
+    descriptor.name[MK_LAUNCH_NAME_MAX - 1u] = '\0';
+    descriptor.entry = mk_video_present_worker_entry;
+    pid = mk_launch_bootstrap(&descriptor);
+    if (pid <= 0) {
+        return -1;
+    }
+    g_video_present_worker_pid = pid;
+    return 0;
+}
+
+static int mk_video_submit_present_job(uint32_t present_mode, uint32_t *sequence_out) {
+    struct mk_video_present_job job;
     uint32_t sequence;
 
+    if (mk_video_ensure_present_worker() != 0) {
+        return -1;
+    }
+
+    sequence = ++g_video_present_next_sequence;
+    job.sequence = sequence;
+    job.present_mode = present_mode;
+    if (kernel_mailbox_try_send(&g_video_present_mailbox, &job) != 0) {
+        (void)mk_video_publish_event(MK_VIDEO_EVENT_OVERFLOW, present_mode);
+        return -1;
+    }
+
+    g_video_present_pending_depth += 1u;
+    g_video_present_last_submitted_sequence = sequence;
+    (void)mk_video_publish_event_with_sequence(MK_VIDEO_EVENT_PRESENT_SUBMITTED,
+                                               present_mode,
+                                               sequence);
+    if (sequence_out != 0) {
+        *sequence_out = sequence;
+    }
+    return 0;
+}
+
+static uint32_t mk_video_complete_present_job(uint32_t present_mode, uint32_t sequence) {
     if (g_video_present_pending_depth != 0u) {
         g_video_present_pending_depth -= 1u;
     }
-    sequence = mk_video_publish_event(MK_VIDEO_EVENT_PRESENT, present_mode);
     g_video_present_last_completed_sequence = sequence;
-    return sequence;
+    return mk_video_publish_event_with_sequence(MK_VIDEO_EVENT_PRESENT,
+                                                present_mode,
+                                                sequence);
+}
+
+static void mk_video_mark_backend_failed(void) {
+    if (g_video_backend_faulted) {
+        return;
+    }
+
+    g_video_backend_faulted = 1;
+    (void)mk_video_publish_event(MK_VIDEO_EVENT_BACKEND_FAILED, VIDEO_PRESENT_AUTO);
+}
+
+static void mk_video_mark_backend_recovered(void) {
+    if (!g_video_backend_faulted) {
+        return;
+    }
+
+    g_video_backend_faulted = 0;
+    (void)mk_video_publish_event(MK_VIDEO_EVENT_BACKEND_RECOVERED, VIDEO_PRESENT_AUTO);
+}
+
+static void mk_video_present_worker_entry(void) {
+    struct mk_video_present_job job;
+
+    for (;;) {
+        if (kernel_mailbox_wait(&g_video_present_mailbox, 0u) != TASK_WAIT_RESULT_SIGNALED) {
+            yield();
+            continue;
+        }
+        while (kernel_mailbox_try_receive(&g_video_present_mailbox, &job) == 0) {
+            kernel_video_flip_mode(job.present_mode);
+            (void)mk_video_complete_present_job(job.present_mode, job.sequence);
+        }
+    }
+}
+
+static int mk_video_control_worker_online(void) {
+    if (g_video_control_worker_pid <= 0) {
+        return 0;
+    }
+    if (scheduler_find_task_by_pid(g_video_control_worker_pid) == 0) {
+        mk_launch_release_pid(g_video_control_worker_pid);
+        g_video_control_worker_pid = 0;
+        return 0;
+    }
+    return 1;
+}
+
+static int mk_video_ensure_control_worker(void) {
+    struct mk_launch_descriptor descriptor;
+    int pid;
+
+    if (mk_video_control_worker_online()) {
+        return 0;
+    }
+
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.abi_version = MK_LAUNCH_ABI_VERSION;
+    descriptor.kind = MK_LAUNCH_KIND_DRIVER;
+    descriptor.flags = MK_LAUNCH_FLAG_BOOTSTRAP |
+                       MK_LAUNCH_FLAG_BUILTIN |
+                       MK_LAUNCH_FLAG_CRITICAL;
+    descriptor.task_class = MK_TASK_CLASS_VIDEO_CONTROL;
+    descriptor.stack_size = 8192u;
+    strncpy(descriptor.name, "video-control", MK_LAUNCH_NAME_MAX - 1u);
+    descriptor.name[MK_LAUNCH_NAME_MAX - 1u] = '\0';
+    descriptor.entry = mk_video_control_worker_entry;
+    pid = mk_launch_bootstrap(&descriptor);
+    if (pid <= 0) {
+        return -1;
+    }
+    g_video_control_worker_pid = pid;
+    return 0;
+}
+
+static void mk_video_control_complete_job(const struct mk_video_control_job *job, int rc) {
+    if (job == 0) {
+        return;
+    }
+    if (job->result_out != 0) {
+        *job->result_out = rc;
+    }
+    if (job->completion != 0) {
+        kernel_completion_complete(job->completion);
+    }
+}
+
+static int mk_video_execute_control_job_inline(uint32_t job_type, uint32_t width, uint32_t height) {
+    int rc;
+
+    switch (job_type) {
+    case MK_VIDEO_CONTROL_JOB_LEAVE:
+        kernel_video_leave_graphics();
+        (void)mk_video_publish_event(MK_VIDEO_EVENT_LEAVE, VIDEO_PRESENT_AUTO);
+        return 0;
+    case MK_VIDEO_CONTROL_JOB_MODE_SET:
+        (void)mk_video_publish_event(MK_VIDEO_EVENT_MODE_SET_BEGIN, VIDEO_PRESENT_AUTO);
+        rc = kernel_video_set_mode(width, height);
+        if (rc == 0) {
+            mk_video_mark_backend_recovered();
+            (void)mk_video_publish_event(MK_VIDEO_EVENT_MODE_SET_DONE, VIDEO_PRESENT_AUTO);
+            (void)mk_video_publish_event(MK_VIDEO_EVENT_MODE_SET, VIDEO_PRESENT_AUTO);
+        } else {
+            mk_video_mark_backend_failed();
+        }
+        return rc;
+    default:
+        return -1;
+    }
+}
+
+static void mk_video_control_worker_entry(void) {
+    struct mk_video_control_job job;
+
+    for (;;) {
+        if (kernel_mailbox_wait(&g_video_control_mailbox, 0u) != TASK_WAIT_RESULT_SIGNALED) {
+            yield();
+            continue;
+        }
+        while (kernel_mailbox_try_receive(&g_video_control_mailbox, &job) == 0) {
+            mk_video_control_complete_job(&job,
+                                          mk_video_execute_control_job_inline(job.job_type,
+                                                                              job.width,
+                                                                              job.height));
+        }
+    }
+}
+
+static int mk_video_execute_control_job(uint32_t job_type, uint32_t width, uint32_t height) {
+    struct mk_video_control_job job;
+    kernel_completion_t completion;
+    int result = -1;
+    int wait_rc;
+
+    if ((int)scheduler_current_pid() == g_video_control_worker_pid ||
+        mk_video_current_process_is_service_worker()) {
+        return mk_video_execute_control_job_inline(job_type, width, height);
+    }
+
+    if (mk_video_ensure_control_worker() != 0) {
+        return -1;
+    }
+
+    memset(&job, 0, sizeof(job));
+    kernel_completion_init(&completion, TASK_WAIT_CLASS_VIDEO, MK_SERVICE_VIDEO);
+    job.job_type = job_type;
+    job.width = width;
+    job.height = height;
+    job.result_out = &result;
+    job.completion = &completion;
+    if (kernel_mailbox_try_send(&g_video_control_mailbox, &job) != 0) {
+        return -1;
+    }
+
+    wait_rc = kernel_completion_wait(&completion, 0u);
+    if (wait_rc != TASK_WAIT_RESULT_SIGNALED) {
+        return -1;
+    }
+    return result;
 }
 
 static uint32_t mk_video_current_pid(void) {
@@ -517,40 +806,36 @@ static int mk_video_local_handler(const struct mk_message *request,
     }
     case MK_MSG_VIDEO_FLIP:
         if (request->payload_size == 0u) {
-            (void)mk_video_begin_present_submission(VIDEO_PRESENT_AUTO);
-            kernel_video_flip();
-            (void)mk_video_complete_present_submission(VIDEO_PRESENT_AUTO);
-            return mk_video_reply_result(reply, 0);
+            return mk_video_reply_result(reply,
+                                         mk_video_submit_present_job(VIDEO_PRESENT_AUTO, 0));
         }
         if (request->payload_size == sizeof(struct mk_video_present_request)) {
             const struct mk_video_present_request *payload =
                 (const struct mk_video_present_request *)request->payload;
-            (void)mk_video_begin_present_submission(payload->mode);
-            kernel_video_flip_mode(payload->mode);
-            (void)mk_video_complete_present_submission(payload->mode);
-            return mk_video_reply_result(reply, 0);
+            return mk_video_reply_result(reply,
+                                         mk_video_submit_present_job(payload->mode, 0));
         }
         return -1;
     case MK_MSG_VIDEO_PRESENT_SUBMIT: {
         const struct mk_video_present_request *payload;
         uint32_t sequence;
+        int rc;
 
         if (request->payload_size != sizeof(*payload)) {
             return -1;
         }
         payload = (const struct mk_video_present_request *)request->payload;
-        sequence = mk_video_begin_present_submission(payload->mode);
-        kernel_video_flip_mode(payload->mode);
-        sequence = mk_video_complete_present_submission(payload->mode);
-        return mk_video_reply_present(reply, 0, sequence);
+        rc = mk_video_submit_present_job(payload->mode, &sequence);
+        return mk_video_reply_present(reply, rc, sequence);
     }
     case MK_MSG_VIDEO_LEAVE:
         if (request->payload_size != 0u) {
             return -1;
         }
-        kernel_video_leave_graphics();
-        mk_video_publish_event(MK_VIDEO_EVENT_LEAVE, VIDEO_PRESENT_AUTO);
-        return mk_video_reply_result(reply, 0);
+        return mk_video_reply_result(reply,
+                                     mk_video_execute_control_job(MK_VIDEO_CONTROL_JOB_LEAVE,
+                                                                  0u,
+                                                                  0u));
     case MK_MSG_VIDEO_BLIT8: {
         const struct mk_video_blit8_request *payload;
         const uint8_t *src;
@@ -583,15 +868,14 @@ static int mk_video_local_handler(const struct mk_message *request,
         if (src == 0 || mk_transfer_size(payload->transfer_id) < payload->byte_count) {
             return -1;
         }
-        kernel_gfx_blit8_present(src,
-                                 payload->src_width,
-                                 payload->src_height,
-                                 payload->dst_x,
-                                 payload->dst_y,
-                                 payload->scale);
-        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
-        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
-        return mk_video_reply_result(reply, 0);
+        kernel_gfx_blit8(src,
+                         payload->src_width,
+                         payload->src_height,
+                         payload->dst_x,
+                         payload->dst_y,
+                         payload->scale);
+        return mk_video_reply_result(reply,
+                                     mk_video_submit_present_job(VIDEO_PRESENT_FULL, 0));
     }
     case MK_MSG_VIDEO_BLIT8_INLINE: {
         const struct mk_video_blit8_inline_request *payload;
@@ -631,15 +915,14 @@ static int mk_video_local_handler(const struct mk_message *request,
             payload->byte_count < (uint32_t)(payload->src_width * payload->src_height)) {
             return -1;
         }
-        kernel_gfx_blit8_present(payload->pixels,
-                                 payload->src_width,
-                                 payload->src_height,
-                                 payload->dst_x,
-                                 payload->dst_y,
-                                 payload->scale);
-        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
-        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
-        return mk_video_reply_result(reply, 0);
+        kernel_gfx_blit8(payload->pixels,
+                         payload->src_width,
+                         payload->src_height,
+                         payload->dst_x,
+                         payload->dst_y,
+                         payload->scale);
+        return mk_video_reply_result(reply,
+                                     mk_video_submit_present_job(VIDEO_PRESENT_FULL, 0));
     }
     case MK_MSG_VIDEO_BLIT8_STRETCH_PRESENT: {
         const struct mk_video_blit8_stretch_present_request *payload;
@@ -653,16 +936,15 @@ static int mk_video_local_handler(const struct mk_message *request,
         if (src == 0 || mk_transfer_size(payload->transfer_id) < payload->byte_count) {
             return -1;
         }
-        kernel_gfx_blit8_stretch_present(src,
-                                         payload->src_width,
-                                         payload->src_height,
-                                         payload->dst_x,
-                                         payload->dst_y,
-                                         payload->dst_width,
-                                         payload->dst_height);
-        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
-        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
-        return mk_video_reply_result(reply, 0);
+        kernel_gfx_blit8_stretch(src,
+                                 payload->src_width,
+                                 payload->src_height,
+                                 payload->dst_x,
+                                 payload->dst_y,
+                                 payload->dst_width,
+                                 payload->dst_height);
+        return mk_video_reply_result(reply,
+                                     mk_video_submit_present_job(VIDEO_PRESENT_FULL, 0));
     }
     case MK_MSG_VIDEO_BLIT8_STRETCH: {
         const struct mk_video_blit8_stretch_request *payload;
@@ -726,16 +1008,15 @@ static int mk_video_local_handler(const struct mk_message *request,
             payload->byte_count < (uint32_t)(payload->src_width * payload->src_height)) {
             return -1;
         }
-        kernel_gfx_blit8_stretch_present(payload->pixels,
-                                         payload->src_width,
-                                         payload->src_height,
-                                         payload->dst_x,
-                                         payload->dst_y,
-                                         payload->dst_width,
-                                         payload->dst_height);
-        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
-        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
-        return mk_video_reply_result(reply, 0);
+        kernel_gfx_blit8_stretch(payload->pixels,
+                                 payload->src_width,
+                                 payload->src_height,
+                                 payload->dst_x,
+                                 payload->dst_y,
+                                 payload->dst_width,
+                                 payload->dst_height);
+        return mk_video_reply_result(reply,
+                                     mk_video_submit_present_job(VIDEO_PRESENT_FULL, 0));
     }
     case MK_MSG_VIDEO_MODE_SET: {
         const struct mk_video_mode_request *payload;
@@ -744,14 +1025,10 @@ static int mk_video_local_handler(const struct mk_message *request,
             return -1;
         }
         payload = (const struct mk_video_mode_request *)request->payload;
-        {
-            int rc = kernel_video_set_mode(payload->width, payload->height);
-
-            if (rc == 0) {
-                mk_video_publish_event(MK_VIDEO_EVENT_MODE_SET, VIDEO_PRESENT_AUTO);
-            }
-            return mk_video_reply_result(reply, rc);
-        }
+        return mk_video_reply_result(reply,
+                                     mk_video_execute_control_job(MK_VIDEO_CONTROL_JOB_MODE_SET,
+                                                                  payload->width,
+                                                                  payload->height));
     }
     case MK_MSG_VIDEO_SET_PALETTE: {
         const struct mk_video_palette_request *payload;
@@ -811,6 +1088,8 @@ static int mk_video_local_handler(const struct mk_message *request,
 
 void mk_video_service_init(void) {
     mk_video_event_init_subscribers();
+    (void)mk_video_ensure_control_worker();
+    (void)mk_video_ensure_present_worker();
     (void)mk_service_launch_task(MK_SERVICE_VIDEO,
                                  "video",
                                  mk_video_local_handler,
@@ -935,10 +1214,7 @@ int mk_video_service_flip_mode(uint32_t mode) {
     struct mk_video_present_request payload;
 
     if (mk_video_current_process_is_service_worker()) {
-        (void)mk_video_begin_present_submission(mode);
-        kernel_video_flip_mode(mode);
-        (void)mk_video_complete_present_submission(mode);
-        return 0;
+        return mk_video_submit_present_job(mode, 0);
     }
 
     payload.mode = mode;
@@ -957,15 +1233,7 @@ int mk_video_service_present_submit(uint32_t mode, uint32_t *sequence_out) {
     struct mk_video_present_request payload;
 
     if (mk_video_current_process_is_service_worker()) {
-        uint32_t sequence;
-
-        sequence = mk_video_begin_present_submission(mode);
-        kernel_video_flip_mode(mode);
-        sequence = mk_video_complete_present_submission(mode);
-        if (sequence_out != 0) {
-            *sequence_out = sequence;
-        }
-        return 0;
+        return mk_video_submit_present_job(mode, sequence_out);
     }
 
     payload.mode = mode;
@@ -983,9 +1251,7 @@ int mk_video_service_leave_graphics(void) {
     struct mk_message reply;
 
     if (mk_video_current_process_is_service_worker()) {
-        kernel_video_leave_graphics();
-        mk_video_publish_event(MK_VIDEO_EVENT_LEAVE, VIDEO_PRESENT_AUTO);
-        return 0;
+        return mk_video_execute_control_job(MK_VIDEO_CONTROL_JOB_LEAVE, 0u, 0u);
     }
 
     if (mk_video_prepare_request(&request, MK_MSG_VIDEO_LEAVE, 0, 0u) != 0) {
@@ -1003,12 +1269,7 @@ int mk_video_service_set_mode(uint32_t width, uint32_t height) {
     struct mk_video_mode_request payload;
 
     if (mk_video_current_process_is_service_worker()) {
-        int rc = kernel_video_set_mode(width, height);
-
-        if (rc == 0) {
-            mk_video_publish_event(MK_VIDEO_EVENT_MODE_SET, VIDEO_PRESENT_AUTO);
-        }
-        return rc;
+        return mk_video_execute_control_job(MK_VIDEO_CONTROL_JOB_MODE_SET, width, height);
     }
 
     payload.width = width;
@@ -1141,10 +1402,8 @@ int mk_video_service_blit8_present_transfer(uint32_t transfer_id, uint32_t byte_
         if (src == 0 || mk_transfer_size(transfer_id) < byte_count) {
             return -1;
         }
-        kernel_gfx_blit8_present(src, src_w, src_h, dst_x, dst_y, scale);
-        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
-        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
-        return 0;
+        kernel_gfx_blit8(src, src_w, src_h, dst_x, dst_y, scale);
+        return mk_video_submit_present_job(VIDEO_PRESENT_FULL, 0);
     }
     if (mk_video_share_transfer(transfer_id, MK_TRANSFER_PERM_READ) != 0) {
         return -1;
@@ -1229,10 +1488,8 @@ int mk_video_service_blit8_present(const uint8_t *src, int src_w, int src_h,
         if (scale <= 0) {
             return -1;
         }
-        kernel_gfx_blit8_present(src, src_w, src_h, dst_x, dst_y, scale);
-        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
-        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
-        return 0;
+        kernel_gfx_blit8(src, src_w, src_h, dst_x, dst_y, scale);
+        return mk_video_submit_present_job(VIDEO_PRESENT_FULL, 0);
     }
     byte_count = (uint32_t)(src_w * src_h);
     if (byte_count != 0u && byte_count <= MK_VIDEO_INLINE_BLIT8_MAX && scale > 0) {
@@ -1383,10 +1640,8 @@ int mk_video_service_blit8_stretch_present_transfer(uint32_t transfer_id, uint32
         if (src == 0 || mk_transfer_size(transfer_id) < byte_count) {
             return -1;
         }
-        kernel_gfx_blit8_stretch_present(src, src_w, src_h, dst_x, dst_y, dst_w, dst_h);
-        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
-        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
-        return 0;
+        kernel_gfx_blit8_stretch(src, src_w, src_h, dst_x, dst_y, dst_w, dst_h);
+        return mk_video_submit_present_job(VIDEO_PRESENT_FULL, 0);
     }
     if (mk_video_share_transfer(transfer_id, MK_TRANSFER_PERM_READ) != 0) {
         return -1;
@@ -1422,10 +1677,8 @@ int mk_video_service_blit8_stretch_present(const uint8_t *src, int src_w, int sr
         return -1;
     }
     if (mk_video_current_process_is_service_worker()) {
-        kernel_gfx_blit8_stretch_present(src, src_w, src_h, dst_x, dst_y, dst_w, dst_h);
-        (void)mk_video_begin_present_submission(VIDEO_PRESENT_FULL);
-        (void)mk_video_complete_present_submission(VIDEO_PRESENT_FULL);
-        return 0;
+        kernel_gfx_blit8_stretch(src, src_w, src_h, dst_x, dst_y, dst_w, dst_h);
+        return mk_video_submit_present_job(VIDEO_PRESENT_FULL, 0);
     }
     byte_count = (uint32_t)(src_w * src_h);
     if (byte_count != 0u && byte_count <= MK_VIDEO_INLINE_BLIT8_MAX) {
@@ -1527,9 +1780,19 @@ int mk_video_service_subscribe(struct process *subscriber) {
     mode = kernel_video_get_mode();
     if (mode != 0 && mode->width != 0u && mode->height != 0u) {
         mk_video_enqueue_event(subscription,
+                               MK_VIDEO_EVENT_MODE_SET_DONE,
+                               VIDEO_PRESENT_AUTO,
+                               mk_video_next_event_sequence());
+        mk_video_enqueue_event(subscription,
                                MK_VIDEO_EVENT_MODE_SET,
                                VIDEO_PRESENT_AUTO,
-                               ++g_video_event_sequence);
+                               mk_video_next_event_sequence());
+    }
+    if (g_video_backend_faulted) {
+        mk_video_enqueue_event(subscription,
+                               MK_VIDEO_EVENT_BACKEND_FAILED,
+                               VIDEO_PRESENT_AUTO,
+                               mk_video_next_event_sequence());
     }
     return 0;
 }

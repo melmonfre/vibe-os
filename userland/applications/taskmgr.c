@@ -244,8 +244,12 @@ static const char *taskmgr_video_event_name(uint32_t event_type) {
     case MK_VIDEO_EVENT_PRESENT: return "present";
     case MK_VIDEO_EVENT_PRESENT_SUBMITTED: return "submit";
     case MK_VIDEO_EVENT_MODE_SET: return "mode";
+    case MK_VIDEO_EVENT_MODE_SET_BEGIN: return "mode-begin";
+    case MK_VIDEO_EVENT_MODE_SET_DONE: return "mode-done";
     case MK_VIDEO_EVENT_LEAVE: return "leave";
     case MK_VIDEO_EVENT_OVERFLOW: return "overflow";
+    case MK_VIDEO_EVENT_BACKEND_FAILED: return "backend-fail";
+    case MK_VIDEO_EVENT_BACKEND_RECOVERED: return "backend-ok";
     default: return "unknown";
     }
 }

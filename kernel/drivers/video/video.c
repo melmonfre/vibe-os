@@ -129,7 +129,7 @@ static uint32_t kernel_video_measure_microkernel_frame_time(void);
 static uint32_t kernel_video_measure_microkernel_flip_time(void);
 static uint32_t kernel_video_measure_microkernel_blit_time(void);
 static uint32_t kernel_video_measure_microkernel_stretch_time(void);
-static void kernel_video_record_benchmarks(void);
+static void __attribute__((unused)) kernel_video_record_benchmarks(void);
 static void kernel_video_activate_backend(enum kernel_video_backend_kind kind,
                                           const struct video_mode *mode);
 static void kernel_video_select_present_kind(void);
@@ -1189,7 +1189,7 @@ static void kernel_video_present_rect_internal(const struct kernel_video_rect *r
     g_backend_ops->present_rect(rect);
 }
 
-static void kernel_video_record_benchmarks(void) {
+static void __attribute__((unused)) kernel_video_record_benchmarks(void) {
     const struct kernel_pci_device_info *active_pci = kernel_drm_active_pci_info();
     const struct kernel_pci_device_info *detected_pci = kernel_drm_detected_pci_info();
 
@@ -1631,7 +1631,6 @@ try_activate_mode:
         kernel_video_log_handoff("runtime",
                                  used_native_modeset ? "drm" :
                                  (used_bios_recovery ? "bios-after-drm-revert" : "bios"));
-        kernel_video_record_benchmarks();
         return 0;
     }
     if (used_native_modeset) {

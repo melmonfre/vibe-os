@@ -38,7 +38,7 @@ int mk_launch_validate_descriptor(const struct mk_launch_descriptor *descriptor)
         descriptor->service_type == MK_SERVICE_NONE) {
         return -1;
     }
-    if (descriptor->task_class > MK_TASK_CLASS_CONSOLE_IO) {
+    if (descriptor->task_class > MK_TASK_CLASS_VIDEO_CONTROL) {
         return -1;
     }
     if (descriptor->stack_size != 0u && descriptor->stack_size < 1024u) {

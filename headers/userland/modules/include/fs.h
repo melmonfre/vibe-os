@@ -29,6 +29,8 @@ extern int g_fs_root;
 extern int g_fs_cwd;
 
 void fs_init(void);
+void fs_set_deferred_catalog_stubs(int enabled);
+void fs_complete_startup(void);
 void fs_tick(void);
 void fs_flush(void);
 int fs_create(const char *path, int is_dir);

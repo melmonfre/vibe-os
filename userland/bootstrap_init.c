@@ -150,7 +150,9 @@ static const char *bootstrap_task_class_name(uint32_t task_class) {
     case MK_TASK_CLASS_INPUT:
         return "input";
     case MK_TASK_CLASS_VIDEO_PRESENT:
-        return "video";
+        return "video-present";
+    case MK_TASK_CLASS_VIDEO_CONTROL:
+        return "video-control";
     case MK_TASK_CLASS_STORAGE_IO:
         return "storage";
     case MK_TASK_CLASS_FILESYSTEM_IO:

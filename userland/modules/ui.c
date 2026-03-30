@@ -25,6 +25,15 @@ static struct {
     int height;
     uint8_t *pixels;
 } g_wallpaper = {0, -1, 0, 0, 0, 0};
+enum ui_pending_wallpaper_kind {
+    UI_PENDING_WALLPAPER_NONE = 0,
+    UI_PENDING_WALLPAPER_DEFAULT,
+    UI_PENDING_WALLPAPER_PATH
+};
+static int g_ui_defer_wallpaper_load = 0;
+static int g_ui_pending_wallpaper_kind = UI_PENDING_WALLPAPER_NONE;
+static int g_ui_pending_wallpaper_save_settings = 0;
+static char g_ui_pending_wallpaper_path[80];
 
 #define TASKBAR_HEIGHT 22
 #define START_MENU_WIDTH 336
@@ -41,6 +50,65 @@ static struct {
 #define UI_SETTINGS_PATH "/config/ui.cfg"
 
 static void ui_save_settings(void);
+static void ui_wallpaper_reset(int explicit_none);
+static int ui_wallpaper_set_from_node_internal(int node, int persist);
+static int ui_try_set_default_wallpaper(void);
+
+static void ui_pending_wallpaper_clear(void) {
+    g_ui_pending_wallpaper_kind = UI_PENDING_WALLPAPER_NONE;
+    g_ui_pending_wallpaper_save_settings = 0;
+    g_ui_pending_wallpaper_path[0] = '\0';
+}
+
+static void ui_pending_wallpaper_schedule_default(int save_settings) {
+    g_ui_pending_wallpaper_kind = UI_PENDING_WALLPAPER_DEFAULT;
+    g_ui_pending_wallpaper_save_settings = save_settings;
+    g_ui_pending_wallpaper_path[0] = '\0';
+}
+
+static void ui_pending_wallpaper_schedule_path(const char *path) {
+    g_ui_pending_wallpaper_kind = UI_PENDING_WALLPAPER_PATH;
+    g_ui_pending_wallpaper_save_settings = 0;
+    str_copy_limited(g_ui_pending_wallpaper_path, path, (int)sizeof(g_ui_pending_wallpaper_path));
+}
+
+static void ui_apply_pending_wallpaper(void) {
+    int save_settings = g_ui_pending_wallpaper_save_settings;
+    int kind = g_ui_pending_wallpaper_kind;
+    char pending_path[80];
+
+    str_copy_limited(pending_path, g_ui_pending_wallpaper_path, (int)sizeof(pending_path));
+
+    ui_pending_wallpaper_clear();
+    if (kind == UI_PENDING_WALLPAPER_NONE || g_wallpaper.explicit_none) {
+        return;
+    }
+
+    if (kind == UI_PENDING_WALLPAPER_PATH) {
+        int node = fs_resolve(pending_path);
+
+        if (node >= 0 && ui_wallpaper_set_from_node_internal(node, 0) == 0) {
+            sys_write_debug("ui: deferred wallpaper ready\n");
+            return;
+        }
+        ui_wallpaper_reset(0);
+        if (ui_try_set_default_wallpaper() == 0) {
+            ui_save_settings();
+            sys_write_debug("ui: deferred wallpaper fallback\n");
+        }
+        return;
+    }
+
+    if (kind == UI_PENDING_WALLPAPER_DEFAULT) {
+        ui_wallpaper_reset(0);
+        if (ui_try_set_default_wallpaper() == 0) {
+            if (save_settings) {
+                ui_save_settings();
+            }
+            sys_write_debug("ui: deferred default wallpaper ready\n");
+        }
+    }
+}
 
 static void ui_wallpaper_release_pixels(void) {
     if (g_wallpaper.pixels) {
@@ -376,35 +444,53 @@ static void ui_load_settings(void) {
     g_theme = loaded;
     if (clear_wallpaper) {
         ui_wallpaper_reset(0);
-        (void)ui_try_set_default_wallpaper();
-        migrate_to_default = 1;
+        if (g_ui_defer_wallpaper_load) {
+            ui_pending_wallpaper_schedule_default(1);
+        } else {
+            (void)ui_try_set_default_wallpaper();
+            migrate_to_default = 1;
+        }
     } else if (str_eq(wallpaper, "@none")) {
         if (wallpaper_explicit_none != 0u) {
+            ui_pending_wallpaper_clear();
             ui_wallpaper_reset(1);
         } else {
             ui_wallpaper_reset(0);
-            (void)ui_try_set_default_wallpaper();
-            migrate_to_default = 1;
+            if (g_ui_defer_wallpaper_load) {
+                ui_pending_wallpaper_schedule_default(1);
+            } else {
+                (void)ui_try_set_default_wallpaper();
+                migrate_to_default = 1;
+            }
         }
     } else {
         int node;
 
         if (ui_wallpaper_path_needs_default_migration(wallpaper)) {
             ui_wallpaper_reset(0);
-            (void)ui_try_set_default_wallpaper();
-            migrate_to_default = 1;
+            if (g_ui_defer_wallpaper_load) {
+                ui_pending_wallpaper_schedule_default(1);
+            } else {
+                (void)ui_try_set_default_wallpaper();
+                migrate_to_default = 1;
+            }
         } else {
-            node = fs_resolve(wallpaper);
-            if (node >= 0) {
-                if (ui_wallpaper_set_from_node_internal(node, 0) != 0) {
+            if (g_ui_defer_wallpaper_load) {
+                ui_wallpaper_reset(0);
+                ui_pending_wallpaper_schedule_path(wallpaper);
+            } else {
+                node = fs_resolve(wallpaper);
+                if (node >= 0) {
+                    if (ui_wallpaper_set_from_node_internal(node, 0) != 0) {
+                        ui_wallpaper_reset(0);
+                        (void)ui_try_set_default_wallpaper();
+                        migrate_to_default = 1;
+                    }
+                } else {
                     ui_wallpaper_reset(0);
                     (void)ui_try_set_default_wallpaper();
                     migrate_to_default = 1;
                 }
-            } else {
-                ui_wallpaper_reset(0);
-                (void)ui_try_set_default_wallpaper();
-                migrate_to_default = 1;
             }
         }
     }
@@ -425,17 +511,26 @@ void ui_refresh_metrics(void) {
 void ui_init(void) {
     ui_refresh_metrics();
     ui_reset_theme_defaults();
+    ui_pending_wallpaper_clear();
+    g_ui_defer_wallpaper_load = 1;
     g_ui_loading_settings = 1;
     ui_load_settings();
-    if (!g_wallpaper.active && !g_wallpaper.explicit_none) {
-        (void)ui_try_set_default_wallpaper();
-    }
     g_ui_loading_settings = 0;
+    g_ui_defer_wallpaper_load = 0;
+    if (!g_wallpaper.active && !g_wallpaper.explicit_none) {
+        if (g_ui_pending_wallpaper_kind == UI_PENDING_WALLPAPER_NONE) {
+            ui_pending_wallpaper_schedule_default(0);
+        }
+    }
     ui_apply_desktop_palette();
 
     dirty_init();
     clip_init();
     cursor_init();
+}
+
+void ui_complete_startup(void) {
+    ui_apply_pending_wallpaper();
 }
 
 int ui_set_resolution(uint32_t width, uint32_t height) {

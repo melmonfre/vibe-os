@@ -90,75 +90,14 @@ Important audit note: in the current tree, a checked item means the migration bo
 - [x] USB boot validation matrix
 - [x] IDE/SATA/AHCI validation matrix
 
-## Latest Completed Slice
+## Current Open Work
 
-- `MBR` now relocates itself safely, enables VESA early, selects the active partition, and chainloads a FAT32 `VBR`.
-- The FAT32 `VBR` now loads a dedicated `stage2` loader from a reserved-sector slot that does not collide with FAT32 metadata (`FSInfo`, backup boot sector).
-- `stage2` now locates `KERNEL.BIN` in the FAT32 root directory and loads it before handing off to the 32-bit kernel entry path.
-- The in-kernel storage path now goes through a primary block-device abstraction, with the current ATA driver registered as one backend instead of exposing ATA-specific logic directly to the rest of the kernel.
-- The disk image builder now emits a real two-partition image:
-  - partition 1: bootable FAT32 volume with `KERNEL.BIN` visible for diagnostics
-  - partition 2: raw data volume used by the current AppFS layout
-- The kernel storage layer now parses the MBR, discovers the data partition, and exposes it as a logical block volume.
-- AppFS, persistence, DOOM assets, and Craft textures are now addressed relative to the data partition instead of absolute disk LBAs.
-- A shared `bootinfo` contract now lives in the tree and is populated by the `MBR` for VESA + partition metadata, replacing scattered magic-address parsing in the kernel.
-- A new microkernel launch contract now describes bootstrap services/drivers explicitly, captures boot partition metadata for launched tasks, and routes the built-in `init` userland payload through the same scheduler/service bootstrap path intended for later extracted services.
-- The launch contract now honors per-service stack sizing and exposes the active launch context to userland through a dedicated syscall, so extracted services can introspect how they were started without scraping boot-time globals.
-- Storage syscalls now enter through a microkernel storage-service dispatch layer that resolves the storage service via the service registry, builds request/reply message envelopes, and moves bulk data through kernel-managed transfer buffers instead of raw payload pointers.
-- Filesystem syscalls now resolve through a local filesystem service handler with transfer-buffer-backed request/reply dispatch for `open/read/write/close/lseek/stat/fstat`, so the whole current VFS ABI now crosses an explicit service boundary even though the handler still runs in-kernel.
-- Video syscalls now resolve through the `videosvc` boundary for the current userland ABI: normal GFX/present requests target the dedicated userland video host, which re-enters the kernel only through service-facing video syscalls and transfer-backed payloads instead of the generic backend-shim loop.
-- Input and console syscalls now also traverse local service handlers, so keyboard/mouse polling, keymap control, debug output, and text console operations no longer call concrete drivers directly from the syscall table.
-- `network` and `audio` now exist as first-class microkernel services with explicit request/reply ABIs and local stub handlers, and VibeOS now exposes BSD-shaped `sys/socket.h`, `sys/uio.h`, and `sys/audioio.h` compatibility headers derived from `compat/sys` so extracted services can preserve familiar contracts without trying to port the BSD kernel wholesale.
-- The microkernel service registry now supports process-backed workers over an in-kernel request/reply IPC path, and the current `network`/`audio` stubs run as real scheduled service tasks instead of only inline local handlers.
-- `storage`, `filesystem`, `video`, `input`, and `console` now also run as scheduled service workers over that same IPC path, so the main syscall surface no longer resolves through inline handlers for the current service set.
-- Transfer buffers now carry explicit owner PID metadata plus per-service grants, so process-backed services only touch request payload memory after the caller shares the specific buffer with read/write permissions.
-- The service registry now retains worker launch metadata and can relaunch an offline built-in worker on demand before dispatching a request, adding a first supervision layer without changing the current boot ABI.
-- QEMU boot validation now reaches the built-in `init` banner path again after fixing resumed-task register restore in `context_switch`, deferring heavy bootstrap asset discovery / initial FS sync work out of the first boot path, and using direct bootstrap fast paths for serial debug plus legacy text-console syscalls while richer console service plumbing stays available for non-bootstrap request/reply traffic.
-- The FAT32 `stage2` loader now retries BIOS extended reads during `KERNEL.BIN` loading, and the current image builder keeps the boot kernel file physically contiguous so the simple linear stage2 path stays reliable while a fully general FAT32 chain loader is still pending.
-- Video capability queries now return both the existing mode bitmask and the concrete mode list in the ABI, so userland can enumerate supported resolutions without hardcoding them.
-- The kernel now carries only a minimal built-in `init` bootstrap entry plus a tiny AppFS launcher runtime instead of the full embedded userland tree, keeping the BIOS-loaded `kernel.bin` under the low-memory ceiling while apps stay split into independent binaries loaded one at a time.
-- Headless QEMU boot now reaches a real external AppFS userland jump again: the bootstrap `init` path loads `hello.app`, enters `vibe_app_entry`, runs `vibe_app_main`, and returns to `init` over the current loader ABI instead of stopping before the first external app call.
-- The AppFS external-app arena now lives below the low-memory kernel-heap fallback, and the FS persistence image moved off the bootstrap stack into static scratch storage, removing the memory overlap / stack-clobber failures that were corrupting `scheduler_current()` during early userland bring-up.
-- Built-in services now degrade more intelligently when the worker transport fails: request dispatch can fall back to the in-kernel local handler for built-in services, and input syscalls also fall back to direct keyboard/mouse driver reads so the post-boot interactive path keeps working while the process-backed worker path is still being stabilized.
-- Built-in service supervision now also treats transport degradation as a restart signal: the registry can terminate and relaunch the stale worker from saved launch metadata, clear the degraded state after a healthy reply, and keep the current built-in compatibility fallback as a safety net instead of the permanent end state.
-- Headless QEMU validation now survives past the first post-boot input poll without reply-failure spam: the current path still shows one degraded input request, then relaunches the input worker and stays stable through a longer soak after the external `hello.app` jump returns.
-- The image pipeline now preserves the current raw AppFS/persistence/asset layout as a first-class standalone artifact again: `make legacy-data-img` emits a raw `build/data-partition.img`, and the partitioned boot image now consumes that same blob instead of rebuilding the data layout through a separate ad-hoc path.
-- FAT32 boot-volume writing is now generalized beyond a single diagnostic kernel copy: the image builder can safely populate the boot partition through `mtools`, and the default image now exports `KERNEL.BIN`, `STAGE2.BIN`, `LAYOUT.TXT`, and `DATAINFO.TXT` into the visible FAT32 volume for inspection and migration debugging.
-- `userland.c` now also builds as an external `userland.app`, and the built-in `init` bootstrap autostarts that AppFS payload on boot before falling back to the tiny rescue shell if the app is missing or returns.
-- `mkdir` is now shipped as an independent AppFS app adapted from `compat/bin/mkdir`, with the shell preferring the external app path before using the old builtin fallback.
-- Headless QEMU validation on the current Phase 1 path now reaches the external boot shell too: the serial log shows `init -> lang_try_run(userland) -> app: runtime init ok -> userland.app: shell start`, confirming that the minimized kernel boots into the AppFS userland payload instead of relying on a monolithic in-kernel shell image.
-- Residual risk during that headless path: the first interactive input request can still log one `service: reply send failed ... type=66` while the input worker transport degrades and recovers through the existing local fallback/supervision path; Phase 1 is considered complete because the service boundary, supervision path, and boot-to-userland handoff are all active, but richer extraction/cleanup remains future work.
-- The SMP scheduler now tracks per-task CPU preference/history, distributes new tasks toward the least-loaded online core, and filters runnable selection so the same process is not dispatched simultaneously on multiple CPUs during multiprocessor bring-up.
-- The LAPIC SMP bring-up path now avoids waiting on PIT ticks with interrupts masked during `INIT/SIPI`, and QEMU `-smp 4` currently reaches `smp: online cpus=4/4` before returning to the `init` bootstrap path.
-- QEMU validation currently reaches the kernel and userland path with early debug markers:
-  - `M a b d V J S L 2 F K A P 10 11 12 13 14 15 16 17`
-- Phase 4 storage driver work is now wired through a single backend-selection point: the kernel probes PCI for AHCI first, enumerates implemented SATA ports, identifies a SATA disk through the AHCI path, and falls back to the legacy ATA PIO backend when no AHCI controller/device is present.
-- IDE and AHCI storage now both pass the same headless bootstrap smoke test: the serial log shows `init: storage smoke begin`, a read request (`type=16`), a write request (`type=17`), and `init: storage smoke ok` before userland handoff, while the `q35` + `ahci` scenario also reports `ahci: controller 0:3.0 pi=3f`, `ahci: sata port=0 total=524288 start=133120 sectors=391168`, and `storage: using ahci backend`.
-- The boot FAT32 volume now also exports `BOOTPOLICY.TXT`, documenting the current USB mass-storage loading strategy for the migration: BIOS `INT 13h` remains the transport for USB boot media through `MBR -> VBR -> stage2 -> KERNEL.BIN/STAGE2.BIN`, while the runtime storage layer probes `AHCI` first and then falls back to legacy `ATA`; native USB mass-storage drivers and hardware validation remain Phase 6 work.
-- Phase 5 initial services now run as distinct user-space service hosts instead of the old in-kernel worker loop: `storage`, `filesystem`, `video`, `input`, `console`, `network`, and `audio` each launch through the microkernel bootstrap path as their own scheduled service process, and headless QEMU boot shows `service-host: online <name>` for all seven before `init` starts.
-- The current extraction shape is now mixed by subsystem: `storage`, `filesystem`, `console`, and `network` still use the deliberate compatibility bridge through the generic backend-shim syscall, while `input`, `video`, and `audio` now terminate steady-state IPC in dedicated userland service loops that call service-specific syscalls/transfer paths instead; backend ownership still remains kernel-heavy across all three.
-- Phase 6 validation is now codified in-tree instead of living only in ad-hoc shell history: `make validate-phase6` runs a headless QEMU matrix across default IDE, `core2duo`, `pentium`, `n270`, `q35`+`ahci`, and USB mass-storage BIOS boot, then writes `build/phase6-validation.md` with the observed markers and MBR metadata.
-- The legacy ATA path is now hardened for compatibility validation: the backend performs 400 ns alternate-status delays, serializes sector transactions with `irqsave` locking, and the bootstrap smoke test now uses a non-AppFS persistence sector so IDE validation no longer trashes the external app catalog while probing read/write health.
-- The AppFS loader now retries directory and app-image reads before giving up, and the ATA partition resolver now prefers the bootloader-published data-partition geometry from `BOOTINFO` before falling back to runtime MBR parsing. With that fix, the current IDE/Core2/Pentium/Atom and `q35` + `ahci` QEMU matrix all reach the external `userland.app` shell again; the built-in rescue shell remains a safety net, not the expected steady-state path.
-- The image validation path now also asserts the active MBR partition bit directly from `boot.img`, so the builder will fail Phase 6 regression if the BIOS-facing `MBR -> active FAT32 partition -> VBR -> stage2` chain drifts back toward a superfloppy layout.
-- The USB validation matrix now records the current migration boundary explicitly: under QEMU `usb-storage`, SeaBIOS boots the image through the same active-partition chain and reaches the built-in bootstrap shell, while runtime block-device access still reports `storage: no block device backend available` until a native USB mass-storage service exists.
-- The ported-userland build path is now stable under the official regression target too: `Build.ported.mk` exposes a single deterministic `ported-all` goal, `make validate-phase6` completes successfully again, and the generated `build/phase6-validation.md` reflects the same boot markers used by the migration plan.
-- Kernel waitables now exist as a first real async substrate: IPC mailboxes can block on a waitable instead of spinning in `yield()` loops, `ipc_send()` signals sleeping receivers, the scheduler can park a blocked task until wakeup, and headless QEMU boot still reaches `init: supervisor idle` with all current service hosts online.
-- Keyboard and mouse IRQ paths now also publish into shared kernel input mailboxes with an explicit dequeue ABI (`SYSCALL_INPUT_EVENT`), so the tree has a first unified event stream for userland input consumers in parallel with the older compatibility polling syscalls.
-- The `input` service boundary now also carries that event stream through a dedicated userland service host: `event`, `mouse`, `key`, and `layout` requests no longer need the generic backend-shim loop in steady state, the desktop no longer has a special direct-queue bypass on `SYSCALL_INPUT_EVENT`, and small transfer syscalls now let the service host own the layout buffer replies; raw keyboard/mouse capture is still kernel-owned and the final extracted publisher is still pending.
-- The USB host path now captures boot-HID endpoint metadata during descriptor scan and performs on-demand UHCI/OHCI polling for enumerated boot keyboard/mouse interfaces, feeding the same kernel input queues used by PS/2 while the fully service-owned input publisher is still in progress.
-- The waitable substrate is now richer than a bare wakeup bit: kernel waitables carry event class/kind metadata, per-service ownership tags, signal/completion wrappers, timeout/cancel paths, and scheduler snapshots can now report timed-out/canceled waits plus pending signal state without regressing the current headless boot smoke.
-- Service supervision now also emits explicit async state events: each service record owns a subscriber-aware event ring for `online/offline/degraded/recovered/restarted` notifications, so restart/degradation is no longer only observable through the synchronous request path.
-- The `init` supervisor now consumes that service-event stream in userland through explicit subscribe/receive syscalls, logging the initial `online` snapshot for storage/filesystem/video/input/console/network/audio during boot instead of idling as a pure `yield()` loop.
-- Service-event receive now also supports non-blocking userland polling, and the task manager uses that path to keep a recent in-UI history of service state changes without stalling its redraw loop.
-- The audio service now also exposes a first subsystem-level datapath event stream to userland: `queued`, `idle`, and `underrun` notifications flow through dedicated subscribe/receive syscalls, the task manager can observe them directly, and the async WAV helper now uses that channel to detect playback completion on the kernel-async path instead of polling status alone.
-- The audio service boundary now also exits the generic backend-shim loop in steady state: `get_info/status`, `set_params`, `start/stop`, `write`, `write_async`, `read`, and mixer/control requests now flow through a dedicated `audiosvc` userland host, and `SYSCALL_AUDIO_WRITE` no longer bypasses the service IPC path even though async ring ownership is still kernel-side.
-- The video service now also emits a first presentation event stream to userland: `present`, `mode-set`, and `leave-graphics` notifications flow through dedicated subscribe/receive syscalls, and the task manager can observe recent present activity without depending only on bench snapshots.
-- Video presentation now also has an explicit submit boundary: userland can submit a `present` request and receive a concrete `sequence` fence token back, and the desktop now uses that path instead of treating framebuffer presentation as an anonymous trap.
-- The video service boundary now also exits the generic backend-shim loop in steady state: normal `gfx`/`present` requests flow through the dedicated `videosvc` userland host, which uses service-worker fast paths inside `video.c` instead of routing the steady-state request body through `sys_service_backend()`.
-- The network service now also exposes a first async readiness stream to userland: subscribe/receive syscalls publish link-status transitions plus socket `recv`, `accept`, `send`, and `closed` notifications from the current service state machine, and the task manager now consumes that stream for live diagnostics.
-- Desktop/session supervision now also has a first task-lifecycle event path: the scheduler publishes launched/terminated task events through a dedicated subscribe/receive ABI, and `desktop-host` now waits for `startx` session exit via that event stream instead of spinning on repeated task snapshots in a `yield()` loop.
-- The desktop now reserves dedicated low-control chaos shortcuts for async migration smoke (`Ctrl+K` input restart, `Ctrl+U` audio restart, `Ctrl+V` video restart, `Ctrl+W` network restart, `Ctrl+L` detached app spawn), and the headless `validate-startx-*` path now encodes matching `audio`/`network`/`video` restart scenarios plus a post-restart desktop-icon click so Phase B continuity is testable in-tree once the current shortcut/input gate is green again.
+This section stays near the top on purpose: open migration work first, completed work at the end of the file.
+
+- Phase D headless desktop validation is green again, including `vidmodes-shell`; the remaining work is no longer bring-up proof, but finishing the architectural extraction behind that proof.
+- The video path is still intentionally hybrid: lightweight desktop-class video IPC keeps a local continuity fast path, while `MK_MSG_VIDEO_MODE_SET` / `MK_MSG_VIDEO_LEAVE` still flow through the dedicated `videosvc` service task.
+- The remaining hard boundary is backend ownership. GPU/MMIO privilege, backend coordination, and the final split between privileged video backend work and user-space service ownership are still open.
+- This migration slice still does not need to block the other planning documents. Reconcile those separately after this architectural cleanup.
 
 ## Audited Remaining Gaps
 
@@ -243,14 +182,14 @@ Rules:
 - [x] add timeout/cancel primitives for pending work items
 - [x] add non-busy wait/wakeup path so services stop relying on `yield`/poll loops
 - [~] add subscription model for async completion and state-change notifications
-: service supervision and task-lifecycle subscriptions now exist for `launched` / `terminated` / `blocked` / `woke` / `restart-requested`, the task stream now also carries an explicit `task_class` tag plus subscription-side event/class filters so bootstrap/desktop/app hosts can subscribe more narrowly, but subsystem-level async completions are still missing outside the per-domain streams
+: service supervision and task-lifecycle subscriptions now exist for `launched` / `terminated` / `blocked` / `woke` / `restart-requested`, the task stream now also carries an explicit `task_class` tag plus subscription-side event/class filters so bootstrap/desktop/app runtime supervisors can subscribe more narrowly, but subsystem-level async completions are still missing outside the per-domain streams
 - [~] subsystem event streams now also surface ring pressure through per-event `dropped_events` telemetry for audio/video/network consumers, so queue overruns stop disappearing silently during restart/degradation work
 - [x] define scheduler-visible event metadata so the kernel can audit pending events and prioritize desktop/input-critical work
 - [ ] define one independent async worker/thread context per major task class instead of reusing UI loops as pumps
 - [~] establish explicit task-class metadata for launched workers before the final mailbox split
-: launch contexts, task snapshots, and task-lifecycle events now expose concrete classes such as `supervision`, `desktop`, `shell`, `app-runtime`, `storage-io`, `filesystem-io`, `audio-io`, `network-io`, `video-present`, and `input`, and userland subscribers can now filter on those classes; the remaining gap is turning those class tags into true per-class worker/mailbox ownership instead of only better-tagged scheduling/supervision telemetry
+: launch contexts, task snapshots, and task-lifecycle events now expose concrete classes such as `supervision`, `desktop`, `shell`, `app-runtime`, `storage-io`, `filesystem-io`, `audio-io`, `network-io`, `video-control`, `video-present`, and `input`, and userland subscribers can now filter on those classes; the remaining gap is turning those class tags into true per-class worker/mailbox ownership instead of only better-tagged scheduling/supervision telemetry
 - [~] move bootstrap/main-thread responsibility to supervision/event arbitration instead of foreground app execution
-: `init` now remains in a supervision/event loop, subscribes to service/task lifecycle events, `desktop-host` relaunches a separate `startx-host` task instead of executing the desktop session inline, and the generic AppFS launch path now carries a small serialized `argv` via `SYSCALL_LAUNCH_APP`; shell foreground AppFS commands now also prefer a dedicated app-host task and wait on task-lifecycle events instead of owning `lang_try_run()` inline, `startx-host` / `desktop-audio` / `boot-audio` now launch detached AppFS workers and wait on task events instead of owning the normal path inline, and the desktop-side `netmgrd` / `audiosvc` control path now also launches detached workers instead of dropping back into the desktop task, while oversized/richer launch payloads plus host-local rescue fallbacks still remain
+: `init` now remains in a supervision/event loop, subscribes to service/task lifecycle events, `desktop-host` relaunches a separate `startx-host` task instead of executing the desktop session inline, and the generic AppFS launch path now carries a small serialized `argv` via `SYSCALL_LAUNCH_APP`; shell foreground AppFS commands now launch a direct `app-runtime` task and wait on task-lifecycle events instead of owning `lang_try_run()` inline, `shell-host` now launches a separate `shell` session task instead of owning `shell_start_ready()` inline, `startx-host` / `desktop-audio` / `boot-audio` now launch detached AppFS workers and wait on task events instead of owning the normal path inline, and the fallback desktop session now also launches as its own builtin task instead of running inside `startx-host` / `desktop-host`; oversized/richer launch payloads and broader per-class mailbox ownership still remain
 - [~] detached AppFS launch telemetry now exposes `argc`/`argv` through launch-info reporting and host-side debug logs, so supervised generic app workers are easier to audit while broader mailbox/supervision work is still pending
 - [~] `init` no longer needs to own boot-sound playback directly on non-desktop boots; dedicated `desktop-audio` / `boot-audio` builtin workers now supervise detached `audiosvc play-asset` launches and retain inline playback only as fallback
 
@@ -259,11 +198,12 @@ Implementation to finish Phase A:
 1. add a generic task-lifecycle event stream beside service/audio/video/network streams
    - publish `launched`, `terminated`, `blocked`, `woke`, and `restart-requested`
    - make scheduler snapshots and supervisor logs correlate to the same event IDs
-   - use this as the canonical wakeup source for `desktop-host`, `shell-host`, and later AppFS app hosts
+   - use this as the canonical wakeup source for `desktop-host`, `shell-host`, and later AppFS app runtime supervisors
 2. add one waitable-backed mailbox per major task class
    - `desktop`
    - `input-keyboard`
    - `input-pointer`
+   - `video-control`
    - `video-present`
    - `storage-io`
    - `filesystem-io`
@@ -274,7 +214,7 @@ Implementation to finish Phase A:
    - `desktop-host` owns session supervision only
    - `startx-host` owns session launch only
    - shell command execution and modular AppFS app execution move into separate launched tasks
-   - modular AppFS launch now has a reusable host path with short `argv` support; the shell foreground path uses that host and task events by default, while inline fallback remains only for longer/richer launch payloads or launch-path failure
+   - modular AppFS launch now has a reusable short-`argv` runtime launch path; the shell foreground path uses task events by default, while richer payload fallbacks or deeper launch supervision can evolve independently
 4. make the bootstrap thread reject foreground execution work after handoff
    - bootstrap may supervise, subscribe, restart, and log
    - bootstrap may not become the long-lived owner of shell, desktop, or app execution
@@ -297,7 +237,7 @@ Phase A regression risks:
 
 - adding new wait paths that accidentally starve the current desktop host
 - introducing task-event spam that overruns tiny rings and hides the one event the supervisor needs
-- keeping `lang_try_run()` as an implicit ownership path after task-host launch exists
+- keeping `lang_try_run()` as an implicit ownership path inside supervision/host tasks after detached runtime launch exists
 
 Phase A validation gate:
 
@@ -310,7 +250,7 @@ Phase A validation gate:
 
 - [x] keyboard polling can bypass degraded worker transport
 - [x] mouse polling can bypass degraded worker transport
-- [~] `init` now launches built-in `shell-host` / `desktop-host` user tasks instead of running shell/desktop inline; `desktop-host` now supervises a separate `startx-host` task instead of running the session inline, but general foreground modular apps still need the same treatment
+- [~] `init` now launches built-in `shell-host` / `desktop-host` user tasks instead of running shell/desktop inline; `desktop-host` now supervises a separate `startx-host` task instead of running the session inline, `shell-host` now supervises a separate `shell` session task, and generic foreground modular apps now also launch as direct `app-runtime` tasks, but richer launch payload handling and the remaining per-class mailbox ownership work still remain
 - [~] move input service to event publication ownership instead of kernel fallback ownership
 : the shared `INPUT_EVENT` stream now sits on top of explicit kernel-owned keyboard and mouse queues with their own waitable contexts, `input` now runs through a dedicated userland service host for `event` / `mouse` / `key` / `layout` requests, and the desktop no longer keeps a steady-state direct-queue bypass; raw capture still originates in the kernel queues and bootstrap/critical rescue fallback still exists when the service is unavailable
 - [~] split desktop input ingestion from desktop render/update loop
@@ -324,7 +264,7 @@ Phase A validation gate:
 - [~] desktop-launched `INPUT_EVENT` consumers now follow the service path while still reacting to `inputsvc` restart/degrade events
   : this removes the previous request/reply bypass in the desktop path and makes the steady-state architecture match the service boundary, but the underlying keyboard/mouse producer is still kernel-owned rather than a fully extracted `inputsvc` publisher
 - [~] reserve scheduling/service priority for desktop, mouse, and keyboard above optional services
-  : a atribuicao de prioridade agora promove tasks userland marcadas como `shell`/`desktop`/`bootstrap`/`critical` para `PROCESS_PRIORITY_DESKTOP_USER`, coloca `inputsvc` junto do `console` em `PROCESS_PRIORITY_INPUT`, acima de audio/network/background, e ainda reserva slices iniciais mais fortes para workers `app-host`/servicos recem-lancados para que launch/restart nao fiquem presos atras do trafego continuo de input/desktop; ainda falta provar a politica com smoke automatizado de restart e revisar se o cutover final precisa de uma regra ainda mais explicita para video
+  : a atribuicao de prioridade agora promove tasks userland marcadas como `shell`/`desktop`/`bootstrap`/`critical` para `PROCESS_PRIORITY_DESKTOP_USER`, coloca `inputsvc` junto do `console` em `PROCESS_PRIORITY_INPUT`, acima de audio/network/background, e ainda reserva slices iniciais mais fortes para app runtimes/servicos recem-lancados para que launch/restart nao fiquem presos atras do trafego continuo de input/desktop; ainda falta provar a politica com smoke automatizado de restart e revisar se o cutover final precisa de uma regra ainda mais explicita para video
 - [~] prove keyboard and mouse remain live while audio/network/video workers restart
   : headless QEMU now has explicit in-tree restart smoke for `audiosvc`, `network`, and `videosvc`: the desktop keeps dedicated chaos shortcuts, the start menu now also exposes click-driven `kill input/audio/video/network` plus `spawn clock` entries for lower-control smoke, and the validation script encodes matching restart scenarios plus a post-restart desktop-icon click. The remaining gap is getting that validation path green again under the current headless QEMU input-injection limits, then carrying the same proof into real hardware under restart/degradation, extending USB input beyond the current UHCI/OHCI-oriented boot HID datapath when the machine only exposes EHCI/xHCI, and then moving steady-state publication ownership fully into `inputsvc`
 
@@ -457,16 +397,16 @@ Phase C validation gate:
 
 - [ ] separate window/compositor logic from framebuffer/present backend logic
 - [~] introduce explicit present queue / frame fence model
-: `videosvc` now publishes `present` / `mode-set` / `leave` events through a dedicated mailbox-backed ABI, and `present submit` now returns a concrete `sequence` fence token that the desktop uses on its main path; a true queued presenter worker still remains open
+: `videosvc` now publishes `present` / `mode-set` / `leave` events through a dedicated mailbox-backed ABI, `present submit` now returns a concrete stable fence `sequence` token that the desktop uses on its main path, and a dedicated `video-present` worker now drains a mailbox-backed present queue independently of the desktop/session loop; broader continuity proof under headless restart smoke still remains open
 - [~] `videosvc` now also emits an explicit `present-submitted` stage plus per-event `pending_depth` / `completed_sequence` telemetry, so the present path is visible as a service-owned fence lifecycle even though the backend work is still completing synchronously underneath
-- [~] video event delivery now reports subscriber-ring overflow explicitly, so presenter pressure and missed notifications are visible while the queued presenter worker is still pending
+- [~] video event delivery now reports subscriber-ring overflow explicitly, so presenter pressure and missed notifications are visible across the queued presenter worker path too
 - [~] desktop now also consumes the video fence/backlog stream directly and resets its async video path when `videosvc` reports overflow or dropped notifications, so presenter-pressure faults no longer leave the compositor blind to stale fence state
 - [~] stop doing heavyweight backend work directly from desktop paint cadence
-: the desktop no longer falls back to `sys_present_full()` when `videosvc` rejects `present_submit`; it now tears down its async video subscriptions and waits for the service path to recover, but the actual present work is still completed synchronously inside `videosvc`
+: the desktop main loop now submits fullscreen presents through `present_submit` instead of `sys_present_full()`, it still tears down its async video subscriptions when `videosvc` rejects the submit path, and the actual flip now drains through the dedicated presenter worker instead of executing inline in the desktop cadence; kernel-owned backend work and final recovery proof still remain
 - [~] add evented mode-change / hotplug / backend-failure notifications
-: mode-change and leave-graphics notifications now exist on the new video-event stream, and the desktop now consumes those events plus `video`/`input` supervision events to refresh metrics, clamp layout, and redraw immediately when the backend changes; hotplug/backend-failure paths are still pending
+: `videosvc` now emits explicit `mode-set-begin`, `mode-set-done`, compatibility `mode-set`, `leave`, and backend `failed/recovered` notifications on the mailbox-backed video stream, and the desktop now consumes those events plus `video`/`input` supervision events to refresh metrics, clamp layout, and redraw immediately when the backend changes; future hotplug is still pending
 - [~] move video service off backend-shim steady-state execution
-: steady-state `gfx` / `present` / `mode` / palette / info requests now terminate in the dedicated `videosvc` userland host and service-worker fast paths inside `video.c`, but the actual backend work still completes synchronously in kernel-owned code and the queued presenter worker is still pending
+: steady-state `gfx` / `present` / palette / info requests now terminate in the dedicated `videosvc` userland host and the lightweight desktop continuity fast path inside `video.c`; `present` drains through the queued presenter worker, while `mode` / `leave` transitions are forced through the dedicated service task and serialized in service context instead of the generic backend-shim path. The desktop-shell `800x600 -> 1024x768 -> restore` roundtrip is now green under headless QEMU; backend ownership still remains kernel-side
 - [ ] define what remains privileged for GPU/MMIO ownership versus what moves into service processes
 
 Implementation to finish Phase D:
@@ -520,8 +460,9 @@ Phase D regression risks:
 
 Phase D validation gate:
 
-- `make validate-startx-*` still reaches desktop
+- `make validate-startx-*` still reaches desktop and keeps the non-`vidmodes-shell` scenarios green
 - presentation uses queue/fence semantics
+- desktop-session `vidmodes-shell` completes `800x600 -> 1024x768 -> restore` through `videosvc`
 - `videosvc` restart degrades visuals without killing input/session state
 - mode change notifications remain observable from userland
 
@@ -1106,3 +1047,13 @@ The first slice implemented in-tree is intentionally modest:
 4. Keep the existing monolithic behavior while creating the interfaces needed for extraction.
 
 This does not finish the migration, but it starts replacing ad-hoc coupling with explicit microkernel-oriented primitives.
+
+## Latest Completed Slice
+
+- External `startx` launch now enters as a real desktop-class task instead of a generic app-runtime launch, and bootstrap waiters now follow desktop-class lifecycle events for that session handoff.
+- `videosvc` steady-state presentation is now queue-backed: fullscreen submit returns a fence token, `video-present` drains the present queue, and `mode-set` / `leave` transitions no longer go through the old backend-shim steady-state path.
+- Desktop-class video control requests now reserve a longer request budget for legitimate runtime mode transitions, so `videosvc` control-plane handoffs are not treated as immediate transport failures.
+- The service request path now defers unexpected replies locally while a caller waits on a specific service response, avoiding the self-requeue livelock that could starve longer-running IPC transactions.
+- The desktop validation path now reaches `desktop: session ready` reliably again through the stable desktop shortcut flow used by `validate_modular_apps.py`.
+- The service request wait loop now blocks on the remaining request budget instead of re-arming 1-tick IPC timeouts, avoiding the timeout/resume wedge that previously stranded long `videosvc` mode-set replies in the caller queue.
+- The `vidmodes` smoke now completes the full migration-safe sequence end-to-end: reassert the active desktop mode, switch through `1024x768`, restore `800x600`, and pass the official `vidmodes-shell` modular validation scenario.

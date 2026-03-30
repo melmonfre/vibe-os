@@ -39,11 +39,6 @@ static void host_debug_argv(int argc, char **argv) {
     sys_write_debug(msg);
 }
 
-static int host_try_external_argv(int argc, char **argv) {
-    lang_invalidate_directory_cache();
-    return lang_try_run(argc, argv);
-}
-
 static int host_wait_for_task_exit(uint32_t pid) {
     struct mk_task_event event;
 
@@ -64,6 +59,19 @@ static int host_wait_for_task_exit(uint32_t pid) {
     }
 }
 
+static int host_subscribe_task_exit(uint32_t task_class_mask) {
+    return sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,
+                                         task_class_mask);
+}
+
+static uint32_t host_external_task_class_mask(int argc, char **argv) {
+    if (argc > 0 && argv != 0 && argv[0] != 0 && str_eq(argv[0], "startx")) {
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP);
+    }
+
+    return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
+}
+
 static int host_launch_external_argv_and_wait(int argc, char **argv) {
     int pid;
 
@@ -75,13 +83,26 @@ static int host_launch_external_argv_and_wait(int argc, char **argv) {
     if (!lang_can_run(argv[0])) {
         return -1;
     }
-    if (sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,
-                                      MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME)) != 0) {
+    if (host_subscribe_task_exit(host_external_task_class_mask(argc, argv)) != 0) {
         return -1;
     }
 
     host_debug_argv(argc, argv);
     pid = argc == 1 ? sys_launch_app(argv[0]) : sys_launch_app_argv(argc, argv);
+    if (pid <= 0) {
+        return -1;
+    }
+    return host_wait_for_task_exit((uint32_t)pid);
+}
+
+static int host_launch_builtin_user_and_wait(uint32_t target, uint32_t task_class_mask) {
+    int pid;
+
+    if (host_subscribe_task_exit(task_class_mask) != 0) {
+        return -1;
+    }
+
+    pid = sys_launch_builtin_user(target);
     if (pid <= 0) {
         return -1;
     }
@@ -121,7 +142,7 @@ static int host_decode_launch_argv(const struct userland_launch_info *info,
     return (int)argc;
 }
 
-void userland_app_host_entry(void) {
+void userland_app_runtime_entry(void) {
     struct userland_launch_info info;
     char argv_storage[USERLAND_LAUNCH_ARGV_BYTES];
     char name[sizeof(info.name)];
@@ -130,10 +151,10 @@ void userland_app_host_entry(void) {
 
     console_init();
     fs_init();
-    host_debug("host: app start", 0);
+    host_debug("app: runtime start", 0);
 
     if (sys_launch_info(&info) != 0 || info.name[0] == '\0') {
-        host_debug("host: app missing launch info", 0);
+        host_debug("app: missing launch info", 0);
         return;
     }
 
@@ -147,32 +168,17 @@ void userland_app_host_entry(void) {
     }
     host_debug_argv(argc, argv);
 
-    if (host_try_external_argv(argc, argv) == 0) {
-        host_debug("host: app returned ", name);
+    lang_invalidate_directory_cache();
+    if (lang_try_run(argc, argv) == 0) {
+        host_debug("app: runtime returned ", name);
         return;
     }
 
-    host_debug("host: app launch failed ", name);
+    host_debug("app: runtime launch failed ", name);
 }
 
-static int desktop_host_wait_session_event(int session_pid) {
-    struct mk_task_event event;
-
-    if (session_pid <= 0) {
-        return -1;
-    }
-
-    for (;;) {
-        if (sys_task_event_receive(&event, MK_TASK_EVENT_WAIT_FOREVER) != 0) {
-            return -1;
-        }
-        if ((int)event.pid != session_pid) {
-            continue;
-        }
-        if (event.event_type == MK_TASK_EVENT_TERMINATED) {
-            return 0;
-        }
-    }
+void userland_app_host_entry(void) {
+    userland_app_runtime_entry();
 }
 
 static int desktop_host_launch_startx_session(void) {
@@ -187,12 +193,44 @@ static int desktop_host_launch_startx_session(void) {
     return -1;
 }
 
+static int desktop_host_run_builtin_session(void) {
+    host_debug("host: desktop fallback session", 0);
+    if (host_launch_builtin_user_and_wait(USERLAND_BUILTIN_DESKTOP_SESSION,
+                                          MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP)) != 0) {
+        host_debug("host: desktop fallback launch failed", 0);
+        return -1;
+    }
+    host_debug("host: desktop fallback returned", 0);
+    return 0;
+}
+
+static int host_run_shell_session(const char *launch_log,
+                                  const char *failed_log,
+                                  const char *returned_log) {
+    if (launch_log != 0) {
+        host_debug(launch_log, 0);
+    }
+    if (host_launch_builtin_user_and_wait(USERLAND_BUILTIN_SHELL_SESSION,
+                                          MK_TASK_CLASS_MASK(MK_TASK_CLASS_SHELL)) != 0) {
+        if (failed_log != 0) {
+            host_debug(failed_log, 0);
+        }
+        return -1;
+    }
+    if (returned_log != 0) {
+        host_debug(returned_log, 0);
+    }
+    return 0;
+}
+
 void userland_shell_host_entry(void) {
     host_debug("host: shell start", 0);
     console_init();
     fs_init();
-    shell_start_ready();
-    host_debug("host: shell returned", 0);
+
+    (void)host_run_shell_session("host: shell session launch",
+                                 "host: shell session launch failed",
+                                 "host: shell session returned");
     for (;;) {
         sys_yield();
     }
@@ -205,8 +243,7 @@ void userland_desktop_host_entry(void) {
     host_debug("host: desktop start", 0);
     console_init();
     fs_init();
-    if (sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,
-                                      MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP)) != 0) {
+    if (host_subscribe_task_exit(MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP)) != 0) {
         host_debug("host: desktop subscribe failed", 0);
     }
 
@@ -215,7 +252,7 @@ void userland_desktop_host_entry(void) {
         session_pid = desktop_host_launch_startx_session();
         if (session_pid > 0) {
             for (;;) {
-                if (desktop_host_wait_session_event(session_pid) == 0) {
+                if (host_wait_for_task_exit((uint32_t)session_pid) == 0) {
                     host_debug("host: desktop session exited", 0);
                     session_pid = desktop_host_launch_startx_session();
                     if (session_pid <= 0) {
@@ -227,15 +264,16 @@ void userland_desktop_host_entry(void) {
                 }
             }
         } else {
-            host_debug("host: desktop fallback builtin", 0);
-            desktop_main();
+            (void)desktop_host_run_builtin_session();
         }
     } else {
         host_debug("host: desktop denied by boot flags", 0);
     }
 
     host_debug("host: desktop -> shell fallback", 0);
-    shell_start_ready();
+    (void)host_run_shell_session(0,
+                                 "host: desktop shell launch failed",
+                                 "host: desktop shell returned");
     for (;;) {
         sys_yield();
     }
@@ -253,9 +291,29 @@ void userland_startx_host_entry(void) {
         return;
     }
 
-    host_debug("host: startx fallback builtin", 0);
+    host_debug("host: startx fallback session", 0);
+    if (host_launch_builtin_user_and_wait(USERLAND_BUILTIN_DESKTOP_SESSION,
+                                          MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP)) == 0) {
+        host_debug("host: startx fallback returned", 0);
+        return;
+    }
+    host_debug("host: startx fallback failed", 0);
+}
+
+void userland_desktop_session_entry(void) {
+    host_debug("desktop: session start", 0);
+    fs_set_deferred_catalog_stubs(1);
+    fs_init();
     desktop_main();
-    host_debug("host: startx builtin returned", 0);
+    host_debug("desktop: session returned", 0);
+}
+
+void userland_shell_session_entry(void) {
+    host_debug("shell: session start", 0);
+    console_init();
+    fs_init();
+    shell_start_ready();
+    host_debug("shell: session returned", 0);
 }
 
 void userland_desktop_audio_host_entry(void) {

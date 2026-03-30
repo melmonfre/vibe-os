@@ -26,12 +26,88 @@ static int g_interactive_request_trace_budget = 24;
 static spinlock_t g_service_event_lock;
 
 #define MK_SERVICE_REQUEST_REPLY_TIMEOUT_TICKS 32u
+#define MK_SERVICE_VIDEO_CONTROL_TIMEOUT_TICKS 192u
+#define MK_SERVICE_DEFERRED_REPLIES_MAX 8u
 
 static void mk_service_worker_entry(void);
 static void mk_service_publish_event(struct mk_service_record *service, uint32_t event_type);
 static void mk_service_enqueue_event(struct mk_service_record *service,
                                      struct mk_service_event_subscription *subscription,
                                      uint32_t event_type);
+static uint32_t mk_service_request_timeout_ticks(const struct mk_service_record *service,
+                                                 const struct mk_message *request);
+static void mk_service_restore_deferred_messages(process_t *destination,
+                                                 const struct mk_message *messages,
+                                                 uint32_t count);
+
+static int mk_service_current_prefers_local_handler(const struct mk_service_record *service,
+                                                    const struct mk_message *request) {
+    const struct mk_launch_context *context;
+
+    if (service == 0 || request == 0) {
+        return 0;
+    }
+
+    context = mk_launch_context_current();
+    if (context == 0) {
+        return 0;
+    }
+
+    if ((context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) == 0u) {
+        return 0;
+    }
+
+    if (service->type == MK_SERVICE_INPUT) {
+        return 1;
+    }
+
+    if (service->type == MK_SERVICE_VIDEO) {
+        /*
+         * Keep the desktop-class fast path for lightweight video IPC, but let
+         * full mode switches flow through the dedicated service task so the
+         * control worker completes in the same context the runtime handoff was
+         * designed around.
+         */
+        return request->type != MK_MSG_VIDEO_MODE_SET;
+    }
+
+    return 0;
+}
+
+static uint32_t mk_service_request_timeout_ticks(const struct mk_service_record *service,
+                                                 const struct mk_message *request) {
+    if (service == 0 || request == 0) {
+        return MK_SERVICE_REQUEST_REPLY_TIMEOUT_TICKS;
+    }
+
+    if (service->type == MK_SERVICE_VIDEO &&
+        (request->type == MK_MSG_VIDEO_MODE_SET || request->type == MK_MSG_VIDEO_LEAVE)) {
+        /*
+         * Real mode transitions remap framebuffers and re-arm the backend; they
+         * legitimately take longer than the lightweight IPC/control messages
+         * that use the default budget.
+         */
+        return MK_SERVICE_VIDEO_CONTROL_TIMEOUT_TICKS;
+    }
+
+    return MK_SERVICE_REQUEST_REPLY_TIMEOUT_TICKS;
+}
+
+static void mk_service_restore_deferred_messages(process_t *destination,
+                                                 const struct mk_message *messages,
+                                                 uint32_t count) {
+    uint32_t index;
+
+    if (destination == 0 || messages == 0) {
+        return;
+    }
+
+    for (index = 0; index < count; ++index) {
+        if (ipc_send(destination, &messages[index], sizeof(messages[index])) != 0) {
+            break;
+        }
+    }
+}
 
 void mk_service_init(void) {
     memset(g_services, 0, sizeof(g_services));
@@ -566,18 +642,18 @@ static int mk_service_request_process(const struct mk_service_record *service,
     process_t *current;
     struct mk_message request_copy;
     struct mk_message response;
+    struct mk_message deferred_replies[MK_SERVICE_DEFERRED_REPLIES_MAX];
     uint32_t request_start_tick;
+    uint32_t request_timeout_ticks;
     uint32_t waiting_pid;
+    uint32_t deferred_reply_count = 0u;
 
     if (service == 0 || request == 0 || reply == 0) {
         return -1;
     }
 
     current = scheduler_current();
-    if (current == 0 || current == service->process) {
-        if (service->local_handler != 0) {
-            return service->local_handler(request, reply, service->context);
-        }
+    if (current == 0) {
         return -1;
     }
 
@@ -586,6 +662,15 @@ static int mk_service_request_process(const struct mk_service_record *service,
         request_copy.abi_version = MK_MESSAGE_ABI_VERSION;
     }
     request_copy.source_pid = (uint32_t)current->pid;
+    if (service->pid > 0) {
+        request_copy.target_pid = (uint32_t)service->pid;
+    }
+
+    if ((current == service->process || mk_service_current_prefers_local_handler(service, &request_copy)) &&
+        service->local_handler != 0) {
+        return service->local_handler(&request_copy, reply, service->context);
+    }
+
     for (;;) {
         const struct mk_service_record *live_service = mk_service_find_by_type(service->type);
 
@@ -602,6 +687,7 @@ static int mk_service_request_process(const struct mk_service_record *service,
         request_copy.target_pid = (uint32_t)service->pid;
         waiting_pid = request_copy.target_pid;
         request_start_tick = kernel_timer_get_ticks();
+        request_timeout_ticks = mk_service_request_timeout_ticks(service, &request_copy);
 
         if (service->type == MK_SERVICE_CONSOLE && !g_console_request_trace_emitted) {
             g_console_request_trace_emitted = 1;
@@ -661,11 +747,29 @@ static int mk_service_request_process(const struct mk_service_record *service,
         }
 
         for (;;) {
-            int received = ipc_receive_wait_timeout(current, &response, sizeof(response), 1u);
+            uint32_t elapsed_ticks = kernel_timer_get_ticks() - request_start_tick;
+            uint32_t remaining_ticks = 0u;
+            int received;
+
+            if (elapsed_ticks < request_timeout_ticks) {
+                remaining_ticks = request_timeout_ticks - elapsed_ticks;
+            }
+            if (remaining_ticks == 0u) {
+                received = -1;
+            } else {
+                received = ipc_receive_wait_timeout(current,
+                                                    &response,
+                                                    sizeof(response),
+                                                    remaining_ticks);
+            }
 
             if (received == (int)sizeof(response)) {
                 if (response.source_pid == waiting_pid &&
                     response.target_pid == (uint32_t)current->pid) {
+                    mk_service_restore_deferred_messages(current,
+                                                         deferred_replies,
+                                                         deferred_reply_count);
+                    deferred_reply_count = 0u;
                     if (service->type == MK_SERVICE_CONSOLE && !g_console_reply_trace_emitted) {
                         g_console_reply_trace_emitted = 1;
                         kernel_debug_printf("service: console reply type=%d src=%d dst=%d\n",
@@ -704,12 +808,20 @@ static int mk_service_request_process(const struct mk_service_record *service,
                                         (int)waiting_pid,
                                         current->pid);
                 }
-                (void)mk_service_requeue_message(current, &response);
+                if (deferred_reply_count >= MK_SERVICE_DEFERRED_REPLIES_MAX) {
+                    mk_service_restore_deferred_messages(current,
+                                                         deferred_replies,
+                                                         deferred_reply_count);
+                    deferred_reply_count = 0u;
+                    (void)mk_service_requeue_message(current, &response);
+                    return -1;
+                }
+                deferred_replies[deferred_reply_count++] = response;
                 continue;
             }
 
             if ((uint32_t)(kernel_timer_get_ticks() - request_start_tick) >=
-                MK_SERVICE_REQUEST_REPLY_TIMEOUT_TICKS) {
+                request_timeout_ticks) {
                 struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
 
                 if (g_request_timeout_budget > 0) {
@@ -736,21 +848,33 @@ static int mk_service_request_process(const struct mk_service_record *service,
                                                 (int)request_copy.target_pid,
                                                 (int)service->type);
                         }
+                        mk_service_restore_deferred_messages(current,
+                                                             deferred_replies,
+                                                             deferred_reply_count);
                         return mutable_service->local_handler(&request_copy, reply, mutable_service->context);
                     }
                 }
 
+                mk_service_restore_deferred_messages(current,
+                                                     deferred_replies,
+                                                     deferred_reply_count);
                 return -1;
             }
 
             live_service = mk_service_find_by_type(service->type);
             if (live_service == 0) {
+                mk_service_restore_deferred_messages(current,
+                                                     deferred_replies,
+                                                     deferred_reply_count);
                 return -1;
             }
             if (live_service->transport_degraded != 0u && live_service->process != 0) {
                 (void)mk_service_ensure(service->type);
                 live_service = mk_service_find_by_type(service->type);
                 if (live_service == 0) {
+                    mk_service_restore_deferred_messages(current,
+                                                         deferred_replies,
+                                                         deferred_reply_count);
                     return -1;
                 }
             }

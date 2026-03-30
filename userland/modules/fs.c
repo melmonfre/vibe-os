@@ -30,6 +30,8 @@ static uint32_t g_fs_last_sync_tick = 0u;
 static int g_fs_doom_assets_scanned = 0;
 static int g_fs_texture_assets_scanned = 0;
 static int g_fs_assets_scanned = 0;
+static int g_fs_defer_catalog_stubs = 0;
+static int g_fs_pending_catalog_stubs = 0;
 
 #define FS_SYNC_PERIOD_TICKS 1000u
 
@@ -37,17 +39,36 @@ static void fs_ensure_doom_wad_registered(void);
 static void fs_ensure_craft_textures_registered(void);
 static void fs_ensure_assets_registered(void);
 static uint32_t fs_storage_total_sectors(void);
+static void fs_materialize_catalog_stubs(void);
 
 #define DOOM_WAD_IMAGE_LBA 131728u
+#define DOOM_WAD_IMAGE_SECTORS 24235u
+#define DOOM_WAD_IMAGE_BYTES 12408292
 /* Keep these LBAs aligned with the asset layout in the Makefile. */
 #define CRAFT_TEXTURE_IMAGE_LBA 156304u
+#define CRAFT_TEXTURE_IMAGE_SECTORS 70u
+#define CRAFT_TEXTURE_IMAGE_BYTES 35751
 #define CRAFT_FONT_IMAGE_LBA 156432u
+#define CRAFT_FONT_IMAGE_SECTORS 84u
+#define CRAFT_FONT_IMAGE_BYTES 42838
 #define CRAFT_SKY_IMAGE_LBA 156560u
+#define CRAFT_SKY_IMAGE_SECTORS 154u
+#define CRAFT_SKY_IMAGE_BYTES 78482
 #define CRAFT_SIGN_IMAGE_LBA 156816u
+#define CRAFT_SIGN_IMAGE_SECTORS 5u
+#define CRAFT_SIGN_IMAGE_BYTES 2401
 #define WALLPAPER_IMAGE_LBA 156944u
+#define WALLPAPER_IMAGE_SECTORS 999u
+#define WALLPAPER_IMAGE_BYTES 511155
 #define VIBE_BOOT_WAV_IMAGE_LBA 157968u
+#define VIBE_BOOT_WAV_IMAGE_SECTORS 517u
+#define VIBE_BOOT_WAV_IMAGE_BYTES 264644
 #define VIBE_DESKTOP_WAV_IMAGE_LBA 158992u
+#define VIBE_DESKTOP_WAV_IMAGE_SECTORS 862u
+#define VIBE_DESKTOP_WAV_IMAGE_BYTES 441044
 #define BOOTLOADER_BG_IMAGE_LBA 160016u
+#define BOOTLOADER_BG_IMAGE_SECTORS 6312u
+#define BOOTLOADER_BG_IMAGE_BYTES 3231497
 
 static void fs_reset_node(int idx) {
     int i;
@@ -79,20 +100,6 @@ static uint32_t fs_checksum_bytes(const uint8_t *data, int size) {
         hash *= 16777619u;
     }
     return hash;
-}
-
-static uint32_t fs_read_u32_le(const uint8_t *src) {
-    return (uint32_t)src[0]
-         | ((uint32_t)src[1] << 8)
-         | ((uint32_t)src[2] << 16)
-         | ((uint32_t)src[3] << 24);
-}
-
-static uint32_t fs_read_u32_be(const uint8_t *src) {
-    return ((uint32_t)src[0] << 24)
-         | ((uint32_t)src[1] << 16)
-         | ((uint32_t)src[2] << 8)
-         | (uint32_t)src[3];
 }
 
 static int fs_storage_read_sector_verified(uint32_t lba, uint8_t *dst) {
@@ -326,142 +333,13 @@ static int fs_write_sector_bytes(uint32_t start_lba, const uint8_t *data, int si
     return 0;
 }
 
-static int fs_detect_doom_wad(uint32_t lba, uint32_t *sector_count_out, int *size_out) {
-    uint8_t header[12];
-    uint8_t entry[16];
-    uint32_t numlumps;
-    uint32_t infotableofs;
-    uint32_t max_end;
-    uint32_t dir_end;
-
-    if (!sector_count_out || !size_out) {
-        return -1;
+static void fs_register_known_asset(const char *path,
+                                    uint32_t lba,
+                                    uint32_t sector_count,
+                                    int size) {
+    if (fs_register_image_file(path, lba, sector_count, size) == 0) {
+        fs_debug_asset_path("fs: asset file ", path);
     }
-    if (fs_read_image_bytes(lba, 0u, header, (uint32_t)sizeof(header)) != 0) {
-        return -1;
-    }
-    if (memcmp(header, "IWAD", 4u) != 0 && memcmp(header, "PWAD", 4u) != 0) {
-        return -1;
-    }
-
-    numlumps = fs_read_u32_le(header + 4);
-    infotableofs = fs_read_u32_le(header + 8);
-    if (numlumps == 0u || numlumps > 65535u || infotableofs < 12u) {
-        return -1;
-    }
-
-    dir_end = infotableofs + (numlumps * 16u);
-    max_end = dir_end;
-    for (uint32_t i = 0; i < numlumps; ++i) {
-        uint32_t filepos;
-        uint32_t lump_size;
-        uint32_t lump_end;
-
-        if (fs_read_image_bytes(lba, infotableofs + (i * 16u), entry, (uint32_t)sizeof(entry)) != 0) {
-            return -1;
-        }
-        filepos = fs_read_u32_le(entry + 0);
-        lump_size = fs_read_u32_le(entry + 4);
-        lump_end = filepos + lump_size;
-        if (lump_end > max_end) {
-            max_end = lump_end;
-        }
-    }
-
-    if (max_end == 0u) {
-        return -1;
-    }
-    *size_out = (int)max_end;
-    *sector_count_out = (max_end + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
-    return 0;
-}
-
-static int fs_detect_png_file(uint32_t lba, uint32_t *sector_count_out, int *size_out) {
-    uint8_t signature[8];
-    uint8_t chunk_header[8];
-    uint32_t offset = 8u;
-    uint32_t total_size = 8u;
-    static const uint8_t png_signature[8] = {137u, 80u, 78u, 71u, 13u, 10u, 26u, 10u};
-
-    if (!sector_count_out || !size_out) {
-        return -1;
-    }
-    if (fs_read_image_bytes(lba, 0u, signature, (uint32_t)sizeof(signature)) != 0) {
-        return -1;
-    }
-    if (memcmp(signature, png_signature, sizeof(png_signature)) != 0) {
-        return -1;
-    }
-
-    for (int i = 0; i < 1024; ++i) {
-        uint32_t chunk_length;
-        uint32_t chunk_size;
-
-        if (fs_read_image_bytes(lba, offset, chunk_header, (uint32_t)sizeof(chunk_header)) != 0) {
-            return -1;
-        }
-        chunk_length = fs_read_u32_be(chunk_header + 0);
-        chunk_size = 12u + chunk_length;
-        if (chunk_size < 12u) {
-            return -1;
-        }
-        total_size += chunk_size;
-        if (memcmp(chunk_header + 4, "IEND", 4u) == 0) {
-            *size_out = (int)total_size;
-            *sector_count_out = (total_size + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
-            return 0;
-        }
-        offset += chunk_size;
-    }
-    return -1;
-}
-
-static int fs_detect_bmp_file(uint32_t lba, uint32_t *sector_count_out, int *size_out) {
-    uint8_t header[54];
-    uint32_t total_size;
-
-    if (!sector_count_out || !size_out) {
-        return -1;
-    }
-    if (fs_read_image_bytes(lba, 0u, header, (uint32_t)sizeof(header)) != 0) {
-        return -1;
-    }
-    if (header[0] != 'B' || header[1] != 'M') {
-        return -1;
-    }
-
-    total_size = fs_read_u32_le(header + 2);
-    if (total_size < sizeof(header)) {
-        return -1;
-    }
-
-    *size_out = (int)total_size;
-    *sector_count_out = (total_size + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
-    return 0;
-}
-
-static int fs_detect_wav_file(uint32_t lba, uint32_t *sector_count_out, int *size_out) {
-    uint8_t header[12];
-    uint32_t total_size;
-
-    if (!sector_count_out || !size_out) {
-        return -1;
-    }
-    if (fs_read_image_bytes(lba, 0u, header, (uint32_t)sizeof(header)) != 0) {
-        return -1;
-    }
-    if (memcmp(header, "RIFF", 4u) != 0 || memcmp(header + 8, "WAVE", 4u) != 0) {
-        return -1;
-    }
-
-    total_size = fs_read_u32_le(header + 4) + 8u;
-    if (total_size < sizeof(header)) {
-        return -1;
-    }
-
-    *size_out = (int)total_size;
-    *sector_count_out = (total_size + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
-    return 0;
 }
 
 static int fs_validate_loaded_tree(void) {
@@ -1190,9 +1068,6 @@ int fs_copy_node_to_path(int src_node, const char *dst_path) {
 }
 
 static void fs_ensure_doom_wad_registered(void) {
-    uint32_t doom_wad_sectors = 0u;
-    int doom_wad_size = 0;
-
     if (g_fs_root < 0) {
         return;
     }
@@ -1201,27 +1076,10 @@ static void fs_ensure_doom_wad_registered(void) {
         (void)fs_create("/DOOM", 1);
     }
 
-    if (fs_detect_doom_wad(DOOM_WAD_IMAGE_LBA,
-                           &doom_wad_sectors,
-                           &doom_wad_size) == 0) {
-        (void)fs_register_image_file("/DOOM/DOOM.WAD",
-                                     DOOM_WAD_IMAGE_LBA,
-                                     doom_wad_sectors,
-                                     doom_wad_size);
-        fs_debug_asset_path("fs: asset file ", "/DOOM/DOOM.WAD");
-    }
-}
-
-static void fs_register_image_asset(const char *path, uint32_t lba) {
-    uint32_t sectors = 0u;
-    int size = 0;
-
-    if (fs_detect_png_file(lba, &sectors, &size) == 0 ||
-        fs_detect_bmp_file(lba, &sectors, &size) == 0 ||
-        fs_detect_wav_file(lba, &sectors, &size) == 0) {
-        (void)fs_register_image_file(path, lba, sectors, size);
-        fs_debug_asset_path("fs: asset file ", path);
-    }
+    fs_register_known_asset("/DOOM/DOOM.WAD",
+                            DOOM_WAD_IMAGE_LBA,
+                            DOOM_WAD_IMAGE_SECTORS,
+                            DOOM_WAD_IMAGE_BYTES);
 }
 
 static void fs_ensure_craft_textures_registered(void) {
@@ -1233,10 +1091,22 @@ static void fs_ensure_craft_textures_registered(void) {
         (void)fs_create("/textures", 1);
     }
 
-    fs_register_image_asset("/textures/texture.png", CRAFT_TEXTURE_IMAGE_LBA);
-    fs_register_image_asset("/textures/font.png", CRAFT_FONT_IMAGE_LBA);
-    fs_register_image_asset("/textures/sky.png", CRAFT_SKY_IMAGE_LBA);
-    fs_register_image_asset("/textures/sign.png", CRAFT_SIGN_IMAGE_LBA);
+    fs_register_known_asset("/textures/texture.png",
+                            CRAFT_TEXTURE_IMAGE_LBA,
+                            CRAFT_TEXTURE_IMAGE_SECTORS,
+                            CRAFT_TEXTURE_IMAGE_BYTES);
+    fs_register_known_asset("/textures/font.png",
+                            CRAFT_FONT_IMAGE_LBA,
+                            CRAFT_FONT_IMAGE_SECTORS,
+                            CRAFT_FONT_IMAGE_BYTES);
+    fs_register_known_asset("/textures/sky.png",
+                            CRAFT_SKY_IMAGE_LBA,
+                            CRAFT_SKY_IMAGE_SECTORS,
+                            CRAFT_SKY_IMAGE_BYTES);
+    fs_register_known_asset("/textures/sign.png",
+                            CRAFT_SIGN_IMAGE_LBA,
+                            CRAFT_SIGN_IMAGE_SECTORS,
+                            CRAFT_SIGN_IMAGE_BYTES);
 }
 
 static void fs_ensure_assets_registered(void) {
@@ -1248,11 +1118,38 @@ static void fs_ensure_assets_registered(void) {
         (void)fs_create("/assets", 1);
     }
 
-    fs_register_image_asset("/assets/wallpaper.png", WALLPAPER_IMAGE_LBA);
-    fs_register_image_asset("/wallpaper.png", WALLPAPER_IMAGE_LBA);
-    fs_register_image_asset("/assets/vibe_os_boot.wav", VIBE_BOOT_WAV_IMAGE_LBA);
-    fs_register_image_asset("/assets/vibe_os_desktop.wav", VIBE_DESKTOP_WAV_IMAGE_LBA);
-    fs_register_image_asset("/assets/bootloader_background.png", BOOTLOADER_BG_IMAGE_LBA);
+    fs_register_known_asset("/assets/wallpaper.png",
+                            WALLPAPER_IMAGE_LBA,
+                            WALLPAPER_IMAGE_SECTORS,
+                            WALLPAPER_IMAGE_BYTES);
+    fs_register_known_asset("/wallpaper.png",
+                            WALLPAPER_IMAGE_LBA,
+                            WALLPAPER_IMAGE_SECTORS,
+                            WALLPAPER_IMAGE_BYTES);
+    fs_register_known_asset("/assets/vibe_os_boot.wav",
+                            VIBE_BOOT_WAV_IMAGE_LBA,
+                            VIBE_BOOT_WAV_IMAGE_SECTORS,
+                            VIBE_BOOT_WAV_IMAGE_BYTES);
+    fs_register_known_asset("/assets/vibe_os_desktop.wav",
+                            VIBE_DESKTOP_WAV_IMAGE_LBA,
+                            VIBE_DESKTOP_WAV_IMAGE_SECTORS,
+                            VIBE_DESKTOP_WAV_IMAGE_BYTES);
+    fs_register_known_asset("/assets/bootloader_background.png",
+                            BOOTLOADER_BG_IMAGE_LBA,
+                            BOOTLOADER_BG_IMAGE_SECTORS,
+                            BOOTLOADER_BG_IMAGE_BYTES);
+}
+
+static void fs_materialize_catalog_stubs(void) {
+    if (g_fs_root < 0 || !g_fs_pending_catalog_stubs) {
+        return;
+    }
+
+    for (int i = 0; i < (int)G_APP_CATALOG_STUB_PATHS_COUNT; ++i) {
+        (void)fs_write_file(g_app_catalog_stub_paths[i], "", 0);
+    }
+    g_fs_pending_catalog_stubs = 0;
+    sys_write_debug("fs: deferred compat stubs ready\n");
 }
 
 void fs_build_path(int node, char *out, int max_len) {
@@ -1298,6 +1195,7 @@ void fs_init(void) {
     g_fs_doom_assets_scanned = 0;
     g_fs_texture_assets_scanned = 0;
     g_fs_assets_scanned = 0;
+    g_fs_pending_catalog_stubs = 0;
     for (i = 0; i < FS_MAX_NODES; ++i) {
         fs_reset_node(i);
     }
@@ -1350,14 +1248,28 @@ void fs_init(void) {
                         "}\n",
                         0);
     kernel_debug_puts("fs: base tree created\n");
-    for (i = 0; i < (int)G_APP_CATALOG_STUB_PATHS_COUNT; ++i) {
-        (void)fs_write_file(g_app_catalog_stub_paths[i], "", 0);
+    if (g_fs_defer_catalog_stubs) {
+        g_fs_pending_catalog_stubs = 1;
+        sys_write_debug("fs: compat stubs deferred\n");
+    } else {
+        for (i = 0; i < (int)G_APP_CATALOG_STUB_PATHS_COUNT; ++i) {
+            (void)fs_write_file(g_app_catalog_stub_paths[i], "", 0);
+        }
+        kernel_debug_puts("fs: compat stubs created\n");
     }
     fs_ensure_assets_registered();
-    kernel_debug_puts("fs: compat stubs created\n");
     kernel_debug_puts("fs: asset scans deferred\n");
     g_fs_sync_suspended = 0;
     g_fs_dirty = 1;
     g_fs_last_sync_tick = 0u;
     kernel_debug_puts("fs: initial sync deferred\n");
+}
+
+void fs_set_deferred_catalog_stubs(int enabled) {
+    g_fs_defer_catalog_stubs = enabled != 0;
+}
+
+void fs_complete_startup(void) {
+    fs_materialize_catalog_stubs();
+    g_fs_defer_catalog_stubs = 0;
 }

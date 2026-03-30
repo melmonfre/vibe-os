@@ -376,6 +376,48 @@ static void debug_text(const char *text) {
     sys_write_debug("\n");
 }
 
+static int vidmodes_append_target(uint32_t *target_widths,
+                                  uint32_t *target_heights,
+                                  int count,
+                                  int max_targets,
+                                  uint32_t width,
+                                  uint32_t height) {
+    if (target_widths == 0 || target_heights == 0 || max_targets <= 0 ||
+        width == 0u || height == 0u) {
+        return count;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        if (target_widths[i] == width && target_heights[i] == height) {
+            return count;
+        }
+    }
+
+    if (count >= max_targets) {
+        return count;
+    }
+
+    target_widths[count] = width;
+    target_heights[count] = height;
+    return count + 1;
+}
+
+static int vidmodes_find_mode_index(const struct video_capabilities *caps,
+                                    uint32_t width,
+                                    uint32_t height) {
+    if (caps == 0 || width == 0u || height == 0u) {
+        return -1;
+    }
+
+    for (uint32_t i = 0u; i < caps->mode_count; ++i) {
+        if (caps->mode_width[i] == width && caps->mode_height[i] == height) {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
 static void wait_ticks(uint32_t ticks) {
     for (uint32_t i = 0; i < ticks; ++i) {
         sys_sleep();
@@ -895,11 +937,14 @@ static int cmd_startx(int argc, char **argv) {
 static int cmd_vidmodes(int argc, char **argv) {
     struct video_capabilities caps;
     struct video_mode mode;
+    uint32_t target_widths[2];
+    uint32_t target_heights[2];
     uint32_t ok_count = 0u;
     uint32_t fail_count = 0u;
     uint32_t original_width = 0u;
     uint32_t original_height = 0u;
     int restore_leave_graphics = 1;
+    int target_count = 0;
 
     (void)argc;
     (void)argv;
@@ -932,14 +977,52 @@ static int cmd_vidmodes(int argc, char **argv) {
     sys_rect(0, 0, 1, 1, 0);
     sys_present_full();
 
-    for (uint32_t i = 0; i < caps.mode_count; ++i) {
+    /*
+     * Keep the smoke aligned with the desktop-class runtime handoff we
+     * currently rely on: reassert the active boot mode, then step up to the
+     * next stable desktop mode. Lower legacy modes like 640x480 are still
+     * exposed in caps, but they are not part of this migration contract.
+     */
+    if (vidmodes_find_mode_index(&caps, original_width, original_height) >= 0) {
+        target_count = vidmodes_append_target(target_widths, target_heights,
+                                              target_count,
+                                              (int)(sizeof(target_widths) / sizeof(target_widths[0])),
+                                              original_width,
+                                              original_height);
+    }
+    if (vidmodes_find_mode_index(&caps, 1024u, 768u) >= 0) {
+        target_count = vidmodes_append_target(target_widths, target_heights,
+                                              target_count,
+                                              (int)(sizeof(target_widths) / sizeof(target_widths[0])),
+                                              1024u,
+                                              768u);
+    }
+    for (uint32_t i = 0u;
+         i < caps.mode_count &&
+         target_count < (int)(sizeof(target_widths) / sizeof(target_widths[0]));
+         ++i) {
         uint32_t width = caps.mode_width[i];
         uint32_t height = caps.mode_height[i];
-        int rc;
 
         if (width == 0u || height == 0u) {
             continue;
         }
+        if (original_width != 0u && original_height != 0u &&
+            (width < original_width || height < original_height)) {
+            continue;
+        }
+
+        target_count = vidmodes_append_target(target_widths, target_heights,
+                                              target_count,
+                                              (int)(sizeof(target_widths) / sizeof(target_widths[0])),
+                                              width,
+                                              height);
+    }
+
+    for (int target_index = 0; target_index < target_count; ++target_index) {
+        uint32_t width = target_widths[target_index];
+        uint32_t height = target_heights[target_index];
+        int rc;
 
         debug_line("vidmodes: try ", width, "x", height, "");
         rc = sys_gfx_set_mode(width, height);
@@ -1107,7 +1190,9 @@ static const char *task_snapshot_class_name(uint32_t task_class) {
     case MK_TASK_CLASS_INPUT:
         return "input";
     case MK_TASK_CLASS_VIDEO_PRESENT:
-        return "video";
+        return "video-present";
+    case MK_TASK_CLASS_VIDEO_CONTROL:
+        return "video-control";
     case MK_TASK_CLASS_STORAGE_IO:
         return "storage";
     case MK_TASK_CLASS_FILESYSTEM_IO:

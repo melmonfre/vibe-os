@@ -50,7 +50,7 @@ static uint32_t process_default_task_class_for(enum process_kind kind,
         case MK_SERVICE_FILESYSTEM:
             return MK_TASK_CLASS_FILESYSTEM_IO;
         case MK_SERVICE_VIDEO:
-            return MK_TASK_CLASS_VIDEO_PRESENT;
+            return MK_TASK_CLASS_VIDEO_CONTROL;
         case MK_SERVICE_INPUT:
             return MK_TASK_CLASS_INPUT;
         case MK_SERVICE_CONSOLE:
@@ -77,6 +77,7 @@ static uint32_t process_priority_for_task_class(uint32_t task_class) {
     case MK_TASK_CLASS_CONSOLE_IO:
         return PROCESS_PRIORITY_INPUT;
     case MK_TASK_CLASS_VIDEO_PRESENT:
+    case MK_TASK_CLASS_VIDEO_CONTROL:
         return PROCESS_PRIORITY_VIDEO;
     case MK_TASK_CLASS_STORAGE_IO:
     case MK_TASK_CLASS_FILESYSTEM_IO:

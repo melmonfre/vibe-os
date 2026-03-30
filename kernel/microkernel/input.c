@@ -22,6 +22,15 @@ static int mk_input_current_process_is_service_worker(void) {
 
 static int g_input_service_transport_degraded = 0;
 
+static int mk_input_caller_prefers_local_queue(void) {
+    const struct mk_launch_context *context = mk_launch_context_current();
+
+    if (context == 0) {
+        return 0;
+    }
+    return (context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) != 0u;
+}
+
 static int mk_input_caller_allows_rescue_fallback(void) {
     const struct mk_launch_context *context = mk_launch_context_current();
 
@@ -304,12 +313,17 @@ int mk_input_service_next_event(struct input_event *event) {
     struct mk_message request;
     struct mk_message reply;
     int allow_rescue_fallback;
+    int prefer_local_queue;
     int rc;
 
     if (event == 0) {
         return 0;
     }
     if (mk_input_current_process_is_service_worker()) {
+        return kernel_input_event_dequeue(event);
+    }
+    prefer_local_queue = mk_input_caller_prefers_local_queue();
+    if (prefer_local_queue) {
         return kernel_input_event_dequeue(event);
     }
     allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
@@ -339,6 +353,7 @@ int mk_input_service_poll_mouse(struct mouse_state *state) {
     struct mk_message request;
     struct mk_message reply;
     int allow_rescue_fallback;
+    int prefer_local_queue;
     int rc;
 
     if (state == 0) {
@@ -346,6 +361,14 @@ int mk_input_service_poll_mouse(struct mouse_state *state) {
     }
     if (mk_input_current_process_is_service_worker()) {
         return kernel_input_mouse_event_dequeue(state);
+    }
+    prefer_local_queue = mk_input_caller_prefers_local_queue();
+    if (prefer_local_queue) {
+        if (!kernel_input_mouse_event_dequeue(state)) {
+            memset(state, 0, sizeof(*state));
+            return 0;
+        }
+        return 1;
     }
     allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();
     if ((allow_rescue_fallback && mk_input_should_use_local_fallback()) ||
@@ -382,6 +405,7 @@ int mk_input_service_read_key(void) {
     struct mk_message request;
     struct mk_message reply;
     int allow_rescue_fallback;
+    int prefer_local_queue;
     int rc;
     int key = -1;
 
@@ -390,6 +414,11 @@ int mk_input_service_read_key(void) {
             return key;
         }
         return -1;
+    }
+
+    prefer_local_queue = mk_input_caller_prefers_local_queue();
+    if (prefer_local_queue && kernel_input_key_event_dequeue(&key) != 0) {
+        return key;
     }
 
     allow_rescue_fallback = mk_input_caller_allows_rescue_fallback();

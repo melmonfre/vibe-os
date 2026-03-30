@@ -217,10 +217,10 @@ static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
         task->context_switches == 0u &&
         task->runtime_ticks == 0u) {
         /*
-         * Fresh user hosts need an immediate bootstrap slice before desktop
-         * frame/input traffic dominates the ready queue. App hosts are
-         * particularly sensitive here because they still need to bring up the
-         * loader and hand control to the modular app entrypoint.
+         * Fresh user tasks need an immediate bootstrap slice before desktop
+         * frame/input traffic dominates the ready queue. Newly launched app
+         * runtimes are particularly sensitive here because they still need to
+         * bring up the loader and hand control to the modular app entrypoint.
          */
         if (task->priority_tier == PROCESS_PRIORITY_DESKTOP_USER) {
             return -36;
@@ -235,7 +235,7 @@ static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
         task->context_switches < 4u &&
         task->runtime_ticks < 16u) {
         /*
-         * Let freshly launched app hosts finish their initial loader/fs work
+         * Let freshly launched app runtimes finish their initial loader/fs work
          * over the first few slices so they do not starve behind continuous
          * desktop/input wakeups on graphical boots.
          */

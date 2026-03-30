@@ -30,11 +30,14 @@ typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)
 static syscall_fn syscall_table[MAX_SYSCALLS];
 
 extern void userland_shell_host_entry(void);
+extern void userland_shell_session_entry(void);
 extern void userland_desktop_host_entry(void);
 extern void userland_startx_host_entry(void);
+extern void userland_desktop_session_entry(void);
 extern void userland_desktop_audio_host_entry(void);
 extern void userland_boot_audio_host_entry(void);
 extern void userland_app_host_entry(void);
+extern void userland_app_runtime_entry(void);
 
 static const char *sys_launch_path_basename(const char *path) {
     const char *last = path;
@@ -734,6 +737,7 @@ static uint32_t sys_service_send(uint32_t message_ptr, uint32_t b, uint32_t c,
                                  uint32_t d, uint32_t e) {
     const struct mk_message *message;
     process_t *destination;
+    int rc;
 
     (void)b; (void)c; (void)d; (void)e;
     if (message_ptr == 0u) {
@@ -750,7 +754,8 @@ static uint32_t sys_service_send(uint32_t message_ptr, uint32_t b, uint32_t c,
         return (uint32_t)-1;
     }
 
-    return (uint32_t)ipc_send(destination, message, sizeof(*message));
+    rc = ipc_send(destination, message, sizeof(*message));
+    return (uint32_t)rc;
 }
 
 static uint32_t sys_service_backend(uint32_t request_ptr, uint32_t reply_ptr, uint32_t c,
@@ -912,6 +917,12 @@ static uint32_t sys_launch_builtin_user(uint32_t target, uint32_t b, uint32_t c,
         memcpy(descriptor.name, "shell-host", 11u);
         descriptor.entry = userland_shell_host_entry;
         break;
+    case USERLAND_BUILTIN_SHELL_SESSION:
+        descriptor.flags |= MK_LAUNCH_FLAG_USER_SHELL;
+        descriptor.task_class = MK_TASK_CLASS_SHELL;
+        memcpy(descriptor.name, "shell", 6u);
+        descriptor.entry = userland_shell_session_entry;
+        break;
     case USERLAND_BUILTIN_DESKTOP:
         descriptor.flags |= MK_LAUNCH_FLAG_USER_DESKTOP;
         descriptor.task_class = MK_TASK_CLASS_DESKTOP;
@@ -937,6 +948,13 @@ static uint32_t sys_launch_builtin_user(uint32_t target, uint32_t b, uint32_t c,
         descriptor.task_class = MK_TASK_CLASS_AUDIO_IO;
         memcpy(descriptor.name, "boot-audio", 11u);
         descriptor.entry = userland_boot_audio_host_entry;
+        break;
+    case USERLAND_BUILTIN_DESKTOP_SESSION:
+        descriptor.flags |= MK_LAUNCH_FLAG_USER_DESKTOP;
+        descriptor.task_class = MK_TASK_CLASS_DESKTOP;
+        stack_size = 262144u;
+        memcpy(descriptor.name, "desktop", 8u);
+        descriptor.entry = userland_desktop_session_entry;
         break;
     default:
         return (uint32_t)-1;
@@ -1059,6 +1077,21 @@ static int sys_launch_app_copy_argv(const char *const *argv,
     return 0;
 }
 
+static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor) {
+    if (descriptor == 0) {
+        return;
+    }
+
+    if (strcmp(descriptor->name, "startx") == 0) {
+        descriptor->flags &= ~MK_LAUNCH_FLAG_USER_APP;
+        descriptor->flags |= MK_LAUNCH_FLAG_USER_DESKTOP;
+        descriptor->task_class = MK_TASK_CLASS_DESKTOP;
+        if (descriptor->stack_size < 262144u) {
+            descriptor->stack_size = 262144u;
+        }
+    }
+}
+
 static uint32_t sys_launch_app(uint32_t name_ptr, uint32_t b, uint32_t c,
                                uint32_t d, uint32_t e) {
     struct mk_launch_descriptor descriptor;
@@ -1083,7 +1116,8 @@ static uint32_t sys_launch_app(uint32_t name_ptr, uint32_t b, uint32_t c,
             return (uint32_t)-1;
         }
     }
-    descriptor.entry = userland_app_host_entry;
+    sys_launch_app_apply_role(&descriptor);
+    descriptor.entry = userland_app_runtime_entry;
     return (uint32_t)mk_launch_bootstrap(&descriptor);
 }
 

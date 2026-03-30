@@ -795,9 +795,9 @@ def scenario_terminal_runtime(session: QemuSession) -> None:
 
 
 def scenario_terminal_vidmodes(session: QemuSession) -> None:
-    scenario_open_terminal(session, timeout=45.0)
+    scenario_startx(session)
     time.sleep(1.0)
-    run_command(session, "vidmodes", timeout=8.0, marker="")
+    run_command(session, "vidmodes", timeout=8.0)
     session.wait_for_all(
         [
             "vidmodes: begin",
@@ -1123,12 +1123,15 @@ SCENARIOS = [
     ),
     Scenario(
         name="vidmodes-shell",
-        description="Desktop autostart opens a terminal and exercises runtime video mode switching through vidmodes",
+        description="Desktop autostart uses the stable desktop shortcut path, then exercises runtime video mode switching through vidmodes",
         command=None,
         must_have=[
             "desktop.app: launch startx",
             "desktop: session start",
-            "desktop: open-new w=0 t=1 i=0",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "terminal: command done vibefetch",
+            "shell: command vidmodes",
             "vidmodes: begin",
             "vidmodes: caps mode_count=",
             "vidmodes: try 800x600",

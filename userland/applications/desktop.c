@@ -494,12 +494,15 @@ enum {
 };
 static const uint32_t APPLET_BACKEND_REFRESH_TICKS = 100u;
 static const uint32_t APPLET_AUTOCONNECT_RETRY_TICKS = 300u;
+static const uint32_t DESKTOP_STARTUP_TASK_GATE_TICKS = 50u;
 enum {
     DESKTOP_STARTUP_TASK_SOUND_SYNC = 1u << 0,
     DESKTOP_STARTUP_TASK_SOUND_EXPORT = 1u << 1,
     DESKTOP_STARTUP_TASK_NETWORK_SYNC = 1u << 2,
     DESKTOP_STARTUP_TASK_NETWORK_RECONCILE = 1u << 3,
-    DESKTOP_STARTUP_TASK_NETWORK_EXPORT = 1u << 4
+    DESKTOP_STARTUP_TASK_NETWORK_EXPORT = 1u << 4,
+    DESKTOP_STARTUP_TASK_UI_ASSETS = 1u << 5,
+    DESKTOP_STARTUP_TASK_FS_CATALOG = 1u << 6
 };
 enum {
     APPCTX_PRIMARY = 0,
@@ -6094,7 +6097,9 @@ static void network_applet_try_autoconnect(void) {
 }
 
 static void desktop_queue_startup_background_tasks(void) {
-    g_desktop_startup_tasks = DESKTOP_STARTUP_TASK_SOUND_EXPORT |
+    g_desktop_startup_tasks = DESKTOP_STARTUP_TASK_UI_ASSETS |
+                              DESKTOP_STARTUP_TASK_FS_CATALOG |
+                              DESKTOP_STARTUP_TASK_SOUND_EXPORT |
                               DESKTOP_STARTUP_TASK_NETWORK_RECONCILE |
                               DESKTOP_STARTUP_TASK_NETWORK_EXPORT;
 }
@@ -6103,6 +6108,18 @@ static void desktop_process_startup_background_tasks(void) {
     char *sound_export_argv[3] = {"audiosvc", "export-state", 0};
     char *network_reconcile_argv[3] = {"netmgrd", "reconcile", 0};
     char *network_export_argv[3] = {"netmgrd", "export-state", 0};
+
+    if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_UI_ASSETS) != 0u) {
+        g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_UI_ASSETS;
+        ui_complete_startup();
+        return;
+    }
+
+    if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_FS_CATALOG) != 0u) {
+        g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_FS_CATALOG;
+        fs_complete_startup();
+        return;
+    }
 
     if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_SOUND_EXPORT) != 0u) {
         g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_SOUND_EXPORT;
@@ -6283,6 +6300,12 @@ static uint32_t desktop_record_video_async_event(const struct mk_video_event *ev
         return DESKTOP_ASYNC_REFRESH_LAYOUT;
     }
 
+    if (event->event_type == MK_VIDEO_EVENT_BACKEND_FAILED) {
+        sys_write_debug("desktop: video backend failed\n");
+    } else if (event->event_type == MK_VIDEO_EVENT_BACKEND_RECOVERED) {
+        sys_write_debug("desktop: video backend recovered\n");
+    }
+
     if (event->sequence != g_desktop_video_last_event_sequence ||
         event->completed_sequence != g_desktop_video_last_completed_sequence ||
         event->pending_depth != g_desktop_video_pending_depth) {
@@ -6293,6 +6316,18 @@ static uint32_t desktop_record_video_async_event(const struct mk_video_event *ev
     g_desktop_video_last_completed_sequence = event->completed_sequence;
     g_desktop_video_pending_depth = event->pending_depth;
     return flags;
+}
+
+static int desktop_submit_present_full(void) {
+    uint32_t sequence = 0u;
+
+    if (sys_video_present_submit(VIDEO_PRESENT_FULL, &sequence) == 0) {
+        return 0;
+    }
+
+    sys_write_debug("desktop: present submit failed\n");
+    desktop_reset_video_async_path();
+    return -1;
 }
 
 static uint32_t desktop_pump_async_service_events(void) {
@@ -6420,6 +6455,10 @@ static uint32_t desktop_pump_async_applet_events(void) {
         while (sys_video_event_receive(&video_event, 0u) == 0) {
             flags |= desktop_record_video_async_event(&video_event);
             if (video_event.event_type == MK_VIDEO_EVENT_MODE_SET ||
+                video_event.event_type == MK_VIDEO_EVENT_MODE_SET_BEGIN ||
+                video_event.event_type == MK_VIDEO_EVENT_MODE_SET_DONE ||
+                video_event.event_type == MK_VIDEO_EVENT_BACKEND_FAILED ||
+                video_event.event_type == MK_VIDEO_EVENT_BACKEND_RECOVERED ||
                 video_event.event_type == MK_VIDEO_EVENT_LEAVE ||
                 video_event.event_type == MK_VIDEO_EVENT_PRESENT) {
                 flags |= DESKTOP_ASYNC_REFRESH_LAYOUT;
@@ -7842,8 +7881,10 @@ void desktop_main(void) {
     int resize_anchor_y = 0;
     int running = 1;
     uint32_t desktop_sound_armed_ticks = 0u;
+    uint32_t desktop_startup_task_gate_tick = 0u;
     int desktop_sound_pending = 1;
 
+    sys_write_debug("desktop: session start\n");
     ui_init();
     (void)sys_gfx_set_present_policy(VIDEO_PRESENT_POLICY_DESKTOP);
     g_desktop_startup_tasks = 0u;
@@ -7851,7 +7892,6 @@ void desktop_main(void) {
     g_desktop_input_compat_mode = 0;
     g_desktop_input_stream_idle_polls = 0u;
     g_desktop_input_compat_log_budget = 4;
-    sys_write_debug("desktop: session start\n");
     desktop_sound_armed_ticks = sys_ticks();
     start_button = ui_taskbar_start_button_rect();
     menu_rect = ui_start_menu_rect();
@@ -7864,6 +7904,7 @@ void desktop_main(void) {
     sound_applet_load_settings();
     network_applet_load_settings();
     desktop_queue_startup_background_tasks();
+    desktop_startup_task_gate_tick = sys_ticks() + DESKTOP_STARTUP_TASK_GATE_TICKS;
 
     for (int i = 0; i < MAX_WINDOWS; ++i) g_windows[i].active = 0;
     for (int i = 0; i < MAX_TERMINALS; ++i) g_term_used[i] = 0;
@@ -9042,8 +9083,9 @@ void desktop_main(void) {
                   g_craft[g_windows[focused].instance].started)) {
                 cursor_draw(mouse.x, mouse.y);
             }
-            sys_present_full();
-            dirty = 0;
+            if (desktop_submit_present_full() == 0) {
+                dirty = 0;
+            }
         }
 
         if (input_batch.count == 0 &&
@@ -9052,7 +9094,9 @@ void desktop_main(void) {
             !input_batch.right_just_pressed &&
             input_batch.wheel_delta == 0) {
             network_applet_try_autoconnect();
-            desktop_process_startup_background_tasks();
+            if (ticks >= desktop_startup_task_gate_tick) {
+                desktop_process_startup_background_tasks();
+            }
         }
 
         sys_sleep();

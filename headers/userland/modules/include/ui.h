@@ -63,6 +63,7 @@ enum ui_button_style {
 };
 
 void ui_init(void);
+void ui_complete_startup(void);
 void ui_refresh_metrics(void);
 int ui_set_resolution(uint32_t width, uint32_t height);
 const struct desktop_theme *ui_theme_get(void);

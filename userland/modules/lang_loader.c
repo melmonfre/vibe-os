@@ -38,6 +38,8 @@ static int host_getcwd(char *buf, int max_len);
 #define LANG_STORAGE_RETRY_COUNT 4
 #define LANG_DIRECTORY_RETRY_COUNT 16
 #define LANG_SECTOR_SIZE 512u
+#define LANG_STORAGE_VERIFY_SECTORS 1u
+#define LANG_STORAGE_BULK_SECTORS 128u
 
 struct lang_host_fd {
     int used;
@@ -258,36 +260,33 @@ static int lang_storage_read_retry(uint32_t lba, void *dst, uint32_t sector_coun
     return -1;
 }
 
-static int lang_storage_read_sector_verified(uint32_t lba, void *dst) {
-    uint8_t verify[LANG_SECTOR_SIZE];
-
-    for (int attempt = 0; attempt < LANG_STORAGE_RETRY_COUNT; ++attempt) {
-        if (lang_storage_read_retry(lba, dst, 1u) != 0) {
-            continue;
-        }
-        if (lang_storage_read_retry(lba, verify, 1u) != 0) {
-            continue;
-        }
-        if (lang_memcmp(dst, verify, LANG_SECTOR_SIZE) == 0) {
-            return 0;
-        }
-        sys_write_debug("lang: sector unstable read\n");
-        sys_sleep();
-        sys_yield();
-    }
-
-    return -1;
-}
-
 static int lang_storage_read_bytes(uint32_t lba_start, void *dst, uint32_t sector_count) {
     uint8_t *out = (uint8_t *)dst;
+    uint32_t remaining = sector_count;
+    uint32_t current_lba = lba_start;
 
-    for (uint32_t i = 0; i < sector_count; ++i) {
-        if (lang_storage_read_sector_verified(lba_start + i,
-                                              out + (i * LANG_SECTOR_SIZE)) != 0) {
+    while (remaining != 0u) {
+        uint32_t chunk_sectors = remaining > LANG_STORAGE_BULK_SECTORS
+                                     ? LANG_STORAGE_BULK_SECTORS
+                                     : remaining;
+        uint32_t chunk_bytes = chunk_sectors * LANG_SECTOR_SIZE;
+
+        /*
+         * Large modular apps should not burn the tiny 4 KiB task stack on
+         * transient verify buffers or force thousands of synchronous round
+         * trips. Metadata paths still do explicit stable double-reads; the app
+         * image itself uses retried bulk reads and is validated structurally
+         * after landing in the arena.
+         */
+        if (lang_storage_read_retry(current_lba, out, chunk_sectors) != 0) {
             return -1;
         }
+
+        out += chunk_bytes;
+        current_lba += chunk_sectors;
+        remaining -= chunk_sectors;
     }
+
     return 0;
 }
 
@@ -823,12 +822,21 @@ static const struct vibe_appfs_entry *lang_find_entry(const struct vibe_appfs_di
 static int lang_read_header_copy(const struct vibe_appfs_entry *entry,
                                  struct vibe_app_header *header_out) {
     uint8_t first_sector[LANG_SECTOR_SIZE];
+    uint8_t verify_sector[LANG_STORAGE_VERIFY_SECTORS * LANG_SECTOR_SIZE];
 
     if (!entry || !header_out || entry->sector_count == 0u) {
         return -1;
     }
-    if (lang_storage_read_retry(entry->lba_start, first_sector, 1u) != 0) {
+    if (lang_storage_read_bytes(entry->lba_start, first_sector, 1u) != 0) {
         sys_write_debug("lang: header read failed\n");
+        return -1;
+    }
+    if (lang_storage_read_bytes(entry->lba_start, verify_sector, 1u) != 0) {
+        sys_write_debug("lang: header verify read failed\n");
+        return -1;
+    }
+    if (lang_memcmp(first_sector, verify_sector, LANG_SECTOR_SIZE) != 0) {
+        sys_write_debug("lang: header unstable read\n");
         return -1;
     }
 
@@ -843,6 +851,7 @@ static int lang_read_header_copy(const struct vibe_appfs_entry *entry,
 }
 
 static int lang_prepare_context(const struct vibe_appfs_entry *entry,
+                                const struct vibe_app_header *header_copy_in,
                                 struct vibe_app_header **header_out,
                                 struct vibe_app_context *ctx_out) {
     struct vibe_app_header header_copy;
@@ -852,7 +861,7 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
     uintptr_t heap_base;
     uintptr_t heap_limit;
 
-    if (!entry || !header_out || !ctx_out || entry->sector_count == 0u) {
+    if (!entry || !header_out || !ctx_out || header_copy_in == 0 || entry->sector_count == 0u) {
         return -1;
     }
 
@@ -866,9 +875,7 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
         return -1;
     }
 
-    if (lang_read_header_copy(entry, &header_copy) != 0) {
-        return -1;
-    }
+    header_copy = *header_copy_in;
 
     load_address = (uintptr_t)header_copy.load_address;
     if (!lang_load_address_valid((uint32_t)load_address)) {
@@ -881,6 +888,7 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
     if (lang_storage_read_bytes(entry->lba_start, load_base, entry->sector_count) != 0) {
         return -1;
     }
+    sys_write_debug("lang: image read ok\n");
     lang_debug_vga(19, "lang: app read ok");
 
     header = (struct vibe_app_header *)load_base;
@@ -1045,15 +1053,17 @@ int lang_try_run(int argc, char **argv) {
         lang_write_load_error(entry->name);
         return 0;
     }
+    sys_write_debug("lang: header ok\n");
     arena_load_address = header_copy.load_address;
     if (lang_arena_acquire(arena_load_address) != 0) {
         sys_write_debug("lang: arena acquire failed\n");
         lang_write_load_error(entry->name);
         return 0;
     }
+    sys_write_debug("lang: arena ok\n");
     arena_acquired = 1;
 
-    if (lang_prepare_context(entry, &header, &g_app_ctx) != 0) {
+    if (lang_prepare_context(entry, &header_copy, &header, &g_app_ctx) != 0) {
         sys_write_debug("lang: prepare failed\n");
         lang_write_load_error(entry->name);
         rc = 0;
