@@ -61,6 +61,7 @@ typedef struct process {
     enum process_state state;
     enum process_kind kind;
     uint32_t service_type;
+    uint32_t task_class;
     uint32_t priority_tier;
     uint32_t runtime_ticks;
     uint32_t last_start_tick;
@@ -83,6 +84,7 @@ process_t *process_create_with_stack(void (*entry)(void),
                                      enum process_kind kind,
                                      uint32_t service_type,
                                      uint32_t launch_flags,
+                                     uint32_t task_class,
                                      uint32_t stack_size);
 void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top);
 void process_terminate(process_t *proc);

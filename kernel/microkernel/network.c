@@ -82,12 +82,8 @@ struct mk_network_socket_state {
 struct mk_network_event_subscription {
     int pid;
     process_t *process;
-    kernel_waitable_t waitable;
+    kernel_mailbox_t mailbox;
     struct mk_network_event events[MK_NETWORK_EVENT_QUEUE_SIZE];
-    uint32_t head;
-    uint32_t tail;
-    uint32_t count;
-    uint32_t dropped_events;
 };
 
 struct mk_network_pci_probe_state {
@@ -228,10 +224,13 @@ static void mk_network_event_init_subscribers(void) {
         struct mk_network_event_subscription *subscription = &g_network_event_subscribers[index];
 
         memset(subscription, 0, sizeof(*subscription));
-        kernel_waitable_init_ex(&subscription->waitable,
-                                TASK_WAIT_EVENT_QUEUE,
-                                TASK_WAIT_CLASS_NETWORK,
-                                MK_SERVICE_NETWORK);
+        kernel_mailbox_init(&subscription->mailbox,
+                            subscription->events,
+                            sizeof(subscription->events[0]),
+                            MK_NETWORK_EVENT_QUEUE_SIZE,
+                            KERNEL_MAILBOX_DROP_NEWEST,
+                            TASK_WAIT_CLASS_NETWORK,
+                            MK_SERVICE_NETWORK);
     }
 }
 
@@ -262,14 +261,18 @@ static struct mk_network_event_subscription *mk_network_alloc_subscription(proce
     for (index = 0u; index < MK_NETWORK_EVENT_SUBSCRIBERS; ++index) {
         struct mk_network_event_subscription *subscription = &g_network_event_subscribers[index];
 
-        if (subscription->pid <= 0 || subscription->process == 0) {
+        if (subscription->pid <= 0 || subscription->process == 0 ||
+            scheduler_find_task_by_pid(subscription->pid) == 0) {
             memset(subscription, 0, sizeof(*subscription));
             subscription->pid = subscriber->pid;
             subscription->process = subscriber;
-            kernel_waitable_init_ex(&subscription->waitable,
-                                    TASK_WAIT_EVENT_QUEUE,
-                                    TASK_WAIT_CLASS_NETWORK,
-                                    MK_SERVICE_NETWORK);
+            kernel_mailbox_init(&subscription->mailbox,
+                                subscription->events,
+                                sizeof(subscription->events[0]),
+                                MK_NETWORK_EVENT_QUEUE_SIZE,
+                                KERNEL_MAILBOX_DROP_NEWEST,
+                                TASK_WAIT_CLASS_NETWORK,
+                                MK_SERVICE_NETWORK);
             return subscription;
         }
     }
@@ -288,10 +291,6 @@ static void mk_network_enqueue_event(struct mk_network_event_subscription *subsc
     if (subscription == 0 || event_type == MK_NETWORK_EVENT_NONE) {
         return;
     }
-    if (subscription->count >= MK_NETWORK_EVENT_QUEUE_SIZE) {
-        subscription->dropped_events += 1u;
-        return;
-    }
 
     memset(&event, 0, sizeof(event));
     event.abi_version = 1u;
@@ -301,13 +300,11 @@ static void mk_network_enqueue_event(struct mk_network_event_subscription *subsc
     event.sequence = sequence;
     event.link_state = link_state;
     event.byte_count = byte_count;
-    event.dropped_events = subscription->dropped_events;
+    event.dropped_events = kernel_mailbox_dropped(&subscription->mailbox);
     event.tick = kernel_timer_get_ticks();
-    subscription->events[subscription->tail] = event;
-    subscription->tail = (subscription->tail + 1u) % MK_NETWORK_EVENT_QUEUE_SIZE;
-    subscription->count += 1u;
-    subscription->dropped_events = 0u;
-    kernel_waitable_signal(&subscription->waitable, 1u);
+    if (kernel_mailbox_try_send(&subscription->mailbox, &event) == 0) {
+        kernel_mailbox_clear_dropped(&subscription->mailbox);
+    }
 }
 
 static uint32_t mk_network_publish_event(uint32_t event_type,
@@ -1882,7 +1879,7 @@ int mk_network_service_subscribe(struct process *subscriber) {
         return -1;
     }
 
-    if (subscription->count == 0u) {
+    if (kernel_mailbox_count(&subscription->mailbox) == 0u) {
         mk_network_enqueue_event(subscription,
                                  MK_NETWORK_EVENT_STATUS,
                                  0,
@@ -1898,6 +1895,8 @@ int mk_network_service_event_receive(struct process *subscriber,
                                      struct mk_network_event *event,
                                      uint32_t timeout_ticks) {
     struct mk_network_event_subscription *subscription;
+    uint32_t dropped_events;
+    int wait_rc;
 
     if (subscriber == 0 || event == 0) {
         return -1;
@@ -1909,27 +1908,26 @@ int mk_network_service_event_receive(struct process *subscriber,
     }
 
     for (;;) {
-        if (subscription->count != 0u) {
-            *event = subscription->events[subscription->head];
-            subscription->head = (subscription->head + 1u) % MK_NETWORK_EVENT_QUEUE_SIZE;
-            subscription->count -= 1u;
+        if (kernel_mailbox_try_receive(&subscription->mailbox, event) == 0) {
             return 0;
         }
-        if (subscription->dropped_events != 0u) {
+        dropped_events = kernel_mailbox_dropped(&subscription->mailbox);
+        if (dropped_events != 0u) {
             memset(event, 0, sizeof(*event));
             event->abi_version = 1u;
             event->event_type = MK_NETWORK_EVENT_OVERFLOW;
             event->sequence = ++g_network_event_sequence;
             event->link_state = g_network_state.status.link_state;
-            event->dropped_events = subscription->dropped_events;
-            subscription->dropped_events = 0u;
+            event->dropped_events = dropped_events;
+            kernel_mailbox_clear_dropped(&subscription->mailbox);
             event->tick = kernel_timer_get_ticks();
             return 0;
         }
         if (timeout_ticks == 0u) {
             return -1;
         }
-        if (kernel_waitable_wait_timeout(&subscription->waitable, timeout_ticks) != 0) {
+        wait_rc = kernel_mailbox_wait(&subscription->mailbox, timeout_ticks);
+        if (wait_rc != TASK_WAIT_RESULT_SIGNALED) {
             return -1;
         }
     }

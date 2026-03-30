@@ -29,12 +29,8 @@ struct mk_video_palette_cache {
 struct mk_video_event_subscription {
     int pid;
     process_t *process;
-    kernel_waitable_t waitable;
+    kernel_mailbox_t mailbox;
     struct mk_video_event events[MK_VIDEO_EVENT_QUEUE_SIZE];
-    uint32_t head;
-    uint32_t tail;
-    uint32_t count;
-    uint32_t dropped_events;
 };
 
 static struct mk_video_upload_cache g_video_upload_cache[MK_VIDEO_UPLOAD_CACHE_SLOTS];
@@ -65,10 +61,13 @@ static void mk_video_event_init_subscribers(void) {
         struct mk_video_event_subscription *subscription = &g_video_event_subscribers[index];
 
         memset(subscription, 0, sizeof(*subscription));
-        kernel_waitable_init_ex(&subscription->waitable,
-                                TASK_WAIT_EVENT_QUEUE,
-                                TASK_WAIT_CLASS_VIDEO,
-                                MK_SERVICE_VIDEO);
+        kernel_mailbox_init(&subscription->mailbox,
+                            subscription->events,
+                            sizeof(subscription->events[0]),
+                            MK_VIDEO_EVENT_QUEUE_SIZE,
+                            KERNEL_MAILBOX_DROP_NEWEST,
+                            TASK_WAIT_CLASS_VIDEO,
+                            MK_SERVICE_VIDEO);
     }
 }
 
@@ -99,14 +98,18 @@ static struct mk_video_event_subscription *mk_video_alloc_subscription(process_t
     for (index = 0; index < MK_VIDEO_EVENT_SUBSCRIBERS; ++index) {
         struct mk_video_event_subscription *subscription = &g_video_event_subscribers[index];
 
-        if (subscription->pid <= 0 || subscription->process == 0) {
+        if (subscription->pid <= 0 || subscription->process == 0 ||
+            scheduler_find_task_by_pid(subscription->pid) == 0) {
             memset(subscription, 0, sizeof(*subscription));
             subscription->pid = subscriber->pid;
             subscription->process = subscriber;
-            kernel_waitable_init_ex(&subscription->waitable,
-                                    TASK_WAIT_EVENT_QUEUE,
-                                    TASK_WAIT_CLASS_VIDEO,
-                                    MK_SERVICE_VIDEO);
+            kernel_mailbox_init(&subscription->mailbox,
+                                subscription->events,
+                                sizeof(subscription->events[0]),
+                                MK_VIDEO_EVENT_QUEUE_SIZE,
+                                KERNEL_MAILBOX_DROP_NEWEST,
+                                TASK_WAIT_CLASS_VIDEO,
+                                MK_SERVICE_VIDEO);
             return subscription;
         }
     }
@@ -123,10 +126,6 @@ static void mk_video_enqueue_event(struct mk_video_event_subscription *subscript
     if (subscription == 0 || event_type == MK_VIDEO_EVENT_NONE) {
         return;
     }
-    if (subscription->count >= MK_VIDEO_EVENT_QUEUE_SIZE) {
-        subscription->dropped_events += 1u;
-        return;
-    }
 
     memset(&event, 0, sizeof(event));
     mode = kernel_video_get_mode();
@@ -140,13 +139,11 @@ static void mk_video_enqueue_event(struct mk_video_event_subscription *subscript
         event.active_width = mode->width;
         event.active_height = mode->height;
     }
-    event.dropped_events = subscription->dropped_events;
+    event.dropped_events = kernel_mailbox_dropped(&subscription->mailbox);
     event.tick = kernel_timer_get_ticks();
-    subscription->events[subscription->tail] = event;
-    subscription->tail = (subscription->tail + 1u) % MK_VIDEO_EVENT_QUEUE_SIZE;
-    subscription->count += 1u;
-    subscription->dropped_events = 0u;
-    kernel_waitable_signal(&subscription->waitable, 1u);
+    if (kernel_mailbox_try_send(&subscription->mailbox, &event) == 0) {
+        kernel_mailbox_clear_dropped(&subscription->mailbox);
+    }
 }
 
 static uint32_t mk_video_publish_event(uint32_t event_type, uint32_t present_mode) {
@@ -1394,6 +1391,8 @@ int mk_video_service_event_receive(struct process *subscriber,
                                    struct mk_video_event *event,
                                    uint32_t timeout_ticks) {
     struct mk_video_event_subscription *subscription;
+    uint32_t dropped_events;
+    int wait_rc;
 
     if (subscriber == 0 || event == 0) {
         return -1;
@@ -1405,19 +1404,17 @@ int mk_video_service_event_receive(struct process *subscriber,
     }
 
     for (;;) {
-        if (subscription->count != 0u) {
-            *event = subscription->events[subscription->head];
-            subscription->head = (subscription->head + 1u) % MK_VIDEO_EVENT_QUEUE_SIZE;
-            subscription->count -= 1u;
+        if (kernel_mailbox_try_receive(&subscription->mailbox, event) == 0) {
             return 0;
         }
-        if (subscription->dropped_events != 0u) {
+        dropped_events = kernel_mailbox_dropped(&subscription->mailbox);
+        if (dropped_events != 0u) {
             memset(event, 0, sizeof(*event));
             event->abi_version = 1u;
             event->event_type = MK_VIDEO_EVENT_OVERFLOW;
             event->sequence = ++g_video_event_sequence;
-            event->dropped_events = subscription->dropped_events;
-            subscription->dropped_events = 0u;
+            event->dropped_events = dropped_events;
+            kernel_mailbox_clear_dropped(&subscription->mailbox);
             event->tick = kernel_timer_get_ticks();
             return 0;
         }
@@ -1425,7 +1422,8 @@ int mk_video_service_event_receive(struct process *subscriber,
         if (timeout_ticks == 0u) {
             return -1;
         }
-        if (kernel_waitable_wait_timeout(&subscription->waitable, timeout_ticks) != 0) {
+        wait_rc = kernel_mailbox_wait(&subscription->mailbox, timeout_ticks);
+        if (wait_rc != TASK_WAIT_RESULT_SIGNALED) {
             return -1;
         }
     }

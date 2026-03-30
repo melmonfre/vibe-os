@@ -20,6 +20,11 @@ typedef struct kernel_waitable {
     struct process *wait_head;
 } kernel_waitable_t;
 
+enum kernel_mailbox_overflow_policy {
+    KERNEL_MAILBOX_DROP_OLDEST = 0,
+    KERNEL_MAILBOX_DROP_NEWEST = 1
+};
+
 void kernel_waitable_init(kernel_waitable_t *waitable);
 void kernel_waitable_init_ex(kernel_waitable_t *waitable,
                              uint32_t event_kind,
@@ -31,6 +36,37 @@ int kernel_waitable_wait_timeout(kernel_waitable_t *waitable, uint32_t timeout_t
 void kernel_waitable_signal(kernel_waitable_t *waitable, uint32_t count);
 void kernel_waitable_cancel(kernel_waitable_t *waitable, uint32_t count);
 void kernel_waitable_detach_task(kernel_waitable_t *waitable, struct process *task);
+
+typedef struct kernel_mailbox {
+    spinlock_t lock;
+    kernel_waitable_t waitable;
+    void *storage;
+    uint32_t item_size;
+    uint32_t capacity;
+    uint32_t head;
+    uint32_t tail;
+    uint32_t count;
+    uint32_t dropped_count;
+    uint32_t overflow_policy;
+} kernel_mailbox_t;
+
+void kernel_mailbox_init(kernel_mailbox_t *mailbox,
+                         void *storage,
+                         uint32_t item_size,
+                         uint32_t capacity,
+                         uint32_t overflow_policy,
+                         uint32_t event_class,
+                         uint32_t owner_service);
+void kernel_mailbox_reset(kernel_mailbox_t *mailbox);
+int kernel_mailbox_try_send(kernel_mailbox_t *mailbox, const void *item);
+int kernel_mailbox_try_receive(kernel_mailbox_t *mailbox, void *item);
+int kernel_mailbox_wait(kernel_mailbox_t *mailbox, uint32_t timeout_ticks);
+int kernel_mailbox_receive_timeout(kernel_mailbox_t *mailbox,
+                                   void *item,
+                                   uint32_t timeout_ticks);
+uint32_t kernel_mailbox_count(kernel_mailbox_t *mailbox);
+uint32_t kernel_mailbox_dropped(kernel_mailbox_t *mailbox);
+void kernel_mailbox_clear_dropped(kernel_mailbox_t *mailbox);
 
 typedef struct kernel_signal {
     kernel_waitable_t waitable;

@@ -895,28 +895,33 @@ static uint32_t sys_launch_builtin_user(uint32_t target, uint32_t b, uint32_t c,
     switch (target) {
     case USERLAND_BUILTIN_SHELL:
         descriptor.flags |= MK_LAUNCH_FLAG_USER_SHELL;
+        descriptor.task_class = MK_TASK_CLASS_SHELL;
         memcpy(descriptor.name, "shell-host", 11u);
         descriptor.entry = userland_shell_host_entry;
         break;
     case USERLAND_BUILTIN_DESKTOP:
         descriptor.flags |= MK_LAUNCH_FLAG_USER_DESKTOP;
+        descriptor.task_class = MK_TASK_CLASS_DESKTOP;
         stack_size = 262144u;
         memcpy(descriptor.name, "desktop-host", 13u);
         descriptor.entry = userland_desktop_host_entry;
         break;
     case USERLAND_BUILTIN_STARTX:
         descriptor.flags |= MK_LAUNCH_FLAG_USER_DESKTOP;
+        descriptor.task_class = MK_TASK_CLASS_DESKTOP;
         stack_size = 262144u;
         memcpy(descriptor.name, "startx-host", 12u);
         descriptor.entry = userland_startx_host_entry;
         break;
     case USERLAND_BUILTIN_DESKTOP_AUDIO:
         descriptor.flags |= MK_LAUNCH_FLAG_USER_APP;
+        descriptor.task_class = MK_TASK_CLASS_AUDIO_IO;
         memcpy(descriptor.name, "audio-host", 11u);
         descriptor.entry = userland_desktop_audio_host_entry;
         break;
     case USERLAND_BUILTIN_BOOT_AUDIO:
         descriptor.flags |= MK_LAUNCH_FLAG_USER_APP;
+        descriptor.task_class = MK_TASK_CLASS_AUDIO_IO;
         memcpy(descriptor.name, "boot-audio", 11u);
         descriptor.entry = userland_boot_audio_host_entry;
         break;
@@ -1055,6 +1060,7 @@ static uint32_t sys_launch_app(uint32_t name_ptr, uint32_t b, uint32_t c,
     descriptor.kind = MK_LAUNCH_KIND_USER;
     descriptor.stack_size = 65536u;
     descriptor.flags = MK_LAUNCH_FLAG_USER_APP;
+    descriptor.task_class = MK_TASK_CLASS_APP_RUNTIME;
     if (b == 0u) {
         if (sys_launch_app_copy_name((const char *)(uintptr_t)name_ptr, &descriptor) != 0) {
             return (uint32_t)-1;
@@ -1072,12 +1078,12 @@ static uint32_t sys_task_event_subscribe(uint32_t a, uint32_t b, uint32_t c,
                                          uint32_t d, uint32_t e) {
     process_t *current;
 
-    (void)a; (void)b; (void)c; (void)d; (void)e;
+    (void)c; (void)d; (void)e;
     current = scheduler_current();
     if (current == 0) {
         return (uint32_t)-1;
     }
-    return (uint32_t)(scheduler_task_event_subscribe(current) == 0 ? 0 : (uint32_t)-1);
+    return (uint32_t)(scheduler_task_event_subscribe(current, a, b) == 0 ? 0 : (uint32_t)-1);
 }
 
 static uint32_t sys_task_event_receive(uint32_t event_ptr, uint32_t timeout_ticks, uint32_t c,

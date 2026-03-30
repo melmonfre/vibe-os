@@ -5,7 +5,7 @@
 
 struct process;
 
-#define MK_LAUNCH_ABI_VERSION 1u
+#define MK_LAUNCH_ABI_VERSION 2u
 #define MK_LAUNCH_NAME_MAX 16u
 #define MK_LAUNCH_ARGC_MAX 8u
 #define MK_LAUNCH_ARGV_BYTES 192u
@@ -33,6 +33,7 @@ struct mk_launch_descriptor {
     uint32_t kind;
     uint32_t service_type;
     uint32_t flags;
+    uint32_t task_class;
     uint32_t stack_size;
     uint32_t argc;
     char name[MK_LAUNCH_NAME_MAX];
@@ -46,6 +47,7 @@ struct mk_launch_context {
     uint32_t kind;
     uint32_t service_type;
     uint32_t flags;
+    uint32_t task_class;
     uint32_t boot_flags;
     uint32_t boot_partition_lba;
     uint32_t boot_partition_sectors;

@@ -22,9 +22,83 @@ static uint32_t process_normalize_stack_size(uint32_t stack_size) {
 
 static int g_next_pid = 1;
 
+static uint32_t process_default_task_class_for(enum process_kind kind,
+                                               uint32_t service_type,
+                                               uint32_t launch_flags) {
+    if (kind == PROCESS_KIND_USER) {
+        if ((launch_flags & (MK_LAUNCH_FLAG_BOOTSTRAP | MK_LAUNCH_FLAG_CRITICAL)) != 0u) {
+            return MK_TASK_CLASS_SUPERVISION;
+        }
+        if ((launch_flags & MK_LAUNCH_FLAG_USER_DESKTOP) != 0u) {
+            return MK_TASK_CLASS_DESKTOP;
+        }
+        if ((launch_flags & MK_LAUNCH_FLAG_USER_SHELL) != 0u) {
+            return MK_TASK_CLASS_SHELL;
+        }
+        if ((launch_flags & MK_LAUNCH_FLAG_USER_APP) != 0u) {
+            return MK_TASK_CLASS_APP_RUNTIME;
+        }
+        return MK_TASK_CLASS_APP_RUNTIME;
+    }
+
+    if (kind == PROCESS_KIND_SERVICE) {
+        switch (service_type) {
+        case MK_SERVICE_INIT:
+            return MK_TASK_CLASS_SUPERVISION;
+        case MK_SERVICE_STORAGE:
+            return MK_TASK_CLASS_STORAGE_IO;
+        case MK_SERVICE_FILESYSTEM:
+            return MK_TASK_CLASS_FILESYSTEM_IO;
+        case MK_SERVICE_VIDEO:
+            return MK_TASK_CLASS_VIDEO_PRESENT;
+        case MK_SERVICE_INPUT:
+            return MK_TASK_CLASS_INPUT;
+        case MK_SERVICE_CONSOLE:
+            return MK_TASK_CLASS_CONSOLE_IO;
+        case MK_SERVICE_NETWORK:
+            return MK_TASK_CLASS_NETWORK_IO;
+        case MK_SERVICE_AUDIO:
+            return MK_TASK_CLASS_AUDIO_IO;
+        default:
+            return MK_TASK_CLASS_NONE;
+        }
+    }
+
+    return MK_TASK_CLASS_NONE;
+}
+
+static uint32_t process_priority_for_task_class(uint32_t task_class) {
+    switch (task_class) {
+    case MK_TASK_CLASS_SUPERVISION:
+    case MK_TASK_CLASS_DESKTOP:
+    case MK_TASK_CLASS_SHELL:
+        return PROCESS_PRIORITY_DESKTOP_USER;
+    case MK_TASK_CLASS_INPUT:
+    case MK_TASK_CLASS_CONSOLE_IO:
+        return PROCESS_PRIORITY_INPUT;
+    case MK_TASK_CLASS_VIDEO_PRESENT:
+        return PROCESS_PRIORITY_VIDEO;
+    case MK_TASK_CLASS_STORAGE_IO:
+    case MK_TASK_CLASS_FILESYSTEM_IO:
+        return PROCESS_PRIORITY_STORAGE;
+    case MK_TASK_CLASS_AUDIO_IO:
+        return PROCESS_PRIORITY_AUDIO;
+    case MK_TASK_CLASS_NETWORK_IO:
+        return PROCESS_PRIORITY_NETWORK;
+    case MK_TASK_CLASS_APP_RUNTIME:
+        return PROCESS_PRIORITY_APP;
+    default:
+        return PROCESS_PRIORITY_BACKGROUND;
+    }
+}
+
 static uint32_t process_priority_for(enum process_kind kind,
                                      uint32_t service_type,
-                                     uint32_t launch_flags) {
+                                     uint32_t launch_flags,
+                                     uint32_t task_class) {
+    if (task_class != MK_TASK_CLASS_NONE) {
+        return process_priority_for_task_class(task_class);
+    }
     if (kind == PROCESS_KIND_USER) {
         if ((launch_flags & (MK_LAUNCH_FLAG_USER_SHELL |
                              MK_LAUNCH_FLAG_USER_DESKTOP |
@@ -74,19 +148,31 @@ void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t s
 }
 
 process_t *process_create(void (*entry)(void)) {
-    return process_create_with_stack(entry, PROCESS_KIND_USER, 0u, 0u, PROCESS_DEFAULT_STACK_SIZE);
+    return process_create_with_stack(entry,
+                                     PROCESS_KIND_USER,
+                                     0u,
+                                     0u,
+                                     MK_TASK_CLASS_NONE,
+                                     PROCESS_DEFAULT_STACK_SIZE);
 }
 
 process_t *process_create_kind(void (*entry)(void), enum process_kind kind, uint32_t service_type) {
-    return process_create_with_stack(entry, kind, service_type, 0u, PROCESS_DEFAULT_STACK_SIZE);
+    return process_create_with_stack(entry,
+                                     kind,
+                                     service_type,
+                                     0u,
+                                     MK_TASK_CLASS_NONE,
+                                     PROCESS_DEFAULT_STACK_SIZE);
 }
 
 process_t *process_create_with_stack(void (*entry)(void),
                                      enum process_kind kind,
                                      uint32_t service_type,
                                      uint32_t launch_flags,
+                                     uint32_t task_class,
                                      uint32_t stack_size) {
     uint32_t normalized_stack_size;
+    uint32_t effective_task_class;
 
     if (entry == NULL) {
         return NULL;
@@ -106,7 +192,14 @@ process_t *process_create_with_stack(void (*entry)(void),
     p->state = PROCESS_READY;
     p->kind = kind;
     p->service_type = service_type;
-    p->priority_tier = process_priority_for(kind, service_type, launch_flags);
+    effective_task_class = task_class != MK_TASK_CLASS_NONE
+                               ? task_class
+                               : process_default_task_class_for(kind, service_type, launch_flags);
+    p->task_class = effective_task_class;
+    p->priority_tier = process_priority_for(kind,
+                                            service_type,
+                                            launch_flags,
+                                            effective_task_class);
     p->stack_size = normalized_stack_size;
     p->runtime_ticks = 0u;
     p->last_start_tick = 0u;

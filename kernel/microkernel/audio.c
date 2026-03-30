@@ -427,12 +427,8 @@ struct mk_audio_hda_bdl_entry {
 struct mk_audio_event_subscription {
     int pid;
     process_t *process;
-    kernel_waitable_t waitable;
+    kernel_mailbox_t mailbox;
     struct mk_audio_event events[MK_AUDIO_EVENT_QUEUE_SIZE];
-    uint32_t head;
-    uint32_t tail;
-    uint32_t count;
-    uint32_t dropped_events;
 };
 
 struct mk_audio_service_state {
@@ -855,10 +851,13 @@ static void mk_audio_event_init_subscribers(void) {
         struct mk_audio_event_subscription *subscription = &g_audio_state.event_subscribers[index];
 
         memset(subscription, 0, sizeof(*subscription));
-        kernel_waitable_init_ex(&subscription->waitable,
-                                TASK_WAIT_EVENT_QUEUE,
-                                TASK_WAIT_CLASS_AUDIO,
-                                MK_SERVICE_AUDIO);
+        kernel_mailbox_init(&subscription->mailbox,
+                            subscription->events,
+                            sizeof(subscription->events[0]),
+                            MK_AUDIO_EVENT_QUEUE_SIZE,
+                            KERNEL_MAILBOX_DROP_NEWEST,
+                            TASK_WAIT_CLASS_AUDIO,
+                            MK_SERVICE_AUDIO);
     }
 }
 
@@ -895,10 +894,13 @@ static struct mk_audio_event_subscription *mk_audio_alloc_subscription(process_t
             memset(subscription, 0, sizeof(*subscription));
             subscription->pid = subscriber->pid;
             subscription->process = subscriber;
-            kernel_waitable_init_ex(&subscription->waitable,
-                                    TASK_WAIT_EVENT_QUEUE,
-                                    TASK_WAIT_CLASS_AUDIO,
-                                    MK_SERVICE_AUDIO);
+            kernel_mailbox_init(&subscription->mailbox,
+                                subscription->events,
+                                sizeof(subscription->events[0]),
+                                MK_AUDIO_EVENT_QUEUE_SIZE,
+                                KERNEL_MAILBOX_DROP_NEWEST,
+                                TASK_WAIT_CLASS_AUDIO,
+                                MK_SERVICE_AUDIO);
             return subscription;
         }
     }
@@ -915,10 +917,6 @@ static void mk_audio_enqueue_event(struct mk_audio_event_subscription *subscript
     if (subscription == 0 || event_type == MK_AUDIO_EVENT_NONE) {
         return;
     }
-    if (subscription->count >= MK_AUDIO_EVENT_QUEUE_SIZE) {
-        subscription->dropped_events += 1u;
-        return;
-    }
 
     memset(&event, 0, sizeof(event));
     event.abi_version = 1u;
@@ -926,13 +924,11 @@ static void mk_audio_enqueue_event(struct mk_audio_event_subscription *subscript
     event.backend_kind = g_audio_state.backend_kind;
     event.queued_bytes = queued_bytes;
     event.underruns = underruns;
-    event.dropped_events = subscription->dropped_events;
+    event.dropped_events = kernel_mailbox_dropped(&subscription->mailbox);
     event.tick = kernel_timer_get_ticks();
-    subscription->events[subscription->tail] = event;
-    subscription->tail = (subscription->tail + 1u) % MK_AUDIO_EVENT_QUEUE_SIZE;
-    subscription->count += 1u;
-    subscription->dropped_events = 0u;
-    kernel_waitable_signal(&subscription->waitable, 1u);
+    if (kernel_mailbox_try_send(&subscription->mailbox, &event) == 0) {
+        kernel_mailbox_clear_dropped(&subscription->mailbox);
+    }
 }
 
 static void mk_audio_publish_event(uint32_t event_type, uint32_t queued_bytes, uint32_t underruns) {
@@ -9988,6 +9984,8 @@ int mk_audio_service_event_receive(process_t *subscriber,
                                    struct mk_audio_event *event,
                                    uint32_t timeout_ticks) {
     struct mk_audio_event_subscription *subscription;
+    uint32_t dropped_events;
+    int wait_rc;
 
     if (subscriber == 0 || event == 0) {
         return -1;
@@ -9999,28 +9997,27 @@ int mk_audio_service_event_receive(process_t *subscriber,
     }
 
     for (;;) {
-        if (subscription->count != 0u) {
-            *event = subscription->events[subscription->head];
-            subscription->head = (subscription->head + 1u) % MK_AUDIO_EVENT_QUEUE_SIZE;
-            subscription->count -= 1u;
+        if (kernel_mailbox_try_receive(&subscription->mailbox, event) == 0) {
             return 0;
         }
-        if (subscription->dropped_events != 0u) {
+        dropped_events = kernel_mailbox_dropped(&subscription->mailbox);
+        if (dropped_events != 0u) {
             memset(event, 0, sizeof(*event));
             event->abi_version = 1u;
             event->event_type = MK_AUDIO_EVENT_OVERFLOW;
             event->backend_kind = g_audio_state.backend_kind;
             event->queued_bytes = g_audio_state.audio_event_last_queued_bytes;
             event->underruns = g_audio_state.audio_event_last_underruns;
-            event->dropped_events = subscription->dropped_events;
-            subscription->dropped_events = 0u;
+            event->dropped_events = dropped_events;
+            kernel_mailbox_clear_dropped(&subscription->mailbox);
             event->tick = kernel_timer_get_ticks();
             return 0;
         }
         if (timeout_ticks == 0u) {
             return -1;
         }
-        if (kernel_waitable_wait_timeout(&subscription->waitable, timeout_ticks) != 0) {
+        wait_rc = kernel_mailbox_wait(&subscription->mailbox, timeout_ticks);
+        if (wait_rc != TASK_WAIT_RESULT_SIGNALED) {
             return -1;
         }
     }

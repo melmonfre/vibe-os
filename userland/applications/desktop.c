@@ -22,7 +22,6 @@
 #include <userland/applications/include/games/doom.h>
 #include <userland/applications/include/games/craft.h>
 #include <userland/modules/include/image.h>
-#include <userland/modules/include/lang_loader.h>
 #include <userland/modules/include/utils.h>
 #include <userland/modules/include/fs.h>
 #include <kernel/microkernel/audio.h>
@@ -541,6 +540,11 @@ static int g_launch_editor_nano = 0;
 static char g_launch_editor_path[80];
 static int g_launch_terminal_pending = 0;
 static char g_launch_terminal_command[INPUT_MAX + 1];
+struct desktop_restart_smoke_state {
+    int active;
+    uint32_t service_type;
+};
+static struct desktop_restart_smoke_state g_restart_smoke = {0, MK_SERVICE_NONE};
 static int g_fm_context_has_wallpaper_action = 0;
 struct app_cycle_request {
     int active;
@@ -736,8 +740,11 @@ static int desktop_process_drag_stress(int *focused, uint32_t ticks);
 static const struct mk_network_scan_info *network_applet_selected_scan(void);
 static void network_applet_invalidate_backend_cache(void);
 static void network_applet_sync_backend(int force);
-static void network_applet_export_manager_state(void);
+static int network_applet_set_autoconnect(const char *ssid);
+static int network_applet_forget_profile(const char *ssid);
 static void sound_applet_export_service_state(void);
+static int desktop_launch_detached(int argc, char **argv);
+static int desktop_launch_detached_with_failure_log(int argc, char **argv, const char *failure_log);
 static void desktop_queue_startup_background_tasks(void);
 static void desktop_process_startup_background_tasks(void);
 static void free_window(int widx);
@@ -4668,6 +4675,45 @@ static void desktop_request_open_terminal_command(const char *command) {
     g_launch_terminal_pending = g_launch_terminal_command[0] != '\0';
 }
 
+static void desktop_arm_restart_smoke(uint32_t service_type,
+                                      const char *command,
+                                      int *focused) {
+    if (service_type == MK_SERVICE_NONE || command == 0 || command[0] == '\0') {
+        return;
+    }
+
+    if (focused != 0) {
+        (void)open_window_or_focus_existing(APP_FILEMANAGER, focused);
+    }
+    g_restart_smoke.active = 1;
+    g_restart_smoke.service_type = service_type;
+    desktop_request_open_terminal_command(command);
+}
+
+static int desktop_restart_smoke_matches(const struct mk_service_event *event) {
+    if (event == 0 || !g_restart_smoke.active) {
+        return 0;
+    }
+    if (event->service_type != g_restart_smoke.service_type) {
+        return 0;
+    }
+
+    return event->event_type == MK_SERVICE_EVENT_RESTARTED ||
+           event->event_type == MK_SERVICE_EVENT_ONLINE ||
+           event->event_type == MK_SERVICE_EVENT_RECOVERED;
+}
+
+static void desktop_complete_restart_smoke(const struct mk_service_event *event) {
+    if (!desktop_restart_smoke_matches(event)) {
+        return;
+    }
+
+    g_restart_smoke.active = 0;
+    g_restart_smoke.service_type = MK_SERVICE_NONE;
+    sys_write_debug("desktop: restart smoke followup\n");
+    desktop_request_open_terminal_command("spawn clock");
+}
+
 static int desktop_process_pending_launches(int *focused) {
     int dirty = 0;
 
@@ -5638,9 +5684,9 @@ static void sound_applet_export_service_state(void) {
     export_argv[0] = "audiosvc";
     export_argv[1] = "export-state";
     export_argv[2] = 0;
-    if (sys_launch_app_argv(2, export_argv) <= 0) {
-        (void)lang_try_run(2, export_argv);
-    }
+    (void)desktop_launch_detached_with_failure_log(2,
+                                                   export_argv,
+                                                   "desktop: audio export launch failed\n");
 }
 
 static int desktop_launch_detached(int argc, char **argv) {
@@ -5731,6 +5777,89 @@ static int network_profile_count(void) {
         }
     }
     return count;
+}
+
+static enum network_applet_state_kind network_applet_state_for_link_state(uint32_t link_state) {
+    switch (link_state) {
+    case MK_NETWORK_LINK_CONNECTED:
+        return NETWORK_APPLET_CONNECTED;
+    case MK_NETWORK_LINK_CONNECTING:
+        return NETWORK_APPLET_CONNECTING;
+    default:
+        return NETWORK_APPLET_DISCONNECTED;
+    }
+}
+
+static void network_applet_note_status(uint32_t link_state,
+                                       uint32_t active_kind,
+                                       const char *if_name,
+                                       const char *ssid) {
+    g_network_applet.state = network_applet_state_for_link_state(link_state);
+    g_network_applet_cache.status_valid = 1;
+    g_network_applet_cache.status.link_state = link_state;
+    g_network_applet_cache.status.active_kind = active_kind;
+    str_copy_limited(g_network_applet_cache.status.active_if,
+                     if_name != 0 ? if_name : "",
+                     (int)sizeof(g_network_applet_cache.status.active_if));
+    str_copy_limited(g_network_applet_cache.status.current_ssid,
+                     ssid != 0 ? ssid : "",
+                     (int)sizeof(g_network_applet_cache.status.current_ssid));
+    g_network_applet_cache.status.ip_address[0] = '\0';
+    g_network_applet_cache.status.gateway[0] = '\0';
+    g_network_applet_cache.status.dns_server[0] = '\0';
+    g_network_applet_last_sync_ticks = sys_ticks();
+}
+
+static void network_applet_remember_profile_local(const char *ssid, const char *psk) {
+    struct network_profile *profile = 0;
+
+    if (ssid == 0 || *ssid == '\0') {
+        return;
+    }
+
+    profile = network_profile_find(ssid);
+    if (profile == 0) {
+        for (int i = 0; i < DESKTOP_NETWORK_PROFILE_MAX; ++i) {
+            if (!g_network_profiles[i].used) {
+                profile = &g_network_profiles[i];
+                break;
+            }
+        }
+    }
+    if (profile == 0) {
+        return;
+    }
+
+    profile->used = 1;
+    str_copy_limited(profile->ssid, ssid, (int)sizeof(profile->ssid));
+    str_copy_limited(profile->psk, psk != 0 ? psk : "", (int)sizeof(profile->psk));
+}
+
+static void network_applet_forget_profile_local(const char *ssid) {
+    const struct mk_network_scan_info *selected_scan = network_applet_selected_scan();
+
+    if (ssid == 0 || *ssid == '\0') {
+        return;
+    }
+
+    for (int i = 0; i < DESKTOP_NETWORK_PROFILE_MAX; ++i) {
+        if (g_network_profiles[i].used && str_eq(g_network_profiles[i].ssid, ssid)) {
+            memset(&g_network_profiles[i], 0, sizeof(g_network_profiles[i]));
+            break;
+        }
+    }
+
+    if (str_eq(g_network_auto_ssid, ssid)) {
+        g_network_auto_ssid[0] = '\0';
+    }
+    if (str_eq(g_network_applet.selected_saved_ssid, ssid)) {
+        g_network_applet.selected_saved_ssid[0] = '\0';
+    }
+    if (selected_scan != 0 && str_eq(selected_scan->ssid, ssid)) {
+        g_network_applet.password_len = 0;
+        g_network_applet.password[0] = '\0';
+    }
+    g_network_autoconnect_last_attempt_ticks = 0u;
 }
 
 static struct network_profile *network_profile_at_visible_index(int index) {
@@ -5871,7 +6000,7 @@ static void network_applet_load_settings(void) {
     }
 }
 
-static void network_applet_set_autoconnect(const char *ssid) {
+static int network_applet_set_autoconnect(const char *ssid) {
     char *autoconnect_argv[4];
     const char *target = "off";
 
@@ -5883,34 +6012,40 @@ static void network_applet_set_autoconnect(const char *ssid) {
     autoconnect_argv[1] = "autoconnect";
     autoconnect_argv[2] = (char *)target;
     autoconnect_argv[3] = 0;
-    if (lang_try_run(3, autoconnect_argv) == 0) {
-        network_applet_load_settings();
+    if (desktop_launch_detached_with_failure_log(3,
+                                                 autoconnect_argv,
+                                                 "desktop: autoconnect launch failed\n") != 0) {
+        return -1;
     }
+
+    if (str_eq(target, "off")) {
+        g_network_auto_ssid[0] = '\0';
+    } else {
+        str_copy_limited(g_network_auto_ssid, target, (int)sizeof(g_network_auto_ssid));
+    }
+    g_network_autoconnect_last_attempt_ticks = 0u;
+    return 0;
 }
 
-static void network_applet_forget_profile(const char *ssid) {
+static int network_applet_forget_profile(const char *ssid) {
     char *forget_argv[4];
 
     if (ssid == 0 || *ssid == '\0') {
-        return;
+        return -1;
     }
 
     forget_argv[0] = "netmgrd";
     forget_argv[1] = "forget";
     forget_argv[2] = (char *)ssid;
     forget_argv[3] = 0;
-    if (lang_try_run(3, forget_argv) == 0) {
-        network_applet_load_settings();
-        if (str_eq(g_network_applet.selected_saved_ssid, ssid)) {
-            g_network_applet.selected_saved_ssid[0] = '\0';
-        }
-        if (g_network_applet.selected_network >= 0 &&
-            g_network_applet.selected_network < g_network_applet_cache.scan_count &&
-            str_eq(g_network_applet_cache.scans[g_network_applet.selected_network].ssid, ssid)) {
-            g_network_applet.password_len = 0;
-            g_network_applet.password[0] = '\0';
-        }
+    if (desktop_launch_detached_with_failure_log(3,
+                                                 forget_argv,
+                                                 "desktop: forget launch failed\n") != 0) {
+        return -1;
     }
+
+    network_applet_forget_profile_local(ssid);
+    return 0;
 }
 
 static int network_applet_run_reconcile(void) {
@@ -5958,31 +6093,10 @@ static void network_applet_try_autoconnect(void) {
     }
 }
 
-static void network_applet_export_manager_state(void) {
-    char *export_argv[3];
-
-    export_argv[0] = "netmgrd";
-    export_argv[1] = "export-state";
-    export_argv[2] = 0;
-    if (sys_launch_app_argv(2, export_argv) <= 0) {
-        (void)lang_try_run(2, export_argv);
-    }
-}
-
 static void desktop_queue_startup_background_tasks(void) {
     g_desktop_startup_tasks = DESKTOP_STARTUP_TASK_SOUND_EXPORT |
                               DESKTOP_STARTUP_TASK_NETWORK_RECONCILE |
                               DESKTOP_STARTUP_TASK_NETWORK_EXPORT;
-}
-
-static int desktop_launch_detached_or_inline(int argc, char **argv) {
-    if (argc <= 0 || argv == 0 || argv[0] == 0) {
-        return -1;
-    }
-    if (desktop_launch_detached(argc, argv) == 0) {
-        return 0;
-    }
-    return lang_try_run(argc, argv);
 }
 
 static void desktop_process_startup_background_tasks(void) {
@@ -6018,14 +6132,22 @@ static void desktop_process_startup_background_tasks(void) {
 
 static int network_applet_disconnect_interface(const char *fallback_if) {
     char *disconnect_argv[4];
+    const char *target_if = g_network_applet_cache.status.active_if[0] != '\0'
+                                ? g_network_applet_cache.status.active_if
+                                : (fallback_if != 0 ? fallback_if : "wlan0");
 
     disconnect_argv[0] = "netmgrd";
     disconnect_argv[1] = "disconnect";
-    disconnect_argv[2] = g_network_applet_cache.status.active_if[0] != '\0'
-                             ? g_network_applet_cache.status.active_if
-                             : (char *)(fallback_if != 0 ? fallback_if : "wlan0");
+    disconnect_argv[2] = (char *)target_if;
     disconnect_argv[3] = 0;
-    return desktop_launch_detached_or_inline(3, disconnect_argv);
+    if (desktop_launch_detached_with_failure_log(3,
+                                                 disconnect_argv,
+                                                 "desktop: network disconnect launch failed\n") != 0) {
+        return -1;
+    }
+
+    network_applet_note_status(MK_NETWORK_LINK_DISCONNECTED, 0u, target_if, 0);
+    return 0;
 }
 
 static void network_applet_invalidate_backend_cache(void) {
@@ -6046,17 +6168,7 @@ static void network_applet_sync_backend(int force) {
 
     g_network_applet_cache.status_valid = (sys_network_get_status(&g_network_applet_cache.status) == 0);
     if (g_network_applet_cache.status_valid) {
-        switch (g_network_applet_cache.status.link_state) {
-        case MK_NETWORK_LINK_CONNECTED:
-            g_network_applet.state = NETWORK_APPLET_CONNECTED;
-            break;
-        case MK_NETWORK_LINK_CONNECTING:
-            g_network_applet.state = NETWORK_APPLET_CONNECTING;
-            break;
-        default:
-            g_network_applet.state = NETWORK_APPLET_DISCONNECTED;
-            break;
-        }
+        g_network_applet.state = network_applet_state_for_link_state(g_network_applet_cache.status.link_state);
     } else {
         g_network_applet.state = NETWORK_APPLET_DISCONNECTED;
     }
@@ -6211,6 +6323,7 @@ static uint32_t desktop_pump_async_service_events(void) {
     if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_AUDIO)) != 0u) {
         while (sys_service_event_receive(MK_SERVICE_AUDIO, &event, 0u) == 0) {
             flags |= DESKTOP_ASYNC_REFRESH_AUDIO;
+            desktop_complete_restart_smoke(&event);
             if (desktop_service_event_requires_stream_resubscribe(&event)) {
                 desktop_reset_async_stream_subscription(event.service_type);
                 g_desktop_service_event_subscriptions &= ~(1u << MK_SERVICE_AUDIO);
@@ -6220,6 +6333,7 @@ static uint32_t desktop_pump_async_service_events(void) {
     if ((g_desktop_service_event_subscriptions & (1u << MK_SERVICE_NETWORK)) != 0u) {
         while (sys_service_event_receive(MK_SERVICE_NETWORK, &event, 0u) == 0) {
             flags |= DESKTOP_ASYNC_REFRESH_NETWORK;
+            desktop_complete_restart_smoke(&event);
             if (desktop_service_event_requires_stream_resubscribe(&event)) {
                 desktop_reset_async_stream_subscription(event.service_type);
                 g_desktop_service_event_subscriptions &= ~(1u << MK_SERVICE_NETWORK);
@@ -6231,6 +6345,7 @@ static uint32_t desktop_pump_async_service_events(void) {
             if (desktop_service_event_affects_layout(&event)) {
                 flags |= DESKTOP_ASYNC_REFRESH_LAYOUT;
             }
+            desktop_complete_restart_smoke(&event);
             if (desktop_service_event_requires_stream_resubscribe(&event)) {
                 desktop_reset_async_stream_subscription(event.service_type);
                 g_desktop_service_event_subscriptions &= ~(1u << MK_SERVICE_VIDEO);
@@ -6242,6 +6357,7 @@ static uint32_t desktop_pump_async_service_events(void) {
             if (desktop_service_event_affects_layout(&event)) {
                 flags |= DESKTOP_ASYNC_REFRESH_LAYOUT;
             }
+            desktop_complete_restart_smoke(&event);
             if (desktop_service_event_requires_input_reset(&event)) {
                 flags |= DESKTOP_ASYNC_INPUT_RESET;
                 g_desktop_service_event_subscriptions &= ~(1u << MK_SERVICE_INPUT);
@@ -6664,6 +6780,7 @@ static void draw_network_applet(const struct mouse_state *mouse) {
 static int network_applet_connect_selected(void) {
     const struct mk_network_scan_info *selected = network_applet_selected_scan();
     char *connect_argv[6];
+    int argc;
 
     if (selected == 0) {
         return -1;
@@ -6682,10 +6799,27 @@ static int network_applet_connect_selected(void) {
         connect_argv[4] = "--psk";
         connect_argv[5] = g_network_applet.password;
     }
-    if (lang_try_run(selected->security != MK_NETWORK_SECURITY_OPEN ? 6 : 4, connect_argv) != 0) {
+
+    argc = selected->security != MK_NETWORK_SECURITY_OPEN ? 6 : 4;
+    if (desktop_launch_detached_with_failure_log(argc,
+                                                 connect_argv,
+                                                 "desktop: wifi connect launch failed\n") != 0) {
         return -1;
     }
-    network_applet_load_settings();
+
+    network_applet_remember_profile_local(selected->ssid,
+                                          selected->security != MK_NETWORK_SECURITY_OPEN
+                                              ? g_network_applet.password
+                                              : "");
+    str_copy_limited(g_network_auto_ssid, selected->ssid, (int)sizeof(g_network_auto_ssid));
+    str_copy_limited(g_network_applet.selected_saved_ssid,
+                     selected->ssid,
+                     (int)sizeof(g_network_applet.selected_saved_ssid));
+    network_applet_note_status(MK_NETWORK_LINK_CONNECTING,
+                               MK_NETWORK_IF_WIFI,
+                               "wlan0",
+                               selected->ssid);
+    g_network_autoconnect_last_attempt_ticks = 0u;
     return 0;
 }
 
@@ -6696,7 +6830,17 @@ static int network_applet_connect_ethernet(void) {
     connect_argv[1] = "connect";
     connect_argv[2] = "ethernet";
     connect_argv[3] = 0;
-    return desktop_launch_detached_or_inline(3, connect_argv);
+    if (desktop_launch_detached_with_failure_log(3,
+                                                 connect_argv,
+                                                 "desktop: ethernet connect launch failed\n") != 0) {
+        return -1;
+    }
+
+    network_applet_note_status(MK_NETWORK_LINK_CONNECTING,
+                               MK_NETWORK_IF_ETHERNET,
+                               "ethernet",
+                               0);
+    return 0;
 }
 
 static int desktop_dispatch_applet_click(struct desktop_session_action_queue *queue,
@@ -6788,40 +6932,28 @@ static int desktop_dispatch_applet_click(struct desktop_session_action_queue *qu
         }
         selected_profile = network_applet_selected_profile();
         if (point_in_rect(&auto_button, click_x, click_y) && selected_profile != 0) {
-            network_applet_set_autoconnect(selected_profile->ssid);
-            network_applet_export_manager_state();
-            *dirty = 1;
+            if (network_applet_set_autoconnect(selected_profile->ssid) == 0) {
+                *dirty = 1;
+            }
         } else if (point_in_rect(&forget_button, click_x, click_y) && selected_profile != 0) {
-            network_applet_forget_profile(selected_profile->ssid);
-            network_applet_export_manager_state();
-            *dirty = 1;
+            if (network_applet_forget_profile(selected_profile->ssid) == 0) {
+                *dirty = 1;
+            }
         } else if (point_in_rect(&ethernet_connect_button, click_x, click_y)) {
             if (network_applet_connect_ethernet() == 0) {
-                network_applet_invalidate_backend_cache();
-                network_applet_sync_backend(1);
-                network_applet_export_manager_state();
                 *dirty = 1;
             }
         } else if (point_in_rect(&ethernet_disconnect_button, click_x, click_y)) {
             if (network_applet_disconnect_interface("ethernet") == 0) {
-                network_applet_invalidate_backend_cache();
-                network_applet_sync_backend(1);
-                network_applet_export_manager_state();
                 *dirty = 1;
             }
         }
         if (point_in_rect(&connect_button, click_x, click_y)) {
             if (network_applet_connect_selected() == 0) {
-                network_applet_invalidate_backend_cache();
-                network_applet_sync_backend(1);
-                network_applet_export_manager_state();
                 *dirty = 1;
             }
         } else if (point_in_rect(&disconnect_button, click_x, click_y)) {
             if (network_applet_disconnect_interface("wlan0") == 0) {
-                network_applet_invalidate_backend_cache();
-                network_applet_sync_backend(1);
-                network_applet_export_manager_state();
                 *dirty = 1;
             }
         }
@@ -8271,9 +8403,6 @@ void desktop_main(void) {
                 }
                 if (key == '\n') {
                     if (network_applet_connect_selected() == 0) {
-                        network_applet_invalidate_backend_cache();
-                        network_applet_sync_backend(1);
-                        network_applet_export_manager_state();
                         dirty = 1;
                     }
                     continue;
@@ -8325,9 +8454,6 @@ void desktop_main(void) {
                 }
                 if (key == '\n') {
                     if (network_applet_connect_selected() == 0) {
-                        network_applet_invalidate_backend_cache();
-                        network_applet_sync_backend(1);
-                        network_applet_export_manager_state();
                         dirty = 1;
                     }
                     continue;
@@ -8337,9 +8463,9 @@ void desktop_main(void) {
                     struct network_profile *profile = selected != 0 ? network_profile_find(selected->ssid) : 0;
 
                     if (profile != 0) {
-                        network_applet_set_autoconnect(profile->ssid);
-                        network_applet_export_manager_state();
-                        dirty = 1;
+                        if (network_applet_set_autoconnect(profile->ssid) == 0) {
+                            dirty = 1;
+                        }
                     }
                     continue;
                 }
@@ -8348,26 +8474,20 @@ void desktop_main(void) {
                     struct network_profile *profile = selected != 0 ? network_profile_find(selected->ssid) : 0;
 
                     if (profile != 0) {
-                        network_applet_forget_profile(profile->ssid);
-                        network_applet_export_manager_state();
-                        dirty = 1;
+                        if (network_applet_forget_profile(profile->ssid) == 0) {
+                            dirty = 1;
+                        }
                     }
                     continue;
                 }
                 if (key == 'e' || key == 'E') {
                     if (network_applet_connect_ethernet() == 0) {
-                        network_applet_invalidate_backend_cache();
-                        network_applet_sync_backend(1);
-                        network_applet_export_manager_state();
                         dirty = 1;
                     }
                     continue;
                 }
                 if (key == 'x' || key == 'X') {
                     if (network_applet_disconnect_interface("ethernet") == 0) {
-                        network_applet_invalidate_backend_cache();
-                        network_applet_sync_backend(1);
-                        network_applet_export_manager_state();
                         dirty = 1;
                     }
                     continue;
@@ -8497,7 +8617,7 @@ void desktop_main(void) {
              * can exercise service restarts without relying on long typing.
              */
             if (key == 11) {
-                desktop_request_open_terminal_command("kill input");
+                desktop_arm_restart_smoke(MK_SERVICE_INPUT, "kill input", &focused);
                 dirty = 1;
                 continue;
             }
@@ -8507,17 +8627,17 @@ void desktop_main(void) {
                 continue;
             }
             if (key == 21) {
-                desktop_request_open_terminal_command("kill audio");
+                desktop_arm_restart_smoke(MK_SERVICE_AUDIO, "kill audio", &focused);
                 dirty = 1;
                 continue;
             }
             if (key == 22) {
-                desktop_request_open_terminal_command("kill video");
+                desktop_arm_restart_smoke(MK_SERVICE_VIDEO, "kill video", &focused);
                 dirty = 1;
                 continue;
             }
             if (key == 23) {
-                desktop_request_open_terminal_command("kill network");
+                desktop_arm_restart_smoke(MK_SERVICE_NETWORK, "kill network", &focused);
                 dirty = 1;
                 continue;
             }

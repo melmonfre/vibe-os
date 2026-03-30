@@ -34,12 +34,8 @@ enum mk_service_type {
 struct mk_service_event_subscription {
     int pid;
     struct process *process;
-    kernel_waitable_t waitable;
+    kernel_mailbox_t mailbox;
     struct mk_service_event events[MK_SERVICE_EVENT_QUEUE_SIZE];
-    uint32_t head;
-    uint32_t tail;
-    uint32_t count;
-    uint32_t dropped_events;
 };
 
 struct mk_service_record {

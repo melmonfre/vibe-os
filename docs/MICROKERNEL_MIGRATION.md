@@ -144,7 +144,7 @@ Important audit note: in the current tree, a checked item means the migration bo
 - The USB validation matrix now records the current migration boundary explicitly: under QEMU `usb-storage`, SeaBIOS boots the image through the same active-partition chain and reaches the built-in bootstrap shell, while runtime block-device access still reports `storage: no block device backend available` until a native USB mass-storage service exists.
 - The ported-userland build path is now stable under the official regression target too: `Build.ported.mk` exposes a single deterministic `ported-all` goal, `make validate-phase6` completes successfully again, and the generated `build/phase6-validation.md` reflects the same boot markers used by the migration plan.
 - Kernel waitables now exist as a first real async substrate: IPC mailboxes can block on a waitable instead of spinning in `yield()` loops, `ipc_send()` signals sleeping receivers, the scheduler can park a blocked task until wakeup, and headless QEMU boot still reaches `init: supervisor idle` with all current service hosts online.
-- Keyboard and mouse IRQ paths now also publish into a shared kernel input-event queue with an explicit dequeue ABI (`SYSCALL_INPUT_EVENT`), so the tree has a first unified event stream for userland input consumers in parallel with the older compatibility polling syscalls.
+- Keyboard and mouse IRQ paths now also publish into shared kernel input mailboxes with an explicit dequeue ABI (`SYSCALL_INPUT_EVENT`), so the tree has a first unified event stream for userland input consumers in parallel with the older compatibility polling syscalls.
 - The `input` service boundary now also carries that event stream: `MK_MSG_INPUT_EVENT` is implemented in the current local handler, while `SYSCALL_INPUT_EVENT` currently drains the kernel-owned unified queue directly so foreground desktop input can survive `inputsvc` restarts; the service path remains relevant for publication/layout/state APIs and the final ownership cutover.
 - The USB host path now captures boot-HID endpoint metadata during descriptor scan and performs on-demand UHCI/OHCI polling for enumerated boot keyboard/mouse interfaces, feeding the same kernel input queues used by PS/2 while the fully service-owned input publisher is still in progress.
 - The waitable substrate is now richer than a bare wakeup bit: kernel waitables carry event class/kind metadata, per-service ownership tags, signal/completion wrappers, timeout/cancel paths, and scheduler snapshots can now report timed-out/canceled waits plus pending signal state without regressing the current headless boot smoke.
@@ -236,19 +236,21 @@ Rules:
 - [x] cooperative execution points exist through `yield`/`sleep`
 - [x] timer-driven tick hooks now exist as an initial event substrate and now drive waitable timeout wakeups
 - [x] add first-class kernel event objects (`queue`, `waitable`, `signal`, `completion`)
-- [~] add per-service event mailbox/ring abstraction instead of ad-hoc request transport only
-: request/reply IPC still exists, but service state changes now also flow through a subscriber-aware event ring instead of staying implicit inside transport fallback logic
+- [x] add per-service event mailbox/ring abstraction instead of ad-hoc request transport only
+: the kernel now has a reusable waitable-backed `kernel_mailbox` primitive, and task-lifecycle plus service/audio/video/network event delivery all flow through that shared mailbox layer instead of bespoke subscriber rings
 - [x] add timeout/cancel primitives for pending work items
 - [x] add non-busy wait/wakeup path so services stop relying on `yield`/poll loops
 - [~] add subscription model for async completion and state-change notifications
-: service supervision and task-lifecycle subscriptions now exist for `launched` / `terminated` / `blocked` / `woke` / `restart-requested`, but subsystem-level async completions are still missing outside the per-domain streams
+: service supervision and task-lifecycle subscriptions now exist for `launched` / `terminated` / `blocked` / `woke` / `restart-requested`, the task stream now also carries an explicit `task_class` tag plus subscription-side event/class filters so bootstrap/desktop/app hosts can subscribe more narrowly, but subsystem-level async completions are still missing outside the per-domain streams
 - [~] subsystem event streams now also surface ring pressure through per-event `dropped_events` telemetry for audio/video/network consumers, so queue overruns stop disappearing silently during restart/degradation work
 - [x] define scheduler-visible event metadata so the kernel can audit pending events and prioritize desktop/input-critical work
 - [ ] define one independent async worker/thread context per major task class instead of reusing UI loops as pumps
+- [~] establish explicit task-class metadata for launched workers before the final mailbox split
+: launch contexts, task snapshots, and task-lifecycle events now expose concrete classes such as `supervision`, `desktop`, `shell`, `app-runtime`, `storage-io`, `filesystem-io`, `audio-io`, `network-io`, `video-present`, and `input`, and userland subscribers can now filter on those classes; the remaining gap is turning those class tags into true per-class worker/mailbox ownership instead of only better-tagged scheduling/supervision telemetry
 - [~] move bootstrap/main-thread responsibility to supervision/event arbitration instead of foreground app execution
-: `init` now remains in a supervision/event loop, subscribes to service/task lifecycle events, `desktop-host` relaunches a separate `startx-host` task instead of executing the desktop session inline, and the generic AppFS launch path now carries a small serialized `argv` via `SYSCALL_LAUNCH_APP`; shell foreground AppFS commands now also prefer a dedicated app-host task and wait on task-lifecycle events instead of owning `lang_try_run()` inline, while oversized/richer launch payloads plus some desktop-side callsites still fall back to the inline path
+: `init` now remains in a supervision/event loop, subscribes to service/task lifecycle events, `desktop-host` relaunches a separate `startx-host` task instead of executing the desktop session inline, and the generic AppFS launch path now carries a small serialized `argv` via `SYSCALL_LAUNCH_APP`; shell foreground AppFS commands now also prefer a dedicated app-host task and wait on task-lifecycle events instead of owning `lang_try_run()` inline, `startx-host` / `desktop-audio` / `boot-audio` now launch detached AppFS workers and wait on task events instead of owning the normal path inline, and the desktop-side `netmgrd` / `audiosvc` control path now also launches detached workers instead of dropping back into the desktop task, while oversized/richer launch payloads plus host-local rescue fallbacks still remain
 - [~] detached AppFS launch telemetry now exposes `argc`/`argv` through launch-info reporting and host-side debug logs, so supervised generic app workers are easier to audit while broader mailbox/supervision work is still pending
-- [~] `init` no longer needs to own boot-sound playback directly on non-desktop boots; a dedicated `boot-audio` builtin worker now carries that audio launch path with inline playback retained only as fallback
+- [~] `init` no longer needs to own boot-sound playback directly on non-desktop boots; dedicated `desktop-audio` / `boot-audio` builtin workers now supervise detached `audiosvc play-asset` launches and retain inline playback only as fallback
 
 Implementation to finish Phase A:
 
@@ -390,7 +392,7 @@ Phase B validation gate:
 - [x] startup sound no longer needs to run as a synchronous desktop-owned playback loop
 - [ ] move audio queue ownership entirely into `audiosvc`
 - [~] add evented playback completions / underrun notifications back to userland
-: `audiosvc` now publishes `queued` / `idle` / `underrun` events through a dedicated ABI, and both diagnostics plus the async WAV helper consume that stream on the kernel-async path; queue ownership and steady-state completion semantics still need to move fully out of the preserved kernel bridge
+: `audiosvc` now publishes `queued` / `idle` / `underrun` events through a dedicated ABI over the shared mailbox-backed event layer, and both diagnostics plus the async WAV helper consume that stream on the kernel-async path; queue ownership and steady-state completion semantics still need to move fully out of the preserved kernel bridge
 - [~] audio async telemetry now carries per-subscriber `dropped_events` pressure so `audiosvc` queue churn is visible to diagnostics while queue ownership is still migrating
 - [ ] add async capture queue and delivery path
 - [ ] stop using the desktop process as a cooperative pump participant for audio progress
@@ -453,7 +455,7 @@ Phase C validation gate:
 
 - [ ] separate window/compositor logic from framebuffer/present backend logic
 - [~] introduce explicit present queue / frame fence model
-: `videosvc` now publishes `present` / `mode-set` / `leave` events through a dedicated ABI, and `present submit` now returns a concrete `sequence` fence token that the desktop uses on its main path; a true queued presenter worker still remains open
+: `videosvc` now publishes `present` / `mode-set` / `leave` events through a dedicated mailbox-backed ABI, and `present submit` now returns a concrete `sequence` fence token that the desktop uses on its main path; a true queued presenter worker still remains open
 - [~] `videosvc` now also emits an explicit `present-submitted` stage plus per-event `pending_depth` / `completed_sequence` telemetry, so the present path is visible as a service-owned fence lifecycle even though the backend work is still completing synchronously underneath
 - [~] video event delivery now reports subscriber-ring overflow explicitly, so presenter pressure and missed notifications are visible while the queued presenter worker is still pending
 - [~] desktop now also consumes the video fence/backlog stream directly and resets its async video path when `videosvc` reports overflow or dropped notifications, so presenter-pressure faults no longer leave the compositor blind to stale fence state
@@ -586,10 +588,10 @@ Phase E validation gate:
 
 - [ ] replace current control-plane MVP with real packet TX/RX queues
 - [~] add socket wakeup/readiness events
-: `network` now publishes `status`, `recv`, `accept`, `send`, and `closed` events through a dedicated event stream, and the desktop consumes those events to refresh network state reactively instead of relying only on periodic polling; true queued TX/RX ownership is still pending
+: `network` now publishes `status`, `recv`, `accept`, `send`, and `closed` events through a dedicated mailbox-backed event stream, and the desktop consumes those events to refresh network state reactively instead of relying only on periodic polling; true queued TX/RX ownership is still pending
 - [~] the network event stream now also publishes backend `rx` / `tx` activity from the virtio compatibility path plus explicit overflow telemetry, giving userland visibility into datapath motion before full extracted TX/RX ownership lands
 - [~] desktop async consumers now tear down and re-subscribe their audio/network/video event streams when supervision reports `offline` / `degraded` / `restarted`, and the desktop now applies the same reset path when a `videosvc` `present_submit` fails, reducing stale-subscription behavior across service restarts and submit-path faults
-- [~] desktop-side `netmgrd` control actions now prefer detached AppFS launch for ethernet connect/disconnect before falling back to inline execution, reducing UI ownership of routine network control work while wifi connect/reconcile and real datapath ownership are still pending
+- [~] desktop-side `netmgrd` control actions now run through detached AppFS workers for wifi/ethernet connect, disconnect, autoconnect, forget, reconcile, and startup export, with the desktop keeping only optimistic cache/UI state while network events converge the real result; mailbox-backed event delivery is now in place, but real datapath ownership and per-class worker isolation are still pending
 - [ ] add async DNS/DHCP completion flow
 - [ ] keep `netmgrd` as policy daemon, not datapath owner
 - [ ] remove steady-state dependence on kernel local handler execution for networking

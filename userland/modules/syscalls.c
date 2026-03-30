@@ -219,8 +219,18 @@ int sys_launch_app_argv(int argc, char **argv) {
     return syscall5(SYSCALL_LAUNCH_APP, (int)(uintptr_t)argv, argc, 0, 0, 0);
 }
 
+int sys_task_event_subscribe_mask(uint32_t event_mask, uint32_t task_class_mask) {
+    return syscall5(SYSCALL_TASK_EVENT_SUBSCRIBE,
+                    (int)event_mask,
+                    (int)task_class_mask,
+                    0,
+                    0,
+                    0);
+}
+
 int sys_task_event_subscribe(void) {
-    return syscall5(SYSCALL_TASK_EVENT_SUBSCRIBE, 0, 0, 0, 0, 0);
+    return sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_LIFECYCLE,
+                                         MK_TASK_CLASS_MASK_ALL);
 }
 
 int sys_task_event_receive(struct mk_task_event *event, uint32_t timeout_ticks) {

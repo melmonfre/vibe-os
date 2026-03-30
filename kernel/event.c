@@ -1,5 +1,6 @@
 #include <kernel/event.h>
 
+#include <kernel/kernel_string.h>
 #include <kernel/interrupt.h>
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
@@ -259,6 +260,178 @@ void kernel_waitable_cancel(kernel_waitable_t *waitable, uint32_t count) {
     if (woke != 0u) {
         smp_wake_sleeping_cpus();
     }
+}
+
+void kernel_mailbox_init(kernel_mailbox_t *mailbox,
+                         void *storage,
+                         uint32_t item_size,
+                         uint32_t capacity,
+                         uint32_t overflow_policy,
+                         uint32_t event_class,
+                         uint32_t owner_service) {
+    if (mailbox == 0) {
+        return;
+    }
+
+    spinlock_init(&mailbox->lock);
+    kernel_waitable_init_ex(&mailbox->waitable,
+                            TASK_WAIT_EVENT_QUEUE,
+                            event_class,
+                            owner_service);
+    mailbox->storage = storage;
+    mailbox->item_size = item_size;
+    mailbox->capacity = capacity;
+    mailbox->head = 0u;
+    mailbox->tail = 0u;
+    mailbox->count = 0u;
+    mailbox->dropped_count = 0u;
+    mailbox->overflow_policy = overflow_policy;
+}
+
+void kernel_mailbox_reset(kernel_mailbox_t *mailbox) {
+    uint32_t event_class;
+    uint32_t owner_service;
+
+    if (mailbox == 0) {
+        return;
+    }
+
+    event_class = mailbox->waitable.event_class;
+    owner_service = mailbox->waitable.owner_service;
+    kernel_mailbox_init(mailbox,
+                        mailbox->storage,
+                        mailbox->item_size,
+                        mailbox->capacity,
+                        mailbox->overflow_policy,
+                        event_class,
+                        owner_service);
+}
+
+int kernel_mailbox_try_send(kernel_mailbox_t *mailbox, const void *item) {
+    uint8_t *storage;
+    uint32_t flags;
+
+    if (mailbox == 0 || item == 0 || mailbox->storage == 0 ||
+        mailbox->item_size == 0u || mailbox->capacity == 0u) {
+        return -1;
+    }
+
+    flags = spinlock_lock_irqsave(&mailbox->lock);
+    if (mailbox->count >= mailbox->capacity) {
+        if (mailbox->overflow_policy == KERNEL_MAILBOX_DROP_OLDEST) {
+            mailbox->head = (mailbox->head + 1u) % mailbox->capacity;
+            mailbox->count -= 1u;
+            mailbox->dropped_count += 1u;
+        } else {
+            mailbox->dropped_count += 1u;
+            spinlock_unlock_irqrestore(&mailbox->lock, flags);
+            return -1;
+        }
+    }
+
+    storage = (uint8_t *)mailbox->storage;
+    memcpy(&storage[mailbox->tail * mailbox->item_size], item, mailbox->item_size);
+    mailbox->tail = (mailbox->tail + 1u) % mailbox->capacity;
+    mailbox->count += 1u;
+    spinlock_unlock_irqrestore(&mailbox->lock, flags);
+    kernel_waitable_signal(&mailbox->waitable, 1u);
+    return 0;
+}
+
+int kernel_mailbox_try_receive(kernel_mailbox_t *mailbox, void *item) {
+    uint8_t *storage;
+    uint32_t flags;
+
+    if (mailbox == 0 || item == 0 || mailbox->storage == 0 ||
+        mailbox->item_size == 0u || mailbox->capacity == 0u) {
+        return -1;
+    }
+
+    flags = spinlock_lock_irqsave(&mailbox->lock);
+    if (mailbox->count == 0u) {
+        spinlock_unlock_irqrestore(&mailbox->lock, flags);
+        return -1;
+    }
+
+    storage = (uint8_t *)mailbox->storage;
+    memcpy(item, &storage[mailbox->head * mailbox->item_size], mailbox->item_size);
+    mailbox->head = (mailbox->head + 1u) % mailbox->capacity;
+    mailbox->count -= 1u;
+    spinlock_unlock_irqrestore(&mailbox->lock, flags);
+    return 0;
+}
+
+int kernel_mailbox_wait(kernel_mailbox_t *mailbox, uint32_t timeout_ticks) {
+    if (mailbox == 0) {
+        return -1;
+    }
+    if (timeout_ticks == 0u) {
+        return kernel_waitable_wait(&mailbox->waitable);
+    }
+    return kernel_waitable_wait_timeout(&mailbox->waitable, timeout_ticks);
+}
+
+int kernel_mailbox_receive_timeout(kernel_mailbox_t *mailbox,
+                                   void *item,
+                                   uint32_t timeout_ticks) {
+    int wait_rc;
+
+    if (mailbox == 0 || item == 0) {
+        return -1;
+    }
+
+    for (;;) {
+        if (kernel_mailbox_try_receive(mailbox, item) == 0) {
+            return 0;
+        }
+        if (timeout_ticks == 0u) {
+            return -1;
+        }
+        wait_rc = kernel_mailbox_wait(mailbox, timeout_ticks);
+        if (wait_rc != TASK_WAIT_RESULT_SIGNALED) {
+            return -1;
+        }
+    }
+}
+
+uint32_t kernel_mailbox_count(kernel_mailbox_t *mailbox) {
+    uint32_t count;
+    uint32_t flags;
+
+    if (mailbox == 0) {
+        return 0u;
+    }
+
+    flags = spinlock_lock_irqsave(&mailbox->lock);
+    count = mailbox->count;
+    spinlock_unlock_irqrestore(&mailbox->lock, flags);
+    return count;
+}
+
+uint32_t kernel_mailbox_dropped(kernel_mailbox_t *mailbox) {
+    uint32_t dropped;
+    uint32_t flags;
+
+    if (mailbox == 0) {
+        return 0u;
+    }
+
+    flags = spinlock_lock_irqsave(&mailbox->lock);
+    dropped = mailbox->dropped_count;
+    spinlock_unlock_irqrestore(&mailbox->lock, flags);
+    return dropped;
+}
+
+void kernel_mailbox_clear_dropped(kernel_mailbox_t *mailbox) {
+    uint32_t flags;
+
+    if (mailbox == 0) {
+        return;
+    }
+
+    flags = spinlock_lock_irqsave(&mailbox->lock);
+    mailbox->dropped_count = 0u;
+    spinlock_unlock_irqrestore(&mailbox->lock, flags);
 }
 
 void kernel_signal_init(kernel_signal_t *signal, uint32_t event_class, uint32_t owner_service) {

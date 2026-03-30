@@ -9,8 +9,6 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/utils.h>
 
-#define DESKTOP_HOST_TASK_EVENT_TIMEOUT_TICKS 64u
-
 static void host_debug(const char *prefix, const char *suffix) {
     char msg[96];
 
@@ -41,16 +39,53 @@ static void host_debug_argv(int argc, char **argv) {
     sys_write_debug(msg);
 }
 
-static int desktop_host_try_external(void) {
-    char *argv[2] = {"startx", 0};
-
-    lang_invalidate_directory_cache();
-    return lang_try_run(1, argv);
-}
-
 static int host_try_external_argv(int argc, char **argv) {
     lang_invalidate_directory_cache();
     return lang_try_run(argc, argv);
+}
+
+static int host_wait_for_task_exit(uint32_t pid) {
+    struct mk_task_event event;
+
+    if (pid == 0u) {
+        return -1;
+    }
+
+    for (;;) {
+        if (sys_task_event_receive(&event, MK_TASK_EVENT_WAIT_FOREVER) != 0) {
+            return -1;
+        }
+        if (event.pid != pid) {
+            continue;
+        }
+        if (event.event_type == MK_TASK_EVENT_TERMINATED) {
+            return 0;
+        }
+    }
+}
+
+static int host_launch_external_argv_and_wait(int argc, char **argv) {
+    int pid;
+
+    if (argc <= 0 || argv == 0 || argv[0] == 0) {
+        return -1;
+    }
+
+    lang_invalidate_directory_cache();
+    if (!lang_can_run(argv[0])) {
+        return -1;
+    }
+    if (sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,
+                                      MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME)) != 0) {
+        return -1;
+    }
+
+    host_debug_argv(argc, argv);
+    pid = argc == 1 ? sys_launch_app(argv[0]) : sys_launch_app_argv(argc, argv);
+    if (pid <= 0) {
+        return -1;
+    }
+    return host_wait_for_task_exit((uint32_t)pid);
 }
 
 static int host_decode_launch_argv(const struct userland_launch_info *info,
@@ -128,7 +163,7 @@ static int desktop_host_wait_session_event(int session_pid) {
     }
 
     for (;;) {
-        if (sys_task_event_receive(&event, DESKTOP_HOST_TASK_EVENT_TIMEOUT_TICKS) != 0) {
+        if (sys_task_event_receive(&event, MK_TASK_EVENT_WAIT_FOREVER) != 0) {
             return -1;
         }
         if ((int)event.pid != session_pid) {
@@ -170,7 +205,10 @@ void userland_desktop_host_entry(void) {
     host_debug("host: desktop start", 0);
     console_init();
     fs_init();
-    (void)sys_task_event_subscribe();
+    if (sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,
+                                      MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP)) != 0) {
+        host_debug("host: desktop subscribe failed", 0);
+    }
 
     if (sys_launch_info(&info) == 0 &&
         (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) == 0u) {
@@ -184,7 +222,8 @@ void userland_desktop_host_entry(void) {
                         break;
                     }
                 } else {
-                    sys_yield();
+                    host_debug("host: desktop session wait failed", 0);
+                    break;
                 }
             }
         } else {
@@ -203,11 +242,13 @@ void userland_desktop_host_entry(void) {
 }
 
 void userland_startx_host_entry(void) {
+    char *argv[2] = {"startx", 0};
+
     host_debug("host: startx start", 0);
     console_init();
     fs_init();
 
-    if (desktop_host_try_external() == 0) {
+    if (host_launch_external_argv_and_wait(1, argv) == 0) {
         host_debug("host: startx external returned", 0);
         return;
     }
@@ -224,7 +265,7 @@ void userland_desktop_audio_host_entry(void) {
     console_init();
     fs_init();
 
-    if (host_try_external_argv(3, argv) == 0) {
+    if (host_launch_external_argv_and_wait(3, argv) == 0) {
         host_debug("host: desktop audio returned", 0);
         return;
     }
@@ -241,7 +282,7 @@ void userland_boot_audio_host_entry(void) {
     console_init();
     fs_init();
 
-    if (host_try_external_argv(3, argv) == 0) {
+    if (host_launch_external_argv_and_wait(3, argv) == 0) {
         host_debug("host: boot audio returned", 0);
         return;
     }

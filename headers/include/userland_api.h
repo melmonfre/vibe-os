@@ -283,6 +283,7 @@ struct userland_launch_info {
     uint32_t kind;
     uint32_t service_type;
     uint32_t flags;
+    uint32_t task_class;
     uint32_t boot_flags;
     uint32_t boot_partition_lba;
     uint32_t boot_partition_sectors;
@@ -354,6 +355,24 @@ struct mk_network_event {
     uint32_t tick;
 };
 
+enum mk_task_class {
+    MK_TASK_CLASS_NONE = 0,
+    MK_TASK_CLASS_SUPERVISION = 1,
+    MK_TASK_CLASS_DESKTOP = 2,
+    MK_TASK_CLASS_SHELL = 3,
+    MK_TASK_CLASS_APP_RUNTIME = 4,
+    MK_TASK_CLASS_INPUT = 5,
+    MK_TASK_CLASS_VIDEO_PRESENT = 6,
+    MK_TASK_CLASS_STORAGE_IO = 7,
+    MK_TASK_CLASS_FILESYSTEM_IO = 8,
+    MK_TASK_CLASS_AUDIO_IO = 9,
+    MK_TASK_CLASS_NETWORK_IO = 10,
+    MK_TASK_CLASS_CONSOLE_IO = 11
+};
+
+#define MK_TASK_CLASS_MASK(task_class) (1u << (task_class))
+#define MK_TASK_CLASS_MASK_ALL 0xffffffffu
+
 enum mk_task_event_type {
     MK_TASK_EVENT_NONE = 0,
     MK_TASK_EVENT_LAUNCHED = 1,
@@ -369,12 +388,31 @@ struct mk_task_event {
     uint32_t pid;
     uint32_t kind;
     uint32_t service_type;
+    uint32_t task_class;
     uint32_t priority_tier;
     uint32_t flags;
     uint32_t tick;
 };
 
-#define TASK_SNAPSHOT_ABI_VERSION 3u
+#define MK_TASK_EVENT_MASK_LAUNCHED (1u << MK_TASK_EVENT_LAUNCHED)
+#define MK_TASK_EVENT_MASK_TERMINATED (1u << MK_TASK_EVENT_TERMINATED)
+#define MK_TASK_EVENT_MASK_BLOCKED (1u << MK_TASK_EVENT_BLOCKED)
+#define MK_TASK_EVENT_MASK_WOKE (1u << MK_TASK_EVENT_WOKE)
+#define MK_TASK_EVENT_MASK_RESTART_REQUESTED (1u << MK_TASK_EVENT_RESTART_REQUESTED)
+#define MK_TASK_EVENT_MASK_LIFECYCLE \
+    (MK_TASK_EVENT_MASK_LAUNCHED | \
+     MK_TASK_EVENT_MASK_TERMINATED | \
+     MK_TASK_EVENT_MASK_RESTART_REQUESTED)
+#define MK_TASK_EVENT_MASK_ALL \
+    (MK_TASK_EVENT_MASK_LAUNCHED | \
+     MK_TASK_EVENT_MASK_TERMINATED | \
+     MK_TASK_EVENT_MASK_BLOCKED | \
+     MK_TASK_EVENT_MASK_WOKE | \
+     MK_TASK_EVENT_MASK_RESTART_REQUESTED)
+
+#define MK_TASK_EVENT_WAIT_FOREVER 0xffffffffu
+
+#define TASK_SNAPSHOT_ABI_VERSION 4u
 #define TASK_SNAPSHOT_NAME_MAX 16u
 #define TASK_SNAPSHOT_MAX 32u
 
@@ -425,6 +463,7 @@ struct task_snapshot_entry {
     uint32_t context_switches;
     uint32_t service_type;
     uint32_t priority_tier;
+    uint32_t task_class;
     uint32_t service_restart_count;
     uint32_t flags;
     uint32_t wait_result;

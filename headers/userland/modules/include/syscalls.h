@@ -64,6 +64,7 @@ int sys_task_terminate(uint32_t pid);
 int sys_launch_app(const char *name);
 int sys_launch_app_argv(int argc, char **argv);
 int sys_task_event_subscribe(void);
+int sys_task_event_subscribe_mask(uint32_t event_mask, uint32_t task_class_mask);
 int sys_task_event_receive(struct mk_task_event *event, uint32_t timeout_ticks);
 void sys_sleep(void);
 uint32_t sys_ticks(void);

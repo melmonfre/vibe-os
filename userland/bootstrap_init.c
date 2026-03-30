@@ -137,6 +137,35 @@ static const char *bootstrap_task_priority_name(uint32_t priority_tier) {
     }
 }
 
+static const char *bootstrap_task_class_name(uint32_t task_class) {
+    switch (task_class) {
+    case MK_TASK_CLASS_SUPERVISION:
+        return "supervision";
+    case MK_TASK_CLASS_DESKTOP:
+        return "desktop";
+    case MK_TASK_CLASS_SHELL:
+        return "shell";
+    case MK_TASK_CLASS_APP_RUNTIME:
+        return "app";
+    case MK_TASK_CLASS_INPUT:
+        return "input";
+    case MK_TASK_CLASS_VIDEO_PRESENT:
+        return "video";
+    case MK_TASK_CLASS_STORAGE_IO:
+        return "storage";
+    case MK_TASK_CLASS_FILESYSTEM_IO:
+        return "filesystem";
+    case MK_TASK_CLASS_AUDIO_IO:
+        return "audio";
+    case MK_TASK_CLASS_NETWORK_IO:
+        return "network";
+    case MK_TASK_CLASS_CONSOLE_IO:
+        return "console";
+    default:
+        return "unknown";
+    }
+}
+
 static void bootstrap_log_task_event(const struct mk_task_event *event) {
     char buffer[192];
 
@@ -151,6 +180,8 @@ static void bootstrap_log_task_event(const struct mk_task_event *event) {
     bootstrap_append_u32(buffer, (int)sizeof(buffer), event->pid);
     str_append(buffer, " prio=", (int)sizeof(buffer));
     str_append(buffer, bootstrap_task_priority_name(event->priority_tier), (int)sizeof(buffer));
+    str_append(buffer, " class=", (int)sizeof(buffer));
+    str_append(buffer, bootstrap_task_class_name(event->task_class), (int)sizeof(buffer));
     str_append(buffer, " service=", (int)sizeof(buffer));
     str_append(buffer, bootstrap_service_name(event->service_type), (int)sizeof(buffer));
     str_append(buffer, " tick=", (int)sizeof(buffer));
@@ -304,7 +335,8 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     }
     kernel_debug_puts("init: supervisor idle\n");
     bootstrap_subscribe_supervision_events();
-    (void)sys_task_event_subscribe();
+    (void)sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_ALL,
+                                        MK_TASK_CLASS_MASK_ALL);
     for (;;) {
         uint32_t service_type;
         int handled = 0;

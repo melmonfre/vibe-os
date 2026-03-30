@@ -18,11 +18,14 @@ static int g_console_reply_trace_emitted = 0;
 static int g_transport_fallback_budget = 16;
 static int g_request_send_fail_budget = 16;
 static int g_unexpected_reply_budget = 16;
+static int g_request_timeout_budget = 16;
 static int g_storage_request_trace_budget = 8;
 static int g_storage_worker_trace_budget = 8;
 static int g_storage_reply_trace_budget = 8;
 static int g_interactive_request_trace_budget = 24;
 static spinlock_t g_service_event_lock;
+
+#define MK_SERVICE_REQUEST_REPLY_TIMEOUT_TICKS 32u
 
 static void mk_service_worker_entry(void);
 static void mk_service_publish_event(struct mk_service_record *service, uint32_t event_type);
@@ -70,10 +73,13 @@ static void mk_service_init_subscriptions(struct mk_service_record *service) {
 
         memset(subscription, 0, sizeof(*subscription));
         subscription->pid = 0;
-        kernel_waitable_init_ex(&subscription->waitable,
-                                TASK_WAIT_EVENT_QUEUE,
-                                TASK_WAIT_CLASS_SUPERVISION,
-                                service->type);
+        kernel_mailbox_init(&subscription->mailbox,
+                            subscription->events,
+                            sizeof(subscription->events[0]),
+                            MK_SERVICE_EVENT_QUEUE_SIZE,
+                            KERNEL_MAILBOX_DROP_NEWEST,
+                            TASK_WAIT_CLASS_SUPERVISION,
+                            service->type);
     }
 }
 
@@ -243,15 +249,14 @@ static void mk_service_publish_event(struct mk_service_record *service, uint32_t
             continue;
         }
         if (scheduler_find_task_by_pid(subscription->pid) == 0) {
-            subscription->pid = 0;
-            subscription->process = 0;
-            subscription->head = 0u;
-            subscription->tail = 0u;
-            subscription->count = 0u;
-            continue;
-        }
-        if (subscription->count >= MK_SERVICE_EVENT_QUEUE_SIZE) {
-            subscription->dropped_events += 1u;
+            memset(subscription, 0, sizeof(*subscription));
+            kernel_mailbox_init(&subscription->mailbox,
+                                subscription->events,
+                                sizeof(subscription->events[0]),
+                                MK_SERVICE_EVENT_QUEUE_SIZE,
+                                KERNEL_MAILBOX_DROP_NEWEST,
+                                TASK_WAIT_CLASS_SUPERVISION,
+                                service->type);
             continue;
         }
         mk_service_enqueue_event(service, subscription, event_type);
@@ -267,10 +272,6 @@ static void mk_service_enqueue_event(struct mk_service_record *service,
     if (service == 0 || subscription == 0 || event_type == MK_SERVICE_EVENT_NONE) {
         return;
     }
-    if (subscription->count >= MK_SERVICE_EVENT_QUEUE_SIZE) {
-        subscription->dropped_events += 1u;
-        return;
-    }
 
     memset(&event, 0, sizeof(event));
     event.abi_version = 1u;
@@ -281,10 +282,7 @@ static void mk_service_enqueue_event(struct mk_service_record *service,
     event.transport_degraded = service->transport_degraded;
     event.tick = kernel_timer_get_ticks();
 
-    subscription->events[subscription->tail] = event;
-    subscription->tail = (subscription->tail + 1u) % MK_SERVICE_EVENT_QUEUE_SIZE;
-    subscription->count += 1u;
-    kernel_waitable_signal(&subscription->waitable, 1u);
+    (void)kernel_mailbox_try_send(&subscription->mailbox, &event);
 }
 
 static struct mk_service_event_subscription *mk_service_find_subscription(
@@ -324,10 +322,13 @@ static struct mk_service_event_subscription *mk_service_alloc_subscription(
             memset(subscription, 0, sizeof(*subscription));
             subscription->pid = subscriber->pid;
             subscription->process = subscriber;
-            kernel_waitable_init_ex(&subscription->waitable,
-                                    TASK_WAIT_EVENT_QUEUE,
-                                    TASK_WAIT_CLASS_SUPERVISION,
-                                    service->type);
+            kernel_mailbox_init(&subscription->mailbox,
+                                subscription->events,
+                                sizeof(subscription->events[0]),
+                                MK_SERVICE_EVENT_QUEUE_SIZE,
+                                KERNEL_MAILBOX_DROP_NEWEST,
+                                TASK_WAIT_CLASS_SUPERVISION,
+                                service->type);
             return subscription;
         }
     }
@@ -565,6 +566,7 @@ static int mk_service_request_process(const struct mk_service_record *service,
     process_t *current;
     struct mk_message request_copy;
     struct mk_message response;
+    uint32_t request_start_tick;
     uint32_t waiting_pid;
 
     if (service == 0 || request == 0 || reply == 0) {
@@ -599,6 +601,7 @@ static int mk_service_request_process(const struct mk_service_record *service,
 
         request_copy.target_pid = (uint32_t)service->pid;
         waiting_pid = request_copy.target_pid;
+        request_start_tick = kernel_timer_get_ticks();
 
         if (service->type == MK_SERVICE_CONSOLE && !g_console_request_trace_emitted) {
             g_console_request_trace_emitted = 1;
@@ -703,6 +706,41 @@ static int mk_service_request_process(const struct mk_service_record *service,
                 }
                 (void)mk_service_requeue_message(current, &response);
                 continue;
+            }
+
+            if ((uint32_t)(kernel_timer_get_ticks() - request_start_tick) >=
+                MK_SERVICE_REQUEST_REPLY_TIMEOUT_TICKS) {
+                struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
+
+                if (g_request_timeout_budget > 0) {
+                    g_request_timeout_budget -= 1;
+                    kernel_debug_printf("service: request timeout svc=%d type=%d src=%d dst=%d\n",
+                                        (int)service->type,
+                                        (int)request_copy.type,
+                                        (int)request_copy.source_pid,
+                                        (int)request_copy.target_pid);
+                }
+
+                if (mutable_service != 0) {
+                    if (mutable_service->transport_degraded == 0u) {
+                        mutable_service->transport_degraded = 1u;
+                        mk_service_publish_event(mutable_service, MK_SERVICE_EVENT_DEGRADED);
+                    }
+                    (void)mk_service_restart_worker_record(mutable_service);
+                    if (mutable_service->local_handler != 0) {
+                        if (g_transport_fallback_budget > 0) {
+                            g_transport_fallback_budget -= 1;
+                            kernel_debug_printf("service: timeout fallback type=%d src=%d dst=%d service=%d\n",
+                                                (int)request_copy.type,
+                                                (int)request_copy.source_pid,
+                                                (int)request_copy.target_pid,
+                                                (int)service->type);
+                        }
+                        return mutable_service->local_handler(&request_copy, reply, mutable_service->context);
+                    }
+                }
+
+                return -1;
             }
 
             live_service = mk_service_find_by_type(service->type);
@@ -864,7 +902,7 @@ int mk_service_event_receive(uint32_t type,
                              struct mk_service_event *event,
                              uint32_t timeout_ticks) {
     struct mk_service_record *service;
-    struct mk_service_event_subscription *subscription;
+    int wait_rc;
     uint32_t flags;
 
     if (subscriber == 0 || event == 0) {
@@ -876,22 +914,16 @@ int mk_service_event_receive(uint32_t type,
         return -1;
     }
 
-    subscription = mk_service_find_subscription(service, subscriber);
-    if (subscription == 0) {
-        return -1;
-    }
-
     for (;;) {
+        struct mk_service_event_subscription *subscription;
+
         flags = spinlock_lock_irqsave(&g_service_event_lock);
         subscription = mk_service_find_subscription(service, subscriber);
         if (subscription == 0) {
             spinlock_unlock_irqrestore(&g_service_event_lock, flags);
             return -1;
         }
-        if (subscription->count != 0u) {
-            *event = subscription->events[subscription->head];
-            subscription->head = (subscription->head + 1u) % MK_SERVICE_EVENT_QUEUE_SIZE;
-            subscription->count -= 1u;
+        if (kernel_mailbox_try_receive(&subscription->mailbox, event) == 0) {
             spinlock_unlock_irqrestore(&g_service_event_lock, flags);
             return 0;
         }
@@ -899,7 +931,8 @@ int mk_service_event_receive(uint32_t type,
         if (timeout_ticks == 0u) {
             return -1;
         }
-        if (kernel_waitable_wait_timeout(&subscription->waitable, timeout_ticks) != 0) {
+        wait_rc = kernel_mailbox_wait(&subscription->mailbox, timeout_ticks);
+        if (wait_rc != TASK_WAIT_RESULT_SIGNALED) {
             return -1;
         }
     }

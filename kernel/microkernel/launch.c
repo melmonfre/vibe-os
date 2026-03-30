@@ -38,6 +38,9 @@ int mk_launch_validate_descriptor(const struct mk_launch_descriptor *descriptor)
         descriptor->service_type == MK_SERVICE_NONE) {
         return -1;
     }
+    if (descriptor->task_class > MK_TASK_CLASS_CONSOLE_IO) {
+        return -1;
+    }
     if (descriptor->stack_size != 0u && descriptor->stack_size < 1024u) {
         return -1;
     }
@@ -74,6 +77,7 @@ static void mk_launch_fill_context(struct mk_launch_context *context,
     context->kind = descriptor->kind;
     context->service_type = descriptor->service_type;
     context->flags = descriptor->flags;
+    context->task_class = process->task_class;
     context->argc = descriptor->argc;
     strncpy(context->name, descriptor->name, MK_LAUNCH_NAME_MAX - 1u);
     context->name[MK_LAUNCH_NAME_MAX - 1u] = '\0';
@@ -112,6 +116,7 @@ int mk_launch_bootstrap(const struct mk_launch_descriptor *descriptor) {
                                         process_kind,
                                         descriptor->service_type,
                                         descriptor->flags,
+                                        descriptor->task_class,
                                         descriptor->stack_size == 0u
                                             ? MK_LAUNCH_STACK_SIZE_DEFAULT
                                             : descriptor->stack_size);

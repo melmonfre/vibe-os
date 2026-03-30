@@ -441,22 +441,19 @@ static int busybox_wait_for_task_exit(uint32_t pid) {
     if (pid == 0u) {
         return -1;
     }
-    if (sys_task_event_subscribe() != 0) {
-        return -1;
-    }
 
     for (;;) {
-        while (sys_task_event_receive(&event, 8u) == 0) {
+        if (sys_task_event_receive(&event, MK_TASK_EVENT_WAIT_FOREVER) == 0) {
             if (event.pid == pid &&
                 event.event_type == MK_TASK_EVENT_TERMINATED) {
                 return 0;
             }
+            continue;
         }
         if (!busybox_task_pid_alive(pid)) {
             return 0;
         }
-        fs_tick();
-        sys_yield();
+        return -1;
     }
 }
 
@@ -502,6 +499,12 @@ static int busybox_launch_external_task(int argc, char **argv, int wait_for_exit
         return -1;
     }
 
+    if (wait_for_exit &&
+        sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,
+                                      MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME)) != 0) {
+        return -1;
+    }
+
     pid = sys_launch_app_argv(argc, argv);
     if (pid <= 0) {
         return -1;
@@ -513,8 +516,6 @@ static int busybox_launch_external_task(int argc, char **argv, int wait_for_exit
 }
 
 static int try_run_external_prepared(int argc, char **argv) {
-    int rc;
-
     if (argc <= 0 || argv == 0 || argv[0] == 0) {
         return -1;
     }
@@ -528,12 +529,7 @@ static int try_run_external_prepared(int argc, char **argv) {
         return 0;
     }
 
-    rc = lang_try_run(argc, argv);
-    if (rc >= 0) {
-        busybox_debug_cmd("busybox: external ok ", argv[0]);
-        return rc;
-    }
-    busybox_debug_cmd("busybox: external miss ", argv[0]);
+    busybox_debug_cmd("busybox: external launch failed ", argv[0]);
     return -1;
 }
 
@@ -1098,6 +1094,35 @@ static const char *task_snapshot_priority_name(uint32_t tier) {
     }
 }
 
+static const char *task_snapshot_class_name(uint32_t task_class) {
+    switch (task_class) {
+    case MK_TASK_CLASS_SUPERVISION:
+        return "supervision";
+    case MK_TASK_CLASS_DESKTOP:
+        return "desktop";
+    case MK_TASK_CLASS_SHELL:
+        return "shell";
+    case MK_TASK_CLASS_APP_RUNTIME:
+        return "app";
+    case MK_TASK_CLASS_INPUT:
+        return "input";
+    case MK_TASK_CLASS_VIDEO_PRESENT:
+        return "video";
+    case MK_TASK_CLASS_STORAGE_IO:
+        return "storage";
+    case MK_TASK_CLASS_FILESYSTEM_IO:
+        return "filesystem";
+    case MK_TASK_CLASS_AUDIO_IO:
+        return "audio";
+    case MK_TASK_CLASS_NETWORK_IO:
+        return "network";
+    case MK_TASK_CLASS_CONSOLE_IO:
+        return "console";
+    default:
+        return "unknown";
+    }
+}
+
 static const char *task_snapshot_service_name(uint32_t service_type) {
     switch (service_type) {
     case 1u:
@@ -1219,7 +1244,7 @@ static int cmd_ps(int argc, char **argv) {
         count = TASK_SNAPSHOT_MAX;
     }
 
-    console_write("pid kind state prio service restarts name\n");
+    console_write("pid kind state prio class service restarts name\n");
     for (i = 0; i < count; ++i) {
         char line[160];
 
@@ -1240,6 +1265,8 @@ static int cmd_ps(int argc, char **argv) {
         str_append(line, task_snapshot_state_name(entries[i].state), (int)sizeof(line));
         str_append(line, " ", (int)sizeof(line));
         str_append(line, task_snapshot_priority_name(entries[i].priority_tier), (int)sizeof(line));
+        str_append(line, " ", (int)sizeof(line));
+        str_append(line, task_snapshot_class_name(entries[i].task_class), (int)sizeof(line));
         str_append(line, " ", (int)sizeof(line));
         str_append(line, task_snapshot_service_name(entries[i].service_type), (int)sizeof(line));
         str_append(line, " ", (int)sizeof(line));
@@ -3837,6 +3864,7 @@ static void append_vidreport_launch_info(char *buf, int max_len) {
     append_vidbench_line(buf, max_len, "kind", info.kind);
     append_vidbench_line(buf, max_len, "service_type", info.service_type);
     append_vidbench_line(buf, max_len, "flags", info.flags);
+    append_vidbench_line(buf, max_len, "task_class", info.task_class);
     append_vidbench_line(buf, max_len, "argc", info.argc);
     append_vidstress_line(buf, max_len, "name", info.name);
     argv_line[0] = '\0';
