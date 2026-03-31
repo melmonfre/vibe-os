@@ -10,6 +10,7 @@
 #include <lang/include/vibe_network_client.h>
 
 struct mk_network_ethernet_config;
+struct mk_audio_event;
 
 const struct vibe_app_context *vibe_app_get_context(void);
 void vibe_app_console_putc(char c);
@@ -45,6 +46,8 @@ int vibe_app_audio_start(void);
 int vibe_app_audio_stop(void);
 int vibe_app_audio_write(const void *data, uint32_t size);
 int vibe_app_audio_read(void *data, uint32_t size);
+int vibe_app_audio_event_subscribe(void);
+int vibe_app_audio_event_receive(struct mk_audio_event *event, uint32_t timeout_ticks);
 int vibe_app_audio_get_control_info(uint32_t index, struct mk_audio_control_info *info);
 int vibe_app_audio_mixer_read(mixer_ctrl_t *control);
 int vibe_app_audio_mixer_write(const mixer_ctrl_t *control);

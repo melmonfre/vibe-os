@@ -208,16 +208,22 @@ static void audio_debug_line(const char *prefix, const char *tag, const char *su
     sys_write_debug(line);
 }
 
+static int audio_is_desktop_async_tag(const char *tag) {
+    return tag != 0 &&
+           (str_eq(tag, "desktop-session") ||
+            str_eq(tag, "desktop") ||
+            str_eq(tag, "desktop-player"));
+}
+
 static int audio_debug_progress_enabled(const char *tag) {
-    if (tag != 0 && (str_eq(tag, "desktop-session") || str_eq(tag, "desktop"))) {
+    if (audio_is_desktop_async_tag(tag)) {
         return 0;
     }
     return 1;
 }
 
 static int audio_should_use_kernel_async(const char *tag) {
-    return tag != 0 &&
-           (str_eq(tag, "desktop-session") || str_eq(tag, "desktop"));
+    return audio_is_desktop_async_tag(tag);
 }
 
 static int audio_backend_kind(void) {
@@ -579,8 +585,7 @@ int audio_play_wav_async_start(struct audio_async_playback *playback, const char
     }
 
     if (playback->backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO &&
-        tag != 0 &&
-        (str_eq(tag, "desktop-session") || str_eq(tag, "desktop"))) {
+        (tag != 0 && (str_eq(tag, "desktop-session") || str_eq(tag, "desktop")))) {
         audio_set_last_playback_error("deferred");
         audio_debug_line("audio: defer wav ", tag, "\n");
         return 0;

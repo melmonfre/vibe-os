@@ -33,6 +33,12 @@ struct taskmgr_netmgrd_status {
     char active_if[16];
     char active_kind[16];
     char backend[24];
+    char transport[24];
+    char ownership[24];
+    char fallback[24];
+    char datapath_executor[24];
+    char event_stream[24];
+    char backend_events[24];
     char dns_mode[24];
     char lease_state[24];
     char lease_source[24];
@@ -53,6 +59,9 @@ struct taskmgr_service_event_entry {
 struct taskmgr_state {
     struct rect window;
     int selected_tab;
+    int performance_scroll_offset;
+    int processes_scroll_offset;
+    int details_scroll_offset;
     uint32_t last_refresh_ticks;
     uint32_t last_video_refresh_ticks;
     uint32_t last_audio_refresh_ticks;
@@ -103,5 +112,12 @@ struct taskmgr_action taskmgr_handle_click(struct taskmgr_state *tm,
                                            int x,
                                            int y,
                                            uint32_t ticks);
+int taskmgr_scroll_by(struct taskmgr_state *tm,
+                      const struct window *wins,
+                      int win_count,
+                      int x,
+                      int y,
+                      int delta,
+                      uint32_t ticks);
 
 #endif // TASKMGR_H

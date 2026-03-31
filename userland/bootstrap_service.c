@@ -872,6 +872,21 @@ static int audio_service_handle_request(const struct mk_message *request,
                                           source_pid,
                                           sys_audio_write_async(payload->data, payload->size));
     }
+    case MK_MSG_AUDIO_PLAY_ASSET: {
+        const struct mk_audio_play_asset_request *payload;
+
+        if (request->payload_size != sizeof(*payload)) {
+            return -1;
+        }
+        payload = (const struct mk_audio_play_asset_request *)request->payload;
+        if (payload->path[0] == '\0') {
+            return audio_service_reply_result(reply, request, source_pid, -1);
+        }
+        return audio_service_reply_result(reply,
+                                          request,
+                                          source_pid,
+                                          audio_play_wav_best_effort(payload->path, "audio-service"));
+    }
     case MK_MSG_AUDIO_READ: {
         const struct mk_audio_transfer_request *payload;
         struct mk_audio_read_reply read_reply;

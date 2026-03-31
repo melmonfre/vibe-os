@@ -319,6 +319,11 @@ static void bootstrap_launch_runtime_service_apps(uint32_t boot_flags) {
         }
     }
 
+    if ((boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u) {
+        sys_write_debug("init: boot network reconcile deferred to desktop session\n");
+        return;
+    }
+
     {
         char *network_reconcile_argv[3] = {"netmgrd", "reconcile", 0};
         if (sys_launch_app_argv(2, network_reconcile_argv) > 0) {

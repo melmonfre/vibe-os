@@ -1,5 +1,6 @@
 #include <lang/include/vibe_app_runtime.h>
 #include <lang/include/vibe_stdlib.h>
+#include <include/userland_api.h>
 
 #define SOUNDCTL_WAV_STREAM_CHUNK 960u
 #define SOUNDCTL_WAV_AZALIA_CHUNK 16384u
@@ -12,9 +13,6 @@
 #define MK_AUDIO_STATUS_FLAG_UNDERRUN 0x00001000u
 #define MK_AUDIO_STATUS_FLAG_CAPTURE_DATA 0x00002000u
 #define MK_AUDIO_STATUS_FLAG_CAPTURE_XRUN 0x00004000u
-#define MK_AUDIO_FEATURE_USB_ATTACH_READY 0x00020000u
-#define MK_AUDIO_FEATURE_USB_ATTACHED_READY 0x00040000u
-
 static unsigned soundctl_feature_flags(const struct mk_audio_info *info);
 
 static void soundctl_debug(const char *text) {
@@ -123,6 +121,13 @@ static int soundctl_wait_for_playback_idle(unsigned expected_ticks) {
     }
 }
 
+static void soundctl_debug_uint_line(const char *prefix, unsigned value);
+static int soundctl_handle_capture_event(const struct mk_audio_event *event);
+static void soundctl_drain_capture_events(int subscribed);
+static int soundctl_wait_for_capture_ready(int subscribed);
+static void soundctl_emit_record_capture_debug(void);
+static void soundctl_write_record_summary(const char *target, unsigned duration_ms, unsigned captured);
+
 static unsigned soundctl_status_flags(const struct audio_status *status) {
     if (status == 0) {
         return 0u;
@@ -154,11 +159,135 @@ static void soundctl_append_text(char *buf, int max_len, int *len, const char *t
     buf[*len] = '\0';
 }
 
+static void soundctl_append_uint(char *buf, int max_len, int *len, unsigned value) {
+    char digits[10];
+    int digit_count = 0;
+    int i;
+
+    if (buf == 0 || len == 0 || max_len <= 0) {
+        return;
+    }
+
+    if (value == 0u) {
+        soundctl_append_char(buf, max_len, len, '0');
+        return;
+    }
+
+    while (value != 0u && digit_count < (int)sizeof(digits)) {
+        digits[digit_count++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    for (i = digit_count - 1; i >= 0; --i) {
+        soundctl_append_char(buf, max_len, len, digits[i]);
+    }
+}
+
 static void soundctl_append_hex(char *buf, int max_len, int *len, unsigned value, int digits) {
     for (int shift = (digits - 1) * 4; shift >= 0; shift -= 4) {
         unsigned nibble = (value >> (unsigned)shift) & 0xfu;
         soundctl_append_char(buf, max_len, len, (char)(nibble < 10u ? ('0' + nibble) : ('a' + (nibble - 10u))));
     }
+}
+
+static void soundctl_debug_uint_line(const char *prefix, unsigned value) {
+    char line[64];
+    int len = 0;
+
+    if (prefix == 0) {
+        return;
+    }
+    line[0] = '\0';
+    soundctl_append_text(line, (int)sizeof(line), &len, prefix);
+    soundctl_append_uint(line, (int)sizeof(line), &len, value);
+    soundctl_append_char(line, (int)sizeof(line), &len, '\n');
+    soundctl_debug(line);
+}
+
+static int soundctl_handle_capture_event(const struct mk_audio_event *event) {
+    if (event == 0) {
+        return 0;
+    }
+
+    switch (event->event_type) {
+    case MK_AUDIO_EVENT_CAPTURE_READY:
+        soundctl_debug_uint_line("soundctl: capture-ready=", (unsigned)event->queued_bytes);
+        return 1;
+    case MK_AUDIO_EVENT_CAPTURE_XRUN:
+        soundctl_debug_uint_line("soundctl: capture-xrun=", (unsigned)event->underruns);
+        break;
+    case MK_AUDIO_EVENT_OVERFLOW:
+        if (event->dropped_events != 0u) {
+            soundctl_debug_uint_line("soundctl: capture-overflow=", (unsigned)event->dropped_events);
+        }
+        break;
+    default:
+        break;
+    }
+
+    return 0;
+}
+
+static void soundctl_drain_capture_events(int subscribed) {
+    struct mk_audio_event event;
+
+    if (!subscribed) {
+        return;
+    }
+
+    while (vibe_app_audio_event_receive(&event, 0u) == 0) {
+        (void)soundctl_handle_capture_event(&event);
+    }
+}
+
+static int soundctl_wait_for_capture_ready(int subscribed) {
+    struct mk_audio_event event;
+    unsigned timeout_ticks;
+
+    if (!subscribed) {
+        return -1;
+    }
+
+    timeout_ticks = vibe_app_clock_hz() / 4u;
+    if (timeout_ticks == 0u) {
+        timeout_ticks = 1u;
+    }
+
+    for (;;) {
+        if (vibe_app_audio_event_receive(&event, timeout_ticks) != 0) {
+            return -1;
+        }
+        if (soundctl_handle_capture_event(&event)) {
+            return 0;
+        }
+    }
+}
+
+static void soundctl_emit_record_capture_debug(void) {
+    struct mk_audio_info info;
+    unsigned feature_flags;
+
+    if (vibe_app_audio_get_info(&info) != 0) {
+        return;
+    }
+
+    feature_flags = soundctl_feature_flags(&info);
+    soundctl_debug((feature_flags & 0x400u) != 0u ? "soundctl: capture-dma=1\n"
+                                                  : "soundctl: capture-dma=0\n");
+}
+
+static void soundctl_write_record_summary(const char *target, unsigned duration_ms, unsigned captured) {
+    char line[160];
+    int len = 0;
+
+    line[0] = '\0';
+    soundctl_append_text(line, (int)sizeof(line), &len, "record: ");
+    soundctl_append_uint(line, (int)sizeof(line), &len, duration_ms);
+    soundctl_append_text(line, (int)sizeof(line), &len, " ms -> ");
+    soundctl_append_text(line, (int)sizeof(line), &len, target != 0 ? target : "/capture.wav");
+    soundctl_append_text(line, (int)sizeof(line), &len, " (");
+    soundctl_append_uint(line, (int)sizeof(line), &len, captured);
+    soundctl_append_text(line, (int)sizeof(line), &len, " bytes)");
+    puts(line);
 }
 
 static void soundctl_format_hardware_diag(const struct mk_audio_info *info, char *buf, int max_len) {
@@ -711,7 +840,7 @@ static int soundctl_command_list(void) {
         }
         printf("\n");
     }
-    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed %susb-attach-ready %susb-attached-ready\n",
+    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed %susb-attach-ready %susb-attached-ready %scontrol-owner-audiosvc %skernel-backend-executor %sui-progress-decoupled\n",
            (feature_flags & 0x2u) != 0u ? "" : "no-",
            (feature_flags & 0x8u) != 0u ? "" : "no-",
            (feature_flags & 0x80u) != 0u ? "mmio" : "io",
@@ -723,7 +852,10 @@ static int soundctl_command_list(void) {
            (feature_flags & 0x2000u) != 0u ? "" : "no-",
            (feature_flags & 0x4000u) != 0u ? "" : "no-",
            (feature_flags & MK_AUDIO_FEATURE_USB_ATTACH_READY) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_USB_ATTACHED_READY) != 0u ? "" : "no-");
+           (feature_flags & MK_AUDIO_FEATURE_USB_ATTACHED_READY) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_CONTROL_OWNER_AUDIOSVC) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_KERNEL_BACKEND_EXECUTOR) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_UI_PROGRESS_DECOUPLED) != 0u ? "" : "no-");
     printf("controls:\n");
     while (vibe_app_audio_get_control_info(index, &control_info) == 0) {
         printf("  %s/%s -> id=%u %s pair=%u\n",
@@ -789,7 +921,7 @@ static int soundctl_command_status(void) {
         soundctl_print_default_target(&info, "input", MK_AUDIO_MIXER_INPUT_DEFAULT);
     }
     soundctl_debug("soundctl: status mixer-ok\n");
-    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed %susb-attach-ready %susb-attached-ready irq-count=%u\n",
+    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed %susb-attach-ready %susb-attached-ready %scontrol-owner-audiosvc %skernel-backend-executor %sui-progress-decoupled irq-count=%u\n",
            (feature_flags & 0x2u) != 0u ? "" : "no-",
            (feature_flags & 0x8u) != 0u ? "" : "no-",
            (feature_flags & 0x80u) != 0u ? "mmio" : "io",
@@ -802,6 +934,9 @@ static int soundctl_command_status(void) {
            (feature_flags & 0x4000u) != 0u ? "" : "no-",
            (feature_flags & MK_AUDIO_FEATURE_USB_ATTACH_READY) != 0u ? "" : "no-",
            (feature_flags & MK_AUDIO_FEATURE_USB_ATTACHED_READY) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_CONTROL_OWNER_AUDIOSVC) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_KERNEL_BACKEND_EXECUTOR) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_UI_PROGRESS_DECOUPLED) != 0u ? "" : "no-",
            info.parameters._spare[0]);
     printf("runtime: %sirq-seen %sno-valid-irq %sstarvation %sunderrun %scapture-data %scapture-xrun\n",
            (status_flags & MK_AUDIO_STATUS_FLAG_IRQ_SEEN) != 0u ? "" : "no-",
@@ -810,6 +945,17 @@ static int soundctl_command_status(void) {
            (status_flags & MK_AUDIO_STATUS_FLAG_UNDERRUN) != 0u ? "" : "no-",
            (status_flags & MK_AUDIO_STATUS_FLAG_CAPTURE_DATA) != 0u ? "" : "no-",
            (status_flags & MK_AUDIO_STATUS_FLAG_CAPTURE_XRUN) != 0u ? "" : "no-");
+    if (soundctl_status_backend(&status) == 2) {
+        soundctl_debug("soundctl: backend=compat-azalia\n");
+    } else if (soundctl_status_backend(&status) == 4) {
+        soundctl_debug("soundctl: backend=compat-uaudio\n");
+    } else if (soundctl_status_backend(&status) == 1) {
+        soundctl_debug("soundctl: backend=compat-ac97\n");
+    } else if (soundctl_status_backend(&status) == 3) {
+        soundctl_debug("soundctl: backend=pcspkr\n");
+    } else {
+        soundctl_debug("soundctl: backend=softmix\n");
+    }
     soundctl_debug((feature_flags & 0x80u) != 0u ? "soundctl: transport=mmio\n" : "soundctl: transport=io\n");
     soundctl_debug((feature_flags & 0x100u) != 0u ? "soundctl: codecready-quirk=1\n" : "soundctl: codecready-quirk=0\n");
     soundctl_debug((feature_flags & 0x200u) != 0u ? "soundctl: multichannel=1\n" : "soundctl: multichannel=0\n");
@@ -818,6 +964,15 @@ static int soundctl_command_status(void) {
     soundctl_debug((feature_flags & 0x1000u) != 0u ? "soundctl: codec-probe=1\n" : "soundctl: codec-probe=0\n");
     soundctl_debug((feature_flags & 0x2000u) != 0u ? "soundctl: widget-probe=1\n" : "soundctl: widget-probe=0\n");
     soundctl_debug((feature_flags & 0x4000u) != 0u ? "soundctl: path-programmed=1\n" : "soundctl: path-programmed=0\n");
+    soundctl_debug((feature_flags & MK_AUDIO_FEATURE_CONTROL_OWNER_AUDIOSVC) != 0u ?
+                       "soundctl: control-owner=audiosvc\n" :
+                       "soundctl: control-owner=kernel\n");
+    soundctl_debug((feature_flags & MK_AUDIO_FEATURE_KERNEL_BACKEND_EXECUTOR) != 0u ?
+                       "soundctl: backend-executor=kernel\n" :
+                       "soundctl: backend-executor=userland\n");
+    soundctl_debug((feature_flags & MK_AUDIO_FEATURE_UI_PROGRESS_DECOUPLED) != 0u ?
+                       "soundctl: ui-progress=decoupled\n" :
+                       "soundctl: ui-progress=coupled\n");
     soundctl_debug("soundctl: status ok\n");
     soundctl_emit_hardware_debug(&info);
     return 0;
@@ -1091,6 +1246,7 @@ static int soundctl_command_record(const char *duration_text, const char *path) 
     unsigned captured = 0u;
     unsigned char *wav_data = 0;
     const char *target = path;
+    int capture_event_subscription = 0;
 
     if (duration_text != 0 && soundctl_parse_uint(duration_text, &duration_ms) != 0) {
         printf("soundctl: duracao invalida\n");
@@ -1134,6 +1290,11 @@ static int soundctl_command_record(const char *duration_text, const char *path) 
         printf("soundctl: backend de audio indisponivel\n");
         return 1;
     }
+    soundctl_emit_record_capture_debug();
+    if (vibe_app_audio_event_subscribe() == 0) {
+        capture_event_subscription = 1;
+        soundctl_drain_capture_events(capture_event_subscription);
+    }
 
     while (captured < total_bytes) {
         unsigned chunk_size = total_bytes - captured;
@@ -1151,10 +1312,14 @@ static int soundctl_command_record(const char *duration_text, const char *path) 
             return 1;
         }
         if (got == 0) {
-            vibe_app_yield();
+            if (soundctl_wait_for_capture_ready(capture_event_subscription) != 0) {
+                vibe_app_yield();
+            }
+            soundctl_drain_capture_events(capture_event_subscription);
             continue;
         }
         captured += (unsigned)got;
+        soundctl_drain_capture_events(capture_event_subscription);
     }
 
     (void)vibe_app_audio_stop();
@@ -1165,10 +1330,16 @@ static int soundctl_command_record(const char *duration_text, const char *path) 
         printf("soundctl: nao conseguiu gravar %s\n", target);
         return 1;
     }
+    if (vibe_app_sync() != 0) {
+        free(wav_data);
+        soundctl_debug("soundctl: record sync-fail\n");
+        puts("soundctl: nao conseguiu sincronizar capture.wav");
+        return 1;
+    }
 
     free(wav_data);
     soundctl_debug("soundctl: record ok\n");
-    printf("record: %u ms -> %s (%u bytes)\n", duration_ms, target, captured);
+    soundctl_write_record_summary(target, duration_ms, captured);
     return 0;
 }
 

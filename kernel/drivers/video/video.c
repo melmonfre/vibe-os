@@ -150,6 +150,7 @@ static void kernel_video_present_full_legacy_lfb(void);
 static void kernel_video_present_rect_legacy_lfb(const struct kernel_video_rect *rect);
 static void kernel_video_present_full_fast_lfb(void);
 static void kernel_video_present_rect_fast_lfb(const struct kernel_video_rect *rect);
+static size_t kernel_video_blit8_source_pitch(const uint8_t *src, int src_w, int src_h);
 static void kernel_video_blit8_stretch_to_target(const uint8_t *src, int src_w, int src_h,
                                                  int dst_x, int dst_y, int dst_w, int dst_h,
                                                  uint8_t *dst, uint32_t pitch, uint32_t width,
@@ -617,6 +618,78 @@ static size_t kernel_video_frame_bytes(void) {
         return 0u;
     }
     return (size_t)g_mode.pitch * (size_t)g_mode.height;
+}
+
+static size_t kernel_video_blit8_source_pitch(const uint8_t *src, int src_w, int src_h) {
+    uintptr_t backbuf_addr;
+    uintptr_t src_addr;
+    size_t frame_bytes;
+    size_t offset;
+    size_t start_x;
+    size_t start_y;
+
+    if (src == 0 || src_w <= 0 || src_h <= 0) {
+        return 0u;
+    }
+
+    if (!kernel_video_has_graphics_mode() || g_backbuf == 0) {
+        return (size_t)src_w;
+    }
+
+    backbuf_addr = (uintptr_t)g_backbuf;
+    src_addr = (uintptr_t)src;
+    if (src_addr < backbuf_addr) {
+        return (size_t)src_w;
+    }
+
+    frame_bytes = kernel_video_frame_bytes();
+    offset = (size_t)(src_addr - backbuf_addr);
+    if (frame_bytes == 0u || offset >= frame_bytes) {
+        return (size_t)src_w;
+    }
+
+    start_x = offset % g_mode.pitch;
+    start_y = offset / g_mode.pitch;
+    if (start_x + (size_t)src_w > g_mode.pitch ||
+        start_y + (size_t)src_h > g_mode.height) {
+        return (size_t)src_w;
+    }
+
+    return (size_t)g_mode.pitch;
+}
+
+int kernel_video_pack_blit8_source(const uint8_t *src, int src_w, int src_h,
+                                   uint8_t *dst, size_t dst_size) {
+    size_t src_pitch;
+    size_t row_bytes;
+    size_t packed_bytes;
+
+    if (src == 0 || dst == 0 || src_w <= 0 || src_h <= 0) {
+        return -1;
+    }
+
+    row_bytes = (size_t)src_w;
+    packed_bytes = row_bytes * (size_t)src_h;
+    if (packed_bytes == 0u || dst_size < packed_bytes) {
+        return -1;
+    }
+
+    src_pitch = kernel_video_blit8_source_pitch(src, src_w, src_h);
+    if (src_pitch == 0u) {
+        return -1;
+    }
+
+    if (src_pitch == row_bytes) {
+        memcpy(dst, src, packed_bytes);
+        return 0;
+    }
+
+    for (int y = 0; y < src_h; ++y) {
+        memcpy(dst + ((size_t)y * row_bytes),
+               src + ((size_t)y * src_pitch),
+               row_bytes);
+    }
+    return 0;
 }
 
 static void kernel_video_copy_lfb_to_buffer(uint8_t *dst) {
@@ -1962,6 +2035,7 @@ void kernel_gfx_draw_text(int x, int y, const char *text, uint8_t color) {
 void kernel_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale) {
     struct video_mode *mode;
     uint8_t *bb;
+    size_t src_pitch;
 
     kernel_video_enter_graphics();
     if (src == NULL || src_w <= 0 || src_h <= 0 || scale <= 0) {
@@ -1974,11 +2048,16 @@ void kernel_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int d
         return;
     }
 
+    src_pitch = kernel_video_blit8_source_pitch(src, src_w, src_h);
+    if (src_pitch == 0u) {
+        return;
+    }
+
     for (int sy = 0; sy < src_h; ++sy) {
         int py0 = dst_y + (sy * scale);
         for (int sx = 0; sx < src_w; ++sx) {
             int px0 = dst_x + (sx * scale);
-            uint8_t color = src[(sy * src_w) + sx];
+            uint8_t color = src[((size_t)sy * src_pitch) + (size_t)sx];
 
             for (int oy = 0; oy < scale; ++oy) {
                 int py = py0 + oy;
@@ -1999,6 +2078,8 @@ void kernel_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int d
 }
 
 void kernel_gfx_blit8_present(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale) {
+    size_t src_pitch;
+
     kernel_video_enter_graphics();
     if (src == NULL || src_w <= 0 || src_h <= 0 || scale <= 0) {
         return;
@@ -2014,9 +2095,14 @@ void kernel_gfx_blit8_present(const uint8_t *src, int src_w, int src_h, int dst_
         src_h == (int)g_mode.height) {
         uint8_t *fb = (uint8_t *)(uintptr_t)g_fb;
 
+        src_pitch = kernel_video_blit8_source_pitch(src, src_w, src_h);
+        if (src_pitch == 0u) {
+            return;
+        }
+
         for (int y = 0; y < src_h; ++y) {
             memcpy(fb + ((size_t)y * g_mode.pitch),
-                   src + ((size_t)y * (size_t)src_w),
+                   src + ((size_t)y * src_pitch),
                    (size_t)src_w);
         }
         g_direct_fullscreen_present_dirty = 1;
@@ -2032,6 +2118,13 @@ static void kernel_video_blit8_stretch_to_target(const uint8_t *src, int src_w, 
                                                  int dst_x, int dst_y, int dst_w, int dst_h,
                                                  uint8_t *dst, uint32_t pitch, uint32_t width,
                                                  uint32_t height) {
+    size_t src_pitch;
+
+    src_pitch = kernel_video_blit8_source_pitch(src, src_w, src_h);
+    if (src_pitch == 0u) {
+        return;
+    }
+
     for (int dy = 0; dy < dst_h; ++dy) {
         int py = dst_y + dy;
         int sy;
@@ -2059,7 +2152,7 @@ static void kernel_video_blit8_stretch_to_target(const uint8_t *src, int src_w, 
             } else if (sx >= src_w) {
                 sx = src_w - 1;
             }
-            dst[(py * pitch) + px] = src[(sy * src_w) + sx];
+            dst[(py * pitch) + px] = src[((size_t)sy * src_pitch) + (size_t)sx];
         }
     }
 }

@@ -810,11 +810,16 @@ static void mk_audio_refresh_topology_snapshot(void);
 static void mk_audio_compat_update_input_progress(void);
 static void mk_audio_capture_ring_write(const uint8_t *data, uint32_t size);
 static int mk_audio_capture_ring_read(uint8_t *data, uint32_t size);
+static void mk_audio_capture_note_xrun(void);
 static int mk_audio_compat_capture_block(uint32_t requested_bytes);
 static uint32_t mk_audio_estimated_playback_ticks(const struct audio_swpar *params, uint32_t data_size);
 static void mk_audio_event_init_subscribers(void);
 static void mk_audio_publish_event(uint32_t event_type, uint32_t queued_bytes, uint32_t underruns);
 static int mk_audio_current_underruns(void);
+static void mk_audio_debug_backend_state(const char *prefix);
+static void mk_audio_debug_append_text(char *dst, size_t dst_size, const char *src);
+static void mk_audio_debug_append_hex(char *dst, size_t dst_size, uint32_t value, unsigned digits);
+static void mk_audio_debug_append_uint(char *dst, size_t dst_size, uint32_t value);
 static const struct mk_audio_backend_ops g_audio_backend_soft = {
     mk_audio_backend_soft_start,
     mk_audio_backend_soft_stop,
@@ -950,6 +955,13 @@ static void mk_audio_publish_event(uint32_t event_type, uint32_t queued_bytes, u
         }
         mk_audio_enqueue_event(subscription, event_type, queued_bytes, underruns);
     }
+}
+
+static void mk_audio_capture_note_xrun(void) {
+    g_audio_state.capture_xruns++;
+    mk_audio_publish_event(MK_AUDIO_EVENT_CAPTURE_XRUN,
+                           g_audio_state.capture_fill,
+                           g_audio_state.capture_xruns);
 }
 
 static int mk_audio_current_underruns(void) {
@@ -1265,6 +1277,28 @@ static void mk_audio_copy_limited(char *dst, const char *src, size_t dst_size) {
 
     strncpy(dst, src, dst_size - 1u);
     dst[dst_size - 1u] = '\0';
+}
+
+static void mk_audio_debug_backend_state(const char *prefix) {
+    char line[192];
+    const char *backend = g_audio_state.info.device.version;
+    const char *config = g_audio_state.info.device.config;
+
+    if (prefix == 0) {
+        return;
+    }
+
+    line[0] = '\0';
+    mk_audio_debug_append_text(line, sizeof(line), prefix);
+    mk_audio_debug_append_text(line,
+                               sizeof(line),
+                               backend != 0 && backend[0] != '\0' ? backend : "unknown");
+    mk_audio_debug_append_text(line, sizeof(line), " config=");
+    mk_audio_debug_append_text(line,
+                               sizeof(line),
+                               config != 0 && config[0] != '\0' ? config : "unknown");
+    mk_audio_debug_append_text(line, sizeof(line), "\n");
+    kernel_debug_puts(line);
 }
 
 static void mk_audio_debug_append_text(char *dst, size_t dst_size, const char *src) {
@@ -1994,8 +2028,30 @@ static int mk_audio_compat_write_codec(uint8_t reg, uint16_t value) {
     return 0;
 }
 
+static int mk_audio_compat_probe_codec_registers(uint16_t *caps_out) {
+    uint16_t caps = 0xffffu;
+
+    if (g_audio_state.compat_mix_base == 0u) {
+        return -1;
+    }
+
+    for (uint32_t attempt = 0u; attempt < 32u; ++attempt) {
+        if (mk_audio_compat_read_codec(AC97_REG_RESET, &caps) == 0 &&
+            caps != 0xffffu) {
+            if (caps_out != 0) {
+                *caps_out = caps;
+            }
+            return 0;
+        }
+        mk_audio_compat_delay();
+    }
+
+    return -1;
+}
+
 static int mk_audio_compat_reset_codec(void) {
     uint32_t control;
+    uint16_t caps = 0u;
 
     if (g_audio_state.compat_aud_base == 0u) {
         return -1;
@@ -2012,6 +2068,13 @@ static int mk_audio_compat_reset_codec(void) {
             return 0;
         }
         mk_audio_compat_delay();
+    }
+
+    if (mk_audio_compat_probe_codec_registers(&caps) == 0) {
+        g_audio_state.compat_caps = caps;
+        g_audio_state.compat_codec_ready = 1u;
+        kernel_debug_puts("audio: ac97 codec ready via register probe\n");
+        return 0;
     }
 
     if (g_audio_state.compat_ignore_codecready) {
@@ -3485,69 +3548,74 @@ static uint32_t mk_audio_backend_feature_flags(void) {
     uint32_t flags = 0u;
 
     if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_COMPAT_AUICH) {
-        flags |= 0x1u;
+        flags |= MK_AUDIO_FEATURE_COMPAT_AUICH;
     }
     if (g_audio_state.compat_irq_registered || g_audio_state.azalia_irq_registered) {
-        flags |= 0x2u;
+        flags |= MK_AUDIO_FEATURE_IRQ_REGISTERED;
     }
     if ((g_audio_state.compat_ready || g_audio_state.azalia_ready) &&
         (g_audio_state.pci.irq_line >= 16u ||
          (!g_audio_state.compat_irq_registered && !g_audio_state.azalia_irq_registered))) {
-        flags |= 0x4u;
+        flags |= MK_AUDIO_FEATURE_NO_VALID_IRQ;
     }
     if ((g_audio_state.info.flags & MK_AUDIO_CAPS_CAPTURE) != 0u) {
-        flags |= 0x8u;
+        flags |= MK_AUDIO_FEATURE_CAPTURE;
     }
     if (g_audio_state.compat_irq_count != 0u || g_audio_state.azalia_irq_count != 0u) {
-        flags |= 0x10u;
+        flags |= MK_AUDIO_FEATURE_IRQ_SEEN;
     }
     if (g_audio_state.playback_starvations != 0u) {
-        flags |= 0x20u;
+        flags |= MK_AUDIO_FEATURE_STARVATION;
     }
     if (g_audio_state.playback_underruns != 0u) {
-        flags |= 0x40u;
+        flags |= MK_AUDIO_FEATURE_UNDERRUN;
     }
     if (g_audio_state.compat_aud_is_mmio || g_audio_state.compat_mix_is_mmio || g_audio_state.azalia_ready) {
-        flags |= 0x80u;
+        flags |= MK_AUDIO_FEATURE_MMIO_TRANSPORT;
     }
     if (g_audio_state.compat_ignore_codecready) {
-        flags |= 0x100u;
+        flags |= MK_AUDIO_FEATURE_CODECREADY_QUIRK;
     }
     if ((g_audio_state.compat_ext_audio_id &
          (AC97_EXT_AUDIO_SDAC | AC97_EXT_AUDIO_CDAC | AC97_EXT_AUDIO_LDAC)) != 0u) {
-        flags |= 0x200u;
+        flags |= MK_AUDIO_FEATURE_MULTICHANNEL;
     }
     if (g_audio_state.compat_ready && g_audio_state.compat_codec_ready &&
         (g_audio_state.info.flags & MK_AUDIO_CAPS_CAPTURE) != 0u) {
-        flags |= 0x400u;
+        flags |= MK_AUDIO_FEATURE_CAPTURE_DMA;
     }
     if (g_audio_state.azalia_corb_ready) {
-        flags |= 0x800u;
+        flags |= MK_AUDIO_FEATURE_CORB_RIRB;
     }
     if (g_audio_state.azalia_codec_probed) {
-        flags |= 0x1000u;
+        flags |= MK_AUDIO_FEATURE_CODEC_PROBE;
     }
     if (g_audio_state.azalia_widget_probed) {
-        flags |= 0x2000u;
+        flags |= MK_AUDIO_FEATURE_WIDGET_PROBE;
     }
     if (g_audio_state.azalia_path_programmed) {
-        flags |= 0x4000u;
+        flags |= MK_AUDIO_FEATURE_PATH_PROGRAMMED;
     }
     if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_PCSPKR) {
-        flags |= 0x80u;
+        flags |= MK_AUDIO_FEATURE_MMIO_TRANSPORT;
     }
     if (kernel_usb_audio_class_probe_count() != 0u) {
-        flags |= 0x8000u;
+        flags |= MK_AUDIO_FEATURE_USB_CLASS_DETECTED;
     }
     if (kernel_usb_audio_probe_configured_ready_count() != 0u) {
-        flags |= 0x10000u;
+        flags |= MK_AUDIO_FEATURE_USB_CONFIGURED_READY;
     }
     if (g_audio_state.usb_audio_attach_ready) {
-        flags |= 0x20000u;
+        flags |= MK_AUDIO_FEATURE_USB_ATTACH_READY;
     }
     if (g_audio_state.usb_audio_attached_ready) {
-        flags |= 0x40000u;
+        flags |= MK_AUDIO_FEATURE_USB_ATTACHED_READY;
     }
+    if (mk_audio_service_ready()) {
+        flags |= MK_AUDIO_FEATURE_CONTROL_OWNER_AUDIOSVC;
+    }
+    flags |= MK_AUDIO_FEATURE_KERNEL_BACKEND_EXECUTOR;
+    flags |= MK_AUDIO_FEATURE_UI_PROGRESS_DECOUPLED;
     return flags;
 }
 
@@ -4128,7 +4196,7 @@ static int mk_audio_compat_capture_block(uint32_t requested_bytes) {
            silent block so userland capture does not stall forever. */
         memset(&g_audio_auich_pcmi_buffers[0][0], 0, dma_chunk_limit);
         captured_bytes = (uint16_t)dma_chunk_limit;
-        g_audio_state.capture_xruns++;
+        mk_audio_capture_note_xrun();
         kernel_debug_printf("audio: capture-silence-fallback bytes=%d\n",
                             (unsigned int)captured_bytes);
     }
@@ -4137,7 +4205,7 @@ static int mk_audio_compat_capture_block(uint32_t requested_bytes) {
     }
 
     if ((sts & AUICH_FIFOE) != 0u) {
-        g_audio_state.capture_xruns++;
+        mk_audio_capture_note_xrun();
     }
     mk_audio_compat_write16(g_audio_state.compat_aud_base,
                             g_audio_state.compat_aud_is_mmio,
@@ -4244,7 +4312,7 @@ static void mk_audio_compat_update_input_progress(void) {
 
     if ((sts & (AUICH_CELV | AUICH_LVBCI | AUICH_BCIS | AUICH_FIFOE)) != 0u) {
         if ((sts & AUICH_FIFOE) != 0u) {
-            g_audio_state.capture_xruns++;
+            mk_audio_capture_note_xrun();
         }
         mk_audio_compat_write16(g_audio_state.compat_aud_base,
                                 g_audio_state.compat_aud_is_mmio,
@@ -4287,7 +4355,7 @@ static void mk_audio_compat_irq_handler(void) {
                                 AUICH_PCMI + AUICH_STS,
                                 (uint16_t)(input_status & (AUICH_CELV | AUICH_LVBCI | AUICH_BCIS | AUICH_FIFOE)));
         if ((input_status & AUICH_FIFOE) != 0u) {
-            g_audio_state.capture_xruns++;
+            mk_audio_capture_note_xrun();
         }
     }
 
@@ -8421,10 +8489,12 @@ static uint32_t mk_audio_async_pump_chunk_limit(void) {
 
 static void mk_audio_capture_ring_write(const uint8_t *data, uint32_t size) {
     uint32_t i;
+    uint8_t was_empty;
 
     if (data == 0 || size == 0u) {
         return;
     }
+    was_empty = g_audio_state.capture_fill == 0u ? 1u : 0u;
 
     if (size > MK_AUDIO_SOFT_BUFFER_SIZE) {
         data += size - MK_AUDIO_SOFT_BUFFER_SIZE;
@@ -8437,7 +8507,7 @@ static void mk_audio_capture_ring_write(const uint8_t *data, uint32_t size) {
         g_audio_state.capture_head =
             (g_audio_state.capture_head + overflow) % MK_AUDIO_SOFT_BUFFER_SIZE;
         g_audio_state.capture_fill -= overflow;
-        g_audio_state.capture_xruns++;
+        mk_audio_capture_note_xrun();
     }
 
     for (i = 0u; i < size; ++i) {
@@ -8446,6 +8516,11 @@ static void mk_audio_capture_ring_write(const uint8_t *data, uint32_t size) {
     }
     g_audio_state.capture_fill += size;
     g_audio_state.capture_bytes_captured += size;
+    if (was_empty && g_audio_state.capture_fill != 0u) {
+        mk_audio_publish_event(MK_AUDIO_EVENT_CAPTURE_READY,
+                               g_audio_state.capture_fill,
+                               g_audio_state.capture_xruns);
+    }
 }
 
 static int mk_audio_capture_ring_read(uint8_t *data, uint32_t size) {
@@ -9544,6 +9619,15 @@ static int mk_audio_local_handler(const struct mk_message *request,
             g_last_audio_reply = *reply;
             return 0;
         }
+    case MK_MSG_AUDIO_PLAY_ASSET:
+        if (request->payload_size != sizeof(struct mk_audio_play_asset_request)) {
+            return -1;
+        }
+        if (mk_audio_reply_result(reply, -1) != 0) {
+            return -1;
+        }
+        g_last_audio_reply = *reply;
+        return 0;
     default:
         return -1;
     }
@@ -9756,9 +9840,7 @@ void mk_audio_service_init(void) {
         }
     }
     mk_audio_refresh_topology_snapshot();
-    kernel_debug_printf("audio: service init exit backend=%u config=%s\n",
-                        (unsigned int)g_audio_state.backend_kind,
-                        g_audio_state.info.device.config);
+    mk_audio_debug_backend_state("audio: service init exit backend=");
 
     (void)mk_service_launch_task(MK_SERVICE_AUDIO,
                                  "audio",
@@ -10021,6 +10103,37 @@ int mk_audio_service_write_async(const void *data, uint32_t size) {
     return (int)total_written;
 }
 
+int mk_audio_service_play_asset(const char *path) {
+    struct mk_message request;
+    struct mk_message reply;
+    struct mk_audio_result result;
+    struct mk_audio_play_asset_request payload;
+
+    if (path == 0 || path[0] == '\0') {
+        return -1;
+    }
+
+    memset(&payload, 0, sizeof(payload));
+    mk_audio_copy_limited(payload.path, path, sizeof(payload.path));
+    if (payload.path[0] == '\0') {
+        return -1;
+    }
+    if (mk_audio_prepare_request(&request,
+                                 MK_MSG_AUDIO_PLAY_ASSET,
+                                 &payload,
+                                 sizeof(payload)) != 0) {
+        return -1;
+    }
+    if (mk_service_request(MK_SERVICE_AUDIO, &request, &reply) != 0) {
+        return -1;
+    }
+    if (reply.payload_size != sizeof(result)) {
+        return -1;
+    }
+    memcpy(&result, reply.payload, sizeof(result));
+    return result.value;
+}
+
 static void mk_audio_service_tick(uint32_t tick) {
     (void)tick;
     mk_audio_service_pump_async();
@@ -10028,12 +10141,13 @@ static void mk_audio_service_tick(uint32_t tick) {
 
 void mk_audio_service_pump_async(void) {
     uint8_t chunk[MK_AUDIO_ASYNC_WRITE_CHUNK];
+    uint32_t iterations = 0u;
 
     if (g_audio_backend == 0 || g_audio_backend->write == 0) {
         return;
     }
 
-    if (g_audio_state.async_write_fill != 0u) {
+    while (g_audio_state.async_write_fill != 0u && iterations < 32u) {
         uint32_t chunk_size = g_audio_state.async_write_fill;
         int written;
         uint32_t chunk_limit = mk_audio_async_pump_chunk_limit();
@@ -10053,6 +10167,11 @@ void mk_audio_service_pump_async(void) {
             return;
         }
         mk_audio_async_ring_consume((uint32_t)written);
+        iterations += 1u;
+
+        if ((uint32_t)written < chunk_size) {
+            break;
+        }
     }
     mk_audio_refresh_status_snapshot();
 }
@@ -10086,6 +10205,12 @@ int mk_audio_service_subscribe(process_t *subscriber) {
                                MK_AUDIO_EVENT_IDLE,
                                0u,
                                g_audio_state.audio_event_last_underruns);
+    }
+    if (g_audio_state.capture_fill != 0u) {
+        mk_audio_enqueue_event(subscription,
+                               MK_AUDIO_EVENT_CAPTURE_READY,
+                               g_audio_state.capture_fill,
+                               g_audio_state.capture_xruns);
     }
     return 0;
 }

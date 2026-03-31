@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import re
 import shutil
 import socket
@@ -11,11 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-
-BASE_WIDTH = 640
-BASE_HEIGHT = 480
-START_BUTTON_CENTER = (35, 469)
-START_MENU_TERMINAL_CENTER = (186, 142)
+BASE_WIDTH = 800
+BASE_HEIGHT = 600
+TERMINAL_FOCUS_POINT = (210, 170)
 
 
 @dataclass
@@ -36,6 +35,7 @@ class QemuMonitorSession:
                  audio_devices: List[str]):
         self.serial_log = workspace / "serial.log"
         self.monitor_socket = workspace / "monitor.sock"
+        self.qmp_socket = workspace / "qmp.sock"
         qemu_cmd = [
             qemu_binary,
             "-m",
@@ -54,6 +54,8 @@ class QemuMonitorSession:
             f"file:{self.serial_log}",
             "-monitor",
             f"unix:{self.monitor_socket},server,nowait",
+            "-qmp",
+            f"unix:{self.qmp_socket},server,nowait",
         ]
         if machine:
             qemu_cmd.extend(["-machine", machine])
@@ -72,7 +74,9 @@ class QemuMonitorSession:
         )
         self.mouse_x = 0
         self.mouse_y = 0
+        self.mouse_position_known = False
         self._wait_for_monitor()
+        self._wait_for_qmp()
 
     def _wait_for_monitor(self) -> None:
         deadline = time.time() + 10.0
@@ -83,6 +87,16 @@ class QemuMonitorSession:
                 raise RuntimeError("QEMU exited before monitor socket was created")
             time.sleep(0.05)
         raise RuntimeError("Timed out waiting for QEMU monitor socket")
+
+    def _wait_for_qmp(self) -> None:
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            if self.qmp_socket.exists():
+                return
+            if self.proc.poll() is not None:
+                raise RuntimeError("QEMU exited before QMP socket was created")
+            time.sleep(0.05)
+        raise RuntimeError("Timed out waiting for QMP socket")
 
     def close(self) -> None:
         if self.proc.poll() is None:
@@ -97,6 +111,61 @@ class QemuMonitorSession:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait(timeout=5.0)
+
+    def _recv_qmp_message_once(self, client: socket.socket, timeout: float) -> dict:
+        buffer = ""
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            client.settimeout(max(0.05, deadline - time.time()))
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            buffer += chunk.decode("utf-8", errors="replace")
+
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                if not line.strip():
+                    continue
+                message = json.loads(line)
+                if "return" in message or "error" in message:
+                    return message
+
+        return {}
+
+    def qmp_once(self, payload: dict, timeout: float = 1.0) -> dict:
+        last_error: Optional[Exception] = None
+        deadline = time.time() + max(1.0, timeout * 3.0)
+
+        while time.time() < deadline:
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.settimeout(timeout)
+                    client.connect(str(self.qmp_socket))
+                    greeting = client.recv(4096)
+                    if b"QMP" not in greeting:
+                        raise RuntimeError("Unexpected QMP greeting")
+
+                    client.sendall(json.dumps({"execute": "qmp_capabilities"}).encode("utf-8") + b"\n")
+                    response = self._recv_qmp_message_once(client, timeout)
+                    if "return" not in response:
+                        raise RuntimeError("QMP capability handshake failed")
+
+                    client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+                    return self._recv_qmp_message_once(client, timeout)
+            except (BrokenPipeError,
+                    ConnectionRefusedError,
+                    ConnectionResetError,
+                    OSError,
+                    json.JSONDecodeError) as exc:
+                last_error = exc
+                if self.proc.poll() is not None:
+                    raise
+                time.sleep(0.05)
+
+        if last_error is not None:
+            raise last_error
+        return {}
 
     def hmp(self, command: str, timeout: float = 1.0) -> str:
         chunks: List[bytes] = []
@@ -136,6 +205,16 @@ class QemuMonitorSession:
             return ""
         return self.serial_log.read_text(encoding="utf-8", errors="replace")
 
+    def wait_for_log(self, marker: str, timeout: float) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if marker in self.read_log():
+                return
+            if self.proc.poll() is not None:
+                break
+            time.sleep(0.05)
+        raise RuntimeError(f"Timed out waiting for marker: {marker}")
+
     def wait_for_all(self, markers: List[str], timeout: float) -> None:
         deadline = time.time() + timeout
         pending = list(markers)
@@ -158,7 +237,61 @@ class QemuMonitorSession:
         return (int(width_text, 10), int(height_text, 10))
 
     def send_key(self, key: str, pause: float = 0.08) -> None:
-        self.hmp(f"sendkey {key}")
+        parts = key.split("-")
+        base_key = parts[-1]
+        modifier_keys = parts[:-1]
+        events = []
+
+        for modifier in modifier_keys:
+            events.append(
+                {
+                    "type": "key",
+                    "data": {
+                        "down": True,
+                        "key": {"type": "qcode", "data": modifier},
+                    },
+                }
+            )
+        events.append(
+            {
+                "type": "key",
+                "data": {
+                    "down": True,
+                    "key": {"type": "qcode", "data": base_key},
+                },
+            }
+        )
+        events.append(
+            {
+                "type": "key",
+                "data": {
+                    "down": False,
+                    "key": {"type": "qcode", "data": base_key},
+                },
+            }
+        )
+        for modifier in reversed(modifier_keys):
+            events.append(
+                {
+                    "type": "key",
+                    "data": {
+                        "down": False,
+                        "key": {"type": "qcode", "data": modifier},
+                    },
+                }
+            )
+
+        response = self.qmp_once(
+            {
+                "execute": "input-send-event",
+                "arguments": {
+                    "head": 0,
+                    "events": events,
+                },
+            }
+        )
+        if "error" in response:
+            raise RuntimeError(f"QMP key send failed for {key}: {response['error']}")
         time.sleep(pause)
 
     def type_text(self, text: str, pause: float = 0.08) -> None:
@@ -174,11 +307,46 @@ class QemuMonitorSession:
             self.send_key(key_map.get(ch, ch.lower()), pause=pause)
 
     def reset_mouse_to_center(self) -> None:
-        for _ in range(4):
-            self.hmp("mouse_move -32768 -32768")
-            time.sleep(0.03)
-        self.mouse_x = 0
-        self.mouse_y = 0
+        mode = self.boot_mode_size()
+
+        if not mode:
+            self.mouse_x = 0
+            self.mouse_y = 0
+            self.mouse_position_known = False
+            return
+
+        width, height = mode
+        target_x = width // 2
+        target_y = height // 2
+
+        if self.mouse_position_known:
+            self.move_mouse_to(target_x, target_y, pause=0.02)
+
+        self.mouse_x = target_x
+        self.mouse_y = target_y
+        self.mouse_position_known = True
+
+    def qmp_mouse_rel(self, dx: int, dy: int) -> None:
+        raw_dx = dx // 2
+        raw_dy = dy // 2
+        if dx != 0 and raw_dx == 0:
+            raw_dx = 1 if dx > 0 else -1
+        if dy != 0 and raw_dy == 0:
+            raw_dy = 1 if dy > 0 else -1
+        response = self.qmp_once(
+            {
+                "execute": "input-send-event",
+                "arguments": {
+                    "head": 0,
+                    "events": [
+                        {"type": "rel", "data": {"axis": "x", "value": raw_dx}},
+                        {"type": "rel", "data": {"axis": "y", "value": raw_dy}},
+                    ],
+                },
+            }
+        )
+        if "error" in response:
+            raise RuntimeError(f"QMP mouse move failed: {response['error']}")
 
     def move_mouse_to(self, x: int, y: int, pause: float = 0.04) -> None:
         dx = x - self.mouse_x
@@ -187,24 +355,174 @@ class QemuMonitorSession:
         while dx != 0 or dy != 0:
             step_x = max(-40, min(40, dx))
             step_y = max(-40, min(40, dy))
-            self.hmp(f"mouse_move {step_x} {step_y}")
+            self.qmp_mouse_rel(step_x, step_y)
             self.mouse_x += step_x
             self.mouse_y += step_y
             dx -= step_x
             dy -= step_y
             time.sleep(pause)
+        self.mouse_position_known = True
 
     def left_click(self, pause: float = 0.08) -> None:
-        self.hmp("mouse_button 1")
-        time.sleep(pause)
-        self.hmp("mouse_move 1 0")
+        response = self.qmp_once(
+            {
+                "execute": "input-send-event",
+                "arguments": {
+                    "head": 0,
+                    "events": [
+                        {"type": "rel", "data": {"axis": "x", "value": 1}},
+                        {"type": "rel", "data": {"axis": "y", "value": 0}},
+                        {"type": "btn", "data": {"button": "left", "down": True}},
+                    ],
+                },
+            }
+        )
+        if "error" in response:
+            raise RuntimeError(f"QMP mouse press failed: {response['error']}")
         self.mouse_x += 1
         time.sleep(pause)
-        self.hmp("mouse_button 0")
+        response = self.qmp_once(
+            {
+                "execute": "input-send-event",
+                "arguments": {
+                    "head": 0,
+                    "events": [
+                        {"type": "btn", "data": {"button": "left", "down": False}},
+                    ],
+                },
+            }
+        )
+        if "error" in response:
+            raise RuntimeError(f"QMP mouse release failed: {response['error']}")
         time.sleep(pause)
-        self.hmp("mouse_move -1 0")
+        self.qmp_mouse_rel(-1, 0)
         self.mouse_x -= 1
         time.sleep(pause)
+
+
+def log_contains(session: QemuMonitorSession, marker: str, start_offset: int = 0) -> bool:
+    log = session.read_log()
+    if start_offset > 0:
+        log = log[start_offset:]
+    return marker in log
+
+
+def wait_for_all_since(session: QemuMonitorSession,
+                       markers: List[str],
+                       timeout: float,
+                       start_offset: int = 0) -> None:
+    deadline = time.time() + timeout
+    pending = list(markers)
+    while time.time() < deadline and pending:
+        log = session.read_log()
+        if start_offset > 0:
+            log = log[start_offset:]
+        pending = [marker for marker in pending if marker not in log]
+        if not pending:
+            return
+        if session.proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    raise RuntimeError("Timed out waiting for markers: " + ", ".join(pending))
+
+
+def wait_for_any_marker_since(session: QemuMonitorSession,
+                              markers: List[str],
+                              timeout: float,
+                              start_offset: int = 0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        log = session.read_log()
+        if start_offset > 0:
+            log = log[start_offset:]
+        if any(marker in log for marker in markers):
+            return
+        if session.proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    raise RuntimeError("Timed out waiting for markers: " + ", ".join(markers))
+
+
+def wait_for_any_marker(session: QemuMonitorSession, markers: List[str], timeout: float) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        log = session.read_log()
+        if any(marker in log for marker in markers):
+            return
+        if session.proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    raise RuntimeError("Timed out waiting for any marker: " + " | ".join(markers))
+
+
+def wait_for_terminal_command_done(session: QemuMonitorSession,
+                                   command: str,
+                                   timeout: float = 12.0) -> None:
+    done_marker = f"terminal: command done {command}"
+    if log_contains(session, done_marker):
+        return
+    try:
+        session.wait_for_log(done_marker, timeout=timeout)
+    except RuntimeError:
+        if log_contains(session, f"terminal: command start {command}") or \
+           log_contains(session, f"shell: command {command}"):
+            raise RuntimeError(f"Timed out waiting for marker: {done_marker}")
+        raise
+
+
+def wait_for_terminal_command_done_since(session: QemuMonitorSession,
+                                         command: str,
+                                         start_offset: int,
+                                         timeout: float = 12.0) -> None:
+    done_marker = f"terminal: command done {command}"
+    if log_contains(session, done_marker, start_offset):
+        return
+    try:
+        wait_for_all_since(session, [done_marker], timeout=timeout, start_offset=start_offset)
+    except RuntimeError:
+        if log_contains(session, f"terminal: command start {command}", start_offset) or \
+           log_contains(session, f"shell: command {command}", start_offset):
+            raise RuntimeError(f"Timed out waiting for marker: {done_marker}")
+        raise
+
+
+def run_command(session: QemuMonitorSession,
+                command: str,
+                timeout: float = 6.0,
+                pause: float = 0.12,
+                marker: Optional[str] = None) -> int:
+    command_marker = marker
+    start_offset = len(session.read_log())
+    if command_marker is None:
+        command_marker = command.split(" ", 1)[0] if command else ""
+    session.type_text(command, pause=pause)
+    session.send_key("ret", pause=0.15)
+    if command_marker:
+        wait_for_all_since(session,
+                           [f"shell: command {command_marker}"],
+                           timeout=timeout,
+                           start_offset=start_offset)
+    return start_offset
+
+
+def focus_terminal(session: QemuMonitorSession,
+                   timeout: float = 4.0,
+                   expect_open: bool = False) -> None:
+    start_offset = len(session.read_log())
+    session.send_key("ctrl-x", pause=0.2)
+    if expect_open:
+        wait_for_any_marker_since(session,
+                                  ["desktop: key 24", "desktop: open-new w=0 t=1 i=0"],
+                                  timeout=timeout,
+                                  start_offset=start_offset)
+        return
+    try:
+        wait_for_any_marker_since(session,
+                                  ["desktop: key 24", "desktop: open-new"],
+                                  timeout=min(timeout, 1.5),
+                                  start_offset=start_offset)
+    except RuntimeError:
+        time.sleep(0.4)
 
 
 def scaled_point(session: QemuMonitorSession, point: Tuple[int, int]) -> Tuple[int, int]:
@@ -218,16 +536,9 @@ def scaled_point(session: QemuMonitorSession, point: Tuple[int, int]) -> Tuple[i
     )
 
 
-def wait_for_any_marker(session: QemuMonitorSession, markers: List[str], timeout: float) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        log = session.read_log()
-        if any(marker in log for marker in markers):
-            return
-        if session.proc.poll() is not None:
-            break
-        time.sleep(0.05)
-    raise RuntimeError("Timed out waiting for any marker: " + " | ".join(markers))
+def focus_existing_terminal(session: QemuMonitorSession, pause: float = 0.12) -> None:
+    _ = session
+    time.sleep(max(0.6, pause))
 
 
 def append_missing_alias_groups(log: str,
@@ -253,30 +564,31 @@ def run_audio_capture_smoke(qemu_binary: str,
                             require_hardware_diag: bool,
                             require_desktop_startup_sound: bool,
                             require_boot_startup_sound: bool) -> AudioScenarioResult:
-    backend_marker = f"audiosvc: backend={expected_backend}"
+    backend_markers = [
+        f"audiosvc: backend={expected_backend}",
+        f"soundctl: backend={expected_backend}",
+    ]
     alias_groups: List[Tuple[str, List[str]]] = [
         ("startx-launch", ["desktop.app: launch startx", "host: startx start", "host: desktop session launched"]),
+        (f"backend={expected_backend}", backend_markers),
         ("status: transport=", ["audiosvc: transport=", "soundctl: transport="]),
         ("status: codecready-quirk=", ["audiosvc: codecready-quirk=", "soundctl: codecready-quirk="]),
         ("status: multichannel=", ["audiosvc: multichannel=", "soundctl: multichannel="]),
+        ("status: control-owner=audiosvc", ["audiosvc: control-owner=audiosvc", "soundctl: control-owner=audiosvc"]),
+        ("status: backend-executor=kernel", ["audiosvc: backend-executor=kernel", "soundctl: backend-executor=kernel"]),
+        ("status: ui-progress=decoupled", ["audiosvc: ui-progress=decoupled", "soundctl: ui-progress=decoupled"]),
     ]
     required_markers = [
         "desktop: session start",
         "audiosvc: export ok",
-        backend_marker,
-        "audiosvc: transport=",
-        "audiosvc: codecready-quirk=",
-        "audiosvc: multichannel=",
-        "audiosvc: status ok",
         "desktop: open-new w=0 t=1 i=0",
-        "runtime: ",
     ]
     if require_capture:
         required_markers.extend(
             [
-                "audiosvc: capture-dma=",
                 "soundctl: record begin",
                 "soundctl: record ok",
+                "soundctl: capture-ready=",
                 "soundctl: capture-dma=",
                 "service: storage request type=17",
             ]
@@ -298,24 +610,12 @@ def run_audio_capture_smoke(qemu_binary: str,
     if require_path_programmed:
         alias_groups.append(("status: path-programmed=1",
                              ["audiosvc: path-programmed=1", "soundctl: path-programmed=1"]))
-        required_markers.extend(
-            [
-                "audiosvc: path-programmed=1",
-            ]
-        )
     if require_hardware_diag:
         alias_groups.extend(
             [
                 ("status: pci=", ["audiosvc: pci=", "soundctl: pci="]),
                 ("status: codec=", ["audiosvc: codec=", "soundctl: codec="]),
                 ("status: route=", ["audiosvc: route=", "soundctl: route="]),
-            ]
-        )
-        required_markers.extend(
-            [
-                "audiosvc: pci=",
-                "audiosvc: codec=",
-                "audiosvc: route=",
             ]
         )
     if require_desktop_startup_sound:
@@ -370,48 +670,94 @@ def run_audio_capture_smoke(qemu_binary: str,
                     ],
                     timeout=20.0,
                 )
-            session.reset_mouse_to_center()
-            session.move_mouse_to(*scaled_point(session, START_BUTTON_CENTER))
-            session.left_click(pause=0.12)
-            time.sleep(0.25)
-            session.move_mouse_to(*scaled_point(session, START_MENU_TERMINAL_CENTER))
-            session.left_click(pause=0.12)
-            session.wait_for_all(["desktop: open-new w=0 t=1 i=0"], timeout=8.0)
             time.sleep(1.0)
-            session.type_text("audiosvc status", pause=0.12)
-            session.send_key("ret", pause=0.15)
-            session.wait_for_all([backend_marker, "audiosvc: status ok"], timeout=15.0)
-            session.type_text("soundctl status", pause=0.12)
-            session.send_key("ret", pause=0.15)
-            session.wait_for_all(["runtime: "], timeout=15.0)
-            wait_for_any_marker(session, ["audiosvc: transport=", "soundctl: transport="], timeout=15.0)
-            wait_for_any_marker(session,
-                                ["audiosvc: codecready-quirk=", "soundctl: codecready-quirk="],
-                                timeout=15.0)
-            wait_for_any_marker(session,
-                                ["audiosvc: multichannel=", "soundctl: multichannel="],
-                                timeout=15.0)
+            focus_terminal(session, timeout=12.0, expect_open=True)
+            time.sleep(1.0)
+            focus_existing_terminal(session)
+            command_offset = run_command(session,
+                                         "audiosvc export-state /runtime/audio-validation.state",
+                                         timeout=8.0)
+            wait_for_all_since(session,
+                               ["shell: command audiosvc", "audiosvc: export ok"],
+                               timeout=15.0,
+                               start_offset=command_offset)
+            wait_for_any_marker_since(session, backend_markers, timeout=15.0, start_offset=command_offset)
+            wait_for_any_marker_since(session,
+                                      ["audiosvc: transport=", "soundctl: transport="],
+                                      timeout=15.0,
+                                      start_offset=command_offset)
+            wait_for_any_marker_since(session,
+                                      ["audiosvc: codecready-quirk=", "soundctl: codecready-quirk="],
+                                      timeout=15.0,
+                                      start_offset=command_offset)
+            wait_for_any_marker_since(session,
+                                      ["audiosvc: multichannel=", "soundctl: multichannel="],
+                                      timeout=15.0,
+                                      start_offset=command_offset)
+            wait_for_any_marker_since(session,
+                                      ["audiosvc: control-owner=audiosvc", "soundctl: control-owner=audiosvc"],
+                                      timeout=15.0,
+                                      start_offset=command_offset)
+            wait_for_any_marker_since(session,
+                                      ["audiosvc: backend-executor=kernel", "soundctl: backend-executor=kernel"],
+                                      timeout=15.0,
+                                      start_offset=command_offset)
+            wait_for_any_marker_since(session,
+                                      ["audiosvc: ui-progress=decoupled", "soundctl: ui-progress=decoupled"],
+                                      timeout=15.0,
+                                      start_offset=command_offset)
+            if require_hardware_diag:
+                wait_for_any_marker_since(session,
+                                          ["audiosvc: pci=", "soundctl: pci="],
+                                          timeout=15.0,
+                                          start_offset=command_offset)
+                wait_for_any_marker_since(session,
+                                          ["audiosvc: codec=", "soundctl: codec="],
+                                          timeout=15.0,
+                                          start_offset=command_offset)
+                wait_for_any_marker_since(session,
+                                          ["audiosvc: route=", "soundctl: route="],
+                                          timeout=15.0,
+                                          start_offset=command_offset)
+            wait_for_terminal_command_done_since(session, "audiosvc", command_offset, timeout=12.0)
             if require_capture:
-                session.type_text(f"soundctl record {record_ms} /capture.wav", pause=0.12)
-                session.send_key("ret", pause=0.15)
-                session.wait_for_all(["soundctl: record begin", "soundctl: record ok"], timeout=35.0)
+                focus_existing_terminal(session)
+                command_offset = run_command(session,
+                                             f"soundctl record {record_ms} /capture.wav",
+                                             timeout=8.0)
+                wait_for_all_since(session,
+                                   ["soundctl: record begin", "soundctl: record ok"],
+                                   timeout=35.0,
+                                   start_offset=command_offset)
+                wait_for_terminal_command_done_since(session, "soundctl", command_offset, timeout=20.0)
                 if verify_capture_playback:
-                    session.type_text("soundctl play /capture.wav", pause=0.12)
-                    session.send_key("ret", pause=0.15)
-                    session.wait_for_all(["soundctl: play begin", "soundctl: play ok"], timeout=20.0)
+                    focus_existing_terminal(session)
+                    command_offset = run_command(session, "soundctl play /capture.wav", timeout=8.0)
+                    wait_for_all_since(session,
+                                       ["soundctl: play begin", "soundctl: play ok"],
+                                       timeout=20.0,
+                                       start_offset=command_offset)
+                    wait_for_terminal_command_done_since(session, "soundctl", command_offset, timeout=20.0)
             elif verify_playback_path:
-                session.type_text(f"soundctl play {verify_playback_path}", pause=0.12)
-                session.send_key("ret", pause=0.15)
-                session.wait_for_all(["soundctl: play begin", "soundctl: play ok"], timeout=25.0)
+                focus_existing_terminal(session)
+                command_offset = run_command(session,
+                                             f"soundctl play {verify_playback_path}",
+                                             timeout=8.0)
+                wait_for_all_since(session,
+                                   ["soundctl: play begin", "soundctl: play ok"],
+                                   timeout=25.0,
+                                   start_offset=command_offset)
+                wait_for_terminal_command_done_since(session, "soundctl", command_offset, timeout=20.0)
             if require_path_programmed:
-                session.type_text("audiosvc status", pause=0.12)
-                session.send_key("ret", pause=0.15)
-                session.wait_for_all(["audiosvc: path-programmed=1"], timeout=15.0)
-                session.type_text("soundctl status", pause=0.12)
-                session.send_key("ret", pause=0.15)
-                wait_for_any_marker(session,
-                                    ["audiosvc: path-programmed=1", "soundctl: path-programmed=1"],
-                                    timeout=15.0)
+                focus_existing_terminal(session)
+                command_offset = run_command(session,
+                                             "audiosvc export-state /runtime/audio-validation.state",
+                                             timeout=8.0)
+                wait_for_any_marker_since(session,
+                                          ["audiosvc: path-programmed=1", "soundctl: path-programmed=1"],
+                                          timeout=15.0,
+                                          start_offset=command_offset)
+                wait_for_terminal_command_done_since(session, "audiosvc", command_offset, timeout=12.0)
             log = session.read_log()
         except Exception as exc:
             log = session.read_log()

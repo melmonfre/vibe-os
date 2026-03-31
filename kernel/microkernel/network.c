@@ -1399,7 +1399,13 @@ void mk_network_service_init(void) {
                                  MK_NETWORK_CAPS_ETHERNET_STATUS |
                                  MK_NETWORK_CAPS_WIFI_SCAN |
                                  MK_NETWORK_CAPS_WIFI_CONNECT |
-                                 MK_NETWORK_CAPS_DNS_STATUS;
+                                 MK_NETWORK_CAPS_DNS_STATUS |
+                                 MK_NETWORK_CAPS_EVENT_STREAM_READY |
+                                 MK_NETWORK_CAPS_BACKEND_ACTIVITY_EVENTS |
+                                 MK_NETWORK_CAPS_STEADY_STATE_SERVICE_HOST |
+                                 MK_NETWORK_CAPS_NETMGR_POLICY_ONLY |
+                                 MK_NETWORK_CAPS_LOCAL_FALLBACK_RESCUE_ONLY |
+                                 MK_NETWORK_CAPS_KERNEL_DATAPATH_EXECUTOR;
     if (g_network_state.pci_probe.present) {
         g_network_state.info.flags |= MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING;
     } else {

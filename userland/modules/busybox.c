@@ -487,15 +487,30 @@ static uint32_t g_busybox_pending_task_event_count = 0u;
 static uint32_t busybox_external_task_class_mask(int argc, char **argv) {
     char normalized[64];
 
-    if (argc > 0 &&
-        argv != 0 &&
-        argv[0] != 0 &&
-        lang_normalize_command_name(argv[0], normalized, (int)sizeof(normalized)) == 0 &&
-        strcmp(normalized, "startx") == 0) {
-        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP);
+    if (argc <= 0 ||
+        argv == 0 ||
+        argv[0] == 0 ||
+        lang_normalize_command_name(argv[0], normalized, (int)sizeof(normalized)) != 0) {
+        return MK_TASK_CLASS_MASK_ALL;
     }
 
-    return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
+    if (strcmp(normalized, "startx") == 0) {
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP);
+    }
+    if (strcmp(normalized, "audiosvc") == 0) {
+        if (argc > 1 && argv[1] != 0 && strcmp(argv[1], "play-asset") == 0) {
+            return MK_TASK_CLASS_MASK(MK_TASK_CLASS_AUDIO_IO);
+        }
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
+    }
+    if (strcmp(normalized, "soundctl") == 0) {
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
+    }
+    if (strcmp(normalized, "netmgrd") == 0 || strcmp(normalized, "netctl") == 0) {
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
+    }
+
+    return MK_TASK_CLASS_MASK_ALL;
 }
 
 static void busybox_stash_task_event(const struct mk_task_event *event) {
@@ -540,6 +555,14 @@ static int busybox_take_stashed_task_exit(uint32_t pid, struct mk_task_event *ev
     return -1;
 }
 
+static void busybox_reset_task_exit_subscription(void) {
+    struct mk_task_event event;
+
+    g_busybox_pending_task_event_count = 0u;
+    while (sys_task_event_receive(&event, 0u) == 0) {
+    }
+}
+
 static int busybox_wait_for_task_exit(uint32_t pid) {
     struct mk_task_event event;
 
@@ -557,6 +580,9 @@ static int busybox_wait_for_task_exit(uint32_t pid) {
                 return 0;
             }
             busybox_stash_task_event(&event);
+            if (!busybox_task_pid_alive(pid)) {
+                return 0;
+            }
             continue;
         }
         if (!busybox_task_pid_alive(pid)) {
@@ -616,6 +642,9 @@ static int busybox_launch_external_task(int argc, char **argv, int wait_for_exit
         sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,
                                       busybox_external_task_class_mask(argc, argv)) != 0) {
         return -1;
+    }
+    if (wait_for_exit) {
+        busybox_reset_task_exit_subscription();
     }
 
     pid = sys_launch_app_argv(argc, argv);

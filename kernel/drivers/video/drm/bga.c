@@ -394,5 +394,8 @@ const struct kernel_drm_backend_ops g_kernel_drm_bga_ops = {
     KERNEL_DRM_BACKEND_BGA,
     "native_gpu_bga",
     kernel_drm_bga_probe,
-    kernel_drm_bga_set_mode
+    kernel_drm_bga_set_mode,
+    kernel_drm_bga_revert_last_mode,
+    kernel_drm_bga_forget_last_mode,
+    kernel_drm_bga_prepare_for_bios_modeset
 };

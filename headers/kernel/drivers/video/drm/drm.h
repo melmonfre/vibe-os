@@ -36,6 +36,9 @@ struct kernel_drm_backend_ops {
                     uint32_t height,
                     uint16_t mode_id,
                     struct video_mode *mode_out);
+    int (*revert_last_modeset)(void);
+    void (*forget_last_modeset)(void);
+    void (*prepare_for_bios_modeset)(void);
 };
 
 size_t kernel_drm_probe_candidates(struct kernel_drm_candidate *out, size_t capacity);

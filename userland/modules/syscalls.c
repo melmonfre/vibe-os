@@ -322,6 +322,10 @@ int sys_audio_mixer_write(const mixer_ctrl_t *control) {
     return syscall5(SYSCALL_AUDIO_MIXER_WRITE, (int)(uintptr_t)control, 0, 0, 0, 0);
 }
 
+int sys_audio_play_asset(const char *path) {
+    return syscall5(SYSCALL_AUDIO_PLAY_ASSET, (int)(uintptr_t)path, 0, 0, 0, 0);
+}
+
 int sys_network_get_info(struct mk_network_info *info) {
     return syscall5(SYSCALL_NETWORK_GETINFO, (int)(uintptr_t)info, 0, 0, 0, 0);
 }

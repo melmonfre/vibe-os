@@ -41,7 +41,6 @@
 #define DESKTOP_WINDOW_ACTION_QUEUE_MAX 8
 #define DESKTOP_SESSION_ACTION_QUEUE_MAX 8
 #define DESKTOP_APP_ACTION_QUEUE_MAX 8
-#define DESKTOP_INPUT_STREAM_STALL_THRESHOLD 8
 
 #define DESKTOP_ASYNC_REFRESH_AUDIO   (1u << 0)
 #define DESKTOP_ASYNC_REFRESH_NETWORK (1u << 1)
@@ -314,10 +313,7 @@ static uint32_t g_desktop_video_overflow_last_tick = 0u;
 static int g_desktop_input_trace_budget = 12;
 static int g_desktop_key_trace_budget = 16;
 static int g_desktop_click_trace_budget = 24;
-static int g_desktop_input_stream_seen = 0;
 static int g_desktop_input_compat_mode = 0;
-static uint32_t g_desktop_input_stream_idle_polls = 0u;
-static int g_desktop_input_compat_log_budget = 4;
 
 static const char *g_sound_outputs[] = {"Alto-falantes", "Fones", "Surround", "Centro/LFE"};
 static const char *g_sound_outputs_hda[] = {"Alto-falante", "Fones", "Line-out", "Digital"};
@@ -628,12 +624,8 @@ static const uint32_t APPLET_BACKEND_REFRESH_TICKS = 100u;
 static const uint32_t APPLET_AUTOCONNECT_RETRY_TICKS = 300u;
 static const uint32_t DESKTOP_STARTUP_TASK_GATE_TICKS = 50u;
 enum {
-    DESKTOP_STARTUP_TASK_SOUND_SYNC = 1u << 0,
-    DESKTOP_STARTUP_TASK_SOUND_EXPORT = 1u << 1,
-    DESKTOP_STARTUP_TASK_NETWORK_SYNC = 1u << 2,
-    DESKTOP_STARTUP_TASK_NETWORK_RECONCILE = 1u << 3,
-    DESKTOP_STARTUP_TASK_NETWORK_EXPORT = 1u << 4,
-    DESKTOP_STARTUP_TASK_UI_ASSETS = 1u << 5
+    DESKTOP_STARTUP_TASK_UI_ASSETS = 1u << 0,
+    DESKTOP_STARTUP_TASK_NETWORK_RECONCILE = 1u << 1
 };
 enum {
     APPCTX_PRIMARY = 0,
@@ -1492,29 +1484,17 @@ static int desktop_collect_input_batch(struct desktop_input_batch *batch,
     }
 
     if (stream_event_count > 0) {
-        g_desktop_input_stream_seen = 1;
         g_desktop_input_compat_mode = 0;
-        g_desktop_input_stream_idle_polls = 0u;
-    } else {
+    } else if (g_desktop_input_compat_mode != 0) {
         /*
-         * If the aggregated input stream stalls after an input-service cycle,
-         * temporarily fall back to the service-backed per-device requests until
-         * the stream resumes. This keeps desktop steady-state ownership on the
-         * service boundary without waiting for a full desktop restart.
+         * The kernel currently mirrors each input event into both the
+         * aggregated stream and the per-device compatibility queues. Arming
+         * the compat path on ordinary idle gaps causes duplicated keys/clicks
+         * once the stream catches up, which in turn makes menus and popups
+         * appear to close themselves. Keep the compat path reserved for
+         * explicit input-service reset recovery instead of normal idle.
          */
-        g_desktop_input_stream_idle_polls += 1u;
-        if (g_desktop_input_compat_mode == 0 &&
-            g_desktop_input_stream_idle_polls >= DESKTOP_INPUT_STREAM_STALL_THRESHOLD) {
-            if (g_desktop_input_compat_mode == 0 && g_desktop_input_compat_log_budget > 0) {
-                g_desktop_input_compat_log_budget -= 1;
-                sys_write_debug("desktop: input per-device compat path armed\n");
-            }
-            g_desktop_input_compat_mode = 1;
-        }
-        if (g_desktop_input_compat_mode != 0 &&
-            desktop_collect_compat_input_batch(batch, mouse)) {
-            g_desktop_input_stream_idle_polls = 0u;
-        }
+        (void)desktop_collect_compat_input_batch(batch, mouse);
     }
 
     return batch->async_state_changed;
@@ -6227,12 +6207,21 @@ static void network_applet_try_autoconnect(void) {
 
 static void desktop_queue_startup_background_tasks(void) {
     g_desktop_startup_tasks = DESKTOP_STARTUP_TASK_UI_ASSETS;
+    if (g_network_auto_ssid[0] != '\0') {
+        g_desktop_startup_tasks |= DESKTOP_STARTUP_TASK_NETWORK_RECONCILE;
+    }
 }
 
 static void desktop_process_startup_background_tasks(void) {
     if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_UI_ASSETS) != 0u) {
         g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_UI_ASSETS;
         ui_complete_startup();
+        return;
+    }
+    if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_NETWORK_RECONCILE) != 0u) {
+        g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_NETWORK_RECONCILE;
+        (void)network_applet_run_reconcile();
+        return;
     }
 }
 
@@ -8098,10 +8087,7 @@ void desktop_main(void) {
     g_desktop_visual_ready = 0;
     g_desktop_present_retry_tick = 0u;
     g_desktop_video_overflow_last_tick = 0u;
-    g_desktop_input_stream_seen = 0;
     g_desktop_input_compat_mode = 0;
-    g_desktop_input_stream_idle_polls = 0u;
-    g_desktop_input_compat_log_budget = 4;
     desktop_sound_armed_ticks = sys_ticks();
     start_button = ui_taskbar_start_button_rect();
     menu_rect = ui_start_menu_rect();
@@ -8172,9 +8158,7 @@ void desktop_main(void) {
             resizing = -1;
             menu_scroll_dragging = 0;
             mouse.buttons = 0u;
-            g_desktop_input_stream_seen = 0;
             g_desktop_input_compat_mode = 1;
-            g_desktop_input_stream_idle_polls = 0u;
             dirty = 1;
         }
         desktop_build_ui_event_queue(&ui_event_queue, &input_batch, &mouse);
@@ -8329,6 +8313,16 @@ void desktop_main(void) {
 
                     if (point_in_rect(&list, mouse.x, mouse.y)) {
                         filemanager_scroll_by(fm, wheel_lines);
+                        dirty = 1;
+                    }
+                } else if (g_windows[i].type == APP_TASKMANAGER) {
+                    if (taskmgr_scroll_by(&g_tms[g_windows[i].instance],
+                                          g_windows,
+                                          MAX_WINDOWS,
+                                          mouse.x,
+                                          mouse.y,
+                                          wheel_lines,
+                                          ticks)) {
                         dirty = 1;
                     }
                 } else if (g_windows[i].type == APP_TRASH) {
@@ -8865,6 +8859,12 @@ void desktop_main(void) {
             if (key == 12) {
                 desktop_request_open_terminal_command("spawn clock");
                 dirty = 1;
+                continue;
+            }
+            if (key == 24) {
+                if (open_window_or_focus_existing(APP_TERMINAL, &focused) >= 0) {
+                    dirty = 1;
+                }
                 continue;
             }
             if (key == 21) {

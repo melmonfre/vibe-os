@@ -87,6 +87,10 @@ static const char *netmgrd_backend_name(const struct mk_network_info *info) {
     if (info == 0) {
         return "indisponivel";
     }
+    if ((info->flags & MK_NETWORK_CAPS_NETMGR_POLICY_ONLY) != 0u &&
+        (info->flags & MK_NETWORK_CAPS_KERNEL_DATAPATH_EXECUTOR) != 0u) {
+        return "policy-only+kernel-datapath";
+    }
     if ((info->flags & MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING) != 0u &&
         (info->flags & MK_NETWORK_CAPS_CONTROL_PLANE) != 0u) {
         return "control-plane+pci-probe";
@@ -101,6 +105,66 @@ static const char *netmgrd_backend_name(const struct mk_network_info *info) {
         return "query-only";
     }
     return "ativo";
+}
+
+static const char *netmgrd_transport_mode_name(const struct mk_network_info *info) {
+    if (info == 0) {
+        return "indisponivel";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_STEADY_STATE_SERVICE_HOST) != 0u) {
+        return "service-host";
+    }
+    return "legacy-local";
+}
+
+static const char *netmgrd_ownership_mode_name(const struct mk_network_info *info) {
+    if (info == 0) {
+        return "indisponivel";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_NETMGR_POLICY_ONLY) != 0u) {
+        return "policy-only";
+    }
+    return "mixed";
+}
+
+static const char *netmgrd_fallback_mode_name(const struct mk_network_info *info) {
+    if (info == 0) {
+        return "indisponivel";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_LOCAL_FALLBACK_RESCUE_ONLY) != 0u) {
+        return "rescue-only";
+    }
+    return "normal-path";
+}
+
+static const char *netmgrd_datapath_executor_name(const struct mk_network_info *info) {
+    if (info == 0) {
+        return "indisponivel";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_KERNEL_DATAPATH_EXECUTOR) != 0u) {
+        return "kernel";
+    }
+    return "userland";
+}
+
+static const char *netmgrd_event_stream_name(const struct mk_network_info *info) {
+    if (info == 0) {
+        return "indisponivel";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_EVENT_STREAM_READY) != 0u) {
+        return "mailbox";
+    }
+    return "none";
+}
+
+static const char *netmgrd_backend_events_name(const struct mk_network_info *info) {
+    if (info == 0) {
+        return "indisponivel";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_BACKEND_ACTIVITY_EVENTS) != 0u) {
+        return "rx-tx";
+    }
+    return "none";
 }
 
 static void netmgrd_resolve_ethernet_if_name(char *buffer, int buffer_size) {
@@ -690,7 +754,7 @@ static int netmgrd_write_state_file(const char *path,
     (void)vibe_app_create_dir("/runtime");
     snprintf(text,
              sizeof(text),
-             "state=%s\nactive_if=%s\nactive_kind=%s\nssid=%s\nip=%s\ngateway=%s\ndns=%s\nsaved_profiles=%d\nautoconnect=%s\nbackend=%s\ndns_mode=%s\nlease_state=%s\nlease_source=%s\nmanager=%s\n"
+             "state=%s\nactive_if=%s\nactive_kind=%s\nssid=%s\nip=%s\ngateway=%s\ndns=%s\nsaved_profiles=%d\nautoconnect=%s\nbackend=%s\ntransport=%s\nownership=%s\nfallback=%s\ndatapath_executor=%s\nevent_stream=%s\nbackend_events=%s\ndns_mode=%s\nlease_state=%s\nlease_source=%s\nmanager=%s\n"
              "scan_count=%d\n"
              "scan0_ssid=%s\nscan0_security=%s\nscan0_signal=%u\nscan0_connected=%u\n"
              "scan1_ssid=%s\nscan1_security=%s\nscan1_signal=%u\nscan1_connected=%u\n"
@@ -706,6 +770,12 @@ static int netmgrd_write_state_file(const char *path,
              saved_count,
              auto_ssid != 0 && auto_ssid[0] != '\0' ? auto_ssid : "-",
              netmgrd_backend_name(info),
+             netmgrd_transport_mode_name(info),
+             netmgrd_ownership_mode_name(info),
+             netmgrd_fallback_mode_name(info),
+             netmgrd_datapath_executor_name(info),
+             netmgrd_event_stream_name(info),
+             netmgrd_backend_events_name(info),
              netmgrd_dns_mode_name(info, status),
              netmgrd_lease_state_name(status),
              resolved_lease_source,
@@ -763,6 +833,12 @@ static int netmgrd_command_status(void) {
     printf("gateway: %s\n", status.gateway[0] != '\0' ? status.gateway : "-");
     printf("dns: %s\n", status.dns_server[0] != '\0' ? status.dns_server : "-");
     printf("backend: %s\n", netmgrd_backend_name(&info));
+    printf("transport: %s\n", netmgrd_transport_mode_name(&info));
+    printf("ownership: %s\n", netmgrd_ownership_mode_name(&info));
+    printf("fallback: %s\n", netmgrd_fallback_mode_name(&info));
+    printf("datapath executor: %s\n", netmgrd_datapath_executor_name(&info));
+    printf("event stream: %s\n", netmgrd_event_stream_name(&info));
+    printf("backend events: %s\n", netmgrd_backend_events_name(&info));
     printf("dns mode: %s\n", netmgrd_dns_mode_name(&info, &status));
     printf("lease state: %s\n", netmgrd_lease_state_name(&status));
     netmgrd_detect_lease_source(&status, lease_source, (int)sizeof(lease_source));

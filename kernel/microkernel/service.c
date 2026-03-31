@@ -21,6 +21,7 @@ static int g_request_send_fail_budget = 16;
 static int g_unexpected_reply_budget = 16;
 static int g_request_timeout_budget = 16;
 static int g_storage_request_trace_budget = 8;
+static int g_storage_write_request_trace_emitted = 0;
 static int g_storage_worker_trace_budget = 8;
 static int g_storage_reply_trace_budget = 8;
 static int g_interactive_request_trace_budget = 24;
@@ -756,12 +757,22 @@ static int mk_service_request_process(const struct mk_service_record *service,
                                 current->pid,
                                 service->pid);
         }
-        if (service->type == MK_SERVICE_STORAGE && g_storage_request_trace_budget > 0) {
-            g_storage_request_trace_budget -= 1;
-            kernel_debug_printf("service: storage request type=%d from pid=%d to pid=%d\n",
-                                (int)request_copy.type,
-                                current->pid,
-                                service->pid);
+        if (service->type == MK_SERVICE_STORAGE) {
+            int trace_storage_request = 0;
+
+            if (request_copy.type == MK_MSG_BLOCK_WRITE && !g_storage_write_request_trace_emitted) {
+                g_storage_write_request_trace_emitted = 1;
+                trace_storage_request = 1;
+            } else if (g_storage_request_trace_budget > 0) {
+                g_storage_request_trace_budget -= 1;
+                trace_storage_request = 1;
+            }
+            if (trace_storage_request) {
+                kernel_debug_printf("service: storage request type=%d from pid=%d to pid=%d\n",
+                                    (int)request_copy.type,
+                                    current->pid,
+                                    service->pid);
+            }
         }
         if ((service->type == MK_SERVICE_VIDEO ||
              service->type == MK_SERVICE_AUDIO ||

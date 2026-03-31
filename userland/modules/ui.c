@@ -14,8 +14,8 @@ uint32_t SCREEN_WIDTH = 640;
 uint32_t SCREEN_HEIGHT = 480;
 uint32_t SCREEN_PITCH = 640;
 struct video_mode g_screen_mode = {0};
-static const struct desktop_theme g_classic_theme = {1u, 7u, 3u, 14u, 7u, 3u, 15u, 0u};
-static struct desktop_theme g_theme = {1u, 7u, 3u, 14u, 7u, 3u, 15u, 0u};
+static const struct desktop_theme g_classic_theme = {1u, 7u, 3u, 139u, 7u, 3u, 15u, 0u};
+static struct desktop_theme g_theme = {1u, 7u, 3u, 139u, 7u, 3u, 15u, 0u};
 static int g_ui_loading_settings = 0;
 static struct {
     int active;

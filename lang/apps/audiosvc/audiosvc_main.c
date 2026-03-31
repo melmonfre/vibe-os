@@ -1,5 +1,6 @@
 #include <lang/include/vibe_app_runtime.h>
 #include <lang/include/vibe_stdlib.h>
+#include <userland/modules/include/fs.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h>
 
@@ -12,9 +13,6 @@
 #define MK_AUDIO_STATUS_FLAG_UNDERRUN 0x00001000u
 #define MK_AUDIO_STATUS_FLAG_CAPTURE_DATA 0x00002000u
 #define MK_AUDIO_STATUS_FLAG_CAPTURE_XRUN 0x00004000u
-#define MK_AUDIO_FEATURE_USB_ATTACH_READY 0x00020000u
-#define MK_AUDIO_FEATURE_USB_ATTACHED_READY 0x00040000u
-
 void kernel_debug_puts(const char *msg) {
     (void)msg;
 }
@@ -247,6 +245,99 @@ static void audiosvc_emit_hardware_debug(const struct mk_audio_info *info) {
     }
     audiosvc_append_char(line, (int)sizeof(line), &len, '\n');
     audiosvc_debug(line);
+}
+
+static void audiosvc_emit_state_debug(const struct mk_audio_info *info,
+                                      const struct audio_status *status,
+                                      int input_count,
+                                      int selected_input,
+                                      int emit_status_ok) {
+    unsigned feature_flags;
+
+    if (info == 0 || status == 0) {
+        return;
+    }
+
+    feature_flags = audiosvc_feature_flags(info);
+    if (audiosvc_status_backend(status) == 2) {
+        audiosvc_debug("audiosvc: backend=compat-azalia\n");
+    } else if (audiosvc_status_backend(status) == 4) {
+        audiosvc_debug("audiosvc: backend=compat-uaudio\n");
+    } else if (audiosvc_status_backend(status) == 1) {
+        audiosvc_debug("audiosvc: backend=compat-ac97\n");
+    } else if (audiosvc_status_backend(status) == 3) {
+        audiosvc_debug("audiosvc: backend=pcspkr\n");
+    } else {
+        audiosvc_debug("audiosvc: backend=softmix\n");
+    }
+    audiosvc_debug("audiosvc: outputs listed\n");
+    if (input_count > 1) {
+        audiosvc_debug("audiosvc: inputs=mic,line\n");
+    } else if (input_count == 1) {
+        audiosvc_debug("audiosvc: inputs=mic\n");
+    } else {
+        audiosvc_debug("audiosvc: inputs=none\n");
+    }
+    audiosvc_debug("audiosvc: default-output selected\n");
+    if (selected_input == 1 && input_count > 1) {
+        audiosvc_debug("audiosvc: default-input=line\n");
+    } else if (input_count > 0) {
+        audiosvc_debug("audiosvc: default-input=mic\n");
+    } else {
+        audiosvc_debug("audiosvc: default-input=none\n");
+    }
+    if ((feature_flags & 0x80u) != 0u) {
+        audiosvc_debug("audiosvc: transport=mmio\n");
+    } else {
+        audiosvc_debug("audiosvc: transport=io\n");
+    }
+    if ((feature_flags & 0x100u) != 0u) {
+        audiosvc_debug("audiosvc: codecready-quirk=1\n");
+    } else {
+        audiosvc_debug("audiosvc: codecready-quirk=0\n");
+    }
+    if ((feature_flags & 0x200u) != 0u) {
+        audiosvc_debug("audiosvc: multichannel=1\n");
+    } else {
+        audiosvc_debug("audiosvc: multichannel=0\n");
+    }
+    if ((feature_flags & 0x400u) != 0u) {
+        audiosvc_debug("audiosvc: capture-dma=1\n");
+    } else {
+        audiosvc_debug("audiosvc: capture-dma=0\n");
+    }
+    if ((feature_flags & 0x800u) != 0u) {
+        audiosvc_debug("audiosvc: corb-rirb=1\n");
+    } else {
+        audiosvc_debug("audiosvc: corb-rirb=0\n");
+    }
+    if ((feature_flags & 0x1000u) != 0u) {
+        audiosvc_debug("audiosvc: codec-probe=1\n");
+    } else {
+        audiosvc_debug("audiosvc: codec-probe=0\n");
+    }
+    if ((feature_flags & 0x2000u) != 0u) {
+        audiosvc_debug("audiosvc: widget-probe=1\n");
+    } else {
+        audiosvc_debug("audiosvc: widget-probe=0\n");
+    }
+    if ((feature_flags & 0x4000u) != 0u) {
+        audiosvc_debug("audiosvc: path-programmed=1\n");
+    } else {
+        audiosvc_debug("audiosvc: path-programmed=0\n");
+    }
+    audiosvc_debug((feature_flags & MK_AUDIO_FEATURE_CONTROL_OWNER_AUDIOSVC) != 0u ?
+                       "audiosvc: control-owner=audiosvc\n" :
+                       "audiosvc: control-owner=kernel\n");
+    audiosvc_debug((feature_flags & MK_AUDIO_FEATURE_KERNEL_BACKEND_EXECUTOR) != 0u ?
+                       "audiosvc: backend-executor=kernel\n" :
+                       "audiosvc: backend-executor=userland\n");
+    audiosvc_debug((feature_flags & MK_AUDIO_FEATURE_UI_PROGRESS_DECOUPLED) != 0u ?
+                       "audiosvc: ui-progress=decoupled\n" :
+                       "audiosvc: ui-progress=coupled\n");
+    if (emit_status_ok) {
+        audiosvc_debug("audiosvc: status ok\n");
+    }
 }
 
 static const char *audiosvc_device_hint(const audio_device_t *device) {
@@ -487,6 +578,7 @@ static int audiosvc_write_state_file(const char *path) {
              "input_count=%d\ninput0=%s\ninput1=%s\n"
              "output_mask=%u\ninput_mask=%u\nfeature_flags=%u\nstatus_flags=%u\ntransport=%s\ncodecready_quirk=%d\nmultichannel=%d\ncapture_dma=%d\ncorb_rirb=%d\ncodec_probe=%d\nwidget_probe=%d\npath_programmed=%d\ncapture_data=%d\ncapture_xrun=%d\nirq_count=%u\n"
              "hardware=%s\npci_id=%08x\npci_location=%06x\ncodec_id=%08x\noutput_route=%04x\n"
+             "control_owner=%s\nbackend_executor=%s\nui_progress=%s\n"
              "default_output=%s\ndefault_input=%s\nselected_output_index=%d\nselected_input_index=%d\n"
              "output_volume=%d\ninput_volume=%d\noutput_muted=%d\ninput_muted=%d\n",
              info.device.name,
@@ -525,6 +617,9 @@ static int audiosvc_write_state_file(const char *path) {
              info.controller_location,
              info.codec_vendor_id,
              info.output_route,
+             (feature_flags & MK_AUDIO_FEATURE_CONTROL_OWNER_AUDIOSVC) != 0u ? "audiosvc" : "kernel",
+             (feature_flags & MK_AUDIO_FEATURE_KERNEL_BACKEND_EXECUTOR) != 0u ? "kernel" : "userland",
+             (feature_flags & MK_AUDIO_FEATURE_UI_PROGRESS_DECOUPLED) != 0u ? "decoupled" : "coupled",
              audiosvc_output_name(&info, selected_output),
              input_count > 0 ? audiosvc_input_name(&info, selected_input) : "none",
              selected_output,
@@ -693,7 +788,7 @@ static int audiosvc_command_status(void) {
     printf("default input: %s\n", input_count > 0 ? audiosvc_input_name(&info, selected_input) : "none");
     printf("output volume: %d%% %s\n", output_volume, output_muted ? "(muted)" : "(active)");
     printf("input volume: %d%% %s\n", input_volume, input_muted ? "(muted)" : "(active)");
-    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed %susb-attach-ready %susb-attached-ready irq-count=%u\n",
+    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed %susb-attach-ready %susb-attached-ready %scontrol-owner-audiosvc %skernel-backend-executor %sui-progress-decoupled irq-count=%u\n",
            (feature_flags & 0x2u) != 0u ? "" : "no-",
            (feature_flags & 0x8u) != 0u ? "" : "no-",
            (feature_flags & 0x80u) != 0u ? "mmio" : "io",
@@ -706,6 +801,9 @@ static int audiosvc_command_status(void) {
            (feature_flags & 0x4000u) != 0u ? "" : "no-",
            (feature_flags & MK_AUDIO_FEATURE_USB_ATTACH_READY) != 0u ? "" : "no-",
            (feature_flags & MK_AUDIO_FEATURE_USB_ATTACHED_READY) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_CONTROL_OWNER_AUDIOSVC) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_KERNEL_BACKEND_EXECUTOR) != 0u ? "" : "no-",
+           (feature_flags & MK_AUDIO_FEATURE_UI_PROGRESS_DECOUPLED) != 0u ? "" : "no-",
            info.parameters._spare[0]);
     printf("runtime: %sirq-seen %sno-valid-irq %sstarvation %sunderrun %scapture-data %scapture-xrun\n",
            (status_flags & MK_AUDIO_STATUS_FLAG_IRQ_SEEN) != 0u ? "" : "no-",
@@ -714,85 +812,47 @@ static int audiosvc_command_status(void) {
            (status_flags & MK_AUDIO_STATUS_FLAG_UNDERRUN) != 0u ? "" : "no-",
            (status_flags & MK_AUDIO_STATUS_FLAG_CAPTURE_DATA) != 0u ? "" : "no-",
            (status_flags & MK_AUDIO_STATUS_FLAG_CAPTURE_XRUN) != 0u ? "" : "no-");
-    if (audiosvc_status_backend(&status) == 2) {
-        audiosvc_debug("audiosvc: backend=compat-azalia\n");
-    } else if (audiosvc_status_backend(&status) == 4) {
-        audiosvc_debug("audiosvc: backend=compat-uaudio\n");
-    } else if (audiosvc_status_backend(&status) == 1) {
-        audiosvc_debug("audiosvc: backend=compat-ac97\n");
-    } else if (audiosvc_status_backend(&status) == 3) {
-        audiosvc_debug("audiosvc: backend=pcspkr\n");
-    } else {
-        audiosvc_debug("audiosvc: backend=softmix\n");
-    }
-    audiosvc_debug("audiosvc: outputs listed\n");
-    if (input_count > 1) {
-        audiosvc_debug("audiosvc: inputs=mic,line\n");
-    } else if (input_count == 1) {
-        audiosvc_debug("audiosvc: inputs=mic\n");
-    } else {
-        audiosvc_debug("audiosvc: inputs=none\n");
-    }
-    audiosvc_debug("audiosvc: default-output selected\n");
-    if (selected_input == 1 && input_count > 1) {
-        audiosvc_debug("audiosvc: default-input=line\n");
-    } else if (input_count > 0) {
-        audiosvc_debug("audiosvc: default-input=mic\n");
-    } else {
-        audiosvc_debug("audiosvc: default-input=none\n");
-    }
-    if ((feature_flags & 0x80u) != 0u) {
-        audiosvc_debug("audiosvc: transport=mmio\n");
-    } else {
-        audiosvc_debug("audiosvc: transport=io\n");
-    }
-    if ((feature_flags & 0x100u) != 0u) {
-        audiosvc_debug("audiosvc: codecready-quirk=1\n");
-    } else {
-        audiosvc_debug("audiosvc: codecready-quirk=0\n");
-    }
-    if ((feature_flags & 0x200u) != 0u) {
-        audiosvc_debug("audiosvc: multichannel=1\n");
-    } else {
-        audiosvc_debug("audiosvc: multichannel=0\n");
-    }
-    if ((feature_flags & 0x400u) != 0u) {
-        audiosvc_debug("audiosvc: capture-dma=1\n");
-    } else {
-        audiosvc_debug("audiosvc: capture-dma=0\n");
-    }
-    if ((feature_flags & 0x800u) != 0u) {
-        audiosvc_debug("audiosvc: corb-rirb=1\n");
-    } else {
-        audiosvc_debug("audiosvc: corb-rirb=0\n");
-    }
-    if ((feature_flags & 0x1000u) != 0u) {
-        audiosvc_debug("audiosvc: codec-probe=1\n");
-    } else {
-        audiosvc_debug("audiosvc: codec-probe=0\n");
-    }
-    if ((feature_flags & 0x2000u) != 0u) {
-        audiosvc_debug("audiosvc: widget-probe=1\n");
-    } else {
-        audiosvc_debug("audiosvc: widget-probe=0\n");
-    }
-    if ((feature_flags & 0x4000u) != 0u) {
-        audiosvc_debug("audiosvc: path-programmed=1\n");
-    } else {
-        audiosvc_debug("audiosvc: path-programmed=0\n");
-    }
-    audiosvc_debug("audiosvc: status ok\n");
+    audiosvc_emit_state_debug(&info, &status, input_count, selected_input, 1);
     audiosvc_emit_hardware_debug(&info);
     return 0;
 }
 
 static int audiosvc_command_export_state(const char *path) {
     const char *target = path != 0 && *path != '\0' ? path : AUDIOSVC_STATUS_EXPORT_PATH;
+    struct mk_audio_info info;
+    struct audio_status status;
+    int output_volume = 0;
+    int input_volume = 0;
+    int output_muted = 0;
+    int input_muted = 0;
+    int selected_output = 0;
+    int selected_input = 0;
+    int input_count = 0;
 
     if (audiosvc_write_state_file(target) != 0) {
         audiosvc_debug("audiosvc: export failed\n");
         printf("audiosvc: failed to write %s\n", target);
         return 1;
+    }
+    if (vibe_app_sync() != 0) {
+        audiosvc_debug("audiosvc: export sync-fail\n");
+        printf("audiosvc: failed to sync %s\n", target);
+        return 1;
+    }
+    if (audiosvc_read_state(&info,
+                            &status,
+                            &output_volume,
+                            &input_volume,
+                            &output_muted,
+                            &input_muted,
+                            &selected_output,
+                            &selected_input) == 0) {
+        input_count = audiosvc_input_count(&info);
+        if (selected_input >= input_count && input_count > 0) {
+            selected_input = 0;
+        }
+        audiosvc_emit_state_debug(&info, &status, input_count, selected_input, 0);
+        audiosvc_emit_hardware_debug(&info);
     }
     audiosvc_debug("audiosvc: export ok\n");
     printf("audiosvc: state exported to %s\n", target);
@@ -813,9 +873,6 @@ static int audiosvc_command_apply_settings(const char *path) {
 }
 
 static int audiosvc_command_play_asset(const char *path) {
-    struct audio_async_playback playback;
-    int rc;
-
     if (path == 0 || *path == '\0') {
         audiosvc_debug("audiosvc: play-asset missing-path\n");
         printf("audiosvc: missing asset path\n");
@@ -823,17 +880,7 @@ static int audiosvc_command_play_asset(const char *path) {
     }
 
     audiosvc_debug("audiosvc: play-asset begin\n");
-    rc = audio_play_wav_async_start(&playback, path, "desktop-session");
-    if (rc != 0) {
-        audiosvc_debug("audiosvc: play-asset start-failed\n");
-        return 1;
-    }
-
-    while ((rc = audio_play_wav_async_poll(&playback)) > 0) {
-        sys_yield();
-    }
-
-    if (rc < 0) {
+    if (sys_audio_play_asset(path) != 0) {
         audiosvc_debug("audiosvc: play-asset failed\n");
         return 1;
     }
@@ -843,6 +890,8 @@ static int audiosvc_command_play_asset(const char *path) {
 }
 
 int vibe_app_main(int argc, char **argv) {
+    fs_init();
+
     if (argc < 2 || argv == 0 || argv[1] == 0) {
         audiosvc_usage();
         return 1;

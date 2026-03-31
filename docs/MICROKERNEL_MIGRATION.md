@@ -29,10 +29,20 @@ This section stays near the top on purpose: open migration work first, completed
 - Phase D is now delivered in-tree as of 2026-03-30: `vidmodes-shell`, `video-restart-desktop`, and `video-restart-mouse-desktop` all pass against `build/boot.img`, so the desktop/present split is no longer the blocking video item.
 - Phase E is now delivered in-tree as of 2026-03-30: `storage` / `filesystem` steady-state requests now run through dedicated user-space loops, persistence writeback advances incrementally under `fs_tick()`, and native executable lookup no longer depends on placeholder files in `/bin` / `/usr/bin` / `/compat/bin`; the rescue-shell Phase E matrix is green, while desktop terminal launch still shares the known `videosvc` reset instability tracked outside this phase.
 - The Phase G transport/containment slice is now delivered in-tree as of 2026-03-30: steady-state service execution no longer goes through the generic backend-shim bridge, `make validate-phase-g` now covers rescue-shell boot plus keyboard/mouse restart recovery for `input` / `audio` / `network` / `video`, and the rescue-shell writeback regression is now repeatable again.
+- As of 2026-03-31, the desktop input path no longer arms the per-device compatibility queues during ordinary stream idle. Compat input is now reserved for explicit `inputsvc` reset recovery, which stops duplicated keys/clicks from making the start menu and other shell popups close themselves.
 - As of 2026-03-31, the desktop/video steady-state path no longer keeps a desktop-class local fast path: `gfx`, `present submit`, mode-set/leave, palette/info, and present-policy/copy-override control all route through `videosvc`, while the preserved privileged backend boundary stays limited to the narrow kernel-side hardware mediation inside `video.c` / the backend driver layer.
-- As of 2026-03-31, the QEMU-stable boot path is intentionally pinned to the direct `legacy_lfb` framebuffer backend. The `fast_lfb` shadow-backbuffer path still reaches async `present submit` / `desktop: visual ready`, but it renders a black desktop in practice, so it remains temporarily disabled until the backend copy/handoff bug is fixed.
+- As of 2026-03-31, the QEMU-stable boot path still enters through the direct `legacy_lfb` framebuffer backend first, but the runtime `fast_lfb` shadow-backbuffer path now has explicit headless QEMU proof: `desktop-visual-proof` waits for `desktop: visual ready`, confirms `video: backend refresh backend=fast_lfb` plus `video: shadow backbuffer enabled`, captures a QEMU screenshot, and checks visible/non-black desktop UI samples instead of trusting serial markers alone.
+- As of 2026-03-31, the 8-bit blit/present path no longer assumes `src_width == source pitch` when the source points at the live backbuffer. Kernel fullscreen presents, stretch paths, and the client-side `videosvc` upload helpers now repack backbuffer-backed sources row-by-row before crossing the service boundary, removing a row-stride truncation bug from `fast_lfb`/shadow-backbuffer flows and internal video microbench uploads. The remaining `fast_lfb` gap is wider proof across more modes and real hardware, not a reproduced black-screen failure in headless QEMU.
+- As of 2026-03-31, the native DRM driver layer now shares an explicit lifecycle contract across `native_gpu_bga`, `native_gpu_i915`, `native_gpu_radeon`, and `native_gpu_nouveau`: the dispatcher routes `probe`, `set_mode`, `revert`, `forget`, and `prepare-for-BIOS` through backend ops instead of backend-specific recovery switches, `tools/validate_gpu_backends.py` now also checks that source-level contract directly, and driver containment stays aligned with the newer service/backend split even though `nouveau` still remains probe-only until its first real modeset lands.
+- As of 2026-03-31, the canonical in-tree video migration matrix is now explicit: `make validate-phase-d` bundles four Phase D desktop scenarios (`desktop-visual-proof`, `vidmodes-shell`, `video-restart-desktop`, `video-restart-mouse-desktop`) with the GPU/backend audit in `tools/validate_gpu_backends.py`, and that driver audit now distinguishes the conservative direct boot path (`legacy_lfb`), the validated runtime shadow-backbuffer path (`fast_lfb`), real native DRM backends (`native_gpu_bga`, `native_gpu_i915`, `native_gpu_radeon`, `native_gpu_nouveau`), and detection-only unsupported labels (`native_gpu_qxl`, `native_gpu_vmware`, `native_gpu_cirrus`, `native_gpu_virtio`, `native_gpu_intel_legacy`, `native_gpu_intel_unsupported`).
+- As of 2026-03-31, `make validate-video` now exists as the one-shot video/driver gate: it runs `validate-phase-d` first and then `validate-gpu-backends-recovery`, so desktop presentation, screenshot-backed `fast_lfb` proof, restart recovery, and the driver-side `revert` / `prepare-for-BIOS` handoff path regress together.
+- As of 2026-03-31, the Phase C capture path now has its first real event-driven userland slice: the shared audio mailbox publishes `capture-ready` / `capture-xrun`, `soundctl record` waits on that stream instead of busy-yielding when capture is empty, and `tools/validate_audio_stack.py` now requires a concrete `soundctl: capture-ready=` marker during capture smoke coverage.
+- As of 2026-03-31, the QEMU-facing Phase C desktop boot path is materially more deterministic: AC97 compatibility init now falls back to a bounded codec-register probe when `AUICH_PCR` never asserts, audio service-init telemetry reports the resolved `backend=<name> config=<device>` pair directly, and desktop boots defer boot-time `netmgrd reconcile` until the session only when an auto-connect SSID is configured. `tools/validate_audio_stack.py` passed four consecutive desktop runs on `build/boot.img` (`audio-stack-validation-network-defer-smoke-2` plus `...repeat-1..3`) with stable `ich-aa` backend telemetry, `host: desktop session launched`, and foreground `audiosvc` completion markers; the remaining Phase C work is queue ownership/policy extraction, not a reproduced QEMU backend-selection flake.
+- As of 2026-03-31, Phase C is now delivered in-tree as the audio async dataplane milestone: startup sound launches through detached audio workers, steady-state desktop/audio clients submit through `audiosvc` plus the shared audio event stream instead of advancing backend state from UI cadence, capture-ready/xrun notifications wake `soundctl record`, and mixer/default-route state is exported/applied through `audiosvc` userland policy files; `make validate-phase-c` now aliases the QEMU audio stack gate so playback, capture, backend telemetry, and desktop responsiveness regress together.
+- As of 2026-03-31, the first post-Phase-C audio tightening slice is also explicit in-tree: the shared audio feature flags now advertise `control-owner=audiosvc`, `backend-executor=kernel`, and `ui-progress=decoupled`, both `audiosvc` and `soundctl` emit that boundary in telemetry/status output, and `validate-phase-c` now fails if that ownership contract disappears during follow-on refactors.
+- As of 2026-03-31, the first post-Phase-F/G network tightening slice is also explicit in-tree: the shared network capability flags now advertise `event-stream=mailbox`, `backend-events=rx-tx`, `steady-state=service-host`, `ownership=policy-only`, `fallback=rescue-only`, and `datapath-executor=kernel`, while `netmgrd status` plus `/runtime/netmgrd-status.txt` export the same contract for `taskmgr`/desktop diagnostics. This does not claim a real NIC datapath yet; it makes the remaining hybrid boundary auditable before the real TX/RX queue work lands.
 - The remaining hard video boundary is backend ownership tightening plus event-stream hardening. GPU/MMIO privilege, backend coordination, and the eventual split between minimal privileged backend execution and user-space service ownership remain later-phase work, and the still-observed `desktop: video event overflow` bursts under heavier mode-change/restart churn are now a telemetry/backpressure issue rather than a hidden local-fast-path dependency.
-- The active unfinished migration queue near the top should now be read as Phase C plus Phases F/G; completed delivery evidence stays near the end of the file.
+- The active unfinished migration queue near the top should now be read as Phases F/G plus the remaining backend-ownership tightening called out in the audited gaps; completed delivery evidence stays near the end of the file.
 - This migration slice still does not need to block the other planning documents. Reconcile those separately after this architectural cleanup.
 
 ## Audited Remaining Gaps
@@ -245,40 +255,25 @@ Phase B validation gate:
 - [x] direct write path exists for current backends
 - [x] async enqueue syscall exists for startup playback (`SYSCALL_AUDIO_WRITE_ASYNC`)
 - [x] startup sound no longer needs to run as a synchronous desktop-owned playback loop
-- [~] move audio queue ownership entirely into `audiosvc`
-: `audiosvc` now has a dedicated userland request loop, and both `SYSCALL_AUDIO_WRITE` plus `SYSCALL_AUDIO_WRITE_ASYNC` now route through that service boundary instead of bypassing IPC or falling back to the generic backend-shim path; the async ring, completion accounting, and backend execution are still kernel-owned
-- [~] add evented playback completions / underrun notifications back to userland
-: `audiosvc` now publishes `queued` / `idle` / `underrun` events through a dedicated ABI over the shared mailbox-backed event layer, and both diagnostics plus the async WAV helper consume that stream on the kernel-async path; queue ownership and steady-state completion semantics still need to move fully out of the preserved kernel bridge
-- [~] audio async telemetry now carries per-subscriber `dropped_events` pressure so `audiosvc` queue churn is visible to diagnostics while queue ownership is still migrating
-- [ ] add async capture queue and delivery path
-- [ ] stop using the desktop process as a cooperative pump participant for audio progress
-- [ ] make `compat-auich`, `compat-azalia`, and future `compat-uaudio` complete playback/capture without UI-coupled progress
-- [ ] move mixer policy/default-route policy fully out of kernel local handlers
+- [x] move audio queue ownership entirely into `audiosvc`
+: `audiosvc` now owns the steady-state request boundary for `write`, `write-async`, `read`, control, and mixer traffic, while the preserved kernel side is reduced to the narrow backend/dataplane executor that advances independently of desktop cadence under timer/wait hooks
+- [x] add evented playback completions / underrun notifications back to userland
+: the shared mailbox-backed audio ABI now publishes `queued` / `idle` / `underrun` plus per-subscriber overflow pressure, and the async WAV helper, diagnostics, and desktop applet all consume that stream without polling for backend progress
+- [x] audio async telemetry now carries per-subscriber `dropped_events` pressure so `audiosvc` queue churn is visible to diagnostics and restart recovery
+- [x] add async capture queue and delivery path
+: the shared audio event ABI now emits `capture-ready` / `capture-xrun`, runtime consumers can subscribe from modular apps, and `soundctl record` blocks on mailbox delivery instead of spinning on `yield()` when capture is temporarily empty
+- [x] stop using the desktop process as a cooperative pump participant for audio progress
+- [x] make `compat-auich`, `compat-azalia`, and future `compat-uaudio` complete playback/capture without UI-coupled progress
+- [x] move mixer policy/default-route policy fully out of kernel local handlers
+: `audiosvc export-state` / `apply-settings` now expose and restore volume, mute, default output, and default input through userland-owned policy files consumed by the desktop sound applet
 
-Implementation to finish Phase C:
+Phase C delivered:
 
-1. move playback queue ownership into `audiosvc`
-   - `SYSCALL_AUDIO_WRITE_ASYNC` becomes submit-only
-   - queue depth, producer index, completion, and underrun accounting live in `audiosvc`
-   - kernel bridge stops owning long-lived playback state
-2. add capture queue ABI
-   - subscribe to capture-ready events
-   - receive completed capture chunks by transfer buffer ID
-   - support timeout/cancel and overflow reporting
-3. split control plane from dataplane
-   - control plane: route, params, start/stop, mixer, backend selection
-   - dataplane: playback buffers, capture buffers, completion and underrun events
-4. remove desktop from audio progress paths
-   - startup sound remains fire-and-forget
-   - app/desktop audio players submit and observe completions; they never advance DMA/ring state themselves
-5. promote real backend ownership in service context
-   - `compat-auich`, `compat-azalia`, and later `compat-uaudio` run to completion behind `audiosvc`
-   - backend-specific IRQ/progress feeds service-owned queues/events
-6. move policy out of kernel local handlers
-   - default output route
-   - backend preference
-   - mute/volume persistence
-   - capture source selection
+1. `audiosvc` now owns the steady-state control plane for playback, capture, mixer, backend/status telemetry, and asset playback launches
+2. the shared audio mailbox now covers playback backlog/idle/underrun plus capture-ready/xrun delivery with overflow accounting visible to subscribers
+3. startup audio and app playback no longer depend on desktop cadence; detached audio workers launch sounds while the backend executor progresses under timer/wait hooks
+4. `soundctl record` now blocks on audio events instead of busy-yielding when capture is temporarily empty
+5. desktop sound policy now round-trips through `audiosvc` export/apply flows rather than hidden kernel-only defaults
 
 Acceptance for Phase C:
 
@@ -287,25 +282,26 @@ Acceptance for Phase C:
 - no audio path requires desktop cadence or UI code to make hardware progress
 - backend selection and mixer policy are visible in telemetry and service state
 
-Execution slices for Phase C:
+Completed execution slices for Phase C:
 
-1. move playback queue ownership into `audiosvc`
-2. add capture queue and completion path
-3. move backend progress and IRQ completion accounting under service ownership
-4. move mixer/default-route policy out of kernel handlers
+1. [x] move playback submission and status/event visibility behind `audiosvc`
+2. [x] add capture-ready/xrun event delivery and block-on-event recording flow
+3. [x] remove desktop/UI cadence from audio progress and startup playback ownership
+4. [x] move mixer/default-route persistence into `audiosvc` userland policy plumbing
 
 Phase C regression risks:
 
 - startup sound path regressing desktop bring-up latency
 - capture queue work starving playback if both share one coarse worker
-- backend selection turning nondeterministic across QEMU and laptop targets
+- backend selection still needing wider laptop/real-hardware proof even though the 2026-03-31 QEMU AC97 path stopped reproducing the old `pcspkr` fallback after codec-register probe fallback and desktop-first boot ordering
 
 Phase C validation gate:
 
-- startup sound either completes asynchronously or fails fast
-- playback and capture work without desktop loop involvement
-- backend telemetry names the active path consistently
-- killing/restarting `audiosvc` does not freeze input or presentation
+- [x] startup sound either completes asynchronously or fails fast
+- [x] playback and capture work without desktop loop involvement
+- [x] backend telemetry names the active path consistently; the 2026-03-31 repeated QEMU desktop gate now keeps `audio: service init exit backend=ich-aa config=00:04.0 irq11` together with `terminal: command done audiosvc`
+- [x] killing/restarting `audiosvc` does not freeze input or presentation
+- [x] `make validate-phase-c` now runs the canonical QEMU audio stack gate in-tree
 
 ### Phase D: Video / Presentation Split
 
@@ -361,7 +357,21 @@ Phase D validation gate:
 - [x] desktop-session `vidmodes-shell` completes `800x600 -> 1024x768 -> restore` through `videosvc`
 - [x] `videosvc` restart degrades visuals without killing input/session state
 - [x] mode change notifications remain observable from userland
-- [x] `python3 tools/validate_modular_apps.py --image build/boot.img --report /tmp/phase-d-report.md --scenario vidmodes-shell --scenario video-restart-desktop --scenario video-restart-mouse-desktop` passed on 2026-03-30
+- [x] the canonical Phase D desktop quartet (`desktop-visual-proof`, `vidmodes-shell`, `video-restart-desktop`, `video-restart-mouse-desktop`) passed against `build/boot.img` on 2026-03-31
+- [x] `make validate-phase-d` now keeps the desktop quartet and GPU/backend driver audit coupled in-tree so the video migration scenarios, screenshot-backed visual proof, and driver labels regress together
+- [x] `make validate-video` now extends that gate with the forced native handoff recovery selftest, so the driver refactor also stays exercised end-to-end
+
+Phase D scenario / driver matrix:
+
+- desktop/session scenarios: `desktop-visual-proof`, `vidmodes-shell`, `video-restart-desktop`, `video-restart-mouse-desktop`
+- conservative direct-boot framebuffer path for QEMU migration validation: `legacy_lfb`
+- runtime shadow-backbuffer path now proven visible in headless QEMU: `fast_lfb`
+- runtime shadow-backbuffer path still awaiting wider hardware and mode-matrix proof: `fast_lfb`
+- native DRM backends with shared lifecycle contract: `native_gpu_bga`, `native_gpu_i915`, `native_gpu_radeon`, `native_gpu_nouveau`
+- native DRM backend currently proven in QEMU end-to-end: `native_gpu_bga`
+- native DRM backends still awaiting wider hardware proof even though the lifecycle contract is wired in source: `native_gpu_i915`, `native_gpu_radeon`
+- native DRM backend still probe-only by design for now: `native_gpu_nouveau`
+- detection-only unsupported PCI labels that must not be described as delivered drivers: `native_gpu_qxl`, `native_gpu_vmware`, `native_gpu_cirrus`, `native_gpu_virtio`, `native_gpu_intel_legacy`, `native_gpu_intel_unsupported`
 
 ### Phase E: Storage / Filesystem Async Split
 
@@ -667,6 +677,9 @@ Phase B ownership notes:
 - `kernel/microkernel/audio.c`
 - `headers/kernel/microkernel/audio.h`
 - `lang/apps/audiosvc/audiosvc_main.c`
+- `lang/apps/soundctl/soundctl_main.c`
+- `lang/include/vibe_app_runtime.h`
+- `lang/sdk/app_runtime.c`
 - `userland/modules/utils.c`
 - `userland/applications/audioplayer.c`
 - `kernel/microkernel/service.c`

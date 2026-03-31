@@ -298,6 +298,7 @@ DATA_IMAGE_MANIFEST := $(BUILD_DIR)/data-partition.manifest
 BOOT_VOLUME_MANIFEST := $(BUILD_DIR)/boot-volume-layout.txt
 BOOT_POLICY_MANIFEST := $(BUILD_DIR)/boot-policy.txt
 PHASE6_REPORT := $(BUILD_DIR)/phase6-validation.md
+PHASED_REPORT := $(BUILD_DIR)/phase-d-validation.md
 PHASEG_REPORT := $(BUILD_DIR)/phase-g-validation.md
 MODULAR_APPS_REPORT := $(BUILD_DIR)/modular-apps-validation.md
 GPU_BACKENDS_REPORT := $(BUILD_DIR)/gpu-backends-report.md
@@ -1769,6 +1770,21 @@ validate-phase6-boot-smoke: boot-smoke-image
 
 validate-modular-apps: $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-phase-d: $(IMAGE)
+	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report $(PHASED_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) \
+		--scenario desktop-visual-proof \
+		--scenario vidmodes-shell \
+		--scenario video-restart-desktop \
+		--scenario video-restart-mouse-desktop
+	$(PYTHON) tools/validate_gpu_backends.py --image $(IMAGE) --report $(GPU_BACKENDS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-phase-c: $(IMAGE)
+	$(MAKE) validate-audio-stack
+
+validate-video:
+	$(MAKE) validate-phase-d
+	$(MAKE) validate-gpu-backends-recovery
 
 validate-phase-g: $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report $(PHASEG_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) \

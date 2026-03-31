@@ -11,7 +11,6 @@
 
 #define HOST_PENDING_TASK_EVENTS_MAX 8u
 #define HOST_TASK_EXIT_POLL_TICKS 4u
-
 static struct mk_task_event g_host_pending_task_events[HOST_PENDING_TASK_EVENTS_MAX];
 static uint32_t g_host_pending_task_event_count = 0u;
 
@@ -72,6 +71,14 @@ static int host_take_stashed_task_exit(uint32_t pid, struct mk_task_event *event
     }
 
     return -1;
+}
+
+static void host_reset_task_exit_subscription(void) {
+    struct mk_task_event event;
+
+    g_host_pending_task_event_count = 0u;
+    while (sys_task_event_receive(&event, 0u) == 0) {
+    }
 }
 
 static int host_task_pid_alive(uint32_t pid) {
@@ -136,6 +143,9 @@ static int host_wait_for_task_exit(uint32_t pid) {
         }
         if (event.pid != pid) {
             host_stash_task_event(&event);
+            if (!host_task_pid_alive(pid)) {
+                return 0;
+            }
             continue;
         }
         if (event.event_type == MK_TASK_EVENT_TERMINATED) {
@@ -145,22 +155,41 @@ static int host_wait_for_task_exit(uint32_t pid) {
 }
 
 static int host_subscribe_task_exit(uint32_t task_class_mask) {
-    return sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,
-                                         task_class_mask);
+    if (sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,
+                                      task_class_mask) != 0) {
+        return -1;
+    }
+    host_reset_task_exit_subscription();
+    return 0;
 }
 
 static uint32_t host_external_task_class_mask(int argc, char **argv) {
     char normalized[64];
 
-    if (argc > 0 &&
-        argv != 0 &&
-        argv[0] != 0 &&
-        lang_normalize_command_name(argv[0], normalized, (int)sizeof(normalized)) == 0 &&
-        str_eq(normalized, "startx")) {
-        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP);
+    if (argc <= 0 ||
+        argv == 0 ||
+        argv[0] == 0 ||
+        lang_normalize_command_name(argv[0], normalized, (int)sizeof(normalized)) != 0) {
+        return MK_TASK_CLASS_MASK_ALL;
     }
 
-    return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
+    if (str_eq(normalized, "startx")) {
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_DESKTOP);
+    }
+    if (str_eq(normalized, "audiosvc")) {
+        if (argc > 1 && argv[1] != 0 && str_eq(argv[1], "play-asset")) {
+            return MK_TASK_CLASS_MASK(MK_TASK_CLASS_AUDIO_IO);
+        }
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
+    }
+    if (str_eq(normalized, "soundctl")) {
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
+    }
+    if (str_eq(normalized, "netmgrd") || str_eq(normalized, "netctl")) {
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
+    }
+
+    return MK_TASK_CLASS_MASK_ALL;
 }
 
 static int host_launch_external_argv_and_wait(int argc, char **argv) {

@@ -29,6 +29,22 @@ class GpuScenarioResult:
     error: Optional[str] = None
 
 
+@dataclass
+class SourceContract:
+    name: str
+    description: str
+    path: str
+    must_have: List[str]
+
+
+@dataclass
+class SourceContractResult:
+    contract: SourceContract
+    passed: bool
+    missing_markers: List[str]
+    error: Optional[str] = None
+
+
 class QemuBoot:
     def __init__(self, qemu_binary: str, image_path: Path, memory_mb: int, workspace: Path, extra_args: List[str]):
         self.serial_log = workspace / "serial.log"
@@ -144,6 +160,106 @@ RECOVERY_SCENARIOS = [
     ),
 ]
 
+SOURCE_CONTRACTS = [
+    SourceContract(
+        name="drm-header-lifecycle",
+        description="The shared DRM backend contract should expose probe/set-mode/revert/forget/prepare hooks",
+        path="headers/kernel/drivers/video/drm/drm.h",
+        must_have=[
+            "int (*probe)(const struct kernel_drm_candidate *candidate);",
+            "int (*set_mode)(const struct kernel_drm_candidate *candidate,",
+            "int (*revert_last_modeset)(void);",
+            "void (*forget_last_modeset)(void);",
+            "void (*prepare_for_bios_modeset)(void);",
+        ],
+    ),
+    SourceContract(
+        name="drm-dispatcher-lifecycle",
+        description="The DRM dispatcher should route lifecycle operations through backend ops instead of backend-specific switches",
+        path="kernel/drivers/video/drm/drm.c",
+        must_have=[
+            "&g_kernel_drm_bga_ops,",
+            "&g_kernel_drm_i915_ops,",
+            "&g_kernel_drm_radeon_ops,",
+            "&g_kernel_drm_nouveau_ops,",
+            "ops->revert_last_modeset()",
+            "ops->forget_last_modeset();",
+            "ops->prepare_for_bios_modeset();",
+        ],
+    ),
+    SourceContract(
+        name="drm-candidate-labels",
+        description="The DRM candidate map should keep supported backends distinct from detection-only unsupported labels",
+        path="kernel/drivers/video/drm/drm.c",
+        must_have=[
+            'return "native_gpu_bga";',
+            'return "native_gpu_i915";',
+            'return "native_gpu_radeon";',
+            'return "native_gpu_nouveau";',
+            '*name_out = "native_gpu_qxl";',
+            '*name_out = "native_gpu_vmware";',
+            '*name_out = "native_gpu_cirrus";',
+            '*name_out = "native_gpu_virtio";',
+            '*name_out = "native_gpu_intel_legacy";',
+            '*name_out = "native_gpu_intel_unsupported";',
+            '*name_out = "native_gpu_unknown";',
+        ],
+    ),
+    SourceContract(
+        name="bga-lifecycle",
+        description="bga should publish the shared lifecycle hooks through its backend ops table",
+        path="kernel/drivers/video/drm/bga.c",
+        must_have=[
+            "void kernel_drm_bga_prepare_for_bios_modeset(void)",
+            "int kernel_drm_bga_revert_last_mode(void)",
+            "void kernel_drm_bga_forget_last_mode(void)",
+            "kernel_drm_bga_revert_last_mode,",
+            "kernel_drm_bga_forget_last_mode,",
+            "kernel_drm_bga_prepare_for_bios_modeset",
+        ],
+    ),
+    SourceContract(
+        name="i915-lifecycle",
+        description="i915 should publish the new lifecycle hooks through its backend ops table",
+        path="kernel/drivers/video/drm/i915.c",
+        must_have=[
+            "static void kernel_drm_i915_prepare_for_bios_modeset(void)",
+            "int kernel_drm_i915_revert_last_commit(void)",
+            "void kernel_drm_i915_forget_last_commit(void)",
+            "kernel_drm_i915_revert_last_commit,",
+            "kernel_drm_i915_forget_last_commit,",
+            "kernel_drm_i915_prepare_for_bios_modeset",
+        ],
+    ),
+    SourceContract(
+        name="radeon-lifecycle",
+        description="radeon should publish the new lifecycle hooks through its backend ops table",
+        path="kernel/drivers/video/drm/radeon.c",
+        must_have=[
+            "static void kernel_drm_radeon_prepare_for_bios_modeset(void)",
+            "int kernel_drm_radeon_revert_last_commit(void)",
+            "void kernel_drm_radeon_forget_last_commit(void)",
+            "kernel_drm_radeon_revert_last_commit,",
+            "kernel_drm_radeon_forget_last_commit,",
+            "kernel_drm_radeon_prepare_for_bios_modeset",
+        ],
+    ),
+    SourceContract(
+        name="nouveau-lifecycle",
+        description="nouveau should stay wired into the shared lifecycle even while modeset remains probe-only",
+        path="kernel/drivers/video/drm/nouveau.c",
+        must_have=[
+            "probe-only backend, native modeset still pending",
+            "static int kernel_drm_nouveau_revert_last_modeset(void)",
+            "static void kernel_drm_nouveau_forget_last_modeset(void)",
+            "static void kernel_drm_nouveau_prepare_for_bios_modeset(void)",
+            "kernel_drm_nouveau_revert_last_modeset,",
+            "kernel_drm_nouveau_forget_last_modeset,",
+            "kernel_drm_nouveau_prepare_for_bios_modeset",
+        ],
+    ),
+]
+
 
 def parse_mode_text(mode_text: str) -> Optional[str]:
     parts = mode_text.lower().split("x")
@@ -190,7 +306,28 @@ def run_scenario(qemu_binary: str, image_path: Path, memory_mb: int, scenario: G
     )
 
 
-def write_report(report_path: Path, results: List[GpuScenarioResult]) -> None:
+def run_source_contract(repo_root: Path, contract: SourceContract) -> SourceContractResult:
+    source_path = (repo_root / contract.path).resolve()
+    if not source_path.is_file():
+        return SourceContractResult(
+            contract=contract,
+            passed=False,
+            missing_markers=[],
+            error=f"missing source file: {source_path}",
+        )
+
+    text = source_path.read_text(encoding="utf-8", errors="replace")
+    missing = [marker for marker in contract.must_have if marker not in text]
+    return SourceContractResult(
+        contract=contract,
+        passed=not missing,
+        missing_markers=missing,
+    )
+
+
+def write_report(report_path: Path,
+                 results: List[GpuScenarioResult],
+                 source_results: List[SourceContractResult]) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# GPU Backend Validation Report",
@@ -209,6 +346,16 @@ def write_report(report_path: Path, results: List[GpuScenarioResult]) -> None:
             notes = (notes + " | " if notes else "") + result.error
         lines.append(f"| {result.scenario.name} | {'PASS' if result.passed else 'FAIL'} | {notes} |")
 
+    lines.extend(["", "## Source Driver Contract", "", "| Check | Result | Notes |", "| --- | --- | --- |"])
+
+    for result in source_results:
+        notes = f"{result.contract.description} ({result.contract.path})"
+        if result.missing_markers:
+            notes = "missing: " + ", ".join(result.missing_markers)
+        if result.error:
+            notes = (notes + " | " if notes else "") + result.error
+        lines.append(f"| {result.contract.name} | {'PASS' if result.passed else 'FAIL'} | {notes} |")
+
     lines.extend(["", "## Marker Summary", ""])
     for result in results:
         lines.append(f"### {result.scenario.name}")
@@ -221,10 +368,27 @@ def write_report(report_path: Path, results: List[GpuScenarioResult]) -> None:
         preview = [
             line
             for line in result.log.strip().splitlines()
-            if "drm:" in line or "i915:" in line or "bga:" in line or "video:" in line
+            if "drm:" in line or
+               "i915:" in line or
+               "radeon:" in line or
+               "nouveau:" in line or
+               "bga:" in line or
+               "video:" in line
         ][-20:]
         if preview:
             lines.extend(["", "```text", *preview, "```"])
+        lines.append("")
+
+    lines.extend(["## Source Contract Summary", ""])
+    for result in source_results:
+        lines.append(f"### {result.contract.name}")
+        lines.append(f"- file: {result.contract.path}")
+        if result.passed:
+            lines.append("- required driver markers observed")
+        else:
+            lines.append("- missing markers: " + ", ".join(result.missing_markers))
+        if result.error:
+            lines.append("- error: " + result.error)
         lines.append("")
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -273,12 +437,19 @@ def main() -> int:
             )
             for scenario in scenarios
         ]
+    repo_root = Path(__file__).resolve().parent.parent
     results = [run_scenario(qemu_binary, image_path, args.memory_mb, scenario) for scenario in scenarios]
-    write_report(report_path, results)
+    source_results = [run_source_contract(repo_root, contract) for contract in SOURCE_CONTRACTS]
+    write_report(report_path, results, source_results)
 
     failed = [result for result in results if not result.passed]
-    if failed:
-        print(f"gpu-backends: {len(failed)} scenario(s) failed; see {report_path}", file=sys.stderr)
+    source_failed = [result for result in source_results if not result.passed]
+    if failed or source_failed:
+        print(
+            f"gpu-backends: {len(failed)} QEMU scenario(s) and {len(source_failed)} source contract check(s) failed; "
+            f"see {report_path}",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"gpu-backends: validation passed; report written to {report_path}")

@@ -85,6 +85,7 @@ int sys_audio_read(void *data, uint32_t size);
 int sys_audio_control_info(uint32_t index, struct mk_audio_control_info *info);
 int sys_audio_mixer_read(mixer_ctrl_t *control);
 int sys_audio_mixer_write(const mixer_ctrl_t *control);
+int sys_audio_play_asset(const char *path);
 int sys_network_get_info(struct mk_network_info *info);
 int sys_network_get_status(struct mk_network_status *status);
 int sys_network_scan(uint32_t index, struct mk_network_scan_info *info);

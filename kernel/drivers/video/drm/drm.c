@@ -26,6 +26,8 @@ static const struct kernel_drm_backend_ops *g_kernel_drm_backends[] = {
 };
 static enum kernel_drm_backend_kind g_kernel_drm_last_modeset_backend =
     KERNEL_DRM_BACKEND_NONE;
+static enum kernel_drm_backend_kind g_kernel_drm_last_attempted_backend =
+    KERNEL_DRM_BACKEND_NONE;
 static enum kernel_drm_backend_kind g_kernel_drm_active_backend =
     KERNEL_DRM_BACKEND_NONE;
 static enum kernel_drm_backend_kind g_kernel_drm_detected_backend =
@@ -130,6 +132,46 @@ static const struct kernel_drm_backend_ops *kernel_drm_find_backend(enum kernel_
         }
     }
     return 0;
+}
+
+static const char *kernel_drm_backend_label(enum kernel_drm_backend_kind kind) {
+    const struct kernel_drm_backend_ops *ops = kernel_drm_find_backend(kind);
+
+    if (ops != 0 && ops->name != 0) {
+        return ops->name;
+    }
+
+    switch (kind) {
+    case KERNEL_DRM_BACKEND_BGA:
+        return "native_gpu_bga";
+    case KERNEL_DRM_BACKEND_I915:
+        return "native_gpu_i915";
+    case KERNEL_DRM_BACKEND_RADEON:
+        return "native_gpu_radeon";
+    case KERNEL_DRM_BACKEND_NOUVEAU:
+        return "native_gpu_nouveau";
+    case KERNEL_DRM_BACKEND_UNKNOWN:
+        return "native_gpu_unknown";
+    default:
+        return "none";
+    }
+}
+
+static void kernel_drm_prepare_backend_for_bios(enum kernel_drm_backend_kind kind) {
+    const struct kernel_drm_backend_ops *ops;
+
+    if (kind == KERNEL_DRM_BACKEND_NONE) {
+        return;
+    }
+
+    ops = kernel_drm_find_backend(kind);
+    if (ops == 0 || ops->prepare_for_bios_modeset == 0) {
+        return;
+    }
+
+    kernel_debug_printf("drm: preparing backend=%s for BIOS modeset\n",
+                        kernel_drm_backend_label(kind));
+    ops->prepare_for_bios_modeset();
 }
 
 static void kernel_drm_clear_mode_out(struct video_mode *mode_out) {
@@ -243,6 +285,7 @@ int kernel_drm_try_set_mode(uint32_t width,
     size_t i;
 
     kernel_drm_forget_last_modeset();
+    g_kernel_drm_last_attempted_backend = KERNEL_DRM_BACKEND_NONE;
     kernel_drm_clear_mode_out(mode_out);
 
     for (i = 0u; i < count && i < 8u; ++i) {
@@ -258,8 +301,10 @@ int kernel_drm_try_set_mode(uint32_t width,
             g_kernel_drm_detected_backend = candidates[i].backend_kind;
             g_kernel_drm_detected_pci = candidates[i].pci;
         }
+        g_kernel_drm_last_attempted_backend = candidates[i].backend_kind;
         if (ops->set_mode(&candidates[i], width, height, mode_id, mode_out) == 0) {
             g_kernel_drm_last_modeset_backend = candidates[i].backend_kind;
+            g_kernel_drm_last_attempted_backend = KERNEL_DRM_BACKEND_NONE;
             g_kernel_drm_active_backend = candidates[i].backend_kind;
             g_kernel_drm_active_pci = candidates[i].pci;
             kernel_debug_printf("drm: modeset backend=%s ",
@@ -287,26 +332,7 @@ enum kernel_drm_backend_kind kernel_drm_active_backend_kind(void) {
 }
 
 const char *kernel_drm_active_backend_name(void) {
-    const struct kernel_drm_backend_ops *ops = kernel_drm_find_backend(g_kernel_drm_active_backend);
-
-    if (ops != 0 && ops->name != 0) {
-        return ops->name;
-    }
-
-    switch (g_kernel_drm_active_backend) {
-    case KERNEL_DRM_BACKEND_BGA:
-        return "native_gpu_bga";
-    case KERNEL_DRM_BACKEND_I915:
-        return "native_gpu_i915";
-    case KERNEL_DRM_BACKEND_RADEON:
-        return "native_gpu_radeon";
-    case KERNEL_DRM_BACKEND_NOUVEAU:
-        return "native_gpu_nouveau";
-    case KERNEL_DRM_BACKEND_UNKNOWN:
-        return "native_gpu_unknown";
-    default:
-        return "none";
-    }
+    return kernel_drm_backend_label(g_kernel_drm_active_backend);
 }
 
 enum kernel_drm_backend_kind kernel_drm_detected_backend_kind(void) {
@@ -314,26 +340,7 @@ enum kernel_drm_backend_kind kernel_drm_detected_backend_kind(void) {
 }
 
 const char *kernel_drm_detected_backend_name(void) {
-    const struct kernel_drm_backend_ops *ops = kernel_drm_find_backend(g_kernel_drm_detected_backend);
-
-    if (ops != 0 && ops->name != 0) {
-        return ops->name;
-    }
-
-    switch (g_kernel_drm_detected_backend) {
-    case KERNEL_DRM_BACKEND_BGA:
-        return "native_gpu_bga";
-    case KERNEL_DRM_BACKEND_I915:
-        return "native_gpu_i915";
-    case KERNEL_DRM_BACKEND_RADEON:
-        return "native_gpu_radeon";
-    case KERNEL_DRM_BACKEND_NOUVEAU:
-        return "native_gpu_nouveau";
-    case KERNEL_DRM_BACKEND_UNKNOWN:
-        return "native_gpu_unknown";
-    default:
-        return "none";
-    }
+    return kernel_drm_backend_label(g_kernel_drm_detected_backend);
 }
 
 const struct kernel_pci_device_info *kernel_drm_active_pci_info(void) {
@@ -354,66 +361,49 @@ const struct kernel_pci_device_info *kernel_drm_detected_pci_info(void) {
 
 int kernel_drm_revert_last_modeset(void) {
     enum kernel_drm_backend_kind backend = g_kernel_drm_last_modeset_backend;
+    const struct kernel_drm_backend_ops *ops = kernel_drm_find_backend(backend);
 
     g_kernel_drm_last_modeset_backend = KERNEL_DRM_BACKEND_NONE;
-    switch (backend) {
-    case KERNEL_DRM_BACKEND_BGA:
-        if (kernel_drm_bga_revert_last_mode() == 0) {
-            g_kernel_drm_active_backend = KERNEL_DRM_BACKEND_NONE;
-            kernel_drm_clear_pci_info(&g_kernel_drm_active_pci);
-            return 0;
-        }
-        return -1;
-    case KERNEL_DRM_BACKEND_I915:
-        if (kernel_drm_i915_revert_last_commit() == 0) {
-            g_kernel_drm_active_backend = KERNEL_DRM_BACKEND_NONE;
-            kernel_drm_clear_pci_info(&g_kernel_drm_active_pci);
-            return 0;
-        }
-        return -1;
-    case KERNEL_DRM_BACKEND_RADEON:
-        if (kernel_drm_radeon_revert_last_commit() == 0) {
-            g_kernel_drm_active_backend = KERNEL_DRM_BACKEND_NONE;
-            kernel_drm_clear_pci_info(&g_kernel_drm_active_pci);
-            return 0;
-        }
-        return -1;
-    case KERNEL_DRM_BACKEND_NONE:
+    g_kernel_drm_last_attempted_backend = KERNEL_DRM_BACKEND_NONE;
+    if (backend == KERNEL_DRM_BACKEND_NONE) {
         kernel_debug_puts("drm: revert requested without a recorded native modeset\n");
         return -1;
-    default:
-        kernel_debug_printf("drm: revert not implemented for backend=%d\n",
-                            (int)backend);
+    }
+    if (ops == 0 || ops->revert_last_modeset == 0) {
+        kernel_debug_printf("drm: revert not implemented for backend=%s\n",
+                            kernel_drm_backend_label(backend));
         return -1;
     }
+
+    if (ops->revert_last_modeset() == 0) {
+        g_kernel_drm_active_backend = KERNEL_DRM_BACKEND_NONE;
+        kernel_drm_clear_pci_info(&g_kernel_drm_active_pci);
+        return 0;
+    }
+    return -1;
 }
 
 void kernel_drm_forget_last_modeset(void) {
-    switch (g_kernel_drm_last_modeset_backend) {
-    case KERNEL_DRM_BACKEND_BGA:
-        kernel_drm_bga_forget_last_mode();
-        break;
-    case KERNEL_DRM_BACKEND_I915:
-        kernel_drm_i915_forget_last_commit();
-        break;
-    case KERNEL_DRM_BACKEND_RADEON:
-        kernel_drm_radeon_forget_last_commit();
-        break;
-    default:
-        break;
+    const struct kernel_drm_backend_ops *ops = kernel_drm_find_backend(g_kernel_drm_last_modeset_backend);
+
+    if (ops != 0 && ops->forget_last_modeset != 0) {
+        ops->forget_last_modeset();
     }
     g_kernel_drm_last_modeset_backend = KERNEL_DRM_BACKEND_NONE;
+    g_kernel_drm_last_attempted_backend = KERNEL_DRM_BACKEND_NONE;
     kernel_drm_clear_pci_info(&g_kernel_drm_active_pci);
 }
 
 void kernel_drm_prepare_for_bios_modeset(void) {
+    enum kernel_drm_backend_kind backend = g_kernel_drm_last_modeset_backend;
+
+    if (backend == KERNEL_DRM_BACKEND_NONE) {
+        backend = g_kernel_drm_last_attempted_backend;
+    }
     g_kernel_drm_active_backend = KERNEL_DRM_BACKEND_NONE;
     kernel_drm_clear_pci_info(&g_kernel_drm_active_pci);
-    switch (g_kernel_drm_last_modeset_backend) {
-    case KERNEL_DRM_BACKEND_BGA:
-        kernel_drm_bga_prepare_for_bios_modeset();
-        break;
-    default:
-        break;
+    kernel_drm_prepare_backend_for_bios(backend);
+    if (backend == g_kernel_drm_last_attempted_backend) {
+        g_kernel_drm_last_attempted_backend = KERNEL_DRM_BACKEND_NONE;
     }
 }

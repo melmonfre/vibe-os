@@ -207,7 +207,7 @@ static int kernel_drm_nouveau_set_mode(const struct kernel_drm_candidate *candid
     if (mode_out != 0) {
         *mode_out = (struct video_mode){0};
     }
-    kernel_debug_printf("nouveau: modeset not implemented yet dev=%x requested=%dx%d mode=%x mmio=%x fb=%x\n",
+    kernel_debug_printf("nouveau: probe-only backend, native modeset still pending dev=%x requested=%dx%d mode=%x mmio=%x fb=%x\n",
                         candidate != 0 ? candidate->pci.device_id : 0u,
                         (int)width,
                         (int)height,
@@ -217,9 +217,22 @@ static int kernel_drm_nouveau_set_mode(const struct kernel_drm_candidate *candid
     return -1;
 }
 
+static int kernel_drm_nouveau_revert_last_modeset(void) {
+    return -1;
+}
+
+static void kernel_drm_nouveau_forget_last_modeset(void) {
+}
+
+static void kernel_drm_nouveau_prepare_for_bios_modeset(void) {
+}
+
 const struct kernel_drm_backend_ops g_kernel_drm_nouveau_ops = {
     KERNEL_DRM_BACKEND_NOUVEAU,
     "native_gpu_nouveau",
     kernel_drm_nouveau_probe,
-    kernel_drm_nouveau_set_mode
+    kernel_drm_nouveau_set_mode,
+    kernel_drm_nouveau_revert_last_modeset,
+    kernel_drm_nouveau_forget_last_modeset,
+    kernel_drm_nouveau_prepare_for_bios_modeset
 };

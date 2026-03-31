@@ -38,6 +38,9 @@ static void kernel_drm_i915_clear_mode_out(struct video_mode *mode_out) {
     *mode_out = (struct video_mode){0};
 }
 
+static void kernel_drm_i915_prepare_for_bios_modeset(void) {
+}
+
 static size_t kernel_drm_i915_required_frame_bytes(uint32_t width, uint32_t height) {
     return (size_t)kernel_drm_i915_primary_stride_bytes(width) * (size_t)height;
 }
@@ -629,5 +632,8 @@ const struct kernel_drm_backend_ops g_kernel_drm_i915_ops = {
     KERNEL_DRM_BACKEND_I915,
     "native_gpu_i915",
     kernel_drm_i915_probe,
-    kernel_drm_i915_set_mode
+    kernel_drm_i915_set_mode,
+    kernel_drm_i915_revert_last_commit,
+    kernel_drm_i915_forget_last_commit,
+    kernel_drm_i915_prepare_for_bios_modeset
 };

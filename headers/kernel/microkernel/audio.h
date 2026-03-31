@@ -10,6 +10,7 @@ struct process;
 
 #define MK_AUDIO_INLINE_WRITE_MAX 240u
 #define MK_AUDIO_INLINE_READ_MAX 252u
+#define MK_AUDIO_ASSET_PATH_MAX 192u
 
 enum mk_audio_capability_flags {
     MK_AUDIO_CAPS_QUERY_ONLY = 1u << 0,
@@ -36,6 +37,10 @@ struct mk_audio_read_reply {
 struct mk_audio_write_request {
     uint32_t size;
     uint8_t data[MK_AUDIO_INLINE_WRITE_MAX];
+};
+
+struct mk_audio_play_asset_request {
+    char path[MK_AUDIO_ASSET_PATH_MAX];
 };
 
 enum mk_audio_mixer_control_id {
@@ -83,6 +88,7 @@ int mk_audio_service_stop(void);
 int mk_audio_service_write(const void *data, uint32_t size);
 int mk_audio_service_write_direct(const void *data, uint32_t size);
 int mk_audio_service_write_async(const void *data, uint32_t size);
+int mk_audio_service_play_asset(const char *path);
 int mk_audio_service_subscribe(struct process *subscriber);
 int mk_audio_service_event_receive(struct process *subscriber,
                                    struct mk_audio_event *event,

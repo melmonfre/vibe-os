@@ -25,7 +25,7 @@
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 110
+#define MAX_SYSCALLS 111
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
 
@@ -54,6 +54,35 @@ static const char *sys_launch_path_basename(const char *path) {
     }
 
     return last;
+}
+
+static const char *sys_launch_descriptor_arg(const struct mk_launch_descriptor *descriptor,
+                                             uint32_t index) {
+    uint32_t current = 0u;
+    uint32_t offset = 0u;
+
+    if (descriptor == 0 || index >= descriptor->argc) {
+        return 0;
+    }
+
+    while (current < descriptor->argc && offset < MK_LAUNCH_ARGV_BYTES) {
+        uint32_t len = 0u;
+        const char *arg = &descriptor->argv_data[offset];
+
+        while ((offset + len) < MK_LAUNCH_ARGV_BYTES && arg[len] != '\0') {
+            len += 1u;
+        }
+        if ((offset + len) >= MK_LAUNCH_ARGV_BYTES) {
+            return 0;
+        }
+        if (current == index) {
+            return arg;
+        }
+        offset += len + 1u;
+        current += 1u;
+    }
+
+    return 0;
 }
 
 static uint32_t sys_gfx_clear(uint32_t color, uint32_t b, uint32_t c,
@@ -618,6 +647,15 @@ static uint32_t sys_audio_write_async(uint32_t data_ptr, uint32_t size, uint32_t
         return (uint32_t)-1;
     }
     return (uint32_t)mk_audio_service_write_async((const void *)(uintptr_t)data_ptr, size);
+}
+
+static uint32_t sys_audio_play_asset(uint32_t path_ptr, uint32_t b, uint32_t c,
+                                     uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    if (path_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)mk_audio_service_play_asset((const char *)(uintptr_t)path_ptr);
 }
 
 static uint32_t sys_audio_read(uint32_t data_ptr, uint32_t size, uint32_t c,
@@ -1190,6 +1228,7 @@ static int sys_launch_app_copy_argv(const char *const *argv,
 static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor) {
     process_t *current_process;
     const struct mk_launch_context *current_context;
+    const char *subcommand;
 
     if (descriptor == 0) {
         return;
@@ -1214,12 +1253,13 @@ static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor) {
         return;
     }
 
+    subcommand = sys_launch_descriptor_arg(descriptor, 1u);
+
     if (strcmp(descriptor->name, "audiosvc") == 0) {
-        descriptor->task_class = MK_TASK_CLASS_AUDIO_IO;
+        if (subcommand != 0 && strcmp(subcommand, "play-asset") == 0) {
+            descriptor->task_class = MK_TASK_CLASS_AUDIO_IO;
+        }
         return;
-    }
-    if (strcmp(descriptor->name, "netmgrd") == 0) {
-        descriptor->task_class = MK_TASK_CLASS_NETWORK_IO;
     }
 }
 
@@ -1416,6 +1456,7 @@ void syscall_init(void) {
     syscall_table[SYSCALL_AUDIO_STOP] = sys_audio_stop;
     syscall_table[SYSCALL_AUDIO_WRITE] = sys_audio_write;
     syscall_table[SYSCALL_AUDIO_WRITE_ASYNC] = sys_audio_write_async;
+    syscall_table[SYSCALL_AUDIO_PLAY_ASSET] = sys_audio_play_asset;
     syscall_table[SYSCALL_AUDIO_READ] = sys_audio_read;
     syscall_table[SYSCALL_AUDIO_CONTROL_INFO] = sys_audio_control_info;
     syscall_table[SYSCALL_AUDIO_MIXER_READ] = sys_audio_mixer_read;

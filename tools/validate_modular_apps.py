@@ -87,6 +87,7 @@ def parse_mode_text(mode_text: str) -> Optional[str]:
 
 class QemuSession:
     def __init__(self, qemu_binary: str, image_path: Path, memory_mb: int, workspace: Path):
+        self.workspace = workspace
         self.serial_log = workspace / "s.log"
         self.monitor_socket = workspace / "m.sock"
         self.qmp_socket = workspace / "qmp.sock"
@@ -243,6 +244,13 @@ class QemuSession:
         if last_error is not None:
             raise last_error
         return ""
+
+    def screendump(self, path: Path, timeout: float = 2.0) -> None:
+        if path.exists():
+            path.unlink()
+        response = self.hmp(f"screendump {path}", timeout=timeout)
+        if not path.is_file():
+            raise RuntimeError(f"QEMU screendump failed: {response.strip() or 'no output'}")
 
     def _connect_qmp(self) -> None:
         self._disconnect_qmp()
@@ -651,6 +659,79 @@ def safe_wallpaper_point(session: QemuSession) -> Tuple[int, int]:
     return scaled_point(session, SAFE_WALLPAPER_POINT)
 
 
+def load_ppm_rgb(path: Path) -> Tuple[int, int, bytes]:
+    with path.open("rb") as handle:
+        magic = handle.readline().strip()
+        if magic != b"P6":
+            raise RuntimeError(f"unsupported screenshot format: {magic!r}")
+
+        line = handle.readline()
+        while line.startswith(b"#"):
+            line = handle.readline()
+        width, height = map(int, line.split())
+
+        max_value = int(handle.readline().strip())
+        if max_value != 255:
+            raise RuntimeError(f"unsupported screenshot max value: {max_value}")
+
+        data = handle.read()
+
+    expected_bytes = width * height * 3
+    if len(data) != expected_bytes:
+        raise RuntimeError(
+            f"short screenshot payload: expected {expected_bytes} bytes, got {len(data)}"
+        )
+    return width, height, data
+
+
+def ppm_pixel(data: bytes, width: int, x: int, y: int) -> Tuple[int, int, int]:
+    base = ((y * width) + x) * 3
+    return (data[base], data[base + 1], data[base + 2])
+
+
+def desktop_assert_visual_proof(session: QemuSession) -> None:
+    screenshot_path = session.workspace / "desktop-visual-proof.ppm"
+    session.screendump(screenshot_path)
+    width, height, data = load_ppm_rgb(screenshot_path)
+
+    samples = {
+        "wallpaper": ppm_pixel(data, width, *safe_wallpaper_point(session)),
+        "start_button": ppm_pixel(data, width, *start_button_center(session)),
+        "files_icon": ppm_pixel(data, width, *files_icon_center(session)),
+        "trash_icon": ppm_pixel(data, width, *trash_icon_center(session)),
+    }
+
+    non_black_pixels = 0
+    unique_colors = set()
+    for index in range(0, len(data), 3):
+        color = (data[index], data[index + 1], data[index + 2])
+        if color != (0, 0, 0):
+            non_black_pixels += 1
+        unique_colors.add(color)
+
+    pixel_count = width * height
+    non_black_ratio = non_black_pixels / pixel_count if pixel_count else 0.0
+    distinct_sample_colors = len(set(samples.values()))
+
+    if samples["wallpaper"] == (0, 0, 0):
+        raise RuntimeError(f"desktop visual proof failed: wallpaper sample is black {samples}")
+    if samples["start_button"] == (0, 0, 0):
+        raise RuntimeError(f"desktop visual proof failed: start button sample is black {samples}")
+    if non_black_ratio < 0.25:
+        raise RuntimeError(
+            f"desktop visual proof failed: non-black ratio too low ({non_black_ratio:.3f})"
+        )
+    if len(unique_colors) < 4:
+        raise RuntimeError(
+            f"desktop visual proof failed: unique color count too low ({len(unique_colors)})"
+        )
+    if distinct_sample_colors < 2:
+        raise RuntimeError(
+            "desktop visual proof failed: desktop UI samples collapsed to one color "
+            f"({samples})"
+        )
+
+
 def log_contains(session: QemuSession, marker: str, start_offset: int = 0) -> bool:
     log = session.read_log()
     if start_offset > 0:
@@ -963,6 +1044,17 @@ def scenario_terminal_vidmodes(session: QemuSession) -> None:
         ],
         timeout=40.0,
     )
+    time.sleep(1.0)
+    desktop_assert_visual_proof(session)
+
+
+def scenario_desktop_visual_proof(session: QemuSession) -> None:
+    session.wait_for_all(["desktop.app: launch startx", DESKTOP_READY_MARKER], timeout=45.0)
+    session.wait_for_log("video: backend refresh backend=fast_lfb", timeout=20.0)
+    session.wait_for_log("video: shadow backbuffer enabled bytes=", timeout=20.0)
+    session.wait_for_log("desktop: visual ready", timeout=20.0)
+    time.sleep(1.0)
+    desktop_assert_visual_proof(session)
 
 
 def scenario_open_terminal_combo(session: QemuSession, timeout: float = 45.0) -> None:
@@ -1439,6 +1531,8 @@ SCENARIOS = [
             "vidmodes: mode verify ok 800x600",
             "vidmodes: mode ok 800x600",
             "vidmodes: try 1024x768",
+            "video: shadow backbuffer enabled bytes=",
+            "video: runtime mode backend=fast_lfb",
             "vidmodes: mode verify ok 1024x768",
             "vidmodes: mode ok 1024x768",
             "vidmodes: restore ok ",
@@ -1448,6 +1542,22 @@ SCENARIOS = [
             *AUTODESKTOP_BOOT_MARKERS,
         ],
         action=scenario_terminal_vidmodes,
+    ),
+    Scenario(
+        name="desktop-visual-proof",
+        description="Desktop autostart reaches visual-ready on fast_lfb and produces a visible QEMU screenshot with distinct desktop UI samples",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: session start",
+            "video: backend refresh backend=fast_lfb",
+            "video: shadow backbuffer enabled bytes=",
+            "desktop: visual ready",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_desktop_visual_proof,
     ),
     Scenario(
         name="input-restart-desktop",

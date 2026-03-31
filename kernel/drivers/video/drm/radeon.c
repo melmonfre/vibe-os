@@ -262,6 +262,9 @@ static int kernel_drm_radeon_is_modeset_candidate(uint16_t device_id) {
     return 0;
 }
 
+static void kernel_drm_radeon_prepare_for_bios_modeset(void) {
+}
+
 static int kernel_drm_radeon_is_r6xx_asic(uint16_t device_id) {
     return ((device_id >= 0x7910u && device_id <= 0x791Fu) ||
             (device_id >= 0x7930u && device_id <= 0x793Fu) ||
@@ -1887,5 +1890,8 @@ const struct kernel_drm_backend_ops g_kernel_drm_radeon_ops = {
     KERNEL_DRM_BACKEND_RADEON,
     "native_gpu_radeon",
     kernel_drm_radeon_probe,
-    kernel_drm_radeon_set_mode
+    kernel_drm_radeon_set_mode,
+    kernel_drm_radeon_revert_last_commit,
+    kernel_drm_radeon_forget_last_commit,
+    kernel_drm_radeon_prepare_for_bios_modeset
 };

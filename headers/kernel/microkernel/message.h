@@ -80,7 +80,8 @@ enum mk_message_type {
     MK_MSG_AUDIO_MIXER_READ = 104,
     MK_MSG_AUDIO_MIXER_WRITE = 105,
     MK_MSG_AUDIO_CONTROL_INFO = 106,
-    MK_MSG_AUDIO_WRITE_ASYNC = 107
+    MK_MSG_AUDIO_WRITE_ASYNC = 107,
+    MK_MSG_AUDIO_PLAY_ASSET = 108
 };
 
 struct mk_message {

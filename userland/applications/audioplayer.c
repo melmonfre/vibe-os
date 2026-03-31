@@ -84,10 +84,6 @@ static struct rect audioplayer_button_rect(const struct audioplayer_state *playe
 }
 
 static int audioplayer_play_current(struct audioplayer_state *player) {
-    const char *error_text;
-    const char *detail_text;
-    char line[160];
-
     if (!player || player->path[0] == '\0') {
         if (player) {
             audioplayer_set_status(player, "Digite um caminho .wav");
@@ -95,36 +91,12 @@ static int audioplayer_play_current(struct audioplayer_state *player) {
         return -1;
     }
 
-    if (audio_play_wav_best_effort(player->path, "desktop-player") == 0) {
-        audioplayer_set_status(player, "Playback concluido");
+    if (sys_audio_play_asset(player->path) == 0) {
+        audioplayer_set_status(player, "Playback iniciado");
         return 0;
     }
 
-    error_text = audio_last_playback_error();
-    detail_text = audio_last_playback_detail();
-    line[0] = '\0';
-    if (str_eq(error_text, "missing-file")) {
-        str_copy_limited(line, "Arquivo WAV nao encontrado", (int)sizeof(line));
-    } else if (str_eq(error_text, "unsupported-wav")) {
-        str_copy_limited(line, "WAV nao suportado", (int)sizeof(line));
-    } else if (str_eq(error_text, "set-params-failed")) {
-        str_copy_limited(line, "Falha ao configurar audio", (int)sizeof(line));
-    } else if (str_eq(error_text, "start-failed")) {
-        str_copy_limited(line, "Falha ao iniciar playback", (int)sizeof(line));
-    } else if (str_eq(error_text, "read-failed")) {
-        str_copy_limited(line, "Falha ao ler o WAV", (int)sizeof(line));
-    } else if (str_eq(error_text, "write-failed")) {
-        str_copy_limited(line, "Falha ao enviar audio", (int)sizeof(line));
-    } else if (str_eq(error_text, "wait-timeout")) {
-        str_copy_limited(line, "Timeout no backend de audio", (int)sizeof(line));
-    } else {
-        str_copy_limited(line, "Falha ao tocar WAV", (int)sizeof(line));
-    }
-    if (detail_text[0] != '\0') {
-        str_append(line, " ", (int)sizeof(line));
-        str_append(line, detail_text, (int)sizeof(line));
-    }
-    audioplayer_set_status(player, line);
+    audioplayer_set_status(player, "Falha ao iniciar playback");
     return -1;
 }
 
