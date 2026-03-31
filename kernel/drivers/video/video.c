@@ -116,6 +116,9 @@ extern int kernel_video_bios_set_mode(uint16_t mode);
 
 static int kernel_video_has_graphics_mode(void);
 static int kernel_video_backbuffer_is_lfb(void);
+static size_t kernel_video_frame_bytes(void);
+static int kernel_video_fast_backend_usable(const struct video_mode *mode);
+static int kernel_video_backend_prefers_safe_present_copy(void);
 static enum kernel_video_backend_kind kernel_video_choose_boot_backend(const struct video_mode *mode);
 static void kernel_video_log_state(const char *reason);
 static const char *kernel_video_present_kind_name(enum kernel_video_present_kind kind);
@@ -211,10 +214,16 @@ static void kernel_video_select_present_kind(void) {
         return;
     }
 
-    if (kernel_cpu_sse_enabled() &&
-        paging_pat_wc_enabled() &&
-        !kernel_video_backbuffer_is_lfb()) {
-        g_present_kind = KERNEL_VIDEO_PRESENT_MOVNTDQ;
+    if (!kernel_video_backbuffer_is_lfb()) {
+        if (!kernel_video_backend_prefers_safe_present_copy()) {
+            if (kernel_cpu_sse_enabled() && paging_pat_wc_enabled()) {
+                g_present_kind = KERNEL_VIDEO_PRESENT_MOVNTDQ;
+                return;
+            }
+            g_present_kind = KERNEL_VIDEO_PRESENT_REP_MOVSD;
+            return;
+        }
+        g_present_kind = KERNEL_VIDEO_PRESENT_BYTE_LOOP;
         return;
     }
     g_present_kind = KERNEL_VIDEO_PRESENT_REP_MOVSD;
@@ -224,6 +233,31 @@ static void kernel_video_copy_row_byte(uint8_t *dst, const volatile uint8_t *src
     for (size_t i = 0; i < bytes; ++i) {
         dst[i] = src[i];
     }
+}
+
+static void kernel_video_copy_row_safe(volatile uint8_t *dst, const uint8_t *src, size_t bytes) {
+    if (dst == 0 || src == 0 || bytes == 0u) {
+        return;
+    }
+    for (size_t i = 0; i < bytes; ++i) {
+        dst[i] = src[i];
+    }
+}
+
+static void kernel_video_flush_safe_present_write(const struct kernel_video_rect *rect) {
+    size_t row_off;
+    size_t tail_off;
+    volatile uint8_t posted;
+
+    if (rect == 0 || g_fb == 0 || rect->w <= 0 || rect->h <= 0) {
+        return;
+    }
+
+    row_off = (size_t)(rect->y + rect->h - 1) * g_mode.pitch;
+    tail_off = row_off + (size_t)(rect->x + rect->w - 1);
+    posted = g_fb[tail_off];
+    (void)posted;
+    __asm__ volatile("" : : : "memory");
 }
 
 static void kernel_video_copy_row_rep_movsd(uint8_t *dst, const volatile uint8_t *src, size_t bytes) {
@@ -616,14 +650,42 @@ static void kernel_video_bind_graphics_mode(const struct video_mode *mode) {
     g_backbuf_alloc_failed = 0;
 }
 
+static int kernel_video_fast_backend_usable(const struct video_mode *mode) {
+    size_t frame_bytes;
+    size_t heap_free;
+
+    if (!kernel_video_mode_usable(mode) || !kernel_video_heap_ready()) {
+        return 0;
+    }
+
+    frame_bytes = (size_t)mode->pitch * (size_t)mode->height;
+    heap_free = kernel_heap_free();
+    if (frame_bytes == 0u ||
+        frame_bytes > VIDEO_BACKBUFFER_MAX_BYTES ||
+        heap_free <= frame_bytes ||
+        (heap_free - frame_bytes) < VIDEO_BACKBUFFER_HEAP_RESERVE) {
+        return 0;
+    }
+
+    return 1;
+}
+
+static int kernel_video_backend_prefers_safe_present_copy(void) {
+    enum kernel_drm_backend_kind active_kind = kernel_drm_active_backend_kind();
+    enum kernel_drm_backend_kind detected_kind = kernel_drm_detected_backend_kind();
+    enum kernel_drm_backend_kind effective_kind =
+        active_kind != KERNEL_DRM_BACKEND_NONE ? active_kind : detected_kind;
+
+    return effective_kind == KERNEL_DRM_BACKEND_BGA ||
+           effective_kind == KERNEL_DRM_BACKEND_NONE ||
+           effective_kind == KERNEL_DRM_BACKEND_UNKNOWN;
+}
+
 static enum kernel_video_backend_kind kernel_video_choose_boot_backend(const struct video_mode *mode) {
-    (void)mode;
-    /*
-     * The fast shadow-backbuffer path still produces a black desktop in QEMU
-     * even when async present submission completes successfully. Keep the
-     * direct legacy framebuffer path until the fast backend is fixed.
-     */
-    return KERNEL_VIDEO_BACKEND_LEGACY_LFB;
+    if (!kernel_video_fast_backend_usable(mode)) {
+        return KERNEL_VIDEO_BACKEND_LEGACY_LFB;
+    }
+    return KERNEL_VIDEO_BACKEND_FAST_LFB;
 }
 
 static void kernel_video_log_state(const char *reason) {
@@ -1112,7 +1174,19 @@ static void kernel_video_present_rect_fast_lfb(const struct kernel_video_rect *r
 
     for (int y = clipped.y; y < (clipped.y + clipped.h); ++y) {
         size_t row_off = ((size_t)y * g_mode.pitch) + (size_t)clipped.x;
+
+        if (kernel_video_backend_prefers_safe_present_copy()) {
+            /*
+             * Bochs/BGA in QEMU is more reliable with direct volatile writes
+             * into the mapped framebuffer plus a readback to drain posting.
+             */
+            kernel_video_copy_row_safe(g_fb + row_off, g_backbuf + row_off, (size_t)clipped.w);
+            continue;
+        }
         kernel_video_copy_to_lfb(g_fb + row_off, g_backbuf + row_off, (size_t)clipped.w);
+    }
+    if (kernel_video_backend_prefers_safe_present_copy()) {
+        kernel_video_flush_safe_present_write(&clipped);
     }
 }
 

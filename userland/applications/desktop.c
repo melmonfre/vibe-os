@@ -32,6 +32,9 @@
 #define DESKTOP_NETWORK_PROFILE_MAX 4
 #define DESKTOP_STARTUP_SOUND_DELAY_TICKS 80u
 #define DESKTOP_PRESENT_RETRY_TICKS 4u
+#define DESKTOP_PRESENT_BACKPRESSURE_TICKS 1u
+#define DESKTOP_PRESENT_PENDING_LIMIT 2u
+#define DESKTOP_VIDEO_OVERFLOW_LOG_COOLDOWN_TICKS 50u
 #define DESKTOP_INPUT_BATCH_MAX 128
 #define DESKTOP_UI_EVENT_QUEUE_MAX 4
 #define DESKTOP_KEY_EVENT_QUEUE_MAX DESKTOP_INPUT_BATCH_MAX
@@ -307,6 +310,7 @@ static uint32_t g_desktop_service_event_subscriptions = 0u;
 static uint32_t g_desktop_startup_tasks = 0u;
 static int g_desktop_visual_ready = 0;
 static uint32_t g_desktop_present_retry_tick = 0u;
+static uint32_t g_desktop_video_overflow_last_tick = 0u;
 static int g_desktop_input_trace_budget = 12;
 static int g_desktop_key_trace_budget = 16;
 static int g_desktop_click_trace_budget = 24;
@@ -320,6 +324,8 @@ static const char *g_sound_outputs_hda[] = {"Alto-falante", "Fones", "Line-out",
 static const char *g_sound_inputs[] = {"Microfone", "Linha"};
 static const char *g_sound_inputs_hda[] = {"Microfone", "Line-in"};
 
+static void desktop_append_uint(char *buf, int value, int max_len);
+
 static int desktop_async_runtime_services_allowed(void) {
     return g_desktop_visual_ready != 0;
 }
@@ -327,6 +333,10 @@ static int desktop_async_runtime_services_allowed(void) {
 static int desktop_present_retry_ready(uint32_t ticks) {
     return g_desktop_present_retry_tick == 0u ||
            (int32_t)(ticks - g_desktop_present_retry_tick) >= 0;
+}
+
+static int desktop_present_submit_ready(void) {
+    return g_desktop_video_pending_depth < DESKTOP_PRESENT_PENDING_LIMIT;
 }
 
 static void desktop_note_present_success(void) {
@@ -339,6 +349,35 @@ static void desktop_note_present_success(void) {
 
 static void desktop_note_present_failure(uint32_t ticks) {
     g_desktop_present_retry_tick = ticks + DESKTOP_PRESENT_RETRY_TICKS;
+}
+
+static void desktop_note_present_backpressure(uint32_t ticks) {
+    g_desktop_present_retry_tick = ticks + DESKTOP_PRESENT_BACKPRESSURE_TICKS;
+}
+
+static void desktop_log_video_event_pressure(const struct mk_video_event *event) {
+    char buffer[128];
+    uint32_t tick;
+
+    if (event == 0) {
+        return;
+    }
+
+    tick = event->tick != 0u ? event->tick : sys_ticks();
+    if (g_desktop_video_overflow_last_tick != 0u &&
+        (uint32_t)(tick - g_desktop_video_overflow_last_tick) <
+            DESKTOP_VIDEO_OVERFLOW_LOG_COOLDOWN_TICKS) {
+        return;
+    }
+
+    g_desktop_video_overflow_last_tick = tick;
+    buffer[0] = '\0';
+    str_append(buffer, "desktop: video event pressure dropped=", (int)sizeof(buffer));
+    desktop_append_uint(buffer, (int)event->dropped_events, (int)sizeof(buffer));
+    str_append(buffer, " pending=", (int)sizeof(buffer));
+    desktop_append_uint(buffer, (int)event->pending_depth, (int)sizeof(buffer));
+    str_append(buffer, "\n", (int)sizeof(buffer));
+    sys_write_debug(buffer);
 }
 
 static void desktop_try_play_startup_sound(uint32_t *armed_ticks,
@@ -6439,30 +6478,24 @@ static void desktop_reset_video_async_path(void) {
     g_desktop_video_last_event_sequence = 0u;
     g_desktop_video_last_completed_sequence = 0u;
     g_desktop_video_pending_depth = 0u;
+    g_desktop_video_overflow_last_tick = 0u;
     g_desktop_service_event_subscriptions &= ~(1u << MK_SERVICE_VIDEO);
     if (had_subscription || had_service_subscription) {
         sys_write_debug("desktop: video stream reset\n");
     }
 }
 
-static int desktop_video_event_requires_stream_reset(const struct mk_video_event *event) {
-    if (event == 0) {
-        return 0;
-    }
-
-    return event->event_type == MK_VIDEO_EVENT_OVERFLOW ||
-           event->dropped_events != 0u;
-}
-
 static uint32_t desktop_record_video_async_event(const struct mk_video_event *event) {
+    uint32_t flags = 0u;
+
     if (event == 0) {
         return 0u;
     }
 
-    if (desktop_video_event_requires_stream_reset(event)) {
-        sys_write_debug("desktop: video event overflow\n");
-        desktop_reset_video_async_path();
-        return DESKTOP_ASYNC_REFRESH_LAYOUT;
+    if (event->event_type == MK_VIDEO_EVENT_OVERFLOW ||
+        event->dropped_events != 0u) {
+        desktop_log_video_event_pressure(event);
+        flags |= DESKTOP_ASYNC_REFRESH_LAYOUT;
     }
 
     if (event->event_type == MK_VIDEO_EVENT_BACKEND_FAILED) {
@@ -6471,14 +6504,21 @@ static uint32_t desktop_record_video_async_event(const struct mk_video_event *ev
         sys_write_debug("desktop: video backend recovered\n");
     }
 
-    g_desktop_video_last_event_sequence = event->sequence;
+    if (event->sequence != 0u) {
+        g_desktop_video_last_event_sequence = event->sequence;
+    }
     g_desktop_video_last_completed_sequence = event->completed_sequence;
     g_desktop_video_pending_depth = event->pending_depth;
-    return 0u;
+    return flags;
 }
 
 static int desktop_submit_present_full(uint32_t ticks) {
     uint32_t sequence = 0u;
+
+    if (!desktop_present_submit_ready()) {
+        desktop_note_present_backpressure(ticks);
+        return -1;
+    }
 
     if (sys_video_present_submit(VIDEO_PRESENT_FULL, &sequence) == 0) {
         desktop_note_present_success();
@@ -8057,6 +8097,7 @@ void desktop_main(void) {
     g_desktop_service_event_subscriptions = 0u;
     g_desktop_visual_ready = 0;
     g_desktop_present_retry_tick = 0u;
+    g_desktop_video_overflow_last_tick = 0u;
     g_desktop_input_stream_seen = 0;
     g_desktop_input_compat_mode = 0;
     g_desktop_input_stream_idle_polls = 0u;
@@ -9050,7 +9091,9 @@ void desktop_main(void) {
                                               &resize_anchor_y);
         dirty |= desktop_process_pending_launches(&focused);
 
-        if (dirty && desktop_present_retry_ready(ticks)) {
+        if (dirty &&
+            desktop_present_retry_ready(ticks) &&
+            desktop_present_submit_ready()) {
             draw_desktop(&mouse, menu_open, start_hover,
                          menu_hover, g_windows, MAX_WINDOWS, focused);
 

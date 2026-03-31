@@ -1,6 +1,7 @@
 #include <include/userland_api.h>
 #include <kernel/event.h>
 #include <kernel/drivers/video/video.h>
+#include <kernel/drivers/video/drm/drm.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/kernel_string.h>
 #include <kernel/microkernel/message.h>
@@ -13,7 +14,7 @@
 #define MK_VIDEO_UPLOAD_CACHE_SLOTS 4u
 #define MK_VIDEO_PALETTE_CACHE_SLOTS 4u
 #define MK_VIDEO_EVENT_SUBSCRIBERS 8u
-#define MK_VIDEO_EVENT_QUEUE_SIZE 64u
+#define MK_VIDEO_EVENT_QUEUE_SIZE 128u
 #define MK_VIDEO_PRESENT_QUEUE_SIZE 16u
 #define MK_VIDEO_CONTROL_QUEUE_SIZE 8u
 
@@ -79,6 +80,7 @@ static uint32_t mk_video_publish_event_with_sequence(uint32_t event_type,
 static uint32_t mk_video_publish_event(uint32_t event_type, uint32_t present_mode);
 static struct mk_video_event_subscription *mk_video_find_subscription(const process_t *subscriber);
 static struct mk_video_event_subscription *mk_video_alloc_subscription(process_t *subscriber);
+static uint32_t mk_video_subscription_pending_drops(struct mk_video_event_subscription *subscription);
 static void mk_video_enqueue_event(struct mk_video_event_subscription *subscription,
                                    uint32_t event_type,
                                    uint32_t present_mode,
@@ -86,6 +88,7 @@ static void mk_video_enqueue_event(struct mk_video_event_subscription *subscript
 static void mk_video_present_worker_entry(void);
 static int mk_video_present_worker_online(void);
 static int mk_video_ensure_present_worker(void);
+static int mk_video_present_prefers_inline_submit(void);
 static int mk_video_submit_present_job(uint32_t present_mode, uint32_t *sequence_out);
 static uint32_t mk_video_complete_present_job(uint32_t present_mode, uint32_t sequence);
 static void mk_video_mark_backend_failed(void);
@@ -128,7 +131,7 @@ static void mk_video_event_init_subscribers(void) {
                             subscription->events,
                             sizeof(subscription->events[0]),
                             MK_VIDEO_EVENT_QUEUE_SIZE,
-                            KERNEL_MAILBOX_DROP_NEWEST,
+                            KERNEL_MAILBOX_DROP_OLDEST,
                             TASK_WAIT_CLASS_VIDEO,
                             MK_SERVICE_VIDEO);
     }
@@ -170,13 +173,27 @@ static struct mk_video_event_subscription *mk_video_alloc_subscription(process_t
                                 subscription->events,
                                 sizeof(subscription->events[0]),
                                 MK_VIDEO_EVENT_QUEUE_SIZE,
-                                KERNEL_MAILBOX_DROP_NEWEST,
+                                KERNEL_MAILBOX_DROP_OLDEST,
                                 TASK_WAIT_CLASS_VIDEO,
                                 MK_SERVICE_VIDEO);
             return subscription;
         }
     }
     return 0;
+}
+
+static uint32_t mk_video_subscription_pending_drops(struct mk_video_event_subscription *subscription) {
+    uint32_t dropped_events;
+
+    if (subscription == 0) {
+        return 0u;
+    }
+
+    dropped_events = kernel_mailbox_dropped(&subscription->mailbox);
+    if (kernel_mailbox_count(&subscription->mailbox) >= MK_VIDEO_EVENT_QUEUE_SIZE) {
+        dropped_events += 1u;
+    }
+    return dropped_events;
 }
 
 static void mk_video_enqueue_event(struct mk_video_event_subscription *subscription,
@@ -202,7 +219,7 @@ static void mk_video_enqueue_event(struct mk_video_event_subscription *subscript
         event.active_width = mode->width;
         event.active_height = mode->height;
     }
-    event.dropped_events = kernel_mailbox_dropped(&subscription->mailbox);
+    event.dropped_events = mk_video_subscription_pending_drops(subscription);
     event.tick = kernel_timer_get_ticks();
     if (kernel_mailbox_try_send(&subscription->mailbox, &event) == 0) {
         kernel_mailbox_clear_dropped(&subscription->mailbox);
@@ -284,15 +301,41 @@ static int mk_video_ensure_present_worker(void) {
     return 0;
 }
 
+static int mk_video_present_prefers_inline_submit(void) {
+    enum kernel_drm_backend_kind active_kind = kernel_drm_active_backend_kind();
+    enum kernel_drm_backend_kind detected_kind = kernel_drm_detected_backend_kind();
+    enum kernel_drm_backend_kind effective_kind =
+        active_kind != KERNEL_DRM_BACKEND_NONE ? active_kind : detected_kind;
+
+    return effective_kind == KERNEL_DRM_BACKEND_BGA ||
+           effective_kind == KERNEL_DRM_BACKEND_NONE ||
+           effective_kind == KERNEL_DRM_BACKEND_UNKNOWN;
+}
+
 static int mk_video_submit_present_job(uint32_t present_mode, uint32_t *sequence_out) {
     struct mk_video_present_job job;
     uint32_t sequence;
 
-    if (mk_video_ensure_present_worker() != 0) {
+    if (!mk_video_present_prefers_inline_submit() &&
+        mk_video_ensure_present_worker() != 0) {
         return -1;
     }
 
     sequence = ++g_video_present_next_sequence;
+    if (mk_video_present_prefers_inline_submit()) {
+        g_video_present_pending_depth += 1u;
+        g_video_present_last_submitted_sequence = sequence;
+        (void)mk_video_publish_event_with_sequence(MK_VIDEO_EVENT_PRESENT_SUBMITTED,
+                                                   present_mode,
+                                                   sequence);
+        if (sequence_out != 0) {
+            *sequence_out = sequence;
+        }
+        kernel_video_flip_mode(present_mode);
+        (void)mk_video_complete_present_job(present_mode, sequence);
+        return 0;
+    }
+
     job.sequence = sequence;
     job.present_mode = present_mode;
     if (kernel_mailbox_try_send(&g_video_present_mailbox, &job) != 0) {
@@ -343,13 +386,12 @@ static void mk_video_present_worker_entry(void) {
     struct mk_video_present_job job;
 
     for (;;) {
-        if (kernel_mailbox_wait(&g_video_present_mailbox, 0u) != TASK_WAIT_RESULT_SIGNALED) {
-            yield();
-            continue;
-        }
         while (kernel_mailbox_try_receive(&g_video_present_mailbox, &job) == 0) {
             kernel_video_flip_mode(job.present_mode);
             (void)mk_video_complete_present_job(job.present_mode, job.sequence);
+        }
+        if (kernel_mailbox_wait(&g_video_present_mailbox, 0u) != TASK_WAIT_RESULT_SIGNALED) {
+            yield();
         }
     }
 }
@@ -433,15 +475,14 @@ static void mk_video_control_worker_entry(void) {
     struct mk_video_control_job job;
 
     for (;;) {
-        if (kernel_mailbox_wait(&g_video_control_mailbox, 0u) != TASK_WAIT_RESULT_SIGNALED) {
-            yield();
-            continue;
-        }
         while (kernel_mailbox_try_receive(&g_video_control_mailbox, &job) == 0) {
             mk_video_control_complete_job(&job,
                                           mk_video_execute_control_job_inline(job.job_type,
                                                                               job.width,
                                                                               job.height));
+        }
+        if (kernel_mailbox_wait(&g_video_control_mailbox, 0u) != TASK_WAIT_RESULT_SIGNALED) {
+            yield();
         }
     }
 }
@@ -1874,10 +1915,19 @@ int mk_video_service_event_receive(struct process *subscriber,
         }
         dropped_events = kernel_mailbox_dropped(&subscription->mailbox);
         if (dropped_events != 0u) {
+            struct video_mode *mode;
+
             memset(event, 0, sizeof(*event));
+            mode = kernel_video_get_mode();
             event->abi_version = 1u;
             event->event_type = MK_VIDEO_EVENT_OVERFLOW;
             event->sequence = ++g_video_event_sequence;
+            event->completed_sequence = g_video_present_last_completed_sequence;
+            event->pending_depth = g_video_present_pending_depth;
+            if (mode != 0) {
+                event->active_width = mode->width;
+                event->active_height = mode->height;
+            }
             event->dropped_events = dropped_events;
             kernel_mailbox_clear_dropped(&subscription->mailbox);
             event->tick = kernel_timer_get_ticks();
