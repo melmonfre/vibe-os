@@ -2,25 +2,31 @@
 
 VibeOS e um sistema operacional x86 BIOS em 32-bit com bootloader proprio, kernel hibrido orientado a servicos, AppFS modular para apps e uma arvore grande de ports reaproveitados de `compat/`.
 
-O repositorio hoje ja nao e mais a demo minima original. O estado real do tree e:
+O repositorio ja nao e mais a demo minima original. Hoje o fluxo real e:
 
-- boot BIOS funcional com imagem particionada (`MBR -> FAT32 boot -> stage2 -> kernel`)
-- kernel com scheduler, memoria paginada, ELF loader, VFS, IPC e servicos bootstrap
-- shell externa via `userland.app` carregada do AppFS no boot normal
-- desktop grafico, terminal, file manager, editor, task manager, jogos e apps modulares
-- stack de audio e video em evolucao, com validacao forte em QEMU e rodadas em hardware real
-- SMP em bring-up ativo, com foco atual em estabilizar hardware real antigo
+`BIOS -> MBR -> VBR/stage1 -> stage2 -> KERNEL.BIN -> kernel -> init -> AppFS -> userland.app/startx -> shell e apps`
+
+## Aviso
+
+Este repositorio e um projeto experimental. Ha bastante codigo funcional, mas tambem existem partes incompletas, inconsistentes ou ainda em transicao arquitetural.
+
+Leia o projeto como:
+
+- experimento de bootloader + kernel + runtime modular
+- base para estudo, depuracao e refatoracao
+- sistema em evolucao, nao um OS "acabado"
 
 ## Estado atual
 
-Fechado ou suficientemente estavel:
+Ja esta materialmente funcionando:
 
-- bootloader e pipeline de boot
-- imagem particionada + AppFS + area de persistencia
-- boot modular `init -> userland.app`
-- desktop e base de apps modulares
+- boot BIOS funcional com imagem particionada
+- pipeline `MBR -> FAT32 boot -> stage2 -> kernel`
+- kernel com scheduler, memoria paginada, ELF loader, VFS, IPC e servicos bootstrap
+- shell externa via `userland.app` carregada do AppFS no boot normal
+- desktop grafico, terminal, file manager, editor, task manager, jogos e apps modulares
 - scroll wheel do mouse de ponta a ponta no kernel e no desktop
-- matriz principal de QEMU para boot/apps/audio/video
+- matriz principal de validacao em QEMU para boot, apps, audio e video
 
 Ainda em fechamento:
 
@@ -30,14 +36,36 @@ Ainda em fechamento:
 - SMP estavel em hardware real multiprocessado
 - alguns gaps de runtime/POSIX e smoke por app
 
-O plano consolidado atual esta em [docs/FINALIZATION_EXECUTION_PLAN.md](/home/mel/Documentos/vibe-os/docs/FINALIZATION_EXECUTION_PLAN.md).
+O plano consolidado atual esta em [docs/FINALIZATION_EXECUTION_PLAN.md](docs/FINALIZATION_EXECUTION_PLAN.md).
+
+## Documentacao principal
+
+Os arquivos tecnicos detalhados em `docs/` estao em ingles. Se voce quer a visao mais fiel ao codigo atual, comece por:
+
+- [docs/overview.md](docs/overview.md)
+- [docs/workflow.md](docs/workflow.md)
+- [docs/mbr.md](docs/mbr.md)
+- [docs/stage1.md](docs/stage1.md)
+- [docs/stage2.md](docs/stage2.md)
+- [docs/memory_map.md](docs/memory_map.md)
+- [docs/kernel_init.md](docs/kernel_init.md)
+- [docs/drivers.md](docs/drivers.md)
+- [docs/runtime_and_services.md](docs/runtime_and_services.md)
+- [docs/apps_and_modules.md](docs/apps_and_modules.md)
+
+Planos, migracoes e guidelines historicas agora ficam em [docs/guidelines/](docs/guidelines/), incluindo:
+
+- [docs/guidelines/QUICK_BUILD.md](docs/guidelines/QUICK_BUILD.md)
+- [docs/guidelines/MICROKERNEL_MIGRATION.md](docs/guidelines/MICROKERNEL_MIGRATION.md)
+- [docs/guidelines/COMPAT_PLAN.md](docs/guidelines/COMPAT_PLAN.md)
+- [docs/guidelines/smp.md](docs/guidelines/smp.md)
 
 ## Arquitetura
 
 ### Boot
 
 - `boot/mbr.asm`: MBR BIOS
-- `boot/boot.asm`: VBR/FAT32 bootstrap
+- `boot/stage1.asm`: VBR/FAT32 bootstrap
 - `boot/stage2.asm`: loader principal e handoff para o kernel
 
 ### Kernel
@@ -56,34 +84,27 @@ O plano consolidado atual esta em [docs/FINALIZATION_EXECUTION_PLAN.md](/home/me
 - `userland/applications/`: desktop e apps nativos/modulares
 - `applications/ported/`: utilitarios e apps portados
 
-### Compat
+### Storage em tempo de execucao
 
-- `compat/`: codigo herdado/reaproveitado de base UNIX/BSD para ports e referencias
+Hoje existem dois "mundos" de storage:
 
-### Docs importantes
+1. particao de boot FAT32
+2. particao raw de dados para AppFS, persistencia e assets
 
-- [docs/QUICK_BUILD.md](/home/mel/Documentos/vibe-os/docs/QUICK_BUILD.md): build e comandos rapidos
-- [docs/MICROKERNEL_MIGRATION.md](/home/mel/Documentos/vibe-os/docs/MICROKERNEL_MIGRATION.md): estado real da migracao
-- [docs/NETWORK_AUDIO_PANEL_PLAN.md](/home/mel/Documentos/vibe-os/docs/NETWORK_AUDIO_PANEL_PLAN.md): audio/rede
-- [docs/VIDEO_BACKEND_REWRITE_PLAN.md](/home/mel/Documentos/vibe-os/docs/VIDEO_BACKEND_REWRITE_PLAN.md): video
-- [docs/smp.md](/home/mel/Documentos/vibe-os/docs/smp.md): SMP
+## Build
 
-## Pre-requisitos
-
-Minimo pratico:
+Requisitos minimos praticos:
 
 - `nasm`
 - `make`
 - `python3`
-- QEMU (`qemu-system-i386` ou `qemu-system-x86_64`)
-- `mtools` e `mkfs.fat`/equivalente para gerar a imagem FAT32
+- `qemu-system-i386` ou `qemu-system-x86_64`
+- `mtools` e `mkfs.fat` ou equivalente
 
 Toolchain:
 
 - recomendado: `i686-elf-*`
 - fallback suportado em Linux: toolchain host GNU 32-bit (`gcc`, `ld`, `objcopy`, `nm`, `ar`, `ranlib`)
-
-## Build
 
 Build principal:
 
@@ -91,14 +112,28 @@ Build principal:
 make
 ```
 
-Isso gera, entre outros:
+Alvos uteis:
 
+- `make` ou `make all`: build completo da imagem
+- `make full`: limpa e recompila tudo
+- `make img`: gera a imagem bootavel
+- `make imb`: gera a imagem final para gravacao/uso externo
+- `make legacy-data-img`: gera so `build/data-partition.img`
+- `make clean`: limpa artefatos
+
+Artefatos importantes:
+
+- `build/mbr.bin`
+- `build/boot.bin`
+- `build/stage2.bin`
 - `build/kernel.bin`
 - `build/kernel.elf`
 - `build/data-partition.img`
 - `build/boot.img`
+- `build/generated/app_catalog.h`
+- `build/lang/userland.app`
 
-Referencia curta de comandos: [docs/QUICK_BUILD.md](/home/mel/Documentos/vibe-os/docs/QUICK_BUILD.md).
+Referencia curta de comandos: [docs/guidelines/QUICK_BUILD.md](docs/guidelines/QUICK_BUILD.md).
 
 ## Rodando no QEMU
 
@@ -130,6 +165,7 @@ make run-debug
 make run-headless-debug
 make run-headless-core2duo-debug
 make run-headless-ahci-debug
+make run-headless-usb-debug
 ```
 
 ## Fluxo de boot atual
@@ -144,16 +180,6 @@ O fluxo esperado hoje e:
 6. `startx` sobe o desktop grafico.
 
 O shell embutido permanece como fallback/rescue path, nao como steady-state esperado.
-
-## O que ja existe no runtime
-
-- shell externa modular no AppFS
-- desktop grafico e launcher de apps
-- terminal, editor, file manager, task manager, calculator, image viewer, audio player
-- jogos nativos e ports, incluindo DOOM/Craft
-- layout de teclado em runtime (`loadkeys`)
-- scroll wheel entregue do PS/2 ate userland/desktop
-- boot e smoke automatizados em varias matrizes de QEMU
 
 ## Validacao
 
@@ -171,9 +197,7 @@ Esses fluxos escrevem relatorios em `build/`.
 
 ## Hardware real
 
-Para iterar no bootloader sem regravar a imagem inteira, existe um fluxo de baixo desgaste documentado em [docs/QUICK_BUILD.md](/home/mel/Documentos/vibe-os/docs/QUICK_BUILD.md).
-
-Resumo:
+Para iterar no bootloader sem regravar a imagem inteira:
 
 ```bash
 make build/stage2.bin build/boot.bin
@@ -190,26 +214,15 @@ Se voce mudou `kernel.bin`, assets ou o conteudo FAT32/AppFS, gere `build/boot.i
 - rede real completa ainda nao esta fechada
 - audio em notebook real ainda exige endurecimento por chipset/backend
 - video real fora do QEMU ainda esta em consolidacao
-
-## Estrutura resumida
-
-```text
-.
-├── boot/
-├── build/
-├── compat/
-├── docs/
-├── headers/
-├── kernel/
-├── kernel_asm/
-├── linker/
-├── tools/
-├── userland/
-└── applications/
-```
+- o VFS do kernel ainda e minimo em varias frentes
+- isolamento de processos e modelo "ring3 completo" nao devem ser assumidos
 
 ## Licenca
 
-O repositorio usa GPLv3 no root em [LICENSE](vibe-os/LICENSE).
+O repositorio usa GPLv3 no root em [LICENSE](LICENSE).
 
-Arvores importadas de terceiros dentro de `compat/`, `lang/vendor/` e similares podem manter suas licencas originais. Veja tambem [THIRD_PARTY_LICENSES.md](vibe-os/THIRD_PARTY_LICENSES.md).
+Arvores importadas de terceiros dentro de `compat/`, `lang/vendor/` e similares podem manter suas licencas originais. Veja tambem [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+## English Version
+
+- [README.en.md](README.en.md)
