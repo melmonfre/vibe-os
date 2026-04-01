@@ -905,6 +905,12 @@ SYNC_APP_BIN := $(BUILD_DIR)/ported/sync.app
 TR_APP_BIN := $(BUILD_DIR)/ported/tr.app
 IFCONFIG_APP_BIN := $(BUILD_DIR)/ported/ifconfig.app
 ROUTE_APP_BIN := $(BUILD_DIR)/ported/route.app
+NETSTAT_APP_BIN := $(BUILD_DIR)/ported/netstat.app
+PING_APP_BIN := $(BUILD_DIR)/ported/ping.app
+HOST_APP_BIN := $(BUILD_DIR)/ported/host.app
+DIG_APP_BIN := $(BUILD_DIR)/ported/dig.app
+FTP_APP_BIN := $(BUILD_DIR)/ported/ftp.app
+CURL_APP_BIN := $(BUILD_DIR)/ported/curl.app
 PORTED_APPS_STAMP := $(BUILD_DIR)/.ported_apps.stamp
 ADVENTURE_APP_BIN := $(BUILD_DIR)/ported/adventure.app
 ARITHMETIC_APP_BIN := $(BUILD_DIR)/ported/arithmetic.app
@@ -1416,7 +1422,7 @@ $(PORTED_APPS_STAMP): $(COMPAT_LIB) Build.ported.mk lang/sdk/app_entry.c lang/sd
 		ported-all
 	@touch $@
 
-$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(SED_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN) $(UNAME_APP_BIN) $(SYNC_APP_BIN) $(TR_APP_BIN) $(IFCONFIG_APP_BIN) $(ROUTE_APP_BIN): $(PORTED_APPS_STAMP)
+$(ECHO_APP_BIN) $(CAT_APP_BIN) $(WC_APP_BIN) $(PWD_APP_BIN) $(HEAD_APP_BIN) $(SLEEP_APP_BIN) $(RMDIR_APP_BIN) $(MKDIR_APP_BIN) $(TAIL_APP_BIN) $(GREP_APP_BIN) $(SED_APP_BIN) $(LOADKEYS_APP_BIN) $(TRUE_APP_BIN) $(FALSE_APP_BIN) $(PRINTF_APP_BIN) $(UNAME_APP_BIN) $(SYNC_APP_BIN) $(TR_APP_BIN) $(IFCONFIG_APP_BIN) $(ROUTE_APP_BIN) $(NETSTAT_APP_BIN) $(PING_APP_BIN) $(HOST_APP_BIN) $(DIG_APP_BIN) $(FTP_APP_BIN) $(CURL_APP_BIN): $(PORTED_APPS_STAMP)
 
 $(BSD_GAMES_APPS_STAMP): $(COMPAT_LIB) Build.bsdgames.mk lang/sdk/app_entry.c lang/sdk/app_runtime.c lang/include/vibe_app.h tools/patch_app_header.py \
 	applications/ported/bsdgames/vibe_bsdgame_main.c applications/ported/bsdgames/vibe_bsdgame_compat.c applications/ported/bsdgames/vibe_bsdgame_shim.h
@@ -1782,6 +1788,9 @@ validate-phase-d: $(IMAGE)
 validate-phase-c: $(IMAGE)
 	$(MAKE) validate-audio-stack
 
+validate-network-surface: $(IMAGE)
+	$(PYTHON) tools/validate_network_surface.py --image $(IMAGE) --report build/network-surface-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
 validate-video:
 	$(MAKE) validate-phase-d
 	$(MAKE) validate-gpu-backends-recovery
@@ -1803,6 +1812,12 @@ validate-phase-g: $(IMAGE)
 
 validate-audio-stack: $(IMAGE)
 	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report $(AUDIO_STACK_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-finalization-1-4:
+	$(MAKE) validate-network-surface
+	$(MAKE) validate-phase-c
+	$(MAKE) validate-video
+	$(MAKE) validate-phase-g
 
 validate-audio-stack-long: $(IMAGE)
 	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-stack-long-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --record-ms 3000

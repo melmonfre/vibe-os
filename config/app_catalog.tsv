@@ -95,3 +95,9 @@ sync	SYNC_APP_BIN	1	0	/bin/sync,/usr/bin/sync,/compat/bin/sync
 tr	TR_APP_BIN	1	0	/bin/tr,/usr/bin/tr,/compat/bin/tr
 ifconfig	IFCONFIG_APP_BIN	1	1	/sbin/ifconfig,/bin/ifconfig,/usr/sbin/ifconfig,/compat/sbin/ifconfig
 route	ROUTE_APP_BIN	1	1	/sbin/route,/bin/route,/usr/sbin/route,/compat/sbin/route
+netstat	NETSTAT_APP_BIN	1	1	/usr/bin/netstat,/bin/netstat,/compat/bin/netstat
+ping	PING_APP_BIN	1	1	/sbin/ping,/bin/ping,/usr/sbin/ping,/compat/sbin/ping
+host	HOST_APP_BIN	1	1	/usr/bin/host,/bin/host,/compat/bin/host
+dig	DIG_APP_BIN	1	1	/usr/bin/dig,/bin/dig,/compat/bin/dig
+ftp	FTP_APP_BIN	1	1	/usr/bin/ftp,/bin/ftp,/compat/bin/ftp
+curl	CURL_APP_BIN	1	1	/usr/bin/curl,/bin/curl,/compat/bin/curl

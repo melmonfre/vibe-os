@@ -167,6 +167,29 @@ static const char *netmgrd_backend_events_name(const struct mk_network_info *inf
     return "none";
 }
 
+static const char *netmgrd_packet_path_name(const struct mk_network_info *info) {
+    if (info == 0) {
+        return "indisponivel";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_REAL_PACKET_DATAPATH) != 0u) {
+        return "real";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_KERNEL_DATAPATH_EXECUTOR) != 0u) {
+        return "telemetry-only";
+    }
+    return "none";
+}
+
+static const char *netmgrd_socket_scope_name(const struct mk_network_info *info) {
+    if (info == 0) {
+        return "indisponivel";
+    }
+    if ((info->flags & MK_NETWORK_CAPS_SOCKET_LOCAL_ONLY) != 0u) {
+        return "local-only";
+    }
+    return "network";
+}
+
 static void netmgrd_resolve_ethernet_if_name(char *buffer, int buffer_size) {
     struct mk_network_status status;
 
@@ -754,7 +777,7 @@ static int netmgrd_write_state_file(const char *path,
     (void)vibe_app_create_dir("/runtime");
     snprintf(text,
              sizeof(text),
-             "state=%s\nactive_if=%s\nactive_kind=%s\nssid=%s\nip=%s\ngateway=%s\ndns=%s\nsaved_profiles=%d\nautoconnect=%s\nbackend=%s\ntransport=%s\nownership=%s\nfallback=%s\ndatapath_executor=%s\nevent_stream=%s\nbackend_events=%s\ndns_mode=%s\nlease_state=%s\nlease_source=%s\nmanager=%s\n"
+             "state=%s\nactive_if=%s\nactive_kind=%s\nssid=%s\nip=%s\ngateway=%s\ndns=%s\nsaved_profiles=%d\nautoconnect=%s\nbackend=%s\ntransport=%s\nownership=%s\nfallback=%s\ndatapath_executor=%s\npacket_path=%s\nsocket_scope=%s\nevent_stream=%s\nbackend_events=%s\ndns_mode=%s\nlease_state=%s\nlease_source=%s\nmanager=%s\n"
              "scan_count=%d\n"
              "scan0_ssid=%s\nscan0_security=%s\nscan0_signal=%u\nscan0_connected=%u\n"
              "scan1_ssid=%s\nscan1_security=%s\nscan1_signal=%u\nscan1_connected=%u\n"
@@ -774,6 +797,8 @@ static int netmgrd_write_state_file(const char *path,
              netmgrd_ownership_mode_name(info),
              netmgrd_fallback_mode_name(info),
              netmgrd_datapath_executor_name(info),
+             netmgrd_packet_path_name(info),
+             netmgrd_socket_scope_name(info),
              netmgrd_event_stream_name(info),
              netmgrd_backend_events_name(info),
              netmgrd_dns_mode_name(info, status),
@@ -837,6 +862,8 @@ static int netmgrd_command_status(void) {
     printf("ownership: %s\n", netmgrd_ownership_mode_name(&info));
     printf("fallback: %s\n", netmgrd_fallback_mode_name(&info));
     printf("datapath executor: %s\n", netmgrd_datapath_executor_name(&info));
+    printf("packet path: %s\n", netmgrd_packet_path_name(&info));
+    printf("socket scope: %s\n", netmgrd_socket_scope_name(&info));
     printf("event stream: %s\n", netmgrd_event_stream_name(&info));
     printf("backend events: %s\n", netmgrd_backend_events_name(&info));
     printf("dns mode: %s\n", netmgrd_dns_mode_name(&info, &status));

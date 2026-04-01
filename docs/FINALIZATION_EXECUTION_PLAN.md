@@ -6,7 +6,13 @@ Tudo que ja foi entregue, validado ou virou historico deve ficar nos documentos 
 
 ## Pendencias Reais
 
-### 1. Rede real utilizavel
+Observacao de verdade tecnica em 2026-03-31:
+- a Fase 1 continua aberta como bloqueio real de internet/datapath
+- as fases de servico/microkernel de audio, video e do corte steady-state ja estao fechadas em arvore
+- o que ainda resta em 2/3/4 e trilha de hardware real, promocao de backend e productizacao, nao mais ausencia do corte arquitetural principal em codigo
+- a superficie CLI de rede agora existe em arvore (`ifconfig`, `route`, `netstat`, `ping`, `host`, `dig`, `ftp`, `curl`), mas os binarios novos falham de forma explicita enquanto `packet_path` continuar `telemetry-only` ou `socket_scope` continuar `local-only`
+
+### 1. Rede real utilizavel [aberta]
 
 Falta fechar:
 - datapath real de NIC em vez de control-plane parcial
@@ -27,7 +33,13 @@ Comandos minimos que ainda precisam ficar de pe:
 - `ftp`
 - `curl`
 
-### 2. Audio real em hardware
+Status em arvore:
+- a superficie CLI e o diagnostico de fronteira agora existem; o que ainda falta e fazer esses comandos atravessarem uma pilha de rede remota de verdade
+
+### 2. Audio real em hardware [fechado em arvore para o corte microkernel]
+
+O corte de servico/dataplane ja esta entregue em arvore (`make validate-phase-c`).
+O que continua aberto aqui e fechamento de hardware real e promocao de backend:
 
 Falta fechar:
 - `compat-azalia` robusto em notebook real
@@ -36,7 +48,10 @@ Falta fechar:
 - matriz de hardware definindo backend correto por maquina
 - reduzir ainda mais o bridge privilegiado de audio depois da Fase C entregue
 
-### 3. Video real em hardware
+### 3. Video real em hardware [fechado em arvore para o corte microkernel]
+
+O corte de servico/video steady-state ja esta entregue em arvore (`make validate-video`).
+O que continua aberto aqui e prova ampla em hardware real e promocao de backend:
 
 Falta fechar:
 - promover pelo menos um backend real de hardware com validacao honesta
@@ -45,12 +60,15 @@ Falta fechar:
 - endurecer backpressure/overflow de eventos de video
 - manter claro o escopo real de `i915` / `radeon` / `nouveau`
 
-### 4. Fechamento final da migracao microkernel
+### 4. Fechamento final da migracao microkernel [steady-state fechado em arvore]
+
+O corte steady-state sem `backend-shim` ja esta entregue em arvore (`make validate-phase-g`).
+O que continua aberto aqui depende do fechamento da Fase 1 e de tightening residual de ownership:
 
 Falta fechar:
 - concluir Fase F de rede assincrona real
 - concluir os restos de Fase G onde ainda existe dependencia de bridge/fallback hibrido
-- tirar `backend-shim` do steady state normal
+- manter `backend-shim` restrito a rescue/fallback e fora do caminho normal
 - garantir que restart/falha de servico nao derruba desktop, input, video ou audio
 - continuar apertando ownership de backend ate o kernel ficar so com o minimo privilegiado
 

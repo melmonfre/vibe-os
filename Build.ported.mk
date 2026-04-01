@@ -820,6 +820,228 @@ $(ROUTE_APP): $(ROUTE_ELF)
 
 ported-route: $(ROUTE_APP)
 
+# === NETSTAT APP ===
+
+NETSTAT_SRCS := applications/ported/netstat/netstat.c
+NETSTAT_OBJS := build/ported/netstat.o \
+	build/app_entry_netstat.o \
+	build/app_runtime_netstat.o
+
+NETSTAT_ELF := build/ported/netstat.elf
+NETSTAT_APP := build/ported/netstat.app
+
+build/app_entry_netstat.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"netstat\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_netstat.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/netstat.o: $(NETSTAT_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(NETSTAT_ELF): $(NETSTAT_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(NETSTAT_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(NETSTAT_APP): $(NETSTAT_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Netstat app: $@"
+
+ported-netstat: $(NETSTAT_APP)
+
+# === PING APP ===
+
+PING_SRCS := applications/ported/ping/ping.c
+PING_OBJS := build/ported/ping.o \
+	build/app_entry_ping.o \
+	build/app_runtime_ping.o
+
+PING_ELF := build/ported/ping.elf
+PING_APP := build/ported/ping.app
+
+build/app_entry_ping.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"ping\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_ping.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/ping.o: $(PING_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(PING_ELF): $(PING_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(PING_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(PING_APP): $(PING_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Ping app: $@"
+
+ported-ping: $(PING_APP)
+
+# === HOST APP ===
+
+HOST_SRCS := applications/ported/host/host.c
+HOST_OBJS := build/ported/host.o \
+	build/app_entry_host.o \
+	build/app_runtime_host.o
+
+HOST_ELF := build/ported/host.elf
+HOST_APP := build/ported/host.app
+
+build/app_entry_host.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"host\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_host.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/host.o: $(HOST_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(HOST_ELF): $(HOST_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(HOST_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(HOST_APP): $(HOST_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Host app: $@"
+
+ported-host: $(HOST_APP)
+
+# === DIG APP ===
+
+DIG_SRCS := applications/ported/dig/dig.c
+DIG_OBJS := build/ported/dig.o \
+	build/app_entry_dig.o \
+	build/app_runtime_dig.o
+
+DIG_ELF := build/ported/dig.elf
+DIG_APP := build/ported/dig.app
+
+build/app_entry_dig.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"dig\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_dig.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/dig.o: $(DIG_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(DIG_ELF): $(DIG_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(DIG_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(DIG_APP): $(DIG_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Dig app: $@"
+
+ported-dig: $(DIG_APP)
+
+# === FTP APP ===
+
+FTP_SRCS := applications/ported/ftp/ftp.c
+FTP_OBJS := build/ported/ftp.o \
+	build/app_entry_ftp.o \
+	build/app_runtime_ftp.o
+
+FTP_ELF := build/ported/ftp.elf
+FTP_APP := build/ported/ftp.app
+
+build/app_entry_ftp.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"ftp\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_ftp.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/ftp.o: $(FTP_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(FTP_ELF): $(FTP_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(FTP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(FTP_APP): $(FTP_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Ftp app: $@"
+
+ported-ftp: $(FTP_APP)
+
+# === CURL APP ===
+
+CURL_SRCS := applications/ported/curl/curl.c
+CURL_OBJS := build/ported/curl.o \
+	build/app_entry_curl.o \
+	build/app_runtime_curl.o
+
+CURL_ELF := build/ported/curl.elf
+CURL_APP := build/ported/curl.app
+
+build/app_entry_curl.o: $(APP_ENTRY) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"curl\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=65536u \
+		-c $< -o $@
+
+build/app_runtime_curl.o: $(APP_RUNTIME) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+build/ported/curl.o: $(CURL_SRCS) $(COMPAT_LIB) | build
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(CURL_ELF): $(CURL_OBJS) $(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $(dir $@)
+	$(LD) $(LDFLAGS) $(CURL_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+
+$(CURL_APP): $(CURL_ELF)
+	@mkdir -p $(dir $@)
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $< --bin $@
+	@echo "✓ Curl app: $@"
+
+ported-curl: $(CURL_APP)
+
 # General rules
 build:
 	@mkdir -p $@
@@ -884,6 +1106,24 @@ ported-ifconfig-clean:
 ported-route-clean:
 	rm -f $(ROUTE_OBJS) $(ROUTE_ELF) $(ROUTE_APP)
 
+ported-netstat-clean:
+	rm -f $(NETSTAT_OBJS) $(NETSTAT_ELF) $(NETSTAT_APP)
+
+ported-ping-clean:
+	rm -f $(PING_OBJS) $(PING_ELF) $(PING_APP)
+
+ported-host-clean:
+	rm -f $(HOST_OBJS) $(HOST_ELF) $(HOST_APP)
+
+ported-dig-clean:
+	rm -f $(DIG_OBJS) $(DIG_ELF) $(DIG_APP)
+
+ported-ftp-clean:
+	rm -f $(FTP_OBJS) $(FTP_ELF) $(FTP_APP)
+
+ported-curl-clean:
+	rm -f $(CURL_OBJS) $(CURL_ELF) $(CURL_APP)
+
 PORTED_APP_TARGETS := \
 	$(ECHO_APP) \
 	$(CAT_APP) \
@@ -904,10 +1144,16 @@ PORTED_APP_TARGETS := \
 	$(SYNC_APP) \
 	$(TR_APP) \
 	$(IFCONFIG_APP) \
-	$(ROUTE_APP)
+	$(ROUTE_APP) \
+	$(NETSTAT_APP) \
+	$(PING_APP) \
+	$(HOST_APP) \
+	$(DIG_APP) \
+	$(FTP_APP) \
+	$(CURL_APP)
 
 ported-all: $(PORTED_APP_TARGETS)
 
-ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean ported-uname-clean ported-sync-clean ported-tr-clean ported-ifconfig-clean ported-route-clean
+ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean ported-uname-clean ported-sync-clean ported-tr-clean ported-ifconfig-clean ported-route-clean ported-netstat-clean ported-ping-clean ported-host-clean ported-dig-clean ported-ftp-clean ported-curl-clean
 
-.PHONY: ported-all ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-mkdir ported-true ported-false ported-printf ported-uname ported-sync ported-tr ported-ifconfig ported-route ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean ported-uname-clean ported-sync-clean ported-tr-clean ported-ifconfig-clean ported-route-clean
+.PHONY: ported-all ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-mkdir ported-true ported-false ported-printf ported-uname ported-sync ported-tr ported-ifconfig ported-route ported-netstat ported-ping ported-host ported-dig ported-ftp ported-curl ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean ported-uname-clean ported-sync-clean ported-tr-clean ported-ifconfig-clean ported-route-clean ported-netstat-clean ported-ping-clean ported-host-clean ported-dig-clean ported-ftp-clean ported-curl-clean

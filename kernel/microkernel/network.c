@@ -1405,7 +1405,8 @@ void mk_network_service_init(void) {
                                  MK_NETWORK_CAPS_STEADY_STATE_SERVICE_HOST |
                                  MK_NETWORK_CAPS_NETMGR_POLICY_ONLY |
                                  MK_NETWORK_CAPS_LOCAL_FALLBACK_RESCUE_ONLY |
-                                 MK_NETWORK_CAPS_KERNEL_DATAPATH_EXECUTOR;
+                                 MK_NETWORK_CAPS_KERNEL_DATAPATH_EXECUTOR |
+                                 MK_NETWORK_CAPS_SOCKET_LOCAL_ONLY;
     if (g_network_state.pci_probe.present) {
         g_network_state.info.flags |= MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING;
     } else {
