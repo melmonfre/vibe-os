@@ -18,8 +18,22 @@ struct netmgrd_compat_lease {
 };
 
 static int netmgrd_saved_profile_count(const struct netmgrd_profile *profiles);
+static int netmgrd_save_profiles(const struct netmgrd_profile *profiles, const char *auto_ssid);
 static int netmgrd_load_compat_lease_path(const char *path, struct netmgrd_compat_lease *lease);
 static int netmgrd_write_compat_lease(const struct netmgrd_compat_lease *lease, const char *path);
+static int netmgrd_connect_ethernet_with_runtime_state(const char *manager_mode,
+                                                       const char *success_message,
+                                                       int print_prefix);
+static int netmgrd_command_ipconfig(void);
+static int netmgrd_command_ip_addr(void);
+static int netmgrd_command_ifconfig(void);
+static int netmgrd_command_route(void);
+static int netmgrd_command_dhcp(const char *if_name);
+static int netmgrd_command_dns(void);
+static const char *netmgrd_link_state_name(uint32_t state);
+static const char *netmgrd_if_kind_name(uint32_t kind);
+static struct netmgrd_profile *netmgrd_find_or_allocate_profile(struct netmgrd_profile *profiles,
+                                                                const char *ssid);
 static void netmgrd_resolve_ethernet_if_name(char *buffer, int buffer_size);
 static void netmgrd_resolve_runtime_lease_path(char *buffer, int buffer_size, const char *if_name);
 static void netmgrd_resolve_default_lease_source(char *buffer, int buffer_size, const char *if_name);
@@ -30,6 +44,14 @@ static int netmgrd_write_state_file(const char *path,
                                     const char *auto_ssid,
                                     const char *manager_mode,
                                     const char *lease_source);
+static int netmgrd_export_runtime_state(const char *manager_mode, const char *lease_source);
+static int netmgrd_status_matches_target(const struct mk_network_status *status,
+                                         uint32_t expected_kind,
+                                         const char *expected_ssid);
+static int netmgrd_wait_for_network_target(struct mk_network_status *status,
+                                           uint32_t expected_kind,
+                                           const char *expected_ssid,
+                                           unsigned int timeout_ticks);
 
 static void netmgrd_usage(void) {
     printf("usage: netmgrd <command> [args]\n");
@@ -44,8 +66,84 @@ static void netmgrd_usage(void) {
     printf("  forget <ssid>\n");
     printf("  autoconnect <ssid|off>\n");
     printf("  reconcile\n");
+    printf("  monitor-events [count]\n");
     printf("  import-lease [path]\n");
     printf("  export-state [path]\n");
+    printf("  ipconfig\n");
+    printf("  ip addr\n");
+    printf("  ifconfig\n");
+    printf("  route\n");
+    printf("  dhcp [em0|ethernet]\n");
+    printf("  dns\n");
+}
+
+static int netmgrd_command_ifconfig(void) {
+    return netmgrd_command_ipconfig();
+}
+
+static int netmgrd_command_route(void) {
+    struct mk_network_status status;
+
+    if (vibe_app_network_get_status(&status) != 0) {
+        printf("netmgrd: network service unavailable\n");
+        return 1;
+    }
+    printf("default via %s dev %s\n", status.gateway[0] != '\0' ? status.gateway : "0.0.0.0", status.active_if[0] != '\0' ? status.active_if : "-");
+    return 0;
+}
+
+static int netmgrd_command_dhcp(const char *if_name) {
+    if (if_name != 0 && strcmp(if_name, "em0") != 0 && strcmp(if_name, "ethernet") != 0) {
+        printf("netmgrd: unsupported interface %s\n", if_name);
+        return 1;
+    }
+
+    if (netmgrd_connect_ethernet_with_runtime_state("dhcp", "dhcp initialized %s (%s)", 1) != 0) {
+        printf("netmgrd: dhcp failed\n");
+        return 1;
+    }
+
+    printf("netmgrd: dhcp lease applied\n");
+    return 0;
+}
+
+static int netmgrd_command_dns(void) {
+    struct mk_network_status status;
+
+    if (vibe_app_network_get_status(&status) != 0) {
+        printf("netmgrd: network service unavailable\n");
+        return 1;
+    }
+    printf("dns %s\n", status.dns_server[0] != '\0' ? status.dns_server : "-");
+    return 0;
+}
+
+static int netmgrd_command_ipconfig(void) {
+    struct mk_network_status status;
+    if (vibe_app_network_get_status(&status) != 0) {
+        printf("netmgrd: network service unavailable\n");
+        return 1;
+    }
+    printf("state: %s\n", netmgrd_link_state_name(status.link_state));
+    printf("active_if: %s\n", status.active_if[0] != '\0' ? status.active_if : "-");
+    printf("kind: %s\n", netmgrd_if_kind_name(status.active_kind));
+    printf("ip: %s\n", status.ip_address[0] != '\0' ? status.ip_address : "-");
+    printf("gateway: %s\n", status.gateway[0] != '\0' ? status.gateway : "-");
+    printf("dns: %s\n", status.dns_server[0] != '\0' ? status.dns_server : "-");
+    return 0;
+}
+
+static int netmgrd_command_ip_addr(void) {
+    struct mk_network_status status;
+    if (vibe_app_network_get_status(&status) != 0) {
+        printf("netmgrd: network service unavailable\n");
+        return 1;
+    }
+    printf("%s: %s\n", status.active_if[0] != '\0' ? status.active_if : "lo0", netmgrd_link_state_name(status.link_state));
+    printf("    inet %s\n", status.ip_address[0] != '\0' ? status.ip_address : "0.0.0.0");
+    printf("    gateway %s\n", status.gateway[0] != '\0' ? status.gateway : "0.0.0.0");
+    printf("    dns %s\n", status.dns_server[0] != '\0' ? status.dns_server : "0.0.0.0");
+    return 0;
 }
 
 static const char *netmgrd_link_state_name(uint32_t state) {
@@ -165,6 +263,33 @@ static const char *netmgrd_backend_events_name(const struct mk_network_info *inf
         return "rx-tx";
     }
     return "none";
+}
+
+static const char *netmgrd_event_name(uint32_t event_type) {
+    switch (event_type) {
+    case MK_NETWORK_EVENT_STATUS:
+        return "status";
+    case MK_NETWORK_EVENT_SOCKET_RECV:
+        return "recv";
+    case MK_NETWORK_EVENT_SOCKET_ACCEPT:
+        return "accept";
+    case MK_NETWORK_EVENT_SOCKET_SEND:
+        return "send";
+    case MK_NETWORK_EVENT_SOCKET_CLOSED:
+        return "closed";
+    case MK_NETWORK_EVENT_BACKEND_RX:
+        return "backend-rx";
+    case MK_NETWORK_EVENT_BACKEND_TX:
+        return "backend-tx";
+    case MK_NETWORK_EVENT_OVERFLOW:
+        return "overflow";
+    case MK_NETWORK_EVENT_LEASE:
+        return "lease";
+    case MK_NETWORK_EVENT_DNS:
+        return "dns";
+    default:
+        return "unknown";
+    }
 }
 
 static const char *netmgrd_packet_path_name(const struct mk_network_info *info) {
@@ -327,9 +452,29 @@ static int netmgrd_load_profiles(struct netmgrd_profile *profiles,
     return 0;
 }
 
-static int netmgrd_wait_for_ethernet_ready(struct mk_network_status *status) {
+static int netmgrd_status_matches_target(const struct mk_network_status *status,
+                                         uint32_t expected_kind,
+                                         const char *expected_ssid) {
+    if (status == 0 || status->active_kind != expected_kind) {
+        return 0;
+    }
+    if (expected_kind == MK_NETWORK_IF_WIFI &&
+        expected_ssid != 0 &&
+        expected_ssid[0] != '\0' &&
+        strcmp(status->current_ssid, expected_ssid) != 0) {
+        return 0;
+    }
+    return status->link_state == MK_NETWORK_LINK_CONNECTED;
+}
+
+static int netmgrd_wait_for_network_target(struct mk_network_status *status,
+                                           uint32_t expected_kind,
+                                           const char *expected_ssid,
+                                           unsigned int timeout_ticks) {
+    struct mk_network_event event;
     unsigned int started_at;
     unsigned int now;
+    int subscribed = 0;
 
     if (status == 0) {
         return -1;
@@ -337,20 +482,46 @@ static int netmgrd_wait_for_ethernet_ready(struct mk_network_status *status) {
     if (vibe_app_network_get_status(status) != 0) {
         return -1;
     }
+    if (vibe_app_network_event_subscribe() == 0) {
+        subscribed = 1;
+    }
     started_at = vibe_app_ticks();
     now = started_at;
-    while ((now - started_at) < 25u) {
-        if (status->link_state != MK_NETWORK_LINK_CONNECTING ||
-            status->active_kind != MK_NETWORK_IF_ETHERNET) {
+    while ((now - started_at) < timeout_ticks) {
+        if (netmgrd_status_matches_target(status, expected_kind, expected_ssid)) {
             return 0;
         }
-        (void)vibe_app_sleep_ms(10u);
+        if (subscribed) {
+            memset(&event, 0, sizeof(event));
+            if (vibe_app_network_event_receive(&event, 1u) == 0) {
+                if (event.event_type == MK_NETWORK_EVENT_STATUS ||
+                    event.event_type == MK_NETWORK_EVENT_LEASE ||
+                    event.event_type == MK_NETWORK_EVENT_DNS ||
+                    event.event_type == MK_NETWORK_EVENT_OVERFLOW) {
+                    if (vibe_app_network_get_status(status) != 0) {
+                        return -1;
+                    }
+                    now = vibe_app_ticks();
+                    continue;
+                }
+            }
+        } else {
+            (void)vibe_app_sleep_ms(10u);
+        }
         if (vibe_app_network_get_status(status) != 0) {
             return -1;
         }
         now = vibe_app_ticks();
     }
-    return 0;
+    return netmgrd_status_matches_target(status, expected_kind, expected_ssid) ? 0 : -1;
+}
+
+static int netmgrd_wait_for_ethernet_ready(struct mk_network_status *status) {
+    return netmgrd_wait_for_network_target(status, MK_NETWORK_IF_ETHERNET, 0, 25u);
+}
+
+static int netmgrd_wait_for_wifi_ready(struct mk_network_status *status, const char *ssid) {
+    return netmgrd_wait_for_network_target(status, MK_NETWORK_IF_WIFI, ssid, 40u);
 }
 
 static void netmgrd_trim_value(char *text) {
@@ -616,11 +787,149 @@ static int netmgrd_apply_compat_lease(struct mk_network_status *status) {
     return 0;
 }
 
+static int netmgrd_load_export_context(struct mk_network_info *info,
+                                       struct mk_network_status *status,
+                                       int *saved_count_out,
+                                       char *auto_ssid,
+                                       int auto_ssid_size) {
+    struct netmgrd_profile profiles[NETMGRD_PROFILE_MAX];
+
+    if (info == 0 || status == 0 || saved_count_out == 0 || auto_ssid == 0 || auto_ssid_size <= 0) {
+        return -1;
+    }
+    if (vibe_app_network_get_info(info) != 0 ||
+        vibe_app_network_get_status(status) != 0) {
+        return -1;
+    }
+    (void)netmgrd_load_profiles(profiles, auto_ssid, (size_t)auto_ssid_size);
+    *saved_count_out = netmgrd_saved_profile_count(profiles);
+    return 0;
+}
+
+static int netmgrd_export_runtime_state(const char *manager_mode, const char *lease_source) {
+    struct mk_network_info info;
+    struct mk_network_status status;
+    char auto_ssid[MK_NETWORK_SSID_MAX + 1];
+    int saved_count;
+
+    if (netmgrd_load_export_context(&info,
+                                    &status,
+                                    &saved_count,
+                                    auto_ssid,
+                                    (int)sizeof(auto_ssid)) != 0) {
+        return -1;
+    }
+    return netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
+                                    &info,
+                                    &status,
+                                    saved_count,
+                                    auto_ssid,
+                                    manager_mode,
+                                    lease_source);
+}
+
+static int netmgrd_connect_ethernet_with_runtime_state(const char *manager_mode,
+                                                       const char *success_message,
+                                                       int print_prefix) {
+    struct mk_network_status status;
+    char if_name[MK_NETWORK_IF_NAME_MAX];
+
+    netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
+    if (vibe_app_network_connect_ethernet(if_name) != 0) {
+        if (print_prefix) {
+            printf("netmgrd: failed to connect %s\n", if_name);
+        }
+        return 1;
+    }
+    if (netmgrd_wait_for_ethernet_ready(&status) != 0) {
+        if (print_prefix) {
+            printf("netmgrd: connected %s, but failed to refresh status\n", if_name);
+        }
+        return 1;
+    }
+    if (netmgrd_apply_compat_lease(&status) != 0) {
+        if (print_prefix) {
+            printf("netmgrd: compat lease found for %s, but failed to apply it\n", if_name);
+        }
+        return 1;
+    }
+    (void)netmgrd_export_runtime_state(manager_mode, 0);
+    if (success_message != 0 && success_message[0] != '\0') {
+        if (print_prefix) {
+            printf("netmgrd: ");
+        }
+        printf(success_message,
+               status.active_if[0] != '\0' ? status.active_if : if_name,
+               netmgrd_if_kind_name(status.active_kind));
+        printf("\n");
+    }
+    return 0;
+}
+
+static int netmgrd_connect_wifi_with_runtime_state(struct mk_network_connect_request *request,
+                                                   struct netmgrd_profile *profiles,
+                                                   char *auto_ssid,
+                                                   int auto_ssid_size,
+                                                   const char *manager_mode,
+                                                   const char *success_message) {
+    struct mk_network_status status;
+    struct netmgrd_profile *profile;
+
+    if (request == 0 || request->ssid[0] == '\0') {
+        return 1;
+    }
+    if (vibe_app_network_connect_wifi(request) != 0) {
+        return 1;
+    }
+    if (netmgrd_wait_for_wifi_ready(&status, request->ssid) != 0) {
+        return 1;
+    }
+
+    profile = netmgrd_find_or_allocate_profile(profiles, request->ssid);
+    if (profile != 0) {
+        profile->used = 1;
+        strcpy(profile->ssid, request->ssid);
+        strcpy(profile->psk, request->psk);
+        if (auto_ssid != 0 && auto_ssid_size > 0) {
+            snprintf(auto_ssid, (size_t)auto_ssid_size, "%s", request->ssid);
+        }
+        (void)netmgrd_save_profiles(profiles, auto_ssid);
+    }
+    (void)netmgrd_export_runtime_state(manager_mode, 0);
+    if (success_message != 0 && success_message[0] != '\0') {
+        printf("netmgrd: ");
+        printf(success_message,
+               request->ssid,
+               status.active_if[0] != '\0' ? status.active_if : request->if_name);
+        printf("\n");
+    }
+    return 0;
+}
+
+static int netmgrd_parse_positive_int(const char *text, int *value_out) {
+    int value = 0;
+
+    if (text == 0 || value_out == 0 || *text == '\0') {
+        return -1;
+    }
+    while (*text != '\0') {
+        if (*text < '0' || *text > '9') {
+            return -1;
+        }
+        value = (value * 10) + (*text - '0');
+        text += 1;
+    }
+    if (value <= 0) {
+        return -1;
+    }
+    *value_out = value;
+    return 0;
+}
+
 static int netmgrd_command_import_lease(const char *path) {
     struct netmgrd_compat_lease lease;
     struct mk_network_info info;
     struct mk_network_status status;
-    struct netmgrd_profile profiles[NETMGRD_PROFILE_MAX];
     char auto_ssid[MK_NETWORK_SSID_MAX + 1];
     int saved_count;
     char if_name[MK_NETWORK_IF_NAME_MAX];
@@ -654,10 +963,11 @@ static int netmgrd_command_import_lease(const char *path) {
         status.active_if[0] != '\0' &&
         strcmp(status.active_if, lease.config.if_name) == 0) {
         if (vibe_app_network_configure_ethernet(&lease.config) == 0 &&
-            vibe_app_network_get_info(&info) == 0 &&
-            vibe_app_network_get_status(&status) == 0) {
-            (void)netmgrd_load_profiles(profiles, auto_ssid, sizeof(auto_ssid));
-            saved_count = netmgrd_saved_profile_count(profiles);
+            netmgrd_load_export_context(&info,
+                                        &status,
+                                        &saved_count,
+                                        auto_ssid,
+                                        (int)sizeof(auto_ssid)) == 0) {
             (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
                                            &info,
                                            &status,
@@ -777,7 +1087,7 @@ static int netmgrd_write_state_file(const char *path,
     (void)vibe_app_create_dir("/runtime");
     snprintf(text,
              sizeof(text),
-             "state=%s\nactive_if=%s\nactive_kind=%s\nssid=%s\nip=%s\ngateway=%s\ndns=%s\nsaved_profiles=%d\nautoconnect=%s\nbackend=%s\ntransport=%s\nownership=%s\nfallback=%s\ndatapath_executor=%s\npacket_path=%s\nsocket_scope=%s\nevent_stream=%s\nbackend_events=%s\ndns_mode=%s\nlease_state=%s\nlease_source=%s\nmanager=%s\n"
+             "state=%s\nactive_if=%s\nactive_kind=%s\nssid=%s\nip=%s\ngateway=%s\ndns=%s\nsaved_profiles=%d\nautoconnect=%s\nbackend=%s\ntransport=%s\nownership=%s\nfallback=%s\ndatapath_executor=%s\npacket_path=%s\nsocket_scope=%s\nevent_stream=%s\nbackend_events=%s\nsocket_rx_capacity=%u\nevent_queue_depth=%u\nlisten_backlog_max=%u\nopen_sockets=%u\nlistening_sockets=%u\nconnected_sockets=%u\nrecv_ready=%u\naccept_ready=%u\npending_rx_bytes=%u\nbackend_rx_frames=%u\nbackend_tx_frames=%u\ndns_mode=%s\nlease_state=%s\nlease_source=%s\nmanager=%s\n"
              "scan_count=%d\n"
              "scan0_ssid=%s\nscan0_security=%s\nscan0_signal=%u\nscan0_connected=%u\n"
              "scan1_ssid=%s\nscan1_security=%s\nscan1_signal=%u\nscan1_connected=%u\n"
@@ -801,6 +1111,17 @@ static int netmgrd_write_state_file(const char *path,
              netmgrd_socket_scope_name(info),
              netmgrd_event_stream_name(info),
              netmgrd_backend_events_name(info),
+             (unsigned int)info->socket_rx_capacity,
+             (unsigned int)info->event_queue_depth,
+             (unsigned int)info->listen_backlog_max,
+             (unsigned int)status->open_socket_count,
+             (unsigned int)status->listening_socket_count,
+             (unsigned int)status->connected_socket_count,
+             (unsigned int)status->recv_ready_count,
+             (unsigned int)status->accept_ready_count,
+             (unsigned int)status->pending_rx_bytes,
+             (unsigned int)status->backend_rx_frames,
+             (unsigned int)status->backend_tx_frames,
              netmgrd_dns_mode_name(info, status),
              netmgrd_lease_state_name(status),
              resolved_lease_source,
@@ -828,19 +1149,18 @@ static int netmgrd_write_state_file(const char *path,
 static int netmgrd_command_status(void) {
     struct mk_network_info info;
     struct mk_network_status status;
-    struct netmgrd_profile profiles[NETMGRD_PROFILE_MAX];
     char auto_ssid[MK_NETWORK_SSID_MAX + 1];
     char lease_source[24];
     int saved_count;
 
-    if (vibe_app_network_get_info(&info) != 0 ||
-        vibe_app_network_get_status(&status) != 0) {
+    if (netmgrd_load_export_context(&info,
+                                    &status,
+                                    &saved_count,
+                                    auto_ssid,
+                                    (int)sizeof(auto_ssid)) != 0) {
         printf("netmgrd: network service unavailable\n");
         return 1;
     }
-
-    (void)netmgrd_load_profiles(profiles, auto_ssid, sizeof(auto_ssid));
-    saved_count = netmgrd_saved_profile_count(profiles);
     (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
                                    &info,
                                    &status,
@@ -866,6 +1186,17 @@ static int netmgrd_command_status(void) {
     printf("socket scope: %s\n", netmgrd_socket_scope_name(&info));
     printf("event stream: %s\n", netmgrd_event_stream_name(&info));
     printf("backend events: %s\n", netmgrd_backend_events_name(&info));
+    printf("socket rx capacity: %u\n", (unsigned int)info.socket_rx_capacity);
+    printf("event queue depth: %u\n", (unsigned int)info.event_queue_depth);
+    printf("listen backlog max: %u\n", (unsigned int)info.listen_backlog_max);
+    printf("open sockets: %u\n", (unsigned int)status.open_socket_count);
+    printf("listening sockets: %u\n", (unsigned int)status.listening_socket_count);
+    printf("connected sockets: %u\n", (unsigned int)status.connected_socket_count);
+    printf("recv ready: %u\n", (unsigned int)status.recv_ready_count);
+    printf("accept ready: %u\n", (unsigned int)status.accept_ready_count);
+    printf("pending rx bytes: %u\n", (unsigned int)status.pending_rx_bytes);
+    printf("backend rx frames: %u\n", (unsigned int)status.backend_rx_frames);
+    printf("backend tx frames: %u\n", (unsigned int)status.backend_tx_frames);
     printf("dns mode: %s\n", netmgrd_dns_mode_name(&info, &status));
     printf("lease state: %s\n", netmgrd_lease_state_name(&status));
     netmgrd_detect_lease_source(&status, lease_source, (int)sizeof(lease_source));
@@ -910,19 +1241,18 @@ static int netmgrd_command_scan(const char *if_name) {
 static int netmgrd_command_export_state(const char *path) {
     struct mk_network_info info;
     struct mk_network_status status;
-    struct netmgrd_profile profiles[NETMGRD_PROFILE_MAX];
     char auto_ssid[MK_NETWORK_SSID_MAX + 1];
     int saved_count;
     const char *target = path != 0 && *path != '\0' ? path : NETMGRD_STATUS_EXPORT_PATH;
 
-    if (vibe_app_network_get_info(&info) != 0 ||
-        vibe_app_network_get_status(&status) != 0) {
+    if (netmgrd_load_export_context(&info,
+                                    &status,
+                                    &saved_count,
+                                    auto_ssid,
+                                    (int)sizeof(auto_ssid)) != 0) {
         printf("netmgrd: network service unavailable\n");
         return 1;
     }
-
-    (void)netmgrd_load_profiles(profiles, auto_ssid, sizeof(auto_ssid));
-    saved_count = netmgrd_saved_profile_count(profiles);
     if (netmgrd_write_state_file(target, &info, &status, saved_count, auto_ssid, "export", 0) != 0) {
         printf("netmgrd: failed to write %s\n", target);
         return 1;
@@ -931,14 +1261,49 @@ static int netmgrd_command_export_state(const char *path) {
     return 0;
 }
 
+static int netmgrd_command_monitor_events(int argc, char **argv) {
+    struct mk_network_event event;
+    int limit = 8;
+    int seen = 0;
+
+    if (argc >= 3 && netmgrd_parse_positive_int(argv[2], &limit) != 0) {
+        printf("netmgrd: invalid event count\n");
+        return 1;
+    }
+    if (vibe_app_network_event_subscribe() != 0) {
+        printf("netmgrd: failed to subscribe network events\n");
+        return 1;
+    }
+
+    printf("netmgrd: waiting for %d network event%s\n", limit, limit == 1 ? "" : "s");
+    while (seen < limit) {
+        memset(&event, 0, sizeof(event));
+        if (vibe_app_network_event_receive(&event, 50u) != 0) {
+            printf("netmgrd: timeout waiting for network event %d/%d\n", seen + 1, limit);
+            return seen > 0 ? 0 : 1;
+        }
+        printf("event[%d]: type=%s seq=%u link=%s bytes=%u dropped=%u tick=%u\n",
+               seen,
+               netmgrd_event_name(event.event_type),
+               (unsigned int)event.sequence,
+               netmgrd_link_state_name(event.link_state),
+               (unsigned int)event.byte_count,
+               (unsigned int)event.dropped_events,
+               (unsigned int)event.tick);
+        if (event.event_type == MK_NETWORK_EVENT_STATUS ||
+            event.event_type == MK_NETWORK_EVENT_LEASE ||
+            event.event_type == MK_NETWORK_EVENT_DNS) {
+            (void)netmgrd_export_runtime_state("event-monitor", 0);
+        }
+        seen += 1;
+    }
+    return 0;
+}
+
 static int netmgrd_command_connect(int argc, char **argv) {
-    struct mk_network_info info;
     struct mk_network_connect_request request;
-    struct mk_network_status status;
     struct netmgrd_profile profiles[NETMGRD_PROFILE_MAX];
-    struct netmgrd_profile *profile;
     char auto_ssid[MK_NETWORK_SSID_MAX + 1];
-    int saved_count;
     int i;
 
     if (argc < 3) {
@@ -946,39 +1311,13 @@ static int netmgrd_command_connect(int argc, char **argv) {
         return 1;
     }
     if (strcmp(argv[2], "em0") == 0 || strcmp(argv[2], "ethernet") == 0) {
-        char if_name[MK_NETWORK_IF_NAME_MAX];
-
-        netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
         if (argc != 3) {
             printf("usage: netmgrd connect ethernet\n");
             return 1;
         }
-        if (vibe_app_network_connect_ethernet(if_name) != 0) {
-            printf("netmgrd: failed to connect %s\n", if_name);
-            return 1;
-        }
-        if (vibe_app_network_get_info(&info) != 0 ||
-            netmgrd_wait_for_ethernet_ready(&status) != 0) {
-            printf("netmgrd: connected em0, but failed to refresh status\n");
-            return 1;
-        }
-        if (netmgrd_apply_compat_lease(&status) != 0) {
-            printf("netmgrd: compat lease found for %s, but failed to apply it\n", if_name);
-            return 1;
-        }
-        (void)netmgrd_load_profiles(profiles, auto_ssid, sizeof(auto_ssid));
-        saved_count = netmgrd_saved_profile_count(profiles);
-        (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                       &info,
-                                       &status,
-                                       saved_count,
-                                       auto_ssid,
-                                       "ethernet-connect",
-                                       0);
-        printf("netmgrd: connected %s (%s)\n",
-               status.active_if[0] != '\0' ? status.active_if : if_name,
-               netmgrd_if_kind_name(status.active_kind));
-        return 0;
+        return netmgrd_connect_ethernet_with_runtime_state("ethernet-connect",
+                                                           "connected %s (%s)",
+                                                           1);
     }
     if (strcmp(argv[2], "wlan0") != 0) {
         printf("netmgrd: supported interfaces in this MVP are wlan0 and ethernet\n");
@@ -1001,67 +1340,31 @@ static int netmgrd_command_connect(int argc, char **argv) {
     }
 
     if (request.psk[0] == '\0') {
-        profile = netmgrd_find_profile(profiles, request.ssid);
+        struct netmgrd_profile *profile = netmgrd_find_profile(profiles, request.ssid);
         if (profile != 0) {
             strcpy(request.psk, profile->psk);
         }
     }
-
-    if (vibe_app_network_connect_wifi(&request) != 0) {
+    if (netmgrd_connect_wifi_with_runtime_state(&request,
+                                                profiles,
+                                                auto_ssid,
+                                                (int)sizeof(auto_ssid),
+                                                "wifi-connect",
+                                                "connected to %s via %s") != 0) {
         printf("netmgrd: failed to connect to %s\n", request.ssid);
         return 1;
     }
-
-    if (vibe_app_network_get_info(&info) != 0 ||
-        vibe_app_network_get_status(&status) != 0) {
-        printf("netmgrd: connected, but failed to refresh status\n");
-        return 1;
-    }
-
-    profile = netmgrd_find_or_allocate_profile(profiles, request.ssid);
-    if (profile != 0) {
-        profile->used = 1;
-        strcpy(profile->ssid, request.ssid);
-        strcpy(profile->psk, request.psk);
-        strcpy(auto_ssid, request.ssid);
-        (void)netmgrd_save_profiles(profiles, auto_ssid);
-    }
-    saved_count = netmgrd_saved_profile_count(profiles);
-    (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                   &info,
-                                   &status,
-                                   saved_count,
-                                   auto_ssid,
-                                   "wifi-connect",
-                                   0);
-    printf("netmgrd: connected to %s via %s\n", request.ssid, request.if_name);
     return 0;
 }
 
 static int netmgrd_command_disconnect(const char *if_name) {
-    struct mk_network_info info;
-    struct mk_network_status status;
-    struct netmgrd_profile profiles[NETMGRD_PROFILE_MAX];
-    char auto_ssid[MK_NETWORK_SSID_MAX + 1];
-    int saved_count;
     const char *target = if_name != 0 ? if_name : "wlan0";
 
     if (vibe_app_network_disconnect(target) != 0) {
         printf("netmgrd: failed to disconnect %s\n", target);
         return 1;
     }
-    if (vibe_app_network_get_info(&info) == 0 &&
-        vibe_app_network_get_status(&status) == 0) {
-        (void)netmgrd_load_profiles(profiles, auto_ssid, sizeof(auto_ssid));
-        saved_count = netmgrd_saved_profile_count(profiles);
-        (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                       &info,
-                                       &status,
-                                       saved_count,
-                                       auto_ssid,
-                                       "disconnect",
-                                       0);
-    }
+    (void)netmgrd_export_runtime_state("disconnect", 0);
     printf("netmgrd: disconnected %s\n", target);
     return 0;
 }
@@ -1073,7 +1376,6 @@ static int netmgrd_command_reconcile(void) {
     struct netmgrd_profile profiles[NETMGRD_PROFILE_MAX];
     struct netmgrd_profile *profile;
     char auto_ssid[MK_NETWORK_SSID_MAX + 1];
-    int saved_count;
 
     if (vibe_app_network_get_info(&info) != 0 ||
         vibe_app_network_get_status(&status) != 0) {
@@ -1082,35 +1384,14 @@ static int netmgrd_command_reconcile(void) {
     }
 
     (void)netmgrd_load_profiles(profiles, auto_ssid, sizeof(auto_ssid));
-    saved_count = netmgrd_saved_profile_count(profiles);
     if (auto_ssid[0] == '\0') {
-        char if_name[MK_NETWORK_IF_NAME_MAX];
-
-        netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
         if (status.link_state != MK_NETWORK_LINK_CONNECTED &&
-            vibe_app_network_connect_ethernet(if_name) == 0 &&
-            netmgrd_wait_for_ethernet_ready(&status) == 0) {
-            if (netmgrd_apply_compat_lease(&status) != 0) {
-                printf("netmgrd: failed to apply compat lease for %s\n", if_name);
-                return 1;
-            }
-            (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                           &info,
-                                           &status,
-                                           saved_count,
-                                           auto_ssid,
-                                           "ethernet-fallback",
-                                           0);
-            printf("netmgrd: restored ethernet %s\n", if_name);
+            netmgrd_connect_ethernet_with_runtime_state("ethernet-fallback",
+                                                        "restored ethernet %s (%s)",
+                                                        1) == 0) {
             return 0;
         }
-        (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                       &info,
-                                       &status,
-                                       saved_count,
-                                       auto_ssid,
-                                       "idle",
-                                       0);
+        (void)netmgrd_export_runtime_state("idle", 0);
         printf("netmgrd: autoconnect disabled\n");
         return 0;
     }
@@ -1118,26 +1399,14 @@ static int netmgrd_command_reconcile(void) {
     if (status.link_state == MK_NETWORK_LINK_CONNECTED &&
         status.active_kind == MK_NETWORK_IF_WIFI &&
         strcmp(status.current_ssid, auto_ssid) == 0) {
-        (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                       &info,
-                                       &status,
-                                       saved_count,
-                                       auto_ssid,
-                                       "wifi-steady",
-                                       0);
+        (void)netmgrd_export_runtime_state("wifi-steady", 0);
         printf("netmgrd: already connected to %s\n", auto_ssid);
         return 0;
     }
 
     profile = netmgrd_find_profile(profiles, auto_ssid);
     if (profile == 0) {
-        (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                       &info,
-                                       &status,
-                                       saved_count,
-                                       auto_ssid,
-                                       "missing-profile",
-                                       0);
+        (void)netmgrd_export_runtime_state("missing-profile", 0);
         printf("netmgrd: saved profile not found for %s\n", auto_ssid);
         return 1;
     }
@@ -1146,51 +1415,22 @@ static int netmgrd_command_reconcile(void) {
     strcpy(request.if_name, "wlan0");
     strcpy(request.ssid, auto_ssid);
     strcpy(request.psk, profile->psk);
-    if (vibe_app_network_connect_wifi(&request) != 0) {
-        char if_name[MK_NETWORK_IF_NAME_MAX];
-
-        netmgrd_resolve_ethernet_if_name(if_name, (int)sizeof(if_name));
+    if (netmgrd_connect_wifi_with_runtime_state(&request,
+                                                profiles,
+                                                auto_ssid,
+                                                (int)sizeof(auto_ssid),
+                                                "wifi-connected",
+                                                "connected to %s via %s") != 0) {
         if (status.link_state != MK_NETWORK_LINK_CONNECTED &&
-            vibe_app_network_connect_ethernet(if_name) == 0 &&
-            netmgrd_wait_for_ethernet_ready(&status) == 0) {
-            if (netmgrd_apply_compat_lease(&status) != 0) {
-                printf("netmgrd: failed to apply compat lease for %s\n", if_name);
-                return 1;
-            }
-            (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                           &info,
-                                           &status,
-                                           saved_count,
-                                           auto_ssid,
-                                           "ethernet-fallback",
-                                           0);
-            printf("netmgrd: wifi unavailable, restored ethernet %s\n", if_name);
+            netmgrd_connect_ethernet_with_runtime_state("ethernet-fallback",
+                                                        "wifi unavailable, restored ethernet %s (%s)",
+                                                        1) == 0) {
             return 0;
         }
-        (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                       &info,
-                                       &status,
-                                       saved_count,
-                                       auto_ssid,
-                                       "wifi-failed",
-                                       0);
+        (void)netmgrd_export_runtime_state("wifi-failed", 0);
         printf("netmgrd: failed to connect to %s\n", auto_ssid);
         return 1;
     }
-
-    if (vibe_app_network_get_status(&status) != 0) {
-        printf("netmgrd: connected, but failed to refresh status\n");
-        return 1;
-    }
-
-    (void)netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                   &info,
-                                   &status,
-                                   saved_count,
-                                   auto_ssid,
-                                   "wifi-connected",
-                                   0);
-    printf("netmgrd: connected to %s\n", auto_ssid);
     return 0;
 }
 
@@ -1396,11 +1636,36 @@ int vibe_app_main(int argc, char **argv) {
     if (strcmp(argv[1], "reconcile") == 0) {
         return netmgrd_command_reconcile();
     }
+    if (strcmp(argv[1], "monitor-events") == 0) {
+        return netmgrd_command_monitor_events(argc, argv);
+    }
     if (strcmp(argv[1], "import-lease") == 0) {
         return netmgrd_command_import_lease(argc >= 3 ? argv[2] : 0);
     }
     if (strcmp(argv[1], "export-state") == 0) {
         return netmgrd_command_export_state(argc >= 3 ? argv[2] : NETMGRD_STATUS_EXPORT_PATH);
+    }
+    if (strcmp(argv[1], "ipconfig") == 0) {
+        return netmgrd_command_ipconfig();
+    }
+    if (strcmp(argv[1], "ifconfig") == 0) {
+        return netmgrd_command_ifconfig();
+    }
+    if (strcmp(argv[1], "route") == 0) {
+        return netmgrd_command_route();
+    }
+    if (strcmp(argv[1], "dhcp") == 0) {
+        return netmgrd_command_dhcp(argc >= 3 ? argv[2] : "ethernet");
+    }
+    if (strcmp(argv[1], "dns") == 0) {
+        return netmgrd_command_dns();
+    }
+    if (strcmp(argv[1], "ip") == 0) {
+        if (argc >= 3 && strcmp(argv[2], "addr") == 0) {
+            return netmgrd_command_ip_addr();
+        }
+        netmgrd_usage();
+        return 1;
     }
 
     netmgrd_usage();

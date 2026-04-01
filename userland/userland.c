@@ -18,7 +18,6 @@ void kernel_debug_puts(const char *msg) {
 
 int vibe_app_main(int argc, char **argv) {
     struct userland_launch_info info;
-    char *startx_argv[2] = {"startx", 0};
 
     (void)argc;
     (void)argv;
@@ -26,9 +25,13 @@ int vibe_app_main(int argc, char **argv) {
     if (sys_launch_info(&info) == 0 &&
         (info.boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u &&
         (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) == 0u) {
-        userland_app_boot_debug("userland.app: autostart startx\n");
-        (void)busybox_main(1, startx_argv);
+        if (sys_launch_app("startx") > 0) {
+            userland_app_boot_debug("userland.app: autostart startx\n");
+        } else {
+            userland_app_boot_debug("userland.app: autostart startx failed\n");
+        }
     }
+    userland_app_boot_debug("userland.app: shell_start begin\n");
     shell_start();
     return 0;
 }

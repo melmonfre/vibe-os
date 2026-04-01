@@ -9623,6 +9623,7 @@ static int mk_audio_local_handler(const struct mk_message *request,
         if (request->payload_size != sizeof(struct mk_audio_play_asset_request)) {
             return -1;
         }
+        /* Defer to audiosvc worker; kernel handler returns failure to force fallback */
         if (mk_audio_reply_result(reply, -1) != 0) {
             return -1;
         }

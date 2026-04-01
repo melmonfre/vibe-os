@@ -1,5 +1,5 @@
 #include "compat/include/compat.h"
-#include <lang/include/vibe_app_runtime.h>
+#include "applications/ported/include/network_diag_common.h"
 
 static int curl_starts_with(const char *text, const char *prefix) {
     if (text == 0 || prefix == 0) {
@@ -26,6 +26,7 @@ static void curl_usage(void) {
 }
 
 int vibe_app_main(int argc, char **argv) {
+    struct mk_network_info info;
     struct mk_network_status status;
     const char *target;
     const char *data = 0;
@@ -52,14 +53,15 @@ int vibe_app_main(int argc, char **argv) {
         return 0;
     }
 
-    memset(&status, 0, sizeof(status));
-    if (vibe_app_network_get_status(&status) != 0) {
-        fprintf(stderr, "curl: network status unavailable\n");
+    if (netdiag_load_snapshot("curl", &info, &status) != 0) {
+        return 1;
+    }
+    if (netdiag_require_real_packet_path("curl", "remote transfer", &info, &status) != 0) {
         return 1;
     }
 
     fprintf(stderr,
-            "curl: transport unsupported url=%s active=%s dns=%s\n",
+            "curl: remote transfer not implemented yet url=%s active=%s dns=%s\n",
             argv[1],
             status.active_if[0] != '\0' ? status.active_if : "-",
             status.dns_server[0] != '\0' ? status.dns_server : "-");

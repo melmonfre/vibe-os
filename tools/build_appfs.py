@@ -7,7 +7,7 @@ import sys
 
 APPFS_MAGIC = 0x53465056
 APPFS_VERSION = 1
-ENTRY_MAX = 96
+ENTRY_MAX = 128
 NAME_SIZE = 16
 ENTRY_STRUCT = struct.Struct("<16sIIII")
 DIR_HEADER = struct.Struct("<IIII")

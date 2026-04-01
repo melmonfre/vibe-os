@@ -873,6 +873,9 @@ static int audiosvc_command_apply_settings(const char *path) {
 }
 
 static int audiosvc_command_play_asset(const char *path) {
+    struct audio_async_playback playback;
+    int result;
+    
     if (path == 0 || *path == '\0') {
         audiosvc_debug("audiosvc: play-asset missing-path\n");
         printf("audiosvc: missing asset path\n");
@@ -880,11 +883,25 @@ static int audiosvc_command_play_asset(const char *path) {
     }
 
     audiosvc_debug("audiosvc: play-asset begin\n");
-    if (sys_audio_play_asset(path) != 0) {
+    
+    /* Start async audio playback */
+    result = audio_play_wav_async_start(&playback, path, "audio-service");
+    if (result != 0) {
+        audiosvc_debug("audiosvc: play-asset async-start failed\n");
+        /* Fall back to sync version if async fails */
+        if (audio_play_wav_best_effort(path, "audio-service-fallback") == 0) {
+            audiosvc_debug("audiosvc: play-asset sync fallback done\n");
+            return 0;
+        }
         audiosvc_debug("audiosvc: play-asset failed\n");
         return 1;
     }
-
+    
+    /* Poll until playback completes */
+    while (audio_play_wav_async_poll(&playback) > 0) {
+        sys_sleep(); /* Yield to other processes */
+    }
+    
     audiosvc_debug("audiosvc: play-asset done\n");
     return 0;
 }

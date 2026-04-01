@@ -6,6 +6,7 @@
 #include <kernel/hal/io.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/network.h>
+#include <kernel/microkernel/network_queue.h>
 #include <kernel/microkernel/service.h>
 #include <kernel/scheduler.h>
 #include <kernel/userland_service.h>
@@ -215,6 +216,7 @@ static uint32_t mk_network_publish_event(uint32_t event_type,
                                          uint32_t link_state,
                                          uint32_t byte_count);
 static void mk_network_publish_status_event(void);
+static void mk_network_refresh_socket_telemetry(void);
 
 static void mk_network_event_init_subscribers(void) {
     uint32_t index;
@@ -347,6 +349,52 @@ static void mk_network_publish_status_event(void) {
                                    0,
                                    g_network_state.status.link_state,
                                    0u);
+}
+
+static void mk_network_queue_ready_callback(int32_t socket_handle, uint32_t readiness_flags) {
+    if (readiness_flags & NETWORK_SOCKET_READY_RECV) {
+        (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_RECV,
+                                       socket_handle,
+                                       0,
+                                       g_network_state.status.link_state,
+                                       network_queue_get_rx_depth(socket_handle));
+    }
+    if (readiness_flags & NETWORK_SOCKET_READY_SEND) {
+        (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_SEND,
+                                       socket_handle,
+                                       0,
+                                       g_network_state.status.link_state,
+                                       network_queue_get_tx_depth(socket_handle));
+    }
+    if (readiness_flags & NETWORK_SOCKET_READY_ACCEPT) {
+        (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_ACCEPT,
+                                       socket_handle,
+                                       0,
+                                       g_network_state.status.link_state,
+                                       0u);
+    }
+}
+
+static void mk_network_publish_lease_dns_events(void) {
+    uint32_t lease_bytes = 0u;
+    uint32_t dns_bytes = 0u;
+
+    if (g_network_state.status.ip_address[0] != '\0') {
+        lease_bytes = (uint32_t)strlen(g_network_state.status.ip_address);
+    }
+    if (g_network_state.status.dns_server[0] != '\0') {
+        dns_bytes = (uint32_t)strlen(g_network_state.status.dns_server);
+    }
+    (void)mk_network_publish_event(MK_NETWORK_EVENT_LEASE,
+                                   0,
+                                   0,
+                                   g_network_state.status.link_state,
+                                   lease_bytes);
+    (void)mk_network_publish_event(MK_NETWORK_EVENT_DNS,
+                                   0,
+                                   0,
+                                   g_network_state.status.link_state,
+                                   dns_bytes);
 }
 
 static int mk_network_current_process_is_service_worker(void) {
@@ -1037,8 +1085,12 @@ static struct mk_network_socket_state *mk_network_socket_allocate(uint32_t owner
         socket_state->protocol = protocol;
         socket_state->peer_handle = -1;
         socket_state->pending_accept_handle = -1;
+        
+        // Register socket with queue system
         if (handle_out != 0) {
-            *handle_out = (int)index + 1;
+            int handle = (int)index + 1;
+            *handle_out = handle;
+            (void)network_queue_register_socket(handle, owner_pid);
         }
         return socket_state;
     }
@@ -1081,6 +1133,7 @@ static void mk_network_apply_ethernet_profile(void) {
         g_network_state.status.dns_server[0] = '\0';
     }
     mk_network_publish_status_event();
+    mk_network_publish_lease_dns_events();
 }
 
 static int mk_network_apply_ethernet_config(const struct mk_network_ethernet_config *config) {
@@ -1110,6 +1163,7 @@ static int mk_network_apply_ethernet_config(const struct mk_network_ethernet_con
                                  sizeof(g_network_state.status.dns_server),
                                  config->dns_server);
     mk_network_publish_status_event();
+    mk_network_publish_lease_dns_events();
     return 0;
 }
 
@@ -1133,6 +1187,7 @@ static void mk_network_begin_ethernet_connect(void) {
     g_network_state.status.gateway[0] = '\0';
     g_network_state.status.dns_server[0] = '\0';
     mk_network_publish_status_event();
+    mk_network_publish_lease_dns_events();
 }
 
 static void mk_network_progress_state(void) {
@@ -1148,6 +1203,40 @@ static void mk_network_progress_state(void) {
         }
     }
     mk_network_apply_ethernet_profile();
+}
+
+static void mk_network_refresh_socket_telemetry(void) {
+    uint32_t index;
+
+    g_network_state.status.open_socket_count = 0u;
+    g_network_state.status.listening_socket_count = 0u;
+    g_network_state.status.connected_socket_count = 0u;
+    g_network_state.status.recv_ready_count = 0u;
+    g_network_state.status.accept_ready_count = 0u;
+    g_network_state.status.pending_rx_bytes = 0u;
+    g_network_state.status.backend_rx_frames = g_network_virtio_link.rx_frames_completed;
+    g_network_state.status.backend_tx_frames = g_network_virtio_link.tx_frames_completed;
+
+    /* Update telemetry from queue system */
+    network_queue_update_telemetry(&g_network_state.status);
+
+    for (index = 0u; index < MK_NETWORK_SOCKET_MAX; ++index) {
+        struct mk_network_socket_state *socket_state = &g_network_state.sockets[index];
+
+        if (!socket_state->used) {
+            continue;
+        }
+        g_network_state.status.open_socket_count += 1u;
+        if (socket_state->listening) {
+            g_network_state.status.listening_socket_count += 1u;
+            if (socket_state->pending_accept_handle > 0) {
+                g_network_state.status.accept_ready_count += 1u;
+            }
+        }
+        if (socket_state->connected) {
+            g_network_state.status.connected_socket_count += 1u;
+        }
+    }
 }
 
 static int mk_network_fill_scan_info(uint32_t index, struct mk_network_scan_info *info) {
@@ -1205,6 +1294,7 @@ static int mk_network_state_connect_wifi(const struct mk_network_connect_request
                                      sizeof(g_network_state.status.dns_server),
                                      "1.1.1.1");
         mk_network_publish_status_event();
+        mk_network_publish_lease_dns_events();
         return 0;
     }
 
@@ -1390,6 +1480,7 @@ void mk_network_service_init(void) {
     memset(&g_last_network_reply, 0, sizeof(g_last_network_reply));
     memset(&g_network_state, 0, sizeof(g_network_state));
     mk_network_event_init_subscribers();
+    network_queue_init();
 
     mk_network_probe_pci_devices();
 
@@ -1405,12 +1496,13 @@ void mk_network_service_init(void) {
                                  MK_NETWORK_CAPS_STEADY_STATE_SERVICE_HOST |
                                  MK_NETWORK_CAPS_NETMGR_POLICY_ONLY |
                                  MK_NETWORK_CAPS_LOCAL_FALLBACK_RESCUE_ONLY |
-                                 MK_NETWORK_CAPS_KERNEL_DATAPATH_EXECUTOR |
-                                 MK_NETWORK_CAPS_SOCKET_LOCAL_ONLY;
+                                 MK_NETWORK_CAPS_KERNEL_DATAPATH_EXECUTOR;
     if (g_network_state.pci_probe.present) {
-        g_network_state.info.flags |= MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING;
+        g_network_state.info.flags |= MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING |
+                                      MK_NETWORK_CAPS_REAL_PACKET_DATAPATH;
     } else {
-        g_network_state.info.flags |= MK_NETWORK_CAPS_QUERY_ONLY;
+        g_network_state.info.flags |= MK_NETWORK_CAPS_QUERY_ONLY |
+                                      MK_NETWORK_CAPS_SOCKET_LOCAL_ONLY;
     }
     g_network_state.info.supported_families = MK_NETWORK_FAMILY_UNIX |
                                               MK_NETWORK_FAMILY_INET |
@@ -1419,6 +1511,9 @@ void mk_network_service_init(void) {
                                                   MK_NETWORK_SOCKET_DGRAM;
     g_network_state.info.max_sockets = MK_NETWORK_SOCKET_MAX;
     g_network_state.info.max_packet_size = 1500u;
+    g_network_state.info.socket_rx_capacity = MK_NETWORK_SOCKET_RX_CAPACITY;
+    g_network_state.info.event_queue_depth = MK_NETWORK_EVENT_QUEUE_SIZE;
+    g_network_state.info.listen_backlog_max = 1u;
 
     g_network_state.scan_count = 4u;
     (void)mk_network_copy_string(g_network_state.scans[0].ssid, sizeof(g_network_state.scans[0].ssid), "VibeNet");
@@ -1434,7 +1529,10 @@ void mk_network_service_init(void) {
     g_network_state.scans[3].signal_strength = 4u;
     g_network_state.scans[3].security = MK_NETWORK_SECURITY_WPA_PSK;
     mk_network_apply_ethernet_profile();
+    mk_network_refresh_socket_telemetry();
     mk_network_log_probe();
+
+    network_queue_set_ready_event_callback(mk_network_queue_ready_callback);
 
     (void)mk_service_launch_task(MK_SERVICE_NETWORK,
                                  "network",
@@ -1458,6 +1556,7 @@ int mk_network_service_get_info(struct mk_network_info *info) {
         return -1;
     }
     if (mk_network_current_process_is_service_worker()) {
+        mk_network_refresh_socket_telemetry();
         *info = g_network_state.info;
         return 0;
     }
@@ -1484,6 +1583,7 @@ int mk_network_service_get_status(struct mk_network_status *status) {
     }
     if (mk_network_current_process_is_service_worker()) {
         mk_network_progress_state();
+        mk_network_refresh_socket_telemetry();
         *status = g_network_state.status;
         return 0;
     }
@@ -1778,6 +1878,7 @@ int mk_network_service_socket_connect(int handle, const struct sockaddr *address
 int mk_network_service_send(int handle, const void *data, uint32_t size) {
     struct mk_network_socket_state *socket_state;
     struct mk_network_socket_state *peer;
+    int result;
 
     if (data == 0 || size == 0u || size > MK_NETWORK_SOCKET_RX_CAPACITY) {
         return -1;
@@ -1792,12 +1893,12 @@ int mk_network_service_send(int handle, const void *data, uint32_t size) {
     if (peer == 0 || !peer->used) {
         return -1;
     }
-    if (peer->rx_size + size > MK_NETWORK_SOCKET_RX_CAPACITY) {
+
+    result = network_queue_rx_enqueue((const uint8_t *)data, size, socket_state->peer_handle);
+    if (result != 0) {
         return -1;
     }
 
-    memcpy(peer->rx_buffer + peer->rx_size, data, size);
-    peer->rx_size += size;
     (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_SEND,
                                    handle,
                                    socket_state->peer_handle,
@@ -1807,13 +1908,14 @@ int mk_network_service_send(int handle, const void *data, uint32_t size) {
                                    socket_state->peer_handle,
                                    handle,
                                    g_network_state.status.link_state,
-                                   peer->rx_size);
+                                   network_queue_get_rx_depth(socket_state->peer_handle));
     return (int)size;
 }
 
 int mk_network_service_recv(int handle, void *buffer, uint32_t size) {
     struct mk_network_socket_state *socket_state;
-    uint32_t read_size;
+    int dequeued;
+    uint32_t packet_length;
 
     if (buffer == 0 || size == 0u) {
         return -1;
@@ -1824,19 +1926,23 @@ int mk_network_service_recv(int handle, void *buffer, uint32_t size) {
         return -1;
     }
 
-    read_size = socket_state->rx_size;
-    if (read_size > size) {
-        read_size = size;
+    dequeued = network_queue_rx_dequeue((uint8_t *)buffer,
+                                       size,
+                                       handle,
+                                       &packet_length,
+                                       NULL);
+    if (dequeued < 0) {
+        return 0;
     }
 
-    memcpy(buffer, socket_state->rx_buffer, read_size);
-    if (read_size < socket_state->rx_size) {
-        memmove(socket_state->rx_buffer,
-                socket_state->rx_buffer + read_size,
-                socket_state->rx_size - read_size);
+    if (dequeued > 0) {
+        (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_RECV,
+                                       handle,
+                                       socket_state->peer_handle,
+                                       g_network_state.status.link_state,
+                                       (uint32_t)dequeued);
     }
-    socket_state->rx_size -= read_size;
-    return (int)read_size;
+    return dequeued;
 }
 
 int mk_network_service_close(int handle) {
@@ -1863,6 +1969,9 @@ int mk_network_service_close(int handle) {
                                    peer_handle,
                                    g_network_state.status.link_state,
                                    0u);
+    
+    // Unregister socket from queue system
+    (void)network_queue_unregister_socket(handle);
     memset(socket_state, 0, sizeof(*socket_state));
     return 0;
 }
@@ -1925,6 +2034,24 @@ int mk_network_service_subscribe(struct process *subscriber) {
                                  0,
                                  g_network_state.status.link_state,
                                  0u,
+                                 ++g_network_event_sequence);
+        mk_network_enqueue_event(subscription,
+                                 MK_NETWORK_EVENT_LEASE,
+                                 0,
+                                 0,
+                                 g_network_state.status.link_state,
+                                 g_network_state.status.ip_address[0] != '\0'
+                                     ? (uint32_t)strlen(g_network_state.status.ip_address)
+                                     : 0u,
+                                 ++g_network_event_sequence);
+        mk_network_enqueue_event(subscription,
+                                 MK_NETWORK_EVENT_DNS,
+                                 0,
+                                 0,
+                                 g_network_state.status.link_state,
+                                 g_network_state.status.dns_server[0] != '\0'
+                                     ? (uint32_t)strlen(g_network_state.status.dns_server)
+                                     : 0u,
                                  ++g_network_event_sequence);
     }
     return 0;

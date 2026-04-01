@@ -171,15 +171,26 @@ def run_command_expect(session: QemuSession, command: str, markers: List[str], t
 
 def validate_network_surface(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -> bool:
     commands = [
-        ("netmgrd status", ["backend:", "datapath executor:"]),
+        ("netmgrd status", ["backend:", "datapath executor:", "open sockets:", "backend rx frames:"]),
+        ("netmgrd export-state /runtime/netmgrd-surface.txt", ["state exported to /runtime/netmgrd-surface.txt"]),
+        ("netmgrd monitor-events 3", ["event[0]: type=status", "event[1]: type=lease", "event[2]: type=dns"]),
+        ("netmgrd dhcp", ["dhcp lease applied", "dhcp initialized"]),
+        ("netmgrd dns", ["dns "]),
+        ("netctl status", ["packet path:", "event stream:", "open sockets:", "socket rx capacity:"]),
+        ("netctl events 3", ["event[0]: type=status", "event[1]: type=lease", "event[2]: type=dns"]),
+        ("netctl ifconfig", ["state:", "ip:"]),
+        ("netctl route", ["default via"]),
+        ("netctl dhcp", ["connected", "dns:"]),
+        ("netctl dns", ["dns "]),
         ("ifconfig", ["status:"]),
         ("route", ["Routing tables"]),
-        ("netstat", ["netstat: state="]),
+        ("netstat", ["netstat: state=", "sockets: open=", "backend: rx-frames="]),
         ("ping localhost", ["1 packets transmitted, 1 packets received", "ping: loopback-ok"]),
         ("host localhost", ["localhost has address 127.0.0.1", "host: loopback-ok"]),
         ("dig localhost", ["localhost.\t0\tIN\tA\t127.0.0.1", "dig: loopback-ok"]),
+        ("curl file:///runtime/netmgrd-surface.txt", ["manager=", "lease_state=", "curl: file-ok"]),
         ("curl file:///runtime/netmgrd-status.txt", ["state=", "curl: file-ok"]),
-        ("ftp example.com", ["ftp: transport unsupported"]),
+        ("ftp example.com", ["ftp: ftp transport unavailable: current stack reports packet_path="]),
         ("netctl socket-smoke", ["socket smoke ok: ping"]),
     ]
     lines: List[str] = ["# Network Surface Validation", ""]

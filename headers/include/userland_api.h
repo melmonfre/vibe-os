@@ -384,6 +384,8 @@ struct mk_audio_event {
     uint32_t tick;
 };
 
+#ifndef VIBE_SHARED_NETWORK_EVENT_ABI_DEFINED
+#define VIBE_SHARED_NETWORK_EVENT_ABI_DEFINED
 enum mk_network_event_type {
     MK_NETWORK_EVENT_NONE = 0,
     MK_NETWORK_EVENT_STATUS = 1,
@@ -393,7 +395,9 @@ enum mk_network_event_type {
     MK_NETWORK_EVENT_SOCKET_CLOSED = 5,
     MK_NETWORK_EVENT_BACKEND_RX = 6,
     MK_NETWORK_EVENT_BACKEND_TX = 7,
-    MK_NETWORK_EVENT_OVERFLOW = 8
+    MK_NETWORK_EVENT_OVERFLOW = 8,
+    MK_NETWORK_EVENT_LEASE = 9,
+    MK_NETWORK_EVENT_DNS = 10
 };
 
 struct mk_network_event {
@@ -407,6 +411,7 @@ struct mk_network_event {
     uint32_t dropped_events;
     uint32_t tick;
 };
+#endif
 
 enum mk_task_class {
     MK_TASK_CLASS_NONE = 0,

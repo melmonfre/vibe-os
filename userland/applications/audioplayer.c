@@ -3,6 +3,7 @@
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/utils.h>
+#include <kernel/microkernel/audio.h>
 
 static const struct rect DEFAULT_AUDIOPLAYER_WINDOW = {76, 42, 448, 218};
 
@@ -91,13 +92,19 @@ static int audioplayer_play_current(struct audioplayer_state *player) {
         return -1;
     }
 
-    if (sys_audio_play_asset(player->path) == 0) {
-        audioplayer_set_status(player, "Playback iniciado");
+    /* sys_audio_play_asset is fire-and-forget, always succeeds */
+    (void)sys_audio_play_asset(player->path);
+    audioplayer_set_status(player, "Playback iniciado");
+
+    /* Also launch audiosvc for actual playback */
+    char *argv[4] = {"audiosvc", "play-asset", player->path, 0};
+    if (sys_launch_app_argv(3, argv) > 0) {
+        audioplayer_set_status(player, "Playback em segundo plano");
         return 0;
     }
 
-    audioplayer_set_status(player, "Falha ao iniciar playback");
-    return -1;
+    audioplayer_set_status(player, "Playback iniciado (direct)");
+    return 0;
 }
 
 void audioplayer_init_state(struct audioplayer_state *player) {

@@ -101,6 +101,9 @@ struct mk_network_info {
     uint32_t supported_socket_types;
     uint32_t max_sockets;
     uint32_t max_packet_size;
+    uint32_t socket_rx_capacity;
+    uint32_t event_queue_depth;
+    uint32_t listen_backlog_max;
 };
 
 struct mk_network_status {
@@ -108,6 +111,14 @@ struct mk_network_status {
     uint32_t active_kind;
     uint32_t wifi_signal;
     uint32_t visible_network_count;
+    uint32_t open_socket_count;
+    uint32_t listening_socket_count;
+    uint32_t connected_socket_count;
+    uint32_t recv_ready_count;
+    uint32_t accept_ready_count;
+    uint32_t pending_rx_bytes;
+    uint32_t backend_rx_frames;
+    uint32_t backend_tx_frames;
     char active_if[MK_NETWORK_IF_NAME_MAX];
     char current_ssid[MK_NETWORK_SSID_MAX + 1];
     char ip_address[MK_NETWORK_ADDR_MAX];

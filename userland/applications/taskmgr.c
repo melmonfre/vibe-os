@@ -290,6 +290,8 @@ static const char *taskmgr_network_event_name(uint32_t event_type) {
     case MK_NETWORK_EVENT_BACKEND_RX: return "backend-rx";
     case MK_NETWORK_EVENT_BACKEND_TX: return "backend-tx";
     case MK_NETWORK_EVENT_OVERFLOW: return "overflow";
+    case MK_NETWORK_EVENT_LEASE: return "lease";
+    case MK_NETWORK_EVENT_DNS: return "dns";
     default: return "unknown";
     }
 }

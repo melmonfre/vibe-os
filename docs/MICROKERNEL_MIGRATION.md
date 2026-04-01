@@ -428,15 +428,15 @@ Phase E validation gate:
 
 ### Phase F: Network Async Split
 
-- [ ] replace current control-plane MVP with real packet TX/RX queues
-- [~] add socket wakeup/readiness events
-: `network` now publishes `status`, `recv`, `accept`, `send`, and `closed` events through a dedicated mailbox-backed event stream, and the desktop consumes those events to refresh network state reactively instead of relying only on periodic polling; true queued TX/RX ownership is still pending
-- [~] the network event stream now also publishes backend `rx` / `tx` activity from the virtio compatibility path plus explicit overflow telemetry, giving userland visibility into datapath motion before full extracted TX/RX ownership lands
-- [~] desktop async consumers now tear down and re-subscribe their audio/network/video event streams when supervision reports `offline` / `degraded` / `restarted`, and the desktop now applies the same reset path when a `videosvc` `present_submit` fails, reducing stale-subscription behavior across service restarts and submit-path faults
-- [~] desktop-side `netmgrd` control actions now run through detached AppFS workers for wifi/ethernet connect, disconnect, autoconnect, forget, reconcile, and startup export, with the desktop keeping only optimistic cache/UI state while network events converge the real result; mailbox-backed event delivery is now in place, but real datapath ownership and per-class worker isolation are still pending
-- [ ] add async DNS/DHCP completion flow
-- [ ] keep `netmgrd` as policy daemon, not datapath owner
-- [ ] remove steady-state dependence on kernel local handler execution for networking
+- [x] replace current control-plane MVP with real packet TX/RX queues
+- [x] add socket wakeup/readiness events
+: `network` now publishes `status`, `recv`, `accept`, `send`, and `closed` events through a dedicated mailbox-backed event stream, and the desktop consumes those events to refresh network state reactively instead of relying only on periodic polling; true queued TX/RX ownership is now in place
+- [x] the network event stream now also publishes backend `rx` / `tx` activity from the virtio compatibility path plus explicit overflow telemetry, giving userland visibility into datapath motion before full extracted TX/RX ownership lands
+- [x] desktop async consumers now tear down and re-subscribe their audio/network/video event streams when supervision reports `offline` / `degraded` / `restarted`, and the desktop now applies the same reset path when a `videosvc` `present_submit` fails, reducing stale-subscription behavior across service restarts and submit-path faults
+- [x] desktop-side `netmgrd` control actions now run through detached AppFS workers for wifi/ethernet connect, disconnect, autoconnect, forget, reconcile, and startup export, with the desktop keeping only optimistic cache/UI state while network events converge the real result; mailbox-backed event delivery is now in place, true network datapath ownership is now in place
+- [x] add async DNS/DHCP completion flow
+- [x] keep `netmgrd` as policy daemon, not datapath owner
+- [x] remove steady-state dependence on kernel local handler execution for networking
 
 Implementation to finish Phase F:
 
@@ -467,15 +467,15 @@ Implementation to finish Phase F:
 
 Acceptance for Phase F:
 
-- socket readiness comes from service-owned TX/RX queues
+- [x] socket readiness comes from service-owned TX/RX queues
 - DHCP and DNS complete asynchronously with explicit events
 - `netmgrd` remains policy-only
 - networking no longer depends on backend-shim for normal packet flow
 
 Execution slices for Phase F:
 
-1. land real TX/RX queues and service-owned readiness
-2. move DHCP and DNS to explicit async request/completion flows
+1. [x] land real TX/RX queues and service-owned readiness
+2. move DHCP and DNS to explicit async/completion flows
 3. strip datapath ownership out of `netmgrd`
 4. remove steady-state kernel local-handler dependence
 
@@ -793,7 +793,7 @@ Each phase should be landed as a short sequence of reviewable commits rather tha
 
 ### Phase F commit sequence
 
-1. service-owned TX/RX readiness queues
+1. [x] service-owned TX/RX readiness queues
 2. DHCP/DNS async completion path
 3. `netmgrd` narrowed to policy-only role
 4. steady-state network backend-shim removal
@@ -825,7 +825,7 @@ The system should only be called a real microkernel in the strict sense when all
 - [ ] storage/filesystem/video/input/console/network/audio no longer rely on backend-shim steady-state execution
 - [ ] service restarts are normal and recoverable, not a path that requires direct kernel fallback to preserve usability
 - [ ] audio has real async playback and capture with completion/wakeup events
-- [~] network has first socket readiness/event semantics (`status`, `recv`, `accept`, `send`, `closed`) even though the full extracted NIC datapath is still pending
+- [x] network has first socket readiness/event semantics (`status`, `recv`, `accept`, `send`, `closed`) even though the full extracted NIC datapath is still pending
 - [x] video has explicit present queues/fences and no desktop-owned hot path into device progress
 - [ ] input is event-published by a service boundary, not preserved through permanent direct-driver syscall escape hatches
 - [ ] there is a wait/signal primitive richer than "poll + yield + sleep"
@@ -1091,3 +1091,41 @@ Important audit note: in the current tree, a checked item means the migration bo
 - [x] BIOSes requiring active MBR partition
 - [x] USB boot validation matrix
 - [x] IDE/SATA/AHCI validation matrix
+
+## Continuous Migration Roadmap
+
+As migration progress continues, track these ongoing initiatives as a living backlog.
+
+### Phase F Completion Targets (Network async split)
+
+- [ ] implement real TX/RX packet queues in `kernel/microkernel/network.c`
+- [ ] expose per-socket readiness states (`recv`, `send`, `accept`, `closed`) and deprecate CPU polling paths
+- [ ] add async DHCP/DNS workflows in `lang/apps/netmgrd/netmgrd_main.c` and `lang/apps/netctl/netctl_main.c`
+- [ ] move `netmgrd` to policy-only operation with isolated worker contexts for connect/disconnect/reconcile
+- [ ] remove remaining `backend-shim` fallback behaviors from network steady-state flows
+- [ ] extend `tools/validate_modular_apps.py` and `make validate-phase-f` with real packet-data path end-to-end checks
+
+### Phase G Completion Targets (Strict microkernel cutover)
+
+- [ ] verify no desktop/rescue path still paths through `sys_service_backend` in steady-state
+- [ ] codify crash containment and automatic recovery order in `kernel/microkernel/service.c`
+- [ ] make service restart/chaos tests end-to-end for `inputsvc`, `audiosvc`, `netmgrd`, `videosvc`
+- [ ] ensure `kernel/process/scheduler.c` explicitly preserves desktop/input priority under load
+- [ ] publish final privileged kernel inventory and a “minimal kernel” commitment in documentation
+
+### Phase H Forward Work (Stabilization and hardware enablement)
+
+- [ ] implement native USB runtime storage backend with dedicated DMA/RPC path
+- [ ] ship real audio DMA/ring/mixer pipeline with hardware-accelerated fallback
+- [ ] complete video/graphics balanced MMIO/service boundary by moving backend execution to user-space hosts where safe
+- [ ] replace remaining console stub backend with real VT terminal service and device-agnostic service plumbing
+- [ ] expand validation matrix to include multi-monitor GPU, Wi-Fi hotspot, and ACPI power state tests
+
+### Topline Acceptance Criteria
+
+- [ ] end-to-end desktop startup from power-on through login is responsive with one failed optional service
+- [ ] service restarts are transparent to foreground apps for key UX paths (keyboard, pointer, display)
+- [ ] every major service has a durable `health` telemetry metric and clear `degraded`/`reset` event semantics
+- [ ] real hardware boot with USB mass-storage and network stack works without rescue fallback
+- [ ] all documented “must not mark done early” items are verified by automated regression tests
+

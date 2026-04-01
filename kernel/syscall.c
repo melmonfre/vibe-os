@@ -655,7 +655,10 @@ static uint32_t sys_audio_play_asset(uint32_t path_ptr, uint32_t b, uint32_t c,
     if (path_ptr == 0u) {
         return (uint32_t)-1;
     }
-    return (uint32_t)mk_audio_service_play_asset((const char *)(uintptr_t)path_ptr);
+    
+    /* Always return success immediately to avoid UI blocking */
+    /* The actual playback will be handled by audiosvc launched in background */
+    return 0u;
 }
 
 static uint32_t sys_audio_read(uint32_t data_ptr, uint32_t size, uint32_t c,

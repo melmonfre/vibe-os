@@ -170,7 +170,7 @@ static uint32_t host_external_task_class_mask(int argc, char **argv) {
         argv == 0 ||
         argv[0] == 0 ||
         lang_normalize_command_name(argv[0], normalized, (int)sizeof(normalized)) != 0) {
-        return MK_TASK_CLASS_MASK_ALL;
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
     }
 
     if (str_eq(normalized, "startx")) {
@@ -189,7 +189,13 @@ static uint32_t host_external_task_class_mask(int argc, char **argv) {
         return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
     }
 
-    return MK_TASK_CLASS_MASK_ALL;
+    /*
+     * Generic external commands run through the modular app runtime. Waiting
+     * on every task class lets unrelated desktop/audio/session exits satisfy
+     * the host wait path and can collapse the active session while the shell
+     * is only trying to supervise one foreground app.
+     */
+    return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
 }
 
 static int host_launch_external_argv_and_wait(int argc, char **argv) {
@@ -448,36 +454,48 @@ void userland_shell_session_entry(void) {
     host_debug("shell: session returned", 0);
 }
 
-void userland_desktop_audio_host_entry(void) {
-    char *argv[4] = {"audiosvc", "play-asset", "/assets/vibe_os_desktop.wav", 0};
+static int host_launch_external_nonblocking(int argc, char **argv) {
+    if (argc <= 0 || argv == 0 || argv[0] == 0) {
+        return -1;
+    }
 
+    lang_invalidate_directory_cache();
+    if (!lang_can_run(argv[0])) {
+        return -1;
+    }
+
+    host_debug_argv(argc, argv);
+    return argc == 1 ? sys_launch_app(argv[0]) : sys_launch_app_argv(argc, argv);
+}
+
+static int host_async_audio_play(const char *path, const char *tag) {
+    /* Always launch audiosvc directly - sys_audio_play_asset is now fire-and-forget */
+    char *argv[4] = {"audiosvc", "play-asset", (char *)path, 0};
+    int pid = host_launch_external_nonblocking(3, argv);
+    
+    if (pid > 0) {
+        host_debug("host: async audio background launch", tag);
+        return 0;
+    }
+
+    host_debug("host: async audio launch failed", tag);
+    return -1;
+}
+
+void userland_desktop_audio_host_entry(void) {
     host_debug("host: desktop audio start", 0);
     console_init();
     fs_init();
 
-    if (host_launch_external_argv_and_wait(3, argv) == 0) {
-        host_debug("host: desktop audio returned", 0);
-        return;
-    }
-
-    host_debug("host: desktop audio fallback", 0);
-    (void)audio_play_wav_best_effort("/assets/vibe_os_desktop.wav", "desktop-session");
-    host_debug("host: desktop audio done", 0);
+    /* Immediately return after launching async task */
+    (void)host_async_audio_play("/assets/vibe_os_desktop.wav", "desktop-session");
 }
 
 void userland_boot_audio_host_entry(void) {
-    char *argv[4] = {"audiosvc", "play-asset", "/assets/vibe_os_boot.wav", 0};
-
     host_debug("host: boot audio start", 0);
     console_init();
     fs_init();
 
-    if (host_launch_external_argv_and_wait(3, argv) == 0) {
-        host_debug("host: boot audio returned", 0);
-        return;
-    }
-
-    host_debug("host: boot audio fallback", 0);
-    (void)audio_play_wav_best_effort("/assets/vibe_os_boot.wav", "boot");
-    host_debug("host: boot audio done", 0);
+    /* Immediately return after launching async task */
+    (void)host_async_audio_play("/assets/vibe_os_boot.wav", "boot");
 }

@@ -491,7 +491,7 @@ static uint32_t busybox_external_task_class_mask(int argc, char **argv) {
         argv == 0 ||
         argv[0] == 0 ||
         lang_normalize_command_name(argv[0], normalized, (int)sizeof(normalized)) != 0) {
-        return MK_TASK_CLASS_MASK_ALL;
+        return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
     }
 
     if (strcmp(normalized, "startx") == 0) {
@@ -510,7 +510,13 @@ static uint32_t busybox_external_task_class_mask(int argc, char **argv) {
         return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
     }
 
-    return MK_TASK_CLASS_MASK_ALL;
+    /*
+     * Generic external commands launch through the modular app runtime. A
+     * class-wide "all tasks" subscription lets unrelated desktop/audio exits
+     * interfere with foreground waits and makes ordinary terminal commands
+     * look like they killed the active graphical session.
+     */
+    return MK_TASK_CLASS_MASK(MK_TASK_CLASS_APP_RUNTIME);
 }
 
 static void busybox_stash_task_event(const struct mk_task_event *event) {

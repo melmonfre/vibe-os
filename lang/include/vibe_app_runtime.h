@@ -66,6 +66,8 @@ int vibe_app_network_recv(int handle, void *buffer, uint32_t size);
 int vibe_app_network_close(int handle);
 int vibe_app_network_listen(int handle, int backlog);
 int vibe_app_network_accept(int handle);
+int vibe_app_network_event_subscribe(void);
+int vibe_app_network_event_receive(struct mk_network_event *event, uint32_t timeout_ticks);
 
 void *vibe_app_malloc(size_t size);
 void vibe_app_free(void *ptr);

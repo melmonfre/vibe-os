@@ -7,10 +7,11 @@
 
 #define VIBE_APPFS_MAGIC 0x53465056u
 #define VIBE_APPFS_VERSION 1u
-#define VIBE_APPFS_ENTRY_MAX 96u
+#define VIBE_APPFS_ENTRY_MAX 128u
 #define VIBE_APPFS_DIRECTORY_LBA 0u
 #define VIBE_APPFS_DIRECTORY_SECTORS 16u
 #define VIBE_APPFS_APP_AREA_SECTORS 131072u
+#define VIBE_APPFS_DIRECTORY_BYTES (VIBE_APPFS_DIRECTORY_SECTORS * 512u)
 
 struct vibe_appfs_entry {
     char name[VIBE_APP_NAME_MAX];
@@ -27,5 +28,10 @@ struct vibe_appfs_directory {
     uint32_t checksum;
     struct vibe_appfs_entry entries[VIBE_APPFS_ENTRY_MAX];
 };
+
+_Static_assert(sizeof(struct vibe_appfs_entry) == 32u,
+               "vibe_appfs_entry size must stay packed at 32 bytes");
+_Static_assert(sizeof(struct vibe_appfs_directory) <= VIBE_APPFS_DIRECTORY_BYTES,
+               "vibe_appfs_directory must fit in reserved AppFS directory sectors");
 
 #endif

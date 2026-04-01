@@ -18,6 +18,29 @@
 #define FILESYSTEM_SERVICE_BUFFER_MAX (1024u * 1024u)
 #define VIDEO_SERVICE_TEXT_MAX 4096u
 #define VIDEO_SERVICE_BLIT_BUFFER_MAX (1024u * 1024u)
+#define MK_NETWORK_SOCKET_ADDRESS_MAX 108
+
+#define NETWORK_SERVICE_MAX_SOCKETS 32
+
+struct network_service_socket {
+    int fd;
+    uint32_t domain;
+    uint32_t type;
+    uint32_t protocol;
+    uint32_t flags;
+    char address[MK_NETWORK_SOCKET_ADDRESS_MAX];
+    uint32_t address_length;
+    uint32_t rx_queue_size;
+    uint32_t tx_queue_size;
+    uint64_t rx_bytes;
+    uint64_t tx_bytes;
+    uint64_t rx_packets;
+    uint64_t tx_packets;
+    uint64_t errors;
+};
+
+static struct network_service_socket g_network_service_sockets[NETWORK_SERVICE_MAX_SOCKETS];
+static uint32_t g_network_service_socket_count = 0;
 
 static char g_console_service_text_buffer[CONSOLE_SERVICE_TEXT_MAX];
 static uint8_t g_storage_service_buffer[STORAGE_SERVICE_BUFFER_MAX];
@@ -39,6 +62,11 @@ static void service_log_online(const struct userland_launch_info *info) {
     str_append(buffer, "\n", (int)sizeof(buffer));
     sys_write_debug(buffer);
 }
+
+static int network_service_socket_valid_domain(uint32_t domain);
+static int network_service_socket_valid_type(uint32_t type);
+static int network_service_find_free_socket(void);
+static int network_service_get_socket(int fd);
 
 static void service_prepare_reply(struct mk_message *reply,
                                   const struct mk_message *request,
@@ -301,23 +329,189 @@ static int network_service_handle_request(const struct mk_message *request,
                                             source_pid,
                                             sys_network_configure_ethernet(&config));
     }
-    case MK_MSG_NET_SOCKET:
+    case MK_MSG_NET_SOCKET: {
+        const struct mk_network_socket_request *payload;
+        int socket_index;
+        int fd;
+
         if (request->payload_size != sizeof(struct mk_network_socket_request)) {
             return -1;
         }
-        return network_service_reply_result(reply, request, source_pid, -1);
-    case MK_MSG_NET_BIND:
-    case MK_MSG_NET_CONNECT:
+        payload = (const struct mk_network_socket_request *)request->payload;
+
+        if (!network_service_socket_valid_domain(payload->domain) ||
+            !network_service_socket_valid_type(payload->type)) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        socket_index = network_service_find_free_socket();
+        if (socket_index == -1) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        fd = sys_network_socket(payload->domain, payload->type, payload->protocol);
+        if (fd == -1) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        g_network_service_sockets[socket_index].fd = fd;
+        g_network_service_sockets[socket_index].domain = payload->domain;
+        g_network_service_sockets[socket_index].type = payload->type;
+        g_network_service_sockets[socket_index].protocol = payload->protocol;
+        g_network_service_sockets[socket_index].flags = 0;
+        g_network_service_socket_count++;
+
+        return network_service_reply_result(reply, request, source_pid, fd);
+    }
+    case MK_MSG_NET_BIND: {
+        const struct mk_network_name_request *payload;
+        int socket_index;
+        int rc;
+        uint32_t address_length;
+        struct sockaddr_storage address;
+
         if (request->payload_size != sizeof(struct mk_network_name_request)) {
             return -1;
         }
-        return network_service_reply_result(reply, request, source_pid, -1);
-    case MK_MSG_NET_SEND:
-    case MK_MSG_NET_RECV:
+        payload = (const struct mk_network_name_request *)request->payload;
+
+        socket_index = network_service_get_socket(payload->handle);
+        if (socket_index == -1) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        address_length = payload->address_length;
+        if (address_length == 0u || address_length > MK_NETWORK_SOCKET_ADDRESS_MAX) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+        if (sys_transfer_size(payload->transfer_id) < address_length) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        if (sys_transfer_read(payload->transfer_id, &address, address_length) != 0) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        rc = sys_network_bind(payload->handle, (const struct sockaddr *)&address, address_length);
+        if (rc == 0) {
+            memcpy(g_network_service_sockets[socket_index].address, &address,
+                   address_length < MK_NETWORK_SOCKET_ADDRESS_MAX ?
+                       address_length : MK_NETWORK_SOCKET_ADDRESS_MAX);
+            g_network_service_sockets[socket_index].address_length = address_length;
+        }
+
+        return network_service_reply_result(reply, request, source_pid, rc);
+    }
+    case MK_MSG_NET_CONNECT: {
+        const struct mk_network_name_request *payload;
+        int socket_index;
+        int rc;
+        uint32_t address_length;
+        struct sockaddr_storage address;
+
+        if (request->payload_size != sizeof(struct mk_network_name_request)) {
+            return -1;
+        }
+        payload = (const struct mk_network_name_request *)request->payload;
+
+        socket_index = network_service_get_socket(payload->handle);
+        if (socket_index == -1) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        address_length = payload->address_length;
+        if (address_length == 0u || address_length > MK_NETWORK_SOCKET_ADDRESS_MAX) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+        if (sys_transfer_size(payload->transfer_id) < address_length) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        if (sys_transfer_read(payload->transfer_id, &address, address_length) != 0) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        rc = sys_network_socket_connect(payload->handle, (const struct sockaddr *)&address, address_length);
+        if (rc == 0) {
+            memcpy(g_network_service_sockets[socket_index].address, &address,
+                   address_length < MK_NETWORK_SOCKET_ADDRESS_MAX ?
+                       address_length : MK_NETWORK_SOCKET_ADDRESS_MAX);
+            g_network_service_sockets[socket_index].address_length = address_length;
+        }
+
+        return network_service_reply_result(reply, request, source_pid, rc);
+    }
+    case MK_MSG_NET_SEND: {
+        const struct mk_network_io_request *payload;
+        int socket_index;
+        int rc;
+        uint32_t data_size;
+        uint8_t transfer_buffer[MK_NETWORK_SOCKET_ADDRESS_MAX];
+
         if (request->payload_size != sizeof(struct mk_network_io_request)) {
             return -1;
         }
-        return network_service_reply_result(reply, request, source_pid, -1);
+        payload = (const struct mk_network_io_request *)request->payload;
+
+        socket_index = network_service_get_socket(payload->handle);
+        if (socket_index == -1) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        data_size = payload->size;
+        if (data_size > sizeof(transfer_buffer)) {
+            /* Cap native send size to internal buffer for now */
+            data_size = sizeof(transfer_buffer);
+        }
+
+        if (sys_transfer_size(payload->transfer_id) < data_size) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+        if (sys_transfer_read(payload->transfer_id, transfer_buffer, data_size) != 0) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        rc = sys_network_send(payload->handle, transfer_buffer, data_size);
+        if (rc > 0) {
+            g_network_service_sockets[socket_index].tx_bytes += rc;
+            g_network_service_sockets[socket_index].tx_packets++;
+        }
+
+        return network_service_reply_result(reply, request, source_pid, rc);
+    }
+    case MK_MSG_NET_RECV: {
+        const struct mk_network_io_request *payload;
+        int socket_index;
+        int rc;
+        uint32_t max_size;
+        uint8_t transfer_buffer[MK_NETWORK_SOCKET_ADDRESS_MAX];
+
+        if (request->payload_size != sizeof(struct mk_network_io_request)) {
+            return -1;
+        }
+        payload = (const struct mk_network_io_request *)request->payload;
+
+        socket_index = network_service_get_socket(payload->handle);
+        if (socket_index == -1) {
+            return network_service_reply_result(reply, request, source_pid, -1);
+        }
+
+        max_size = payload->size;
+        if (max_size > sizeof(transfer_buffer)) {
+            max_size = sizeof(transfer_buffer);
+        }
+
+        rc = sys_network_recv(payload->handle, transfer_buffer, max_size);
+        if (rc > 0) {
+            g_network_service_sockets[socket_index].rx_bytes += rc;
+            g_network_service_sockets[socket_index].rx_packets++;
+            if (sys_transfer_write(payload->transfer_id, transfer_buffer, (uint32_t)rc) != 0) {
+                return network_service_reply_result(reply, request, source_pid, -1);
+            }
+        }
+
+        return network_service_reply_result(reply, request, source_pid, rc);
+    }
     case MK_MSG_NET_SETSOCKOPT:
     case MK_MSG_NET_GETSOCKOPT:
         if (request->payload_size != sizeof(struct mk_network_option_request)) {
@@ -1445,6 +1639,58 @@ static int video_service_handle_request(const struct mk_message *request,
     }
 }
 
+static int network_service_socket_valid_domain(uint32_t domain) {
+    return domain == AF_UNIX || domain == AF_LOCAL || domain == AF_INET;
+}
+
+static int network_service_socket_valid_type(uint32_t type) {
+    return type == SOCK_STREAM || type == SOCK_DGRAM;
+}
+
+static int network_service_find_free_socket(void) {
+    uint32_t i;
+
+    for (i = 0; i < NETWORK_SERVICE_MAX_SOCKETS; ++i) {
+        if (g_network_service_sockets[i].fd == -1) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static int network_service_get_socket(int fd) {
+    uint32_t i;
+
+    for (i = 0; i < NETWORK_SERVICE_MAX_SOCKETS; ++i) {
+        if (g_network_service_sockets[i].fd == fd) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static void network_service_init_sockets(void) {
+    uint32_t i;
+
+    for (i = 0; i < NETWORK_SERVICE_MAX_SOCKETS; ++i) {
+        g_network_service_sockets[i].fd = -1;
+        g_network_service_sockets[i].domain = 0;
+        g_network_service_sockets[i].type = 0;
+        g_network_service_sockets[i].protocol = 0;
+        g_network_service_sockets[i].flags = 0;
+        memset(g_network_service_sockets[i].address, 0, MK_NETWORK_SOCKET_ADDRESS_MAX);
+        g_network_service_sockets[i].address_length = 0;
+        g_network_service_sockets[i].rx_queue_size = 0;
+        g_network_service_sockets[i].tx_queue_size = 0;
+        g_network_service_sockets[i].rx_bytes = 0;
+        g_network_service_sockets[i].tx_bytes = 0;
+        g_network_service_sockets[i].rx_packets = 0;
+        g_network_service_sockets[i].tx_packets = 0;
+        g_network_service_sockets[i].errors = 0;
+    }
+    g_network_service_socket_count = 0;
+}
+
 __attribute__((section(".entry"))) void userland_console_service_entry(void) {
     struct userland_launch_info info;
     struct mk_message request;
@@ -1562,6 +1808,7 @@ __attribute__((section(".entry"))) void userland_network_service_entry(void) {
     source_pid = (uint32_t)info.pid;
     service_log_online(&info);
     service_log_mode(info.name);
+    network_service_init_sockets();
 
     for (;;) {
         if (sys_service_receive(&request) != (int)sizeof(request)) {

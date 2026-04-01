@@ -90,6 +90,21 @@ int vibe_app_main(int argc, char **argv) {
            (unsigned)info.supported_families,
            (unsigned)info.supported_socket_types,
            (unsigned)info.flags);
-    printf("note: live socket table export is not implemented in the current datapath\n");
+    printf("telemetry: max=%u rx-cap=%u eventq=%u backlog=%u\n",
+           (unsigned)info.max_sockets,
+           (unsigned)info.socket_rx_capacity,
+           (unsigned)info.event_queue_depth,
+           (unsigned)info.listen_backlog_max);
+    printf("sockets: open=%u listening=%u connected=%u recv-ready=%u accept-ready=%u pending-rx=%u\n",
+           (unsigned)status.open_socket_count,
+           (unsigned)status.listening_socket_count,
+           (unsigned)status.connected_socket_count,
+           (unsigned)status.recv_ready_count,
+           (unsigned)status.accept_ready_count,
+           (unsigned)status.pending_rx_bytes);
+    printf("backend: rx-frames=%u tx-frames=%u\n",
+           (unsigned)status.backend_rx_frames,
+           (unsigned)status.backend_tx_frames);
+    printf("note: live socket table export is not implemented; readiness/backlog telemetry reflects the current local/socket MVP\n");
     return 0;
 }

@@ -87,6 +87,15 @@ static int netdiag_load_snapshot(const char *tool,
     return 0;
 }
 
+static __attribute__((unused)) int netdiag_is_loopback_target(const char *target) {
+    if (target == 0) {
+        return 0;
+    }
+    return strcmp(target, "localhost") == 0 ||
+           strcmp(target, "127.0.0.1") == 0 ||
+           strcmp(target, "lo0") == 0;
+}
+
 static __attribute__((unused)) void netdiag_print_status_summary(
     const struct mk_network_info *info,
     const struct mk_network_status *status) {

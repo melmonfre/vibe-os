@@ -234,25 +234,11 @@ static void bootstrap_print_banner(void) {
 }
 
 static int bootstrap_run_startup_apps(void) {
-    struct userland_launch_info info;
-
-    if (sys_launch_info(&info) == 0 &&
-        (info.boot_flags & BOOTINFO_FLAG_BOOT_RESCUE_SHELL) != 0u) {
-        sys_write_debug("init: rescue shell requested, skipping desktop launch\n");
-        return -2;
+    if (sys_launch_app("userland") > 0) {
+        sys_write_debug("init: userland.app launched\n");
+        return 0;
     }
-
-    if ((info.boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u &&
-        (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) == 0u) {
-        int pid = sys_launch_builtin_user(USERLAND_BUILTIN_DESKTOP);
-
-        if (pid > 0) {
-            sys_write_debug("init: desktop host launched\n");
-            return 0;
-        }
-        sys_write_debug("init: desktop host launch failed\n");
-    }
-
+    sys_write_debug("init: userland.app launch failed\n");
     return -1;
 }
 

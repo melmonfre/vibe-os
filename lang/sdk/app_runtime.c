@@ -18,6 +18,8 @@
 #define VIBE_APP_SYSCALL_AUDIO_READ 75
 #define VIBE_APP_SYSCALL_AUDIO_EVENT_SUBSCRIBE 81
 #define VIBE_APP_SYSCALL_AUDIO_EVENT_RECV 82
+#define VIBE_APP_SYSCALL_NETWORK_EVENT_SUBSCRIBE 86
+#define VIBE_APP_SYSCALL_NETWORK_EVENT_RECV 87
 #define VIBE_APP_SYSCALL_NETWORK_GETINFO 55
 #define VIBE_APP_SYSCALL_NETWORK_GET_STATUS 56
 #define VIBE_APP_SYSCALL_NETWORK_SCAN 57
@@ -1106,6 +1108,22 @@ int vibe_app_network_listen(int handle, int backlog) {
 
 int vibe_app_network_accept(int handle) {
     return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_ACCEPT, handle, 0, 0, 0, 0);
+}
+
+int vibe_app_network_event_subscribe(void) {
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_EVENT_SUBSCRIBE, 0, 0, 0, 0, 0);
+}
+
+int vibe_app_network_event_receive(struct mk_network_event *event, uint32_t timeout_ticks) {
+    if (event == 0) {
+        return -1;
+    }
+    return vibe_app_syscall5(VIBE_APP_SYSCALL_NETWORK_EVENT_RECV,
+                             (int)(uintptr_t)event,
+                             (int)timeout_ticks,
+                             0,
+                             0,
+                             0);
 }
 
 int strcmp(const char *a, const char *b) {

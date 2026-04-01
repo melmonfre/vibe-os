@@ -1,3 +1,7 @@
 {
-    "git.ignoreLimitWarning": true
+    "git.ignoreLimitWarning": true,
+    "oaicopilot.baseUrl": "https://integrate.api.nvidia.com/v1",
+    "oaicopilot.commitLanguage": "Portuguese (Brazil)",
+    "omnichat.baseUrl": "https://integrate.api.nvidia.com/v1",
+    "omnichat.commitLanguage": "Portuguese (Brazil)"
 }

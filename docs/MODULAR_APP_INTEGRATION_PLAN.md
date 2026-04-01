@@ -46,7 +46,7 @@ Esses itens continuam como runtime/shared code para apps launchables.
 - [x] O shell ja prefere alguns apps externos em vez de stubs internos (`echo`, `cat`, `pwd`, `mkdir`, `true`, `false`, `printf`).
 - [x] O diretorio AppFS agora fica cacheado apos a primeira leitura valida, evitando reler o catalogo em toda execucao externa.
 - [x] O bootstrap textual agora aponta para `help` e para os atalhos graficos reais (`startx`, `edit`, `nano`), sem anunciar o fluxo antigo `apps/run`.
-- [x] O AppFS foi ampliado para suportar a modularizacao completa (`VIBE_APPFS_ENTRY_MAX=96`, `VIBE_APPFS_DIRECTORY_SECTORS=16`, `VIBE_APPFS_APP_AREA_SECTORS=131072`).
+- [x] O AppFS foi ampliado para suportar a modularizacao completa (`VIBE_APPFS_ENTRY_MAX=128`, `VIBE_APPFS_DIRECTORY_SECTORS=16`, `VIBE_APPFS_APP_AREA_SECTORS=131072`).
 - [x] `make validate-phase6` agora gera evidencia objetiva em `build/phase6-validation.md`, com matriz QEMU e marcadores observados por cenario.
 
 ### Parcialmente pronto
@@ -70,7 +70,7 @@ Esses itens continuam como runtime/shared code para apps launchables.
 - `userland.app` continua incluindo apenas shell/fs/loader; os launchers graficos permanecem apps AppFS independentes e agora carregam em uma arena separada do boot app para evitar sobrescrita em execucao.
 - `desktop.c` continua centralizando o runtime grafico, mas os launchers externos ja chamam apps independentes atraves do mesmo backend modular.
 - `sed.app` agora existe e entra no AppFS; a implementacao atual e uma variante nativa focada no runtime do VibeOS, enquanto a arvore GNU vendorizada permanece como base para futura paridade completa.
-- O AppFS agora aceita ate `96` entradas e a area reservada foi ampliada para comportar a modularizacao completa.
+- O AppFS agora aceita ate `128` entradas e a area reservada foi ampliada para comportar a modularizacao completa.
 - O desktop agora expoe atalhos globais `Ctrl+F` (Arquivos) e `Ctrl+T` (Terminal), usados no smoke test headless do `startx` sem depender do mouse virtual do QEMU.
 - Existem arquivos duplicados com espaco no nome em `userland/applications/games/craft/* 2.c`; eles nao devem entrar no manifesto.
 

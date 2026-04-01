@@ -31,6 +31,7 @@
 
 #define DESKTOP_NETWORK_PROFILE_MAX 4
 #define DESKTOP_STARTUP_SOUND_DELAY_TICKS 80u
+#define DESKTOP_STARTUP_SOUND_SECONDARY_DELAY_TICKS 180u
 #define DESKTOP_PRESENT_RETRY_TICKS 4u
 #define DESKTOP_PRESENT_BACKPRESSURE_TICKS 1u
 #define DESKTOP_PRESENT_PENDING_LIMIT 2u
@@ -385,20 +386,22 @@ static void desktop_try_play_startup_sound(uint32_t *armed_ticks,
     if (!desktop_async_runtime_services_allowed()) {
         return;
     }
-    if (*pending != 0) {
-        if ((uint32_t)(ticks - *armed_ticks) < DESKTOP_STARTUP_SOUND_DELAY_TICKS) {
-            return;
-        }
+    if (*pending == 0) {
+        return;
+    }
 
-        *pending = 0;
-        if (!audio_desktop_startup_wav_allowed()) {
-            sys_write_debug("desktop: startup sound deferred for backend\n");
-            return;
-        }
-        sys_write_debug("desktop: startup sound begin\n");
-        if (sys_launch_builtin_user(USERLAND_BUILTIN_DESKTOP_AUDIO) <= 0) {
-            sys_write_debug("desktop: startup sound returned\n");
-        }
+    if ((uint32_t)(ticks - *armed_ticks) < DESKTOP_STARTUP_SOUND_DELAY_TICKS) {
+        return;
+    }
+
+    *pending = 0;
+    if (!audio_desktop_startup_wav_allowed()) {
+        sys_write_debug("desktop: startup sound deferred for backend\n");
+        return;
+    }
+    sys_write_debug("desktop: startup sound begin\n");
+    if (sys_launch_builtin_user(USERLAND_BUILTIN_DESKTOP_AUDIO) <= 0) {
+        sys_write_debug("desktop: startup sound launch failed\n");
     }
 }
 
@@ -9291,14 +9294,14 @@ void desktop_main(void) {
         }
 
         if (input_batch.count == 0 &&
-            !input_batch.mouse_event &&
             !input_batch.left_just_pressed &&
             !input_batch.right_just_pressed &&
             input_batch.wheel_delta == 0) {
             network_applet_try_autoconnect();
-            if (ticks >= desktop_startup_task_gate_tick) {
-                desktop_process_startup_background_tasks();
-            }
+        }
+
+        if (ticks >= desktop_startup_task_gate_tick) {
+            desktop_process_startup_background_tasks();
         }
 
         sys_sleep();
