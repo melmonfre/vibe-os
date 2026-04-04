@@ -23,6 +23,7 @@
 #define DOOM_STDOUT_FD 1
 #define DOOM_STDERR_FD 2
 #define DOOM_IWAD_PATH "/DOOM/DOOM.WAD"
+#define DOOM_IWAD_ALIAS_COUNT 6
 #define DOOM_EMBEDDED_FILE_NONE 0
 #define DOOM_EMBEDDED_FILE_WAD 1
 
@@ -44,6 +45,14 @@ struct doom_fd_entry {
 };
 
 static struct doom_fd_entry g_doom_fds[DOOM_MAX_FDS];
+static const char *g_doom_iwad_aliases[DOOM_IWAD_ALIAS_COUNT] = {
+    "doom.wad",
+    "doom1.wad",
+    "doomu.wad",
+    "doom2.wad",
+    "tnt.wad",
+    "plutonia.wad"
+};
 
 static int doom_alloc_fd(void) {
     int i;
@@ -71,7 +80,14 @@ static const char *doom_path_basename(const char *path) {
 
 static int doom_path_is_embedded_wad(const char *path) {
     const char *name = doom_path_basename(path);
-    return strcasecmp(name, "doom.wad") == 0;
+    int i;
+
+    for (i = 0; i < DOOM_IWAD_ALIAS_COUNT; ++i) {
+        if (strcasecmp(name, g_doom_iwad_aliases[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int doom_try_resolve_path(const char *path) {

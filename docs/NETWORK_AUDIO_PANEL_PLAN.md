@@ -241,6 +241,7 @@ Estado atual:
 - [X] mais uma rodada para estabilizar o lote anterior sem mascarar falha real: a politica de `speaker`/`pin sense` agora bloqueia reentrada enquanto reaplica `apply_output_pin_policy()`, o power-up de widgets passa a reutilizar cache `D0` por `nid` e o settle por widget caiu para um valor curto; com isso o probe/runtime quente do `compat-azalia` ficou mais leve, `build/kernel/microkernel/audio.o` voltou a compilar limpo e os tres validadores HDA (`validate-audio-hda-smoke`, `validate-audio-hda-playback` e `validate-audio-hda-startup`) seguiram verdes em sequencia no QEMU `intel-hda`
 - [X] o fallback final de audio deixou de ser sempre silencioso: quando HDA/AC97 nao ficam utilizaveis, o servico agora sobe um backend `pcspkr` baseado no PIT/channel 2 e no speaker legacy (`porta 0x61`), aparecendo em `audiosvc`/`soundctl` como backend proprio em vez de ficar so em `softmix`
 - [~] o backend `pcspkr` ja garante um fallback audivel praticamente universal em desktops/notebooks x86, inclusive para `soundctl tone` e para WAV/PCM em modo degradado; a qualidade ainda e propositalmente rudimentar, com reducao do PCM para blocos curtos de tom no buzzer
+- [~] o gargalo atual do `compat-azalia` deixou de ser bring-up de codec/topologia e ficou concentrado no playback PCM do kernel: ainda ha chiado, artefato visual e sinais de acoplamento entre audio, compositor e input. A leitura mais provavel neste ponto e dupla: (1) paginas DMA do HDA ainda podem nascer com lixo/stale tail, e (2) o backend continua muito perto de um modelo `start/stop por write`, em vez de um stream persistente com refill assíncrono
 - [ ] o terceiro backend amplo planejado agora e `compat-uaudio` para USB Audio Class; o repo ja tem a base `compat/sys/dev/usb/uaudio.c`, mas o VibeOS ainda precisa hospedar/controlar uma stack USB nativa suficiente para enumerar controladoras/dispositivos e dar substrate real para esse port
 - [~] o groundwork de USB para destravar `compat-uaudio` ja comecou no kernel: o VibeOS agora descobre host controllers USB PCI (`UHCI`/`OHCI`/`EHCI`/`XHCI`) durante o boot, habilita o dispositivo PCI, inventaria BAR/IRQ/tipo/portas estimadas, le o estado bruto das portas do root hub, infere speed hint (`low/full/high/super`) para portas ocupadas e loga um sumario proprio; ainda falta attach de bus/root hub e enumeracao real de dispositivos/interfaces/endpoints
 - [X] o fallback de audio agora tambem diferencia o caso "sem audio PCI, mas com host USB presente": quando isso acontece, `device.config` passa a indicar `pcspkr-fallback-usb-host-present`, deixando explicito no diagnostico que o proximo backend natural ali e `compat-uaudio`
@@ -256,6 +257,73 @@ Estado atual:
 - [X] o fallback de audio agora tambem diferencia quando o problema ja nao e "faltou companion", e sim "falta implementar o handoff/control path": `pcspkr-fallback-usb-companion-available-audio`
 
 ## Plano operacional detalhado para fechar `compat-azalia` no T61
+
+### Plano curto de estabilizacao do DMA HDA sem regredir desktop/I/O
+
+Objetivo imediato:
+
+- atacar chiado, artefato e acoplamento `audio <-> mouse/video` no kernel antes de abrir nova frente grande
+- preservar o estado atual que ja ficou aceitavel no QEMU: bootloader sound no `stage2`, startup sound do desktop e compositor subindo sem depender de input
+
+Fase 1. Higiene de DMA e cauda de buffer
+
+- zerar todas as paginas fisicas usadas pelo playback HDA logo apos `alloc_phys_page()`
+- zerar explicitamente a sobra do buffer DMA alem de `bytes` em cada write
+- revisar `LVI/CBL/FIFOW/LPIB` para garantir que o hardware nao leia cauda stale por arredondamento/prefetch
+- nao mudar a orquestracao de desktop/bootstrap nesta fase
+
+Risco:
+
+- baixo
+- esta fase deve mexer quase so em `kernel/microkernel/audio.c`
+- a chance de travar desktop/I/O aqui e pequena se o contrato de `sys_audio_write(_async)` for mantido
+
+Criterio de saida:
+
+- `validate-audio-hda-startup` continua verde
+- `validate-audio-hda-playback` continua verde
+- reducao perceptivel de chiado/artefato no QEMU
+
+Fase 2. Stream persistente em vez de `restart por write`
+
+- parar de tratar cada write como mini-sessao HDA independente
+- manter stream/BDL ativos enquanto houver playback em andamento
+- trocar `halt/restart` frequente por refill cooperativo do buffer
+- usar IRQ/BDL recycle como fonte principal de progresso e polling apenas como fallback
+
+Risco:
+
+- medio
+- aqui ja existe chance real de regressao em input, compositor ou scheduler cooperativo se a fila ficar mal drenada
+
+Criterio de saida:
+
+- sumir o sintoma "audio so anda quando mexe o mouse"
+- sumir congelamento de cursor durante playback continuo
+- `audioplayer` e autoplay do desktop usarem o mesmo miolo HDA sem telas pretas nem texto cru no topo
+
+Fase 3. Limpeza final de acoplamento com UI
+
+- remover qualquer debug/status de audio que ainda vaze para a tela grafica
+- garantir que wallpaper e compositor nao dependam do loop de audio para terminar bootstrap
+- manter `audiosvc`/`soundctl` como control-plane e o datapath o mais direto possivel no backend `compat`
+
+Risco:
+
+- baixo a medio
+- esta fase e mais de acabamento e isolamento do hot path
+
+Sequencia pratica recomendada:
+
+1. fechar Fase 1 inteira e revalidar QEMU
+2. so depois abrir a Fase 2
+3. deixar a Fase 3 por ultimo, quando o som ja estiver limpo
+
+Regra de seguranca:
+
+- nao mexer em rede, VFS ou compositor enquanto a Fase 2 do HDA estiver aberta
+- manter a cada rodada um estado que ainda boota desktop e passa os validadores HDA do QEMU
+- so chamar novo teste manual em hardware real quando entrar um lote estrutural completo, nunca no meio de um refactor de stream
 
 Estado real de referencia:
 

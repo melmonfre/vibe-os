@@ -735,8 +735,6 @@ static int audiosvc_command_status(void) {
     int selected_input = 0;
     int output_count = 0;
     int input_count = 0;
-    unsigned feature_flags = 0u;
-    unsigned status_flags = 0u;
     char hardware_diag[160];
 
     if (audiosvc_read_state(&info,
@@ -752,8 +750,6 @@ static int audiosvc_command_status(void) {
     }
     output_count = audiosvc_output_count(&info);
     input_count = audiosvc_input_count(&info);
-    feature_flags = audiosvc_feature_flags(&info);
-    status_flags = audiosvc_status_flags(&status);
     audiosvc_format_hardware_diag(&info, hardware_diag, (int)sizeof(hardware_diag));
     if (selected_output >= output_count) {
         selected_output = 0;
@@ -788,32 +784,6 @@ static int audiosvc_command_status(void) {
     printf("default input: %s\n", input_count > 0 ? audiosvc_input_name(&info, selected_input) : "none");
     printf("output volume: %d%% %s\n", output_volume, output_muted ? "(muted)" : "(active)");
     printf("input volume: %d%% %s\n", input_volume, input_muted ? "(muted)" : "(active)");
-    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed %susb-attach-ready %susb-attached-ready %scontrol-owner-audiosvc %skernel-backend-executor %sui-progress-decoupled irq-count=%u\n",
-           (feature_flags & 0x2u) != 0u ? "" : "no-",
-           (feature_flags & 0x8u) != 0u ? "" : "no-",
-           (feature_flags & 0x80u) != 0u ? "mmio" : "io",
-           (feature_flags & 0x100u) != 0u ? "" : "no-",
-           (feature_flags & 0x200u) != 0u ? "" : "no-",
-           (feature_flags & 0x400u) != 0u ? "" : "no-",
-           (feature_flags & 0x800u) != 0u ? "" : "no-",
-           (feature_flags & 0x1000u) != 0u ? "" : "no-",
-           (feature_flags & 0x2000u) != 0u ? "" : "no-",
-           (feature_flags & 0x4000u) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_USB_ATTACH_READY) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_USB_ATTACHED_READY) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_CONTROL_OWNER_AUDIOSVC) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_KERNEL_BACKEND_EXECUTOR) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_UI_PROGRESS_DECOUPLED) != 0u ? "" : "no-",
-           info.parameters._spare[0]);
-    printf("runtime: %sirq-seen %sno-valid-irq %sstarvation %sunderrun %scapture-data %scapture-xrun\n",
-           (status_flags & MK_AUDIO_STATUS_FLAG_IRQ_SEEN) != 0u ? "" : "no-",
-           (status_flags & MK_AUDIO_STATUS_FLAG_NO_VALID_IRQ) != 0u ? "" : "no-",
-           (status_flags & MK_AUDIO_STATUS_FLAG_STARVATION) != 0u ? "" : "no-",
-           (status_flags & MK_AUDIO_STATUS_FLAG_UNDERRUN) != 0u ? "" : "no-",
-           (status_flags & MK_AUDIO_STATUS_FLAG_CAPTURE_DATA) != 0u ? "" : "no-",
-           (status_flags & MK_AUDIO_STATUS_FLAG_CAPTURE_XRUN) != 0u ? "" : "no-");
-    audiosvc_emit_state_debug(&info, &status, input_count, selected_input, 1);
-    audiosvc_emit_hardware_debug(&info);
     return 0;
 }
 

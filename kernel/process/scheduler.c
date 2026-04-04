@@ -241,9 +241,17 @@ static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
          * frame/input traffic dominates the ready queue. Newly launched app
          * runtimes are particularly sensitive here because they still need to
          * bring up the loader and hand control to the modular app entrypoint.
+         *
+         * Audio/network helpers also need an early slice or the desktop can
+         * launch them successfully yet keep rendering/input busy long enough
+         * that bootstrap WAVs and async reconnect work appear "hung".
          */
         if (task->priority_tier == PROCESS_PRIORITY_DESKTOP_USER) {
             return -36;
+        }
+        if (task->priority_tier == PROCESS_PRIORITY_AUDIO ||
+            task->priority_tier == PROCESS_PRIORITY_NETWORK) {
+            return -30;
         }
         if (task->priority_tier == PROCESS_PRIORITY_APP) {
             return -34;

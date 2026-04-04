@@ -120,14 +120,17 @@ QEMU_AUDIO_DRIVER ?= alsa
 endif
 endif
 ifeq ($(strip $(QEMU_AUDIO_DRIVER)),)
+QEMU_AUDIO_MACHINE_OPTS ?= -machine $(QEMU_RUN_MACHINE)
 QEMU_AUDIO_OPTS ?= -device $(QEMU_AUDIO_DEVICE)
 QEMU_AUDIO_LIVE_OPTS ?= -device $(QEMU_AUDIO_DEVICE)
 QEMU_AUDIO_HDA_LIVE_OPTS ?= -device intel-hda -device hda-duplex
 else
+QEMU_AUDIO_MACHINE_OPTS ?= -machine $(QEMU_RUN_MACHINE),pcspk-audiodev=snd0
 QEMU_AUDIO_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
 QEMU_AUDIO_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_LIVE_CONTROLLER) -device $(QEMU_AUDIO_LIVE_CODEC),audiodev=snd0
 QEMU_AUDIO_HDA_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0
 endif
+QEMU_RUN_COMMON_AUDIO_OPTS ?= $(QEMU_AUDIO_MACHINE_OPTS) -cpu $(QEMU_RUN_CPU) -smp $(QEMU_RUN_SMP) $(QEMU_RUN_VIDEO_OPTS) $(QEMU_RUN_RTC_OPTS) $(QEMU_RUN_USB_OPTS)
 QEMU_AUDIO_CAPTURE_OPTS ?= -audiodev wav,id=snd0,path=$(QEMU_AUDIO_CAPTURE_WAV) -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
 ifeq ($(strip $(PYTHON)),)
 PYTHON := python3
@@ -274,6 +277,8 @@ CRAFT_SIGN_SRC := userland/applications/games/craft/upstream/textures/sign.png
 WALLPAPER_SRC := assets/wallpaper.png
 VIBE_BOOT_WAV_SRC := assets/vibe_os_boot.wav
 VIBE_DESKTOP_WAV_SRC := assets/vibe_os_desktop.wav
+VIBE_BOOTLOADER_AUDIO_RAW := $(BUILD_DIR)/vibe_os_boot_stage2.raw
+VIBE_BOOTLOADER_AUDIO_RATE ?= 4000
 WALLPAPER_RUNTIME_PNG := $(BUILD_DIR)/wallpaper-runtime.png
 WALLPAPER_RUNTIME_W := 1360
 WALLPAPER_RUNTIME_H := 720
@@ -1453,6 +1458,12 @@ endif
 $(WALLPAPER_RUNTIME_SMOKE_PNG): $(WALLPAPER_SRC) | $(BUILD_DIR)
 	cp $(WALLPAPER_SRC) $@
 
+$(VIBE_BOOTLOADER_AUDIO_RAW): $(VIBE_BOOT_WAV_SRC) | $(BUILD_DIR)
+	$(PYTHON) tools/build_boot_audio_asset.py \
+		--input $< \
+		--output $@ \
+		--sample-rate $(VIBE_BOOTLOADER_AUDIO_RATE)
+
 $(DATA_IMAGE): $(IMAGE_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC) $(WALLPAPER_RUNTIME_PNG) $(VIBE_BOOT_WAV_SRC) $(VIBE_DESKTOP_WAV_SRC) $(BOOTLOADER_BG_SRC)
 	$(PYTHON) tools/build_data_partition.py \
 		--image $@ \
@@ -1489,7 +1500,7 @@ $(BOOT_POLICY_MANIFEST): $(KERNEL_BIN) $(STAGE2_BIN) $(DATA_IMAGE)
 	@mkdir -p $(dir $@)
 	@printf "# vibeOS USB boot/loading strategy\nbios_disk_transport=edd-int13\nboot_partition_fs=fat32\nstage2_path=/STAGE2.BIN\nkernel_path=/KERNEL.BIN\nruntime_storage_probe=ahci-then-ata\ndata_volume_resolution=mbr-data-partition-with-raw-layout-fallback\nusb_scope=phase4-relies-on-bios-mass-storage-before-native-usb-service\n" > $@
 
-$(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOOT_VOLUME_MANIFEST) $(BOOT_POLICY_MANIFEST) $(BOOTLOADER_BG_BIN)
+$(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOOT_VOLUME_MANIFEST) $(BOOT_POLICY_MANIFEST) $(BOOTLOADER_BG_BIN) $(VIBE_BOOTLOADER_AUDIO_RAW)
 	$(PYTHON) tools/build_partitioned_image.py \
 		--image $@ \
 		--mkfs-fat $(MKFS_FAT_TOOL) \
@@ -1511,6 +1522,7 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOO
 		--boot-file "$(KERNEL_BIN)::/KERNEL.BIN" \
 		--boot-file "$(STAGE2_BIN)::/STAGE2.BIN" \
 		--boot-file "$(BOOTLOADER_BG_BIN)::/VIBEBG.BIN" \
+		--boot-file "$(VIBE_BOOTLOADER_AUDIO_RAW)::/VIBEBOOT.RAW" \
 		--boot-file "$(BOOT_VOLUME_MANIFEST)::/LAYOUT.TXT" \
 		--boot-file "$(BOOT_POLICY_MANIFEST)::/BOOTPOLICY.TXT" \
 		--boot-file "$(DATA_IMAGE_MANIFEST)::/DATAINFO.TXT"
@@ -1518,12 +1530,12 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOO
 
 run: $(IMAGE)
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) $(QEMU_RUN_COMMON_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS); \
+		$(QEMU) $(QEMU_RUN_COMMON_AUDIO_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS); \
 	else \
 		echo "Aviso: $(QEMU) não encontrado. Tentando qemu-system-x86_64..."; \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
 			echo "Usando qemu-system-x86_64"; \
-			qemu-system-x86_64 $(QEMU_RUN_COMMON_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS); \
+			qemu-system-x86_64 $(QEMU_RUN_COMMON_AUDIO_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS); \
 		else \
 			echo "Erro: QEMU não encontrado no sistema."; \
 			echo "macOS (Homebrew): brew install qemu"; \
@@ -1538,10 +1550,10 @@ run-debug-gui: $(IMAGE)
 	@rm -f $(QEMU_SERIAL_LOG)
 	@echo "QEMU GUI debug ativo. Serial do kernel: $(QEMU_SERIAL_LOG)"
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) $(QEMU_RUN_COMMON_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS) -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
+		$(QEMU) $(QEMU_RUN_COMMON_AUDIO_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS) -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 $(QEMU_RUN_COMMON_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS) -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
+			qemu-system-x86_64 $(QEMU_RUN_COMMON_AUDIO_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c $(QEMU_NET_OPTS) $(QEMU_AUDIO_LIVE_OPTS) -serial file:$(QEMU_SERIAL_LOG) -monitor none; \
 		else \
 			echo "Erro: QEMU não encontrado"; \
 			exit 1; \
@@ -1565,13 +1577,13 @@ run-headless-audio-debug: $(IMAGE)
 	@rm -f $(QEMU_AUDIO_CAPTURE_WAV)
 	@echo "QEMU headless audio debug ativo. Captura WAV: $(QEMU_AUDIO_CAPTURE_WAV)"
 	@if command -v $(QEMU) >/dev/null 2>&1; then \
-		$(QEMU) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c \
+		$(QEMU) $(QEMU_RUN_COMMON_AUDIO_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c \
 			$(QEMU_NET_OPTS) \
 			-display none -serial stdio -monitor none \
 			$(QEMU_AUDIO_CAPTURE_OPTS); \
 	else \
 		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
-			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c \
+			qemu-system-x86_64 $(QEMU_RUN_COMMON_AUDIO_OPTS) -m $(QEMU_MEMORY_MB) -drive $(QEMU_IMAGE_OPTS) -boot c \
 				$(QEMU_NET_OPTS) \
 				-display none -serial stdio -monitor none \
 				$(QEMU_AUDIO_CAPTURE_OPTS); \

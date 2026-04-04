@@ -42,7 +42,9 @@ struct audio_async_playback {
     uint32_t params_storage[16];
     struct mk_audio_event last_audio_event;
     int use_kernel_async;
+    int builtin_wav;
     char tag[32];
+    char path[80];
 };
 
 int audio_play_wav_async_start(struct audio_async_playback *playback, const char *path, const char *tag);

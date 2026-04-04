@@ -34,6 +34,8 @@ static int g_ui_defer_wallpaper_load = 0;
 static int g_ui_pending_wallpaper_kind = UI_PENDING_WALLPAPER_NONE;
 static int g_ui_pending_wallpaper_save_settings = 0;
 static char g_ui_pending_wallpaper_path[80];
+static int g_ui_startup_persist_hold_depth = 0;
+static int g_ui_pending_settings_save = 0;
 
 #define TASKBAR_HEIGHT 22
 #define START_MENU_WIDTH 336
@@ -53,6 +55,10 @@ static void ui_save_settings(void);
 static void ui_wallpaper_reset(int explicit_none);
 static int ui_wallpaper_set_from_node_internal(int node, int persist);
 static int ui_try_set_default_wallpaper(void);
+
+static int ui_startup_persist_blocked(void) {
+    return g_ui_startup_persist_hold_depth > 0;
+}
 
 static void ui_pending_wallpaper_clear(void) {
     g_ui_pending_wallpaper_kind = UI_PENDING_WALLPAPER_NONE;
@@ -302,6 +308,13 @@ static int ui_wallpaper_set_from_node_internal(int node, int persist) {
     g_wallpaper.explicit_none = 0;
     g_wallpaper.width = width;
     g_wallpaper.height = height;
+    if (persist) {
+        /*
+         * A manual wallpaper choice must win over any deferred startup/default
+         * wallpaper that has not been applied yet.
+         */
+        ui_pending_wallpaper_clear();
+    }
     if (persist && !g_ui_loading_settings) {
         ui_save_settings();
     }
@@ -346,6 +359,11 @@ static void ui_reload_wallpaper_for_current_mode(void) {
 static void ui_save_settings(void) {
     char text[256];
     char wallpaper[80];
+
+    if (ui_startup_persist_blocked()) {
+        g_ui_pending_settings_save = 1;
+        return;
+    }
 
     if (fs_resolve("/config") < 0) {
         (void)fs_create("/config", 1);
@@ -445,7 +463,7 @@ static void ui_load_settings(void) {
     if (clear_wallpaper) {
         ui_wallpaper_reset(0);
         if (g_ui_defer_wallpaper_load) {
-            ui_pending_wallpaper_schedule_default(1);
+            ui_pending_wallpaper_schedule_default(0);
         } else {
             (void)ui_try_set_default_wallpaper();
             migrate_to_default = 1;
@@ -457,7 +475,7 @@ static void ui_load_settings(void) {
         } else {
             ui_wallpaper_reset(0);
             if (g_ui_defer_wallpaper_load) {
-                ui_pending_wallpaper_schedule_default(1);
+                ui_pending_wallpaper_schedule_default(0);
             } else {
                 (void)ui_try_set_default_wallpaper();
                 migrate_to_default = 1;
@@ -469,7 +487,7 @@ static void ui_load_settings(void) {
         if (ui_wallpaper_path_needs_default_migration(wallpaper)) {
             ui_wallpaper_reset(0);
             if (g_ui_defer_wallpaper_load) {
-                ui_pending_wallpaper_schedule_default(1);
+                ui_pending_wallpaper_schedule_default(0);
             } else {
                 (void)ui_try_set_default_wallpaper();
                 migrate_to_default = 1;
@@ -533,6 +551,20 @@ void ui_complete_startup(void) {
     ui_apply_pending_wallpaper();
 }
 
+void ui_hold_startup_persist(void) {
+    g_ui_startup_persist_hold_depth += 1;
+}
+
+void ui_release_startup_persist(void) {
+    if (g_ui_startup_persist_hold_depth > 0) {
+        g_ui_startup_persist_hold_depth -= 1;
+    }
+    if (!ui_startup_persist_blocked() && g_ui_pending_settings_save) {
+        g_ui_pending_settings_save = 0;
+        ui_save_settings();
+    }
+}
+
 int ui_set_resolution(uint32_t width, uint32_t height) {
     if (sys_gfx_set_mode(width, height) != 0) {
         return -1;
@@ -554,6 +586,7 @@ const struct desktop_theme *ui_theme_get(void) {
 }
 
 void ui_wallpaper_clear(void) {
+    ui_pending_wallpaper_clear();
     ui_wallpaper_reset(1);
     if (!g_ui_loading_settings) {
         ui_save_settings();

@@ -96,7 +96,12 @@ static uint32_t process_priority_for_task_class(uint32_t task_class) {
     case MK_TASK_CLASS_FILESYSTEM_IO:
         return PROCESS_PRIORITY_STORAGE;
     case MK_TASK_CLASS_AUDIO_IO:
-        return PROCESS_PRIORITY_AUDIO;
+        /*
+         * Audio playback/control must be able to continue while the desktop is
+         * animating and processing input; otherwise startup WAVs and player
+         * output appear tied to UI activity.
+         */
+        return PROCESS_PRIORITY_DESKTOP_USER;
     case MK_TASK_CLASS_NETWORK_IO:
         return PROCESS_PRIORITY_NETWORK;
     case MK_TASK_CLASS_APP_RUNTIME:
@@ -133,7 +138,7 @@ static uint32_t process_priority_for(enum process_kind kind,
         case MK_SERVICE_FILESYSTEM:
             return PROCESS_PRIORITY_STORAGE;
         case MK_SERVICE_AUDIO:
-            return PROCESS_PRIORITY_AUDIO;
+            return PROCESS_PRIORITY_DESKTOP_USER;
         case MK_SERVICE_NETWORK:
             return PROCESS_PRIORITY_NETWORK;
         case MK_SERVICE_INIT:

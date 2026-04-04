@@ -26,6 +26,10 @@ static void doom_debug(const char *message) {
 static int doom_iwad_available(void) {
     static const char *candidates[] = {
         "/DOOM/DOOM.WAD",
+        "doom.wad",
+        "doom1.wad",
+        "doomu.wad",
+        "doom2.wad",
         0
     };
 

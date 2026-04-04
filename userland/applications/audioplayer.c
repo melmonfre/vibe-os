@@ -39,18 +39,15 @@ static void audioplayer_set_status(struct audioplayer_state *player, const char 
 }
 
 static int audioplayer_launch_async_path(const char *path) {
-    char *argv[4] = {"audiosvc", "play-asset", (char *)path, 0};
-
     if (path == 0 || path[0] == '\0') {
         return -1;
     }
-    if (str_eq(path, "/assets/vibe_os_boot.wav")) {
-        return sys_launch_builtin_user(USERLAND_BUILTIN_BOOT_AUDIO) > 0 ? 0 : -1;
-    }
-    if (str_eq(path, "/assets/vibe_os_desktop.wav")) {
-        return sys_launch_builtin_user(USERLAND_BUILTIN_DESKTOP_AUDIO) > 0 ? 0 : -1;
-    }
-    return sys_launch_app_argv(3, argv) > 0 ? 0 : -1;
+    /*
+     * Route playback straight to the audio service. Spawning an external
+     * audiosvc runtime for every WAV re-enters AppFS/fs_init() and has been a
+     * consistent source of bootstrap/playback stalls.
+     */
+    return sys_audio_play_asset(path) == 0 ? 0 : -1;
 }
 
 static struct rect audioplayer_body_rect(const struct audioplayer_state *player) {

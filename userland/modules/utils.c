@@ -7,11 +7,11 @@
 #define AUDIO_WAV_HEADER_SIZE 44
 #define AUDIO_WAV_CHUNK_HEADER_SIZE 8
 #define AUDIO_WAV_STREAM_CHUNK 960
-#define AUDIO_WAV_AZALIA_CHUNK 4096
+#define AUDIO_WAV_AZALIA_CHUNK 16384
 #define AUDIO_WAV_AZALIA_ASYNC_CHUNK 2048
 #define AUDIO_WAV_COMPAT_ASYNC_CHUNK 2048
 #define AUDIO_WAV_UAUDIO_ASYNC_CHUNK 16384
-#define AUDIO_WAV_ASYNC_QUEUE_CHUNK 2048
+#define AUDIO_WAV_ASYNC_QUEUE_CHUNK 16384
 #define AUDIO_STATUS_BACKEND_MASK 0x000000ffu
 #define AUDIO_BACKEND_SOFT 0
 #define AUDIO_BACKEND_COMPAT_AC97 1
@@ -201,6 +201,13 @@ static uint32_t audio_estimated_playback_ticks(const struct audio_swpar *params,
 static void audio_debug_line(const char *prefix, const char *tag, const char *suffix) {
     char line[128];
 
+    if (!(tag != 0 &&
+          (str_eq(tag, "desktop-session") ||
+           str_eq(tag, "desktop") ||
+           str_eq(tag, "boot")))) {
+        return;
+    }
+
     line[0] = '\0';
     str_append(line, prefix, (int)sizeof(line));
     str_append(line, tag ? tag : "audio", (int)sizeof(line));
@@ -212,7 +219,8 @@ static int audio_is_desktop_async_tag(const char *tag) {
     return tag != 0 &&
            (str_eq(tag, "desktop-session") ||
             str_eq(tag, "desktop") ||
-            str_eq(tag, "desktop-player"));
+            str_eq(tag, "desktop-player") ||
+            str_eq(tag, "boot"));
 }
 
 static int audio_debug_progress_enabled(const char *tag) {
@@ -223,7 +231,31 @@ static int audio_debug_progress_enabled(const char *tag) {
 }
 
 static int audio_should_use_kernel_async(const char *tag) {
+    if (tag != 0 &&
+        (str_eq(tag, "desktop-session") ||
+         str_eq(tag, "boot") ||
+         str_eq(tag, "audio-player"))) {
+        return 0;
+    }
     return audio_is_desktop_async_tag(tag);
+}
+
+static int audio_should_preload_wav(const char *tag,
+                                    int builtin_wav,
+                                    uint32_t data_size) {
+    if (data_size == 0u) {
+        return 0;
+    }
+    if (builtin_wav) {
+        return data_size <= (512u * 1024u);
+    }
+    if (tag != 0 && str_eq(tag, "audio-player")) {
+        return data_size <= (2u * 1024u * 1024u);
+    }
+    if (audio_is_desktop_async_tag(tag)) {
+        return 0;
+    }
+    return data_size <= (128u * 1024u);
 }
 
 int audio_backend_kind(void) {
@@ -243,7 +275,10 @@ int audio_desktop_startup_wav_allowed(void) {
         return 0;
     }
 
-    return backend_kind != AUDIO_BACKEND_PCSPKR;
+    return backend_kind == AUDIO_BACKEND_COMPAT_AC97 ||
+           backend_kind == AUDIO_BACKEND_COMPAT_AZALIA ||
+           backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO ||
+           backend_kind == AUDIO_BACKEND_PCSPKR;
 }
 
 static int audio_wait_for_playback_idle(uint32_t expected_ticks) {
@@ -264,7 +299,7 @@ static int audio_wait_for_playback_idle(uint32_t expected_ticks) {
         if ((uint32_t)(sys_ticks() - start) >= timeout) {
             return -1;
         }
-        sys_sleep();
+        sys_yield();
     }
 }
 
@@ -398,17 +433,55 @@ static int audio_load_wav_info(int node,
     return -1;
 }
 
+static int audio_load_builtin_wav_info(const char *path,
+                                       struct audio_swpar *params_out,
+                                       uint32_t *data_offset_out,
+                                       uint32_t *data_size_out) {
+    if (path == 0 || params_out == 0 || data_offset_out == 0 || data_size_out == 0) {
+        return -1;
+    }
+    if (!str_eq(path, "/assets/vibe_os_boot.wav") &&
+        !str_eq(path, "/assets/vibe_os_desktop.wav")) {
+        return -1;
+    }
+
+    AUDIO_INITPAR(params_out);
+    params_out->sig = 1u;
+    params_out->le = 1u;
+    params_out->bits = 16u;
+    params_out->bps = 2u;
+    params_out->pchan = 1u;
+    params_out->rchan = 1u;
+    params_out->rate = 44100u;
+    params_out->nblks = 4u;
+    params_out->round = 512u;
+    *data_offset_out = 44u;
+    *data_size_out = str_eq(path, "/assets/vibe_os_boot.wav") ? 264600u : 441000u;
+    return 0;
+}
+
+static int audio_is_builtin_wav_path(const char *path) {
+    return path != 0 &&
+           (str_eq(path, "/assets/vibe_os_boot.wav") ||
+            str_eq(path, "/assets/vibe_os_desktop.wav"));
+}
+
 int audio_play_wav_best_effort(const char *path, const char *tag) {
     int node;
     int backend_kind;
+    int builtin_wav = 0;
+    int use_kernel_async = audio_should_use_kernel_async(tag);
     int waited_for_hda_chunks = 0;
+    int fs_sync_held = 0;
     uint32_t file_size;
     struct audio_swpar params;
     uint32_t data_offset = 0u;
     uint32_t data_size = 0u;
+    uint8_t *preloaded = 0;
     uint8_t buffer[AUDIO_WAV_AZALIA_CHUNK];
     uint32_t streamed;
     uint32_t playback_ticks;
+    int rc = -1;
 
     if (path == 0 || path[0] == '\0') {
         audio_set_last_playback_error("empty-path");
@@ -418,50 +491,107 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
 
     audio_set_last_playback_error("ok");
     audio_debug_line("audio: begin ", tag, "\n");
-    node = fs_resolve(path);
-    if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir) {
+    if (fs_ready()) {
+        fs_suspend_sync();
+        fs_sync_held = 1;
+    }
+    node = -1;
+    if (!audio_is_builtin_wav_path(path)) {
+        node = fs_resolve(path);
+    }
+    if (node < 0 && !audio_is_builtin_wav_path(path)) {
         audio_set_last_playback_error("missing-file");
         audio_update_last_playback_detail();
         audio_debug_line("audio: missing wav ", tag, "\n");
-        return -1;
+        goto cleanup;
     }
+    audio_debug_line("audio: resolved ", tag, "\n");
 
-    file_size = (uint32_t)g_fs_nodes[node].size;
-    if (audio_load_wav_info(node, file_size, &params, &data_offset, &data_size) != 0) {
+    file_size = node >= 0 ? (uint32_t)g_fs_nodes[node].size : 0u;
+    if (audio_load_builtin_wav_info(path, &params, &data_offset, &data_size) == 0) {
+        builtin_wav = 1;
+    } else if (node < 0 ||
+               audio_load_wav_info(node, file_size, &params, &data_offset, &data_size) != 0) {
         audio_set_last_playback_error("unsupported-wav");
         audio_update_last_playback_detail();
         audio_debug_line("audio: unsupported wav ", tag, "\n");
-        return -1;
+        goto cleanup;
+    }
+    audio_debug_line("audio: wavinfo ", tag, "\n");
+    if (audio_should_preload_wav(tag, builtin_wav, data_size)) {
+        audio_debug_line("audio: preload ", tag, "\n");
+        preloaded = (uint8_t *)malloc((size_t)data_size);
+        if (preloaded != 0) {
+            if ((builtin_wav
+                    ? fs_read_builtin_asset_bytes(path,
+                                                  (int)data_offset,
+                                                  preloaded,
+                                                  (int)data_size)
+                    : fs_read_node_bytes(node,
+                                         (int)data_offset,
+                                         preloaded,
+                                         (int)data_size)) != (int)data_size) {
+                audio_set_last_playback_error("read-failed");
+                audio_update_last_playback_detail();
+                audio_debug_line("audio: preload failed ", tag, "\n");
+                goto cleanup;
+            }
+            audio_debug_line("audio: preload ok ", tag, "\n");
+        }
+    }
+    if (fs_sync_held) {
+        fs_resume_sync();
+        fs_sync_held = 0;
     }
     playback_ticks = audio_estimated_playback_ticks(&params, data_size);
+    audio_debug_line("audio: backend probe ", tag, "\n");
     backend_kind = audio_backend_kind();
+    if (backend_kind < 0) {
+        if (builtin_wav) {
+            backend_kind = AUDIO_BACKEND_SOFT;
+        } else {
+            audio_set_last_playback_error("backend-probe-failed");
+            audio_update_last_playback_detail();
+            audio_debug_line("audio: backend probe failed ", tag, "\n");
+            goto cleanup;
+        }
+    }
     if (backend_kind == AUDIO_BACKEND_COMPAT_UAUDIO &&
         tag != 0 &&
         str_eq(tag, "boot")) {
         audio_set_last_playback_error("deferred");
         audio_debug_line("audio: defer wav ", tag, "\n");
-        return 0;
+        rc = 0;
+        goto cleanup;
     }
+    audio_debug_line("audio: params call ", tag, "\n");
     if (sys_audio_set_params(&params) != 0) {
         audio_set_last_playback_error("set-params-failed");
         audio_update_last_playback_detail();
         audio_debug_line("audio: set_params failed ", tag, "\n");
-        return -1;
+        goto cleanup;
     }
+    audio_debug_line("audio: params ok ", tag, "\n");
+    audio_debug_line("audio: start call ", tag, "\n");
     if (sys_audio_start() != 0) {
         audio_set_last_playback_error("start-failed");
         audio_update_last_playback_detail();
         audio_debug_line("audio: start failed ", tag, "\n");
-        return -1;
+        goto cleanup;
     }
     audio_debug_line("audio: started ", tag, "\n");
 
     streamed = 0u;
     while (streamed < data_size) {
         uint32_t chunk_size = data_size - streamed;
+        int first_chunk = streamed == 0u;
         int written;
 
-        if (backend_kind == AUDIO_BACKEND_COMPAT_AZALIA) {
+        if (use_kernel_async) {
+            if (chunk_size > AUDIO_WAV_ASYNC_QUEUE_CHUNK) {
+                chunk_size = AUDIO_WAV_ASYNC_QUEUE_CHUNK;
+            }
+        } else if (backend_kind == AUDIO_BACKEND_COMPAT_AZALIA) {
             if (chunk_size > AUDIO_WAV_AZALIA_CHUNK) {
                 chunk_size = AUDIO_WAV_AZALIA_CHUNK;
             }
@@ -472,14 +602,45 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
         } else if (chunk_size > (uint32_t)sizeof(buffer)) {
             chunk_size = (uint32_t)sizeof(buffer);
         }
-        if (fs_read_node_bytes(node, (int)(data_offset + streamed), buffer, (int)chunk_size) != (int)chunk_size) {
-            audio_set_last_playback_error("read-failed");
-            audio_update_last_playback_detail();
-            audio_debug_line("audio: read failed ", tag, "\n");
-            (void)sys_audio_stop();
-            return -1;
+        if (preloaded != 0) {
+            memcpy(buffer, preloaded + streamed, (size_t)chunk_size);
+        } else {
+            if (fs_sync_held == 0 && fs_ready()) {
+                fs_suspend_sync();
+                fs_sync_held = 1;
+            }
+            if ((builtin_wav
+                    ? fs_read_builtin_asset_bytes(path,
+                                                  (int)(data_offset + streamed),
+                                                  buffer,
+                                                  (int)chunk_size)
+                    : fs_read_node_bytes(node,
+                                         (int)(data_offset + streamed),
+                                         buffer,
+                                         (int)chunk_size)) != (int)chunk_size) {
+                audio_set_last_playback_error("read-failed");
+                audio_update_last_playback_detail();
+                audio_debug_line("audio: read failed ", tag, "\n");
+                (void)sys_audio_stop();
+                goto cleanup;
+            }
         }
-        written = sys_audio_write(buffer, chunk_size);
+        if (first_chunk && !audio_debug_progress_enabled(tag)) {
+            audio_debug_line("audio: write call ", tag, "\n");
+        }
+        written = use_kernel_async ? sys_audio_write_async(buffer, chunk_size)
+                                   : sys_audio_write(buffer, chunk_size);
+        if (first_chunk && !audio_debug_progress_enabled(tag)) {
+            if (written > 0) {
+                audio_debug_line("audio: write ok ", tag, "\n");
+            } else {
+                audio_debug_line("audio: write ret<=0 ", tag, "\n");
+            }
+        }
+        if (written == 0 && use_kernel_async) {
+            sys_yield();
+            continue;
+        }
         if (written == 0 && backend_kind == AUDIO_BACKEND_COMPAT_AC97) {
             sys_yield();
             continue;
@@ -489,39 +650,58 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
             audio_update_last_playback_detail();
             audio_debug_line("audio: write failed ", tag, "\n");
             (void)sys_audio_stop();
-            return -1;
+            goto cleanup;
         }
         if (audio_debug_progress_enabled(tag)) {
             audio_debug_line("audio: wrote ", tag, "\n");
         }
         streamed += (uint32_t)written;
-        if (backend_kind == AUDIO_BACKEND_COMPAT_AZALIA) {
+        if (!use_kernel_async && backend_kind == AUDIO_BACKEND_COMPAT_AZALIA) {
             uint32_t chunk_ticks = audio_estimated_playback_ticks(&params, (uint32_t)written);
 
+            if (first_chunk && !audio_debug_progress_enabled(tag)) {
+                audio_debug_line("audio: wait call ", tag, "\n");
+            }
             if (audio_wait_for_playback_idle(chunk_ticks) != 0) {
                 audio_set_last_playback_error("wait-timeout");
                 audio_update_last_playback_detail();
                 audio_debug_line("audio: wait timeout ", tag, "\n");
                 break;
             }
+            if (first_chunk && !audio_debug_progress_enabled(tag)) {
+                audio_debug_line("audio: wait ok ", tag, "\n");
+            }
             waited_for_hda_chunks = 1;
             sys_yield();
             if (audio_debug_progress_enabled(tag)) {
                 audio_debug_line("audio: queued ", tag, "\n");
             }
-        }
-        if (backend_kind != AUDIO_BACKEND_COMPAT_AZALIA) {
+        } else if (use_kernel_async) {
+            if ((uint32_t)written < chunk_size) {
+                sys_yield();
+            } else {
+                sys_yield();
+            }
+        } else if (backend_kind != AUDIO_BACKEND_COMPAT_AZALIA) {
             sys_yield();
         }
     }
 
-    if (playback_ticks > 0u &&
+    if (use_kernel_async) {
+        if (audio_wait_for_playback_idle(playback_ticks + 20u) != 0) {
+            audio_set_last_playback_error("wait-timeout");
+            audio_update_last_playback_detail();
+            audio_debug_line("audio: wait timeout ", tag, "\n");
+            (void)sys_audio_stop();
+            goto cleanup;
+        }
+    } else if (playback_ticks > 0u &&
         backend_kind != AUDIO_BACKEND_COMPAT_UAUDIO &&
         backend_kind != AUDIO_BACKEND_PCSPKR &&
         !(backend_kind == AUDIO_BACKEND_COMPAT_AZALIA && waited_for_hda_chunks)) {
         uint32_t started = sys_ticks();
         while ((uint32_t)(sys_ticks() - started) < playback_ticks) {
-            sys_sleep();
+            sys_yield();
         }
     }
     audio_debug_line("audio: stopping ", tag, "\n");
@@ -529,7 +709,16 @@ int audio_play_wav_best_effort(const char *path, const char *tag) {
     audio_debug_line("audio: done ", tag, "\n");
     audio_set_last_playback_error("ok");
     audio_update_last_playback_detail();
-    return 0;
+    rc = 0;
+
+cleanup:
+    if (fs_sync_held) {
+        fs_resume_sync();
+    }
+    if (preloaded != 0) {
+        free(preloaded);
+    }
+    return rc;
 }
 
 int audio_play_wav_async_start(struct audio_async_playback *playback, const char *path, const char *tag) {
@@ -552,20 +741,29 @@ int audio_play_wav_async_start(struct audio_async_playback *playback, const char
 
     audio_set_last_playback_error("ok");
     audio_debug_line("audio: begin ", tag, "\n");
-    node = fs_resolve(path);
-    if (node < 0 || !g_fs_nodes[node].used || g_fs_nodes[node].is_dir) {
+    node = -1;
+    if (!audio_is_builtin_wav_path(path)) {
+        node = fs_resolve(path);
+    }
+    if (node < 0 && !audio_is_builtin_wav_path(path)) {
         audio_set_last_playback_error("missing-file");
         audio_update_last_playback_detail();
         audio_debug_line("audio: missing wav ", tag, "\n");
         return -1;
     }
 
-    file_size = (uint32_t)g_fs_nodes[node].size;
-    if (audio_load_wav_info(node,
-                            file_size,
-                            params,
-                            &playback->data_offset,
-                            &playback->data_size) != 0) {
+    file_size = node >= 0 ? (uint32_t)g_fs_nodes[node].size : 0u;
+    if (audio_load_builtin_wav_info(path,
+                                    params,
+                                    &playback->data_offset,
+                                    &playback->data_size) == 0) {
+        playback->builtin_wav = 1;
+    } else if (node < 0 ||
+               audio_load_wav_info(node,
+                                   file_size,
+                                   params,
+                                   &playback->data_offset,
+                                   &playback->data_size) != 0) {
         audio_set_last_playback_error("unsupported-wav");
         audio_update_last_playback_detail();
         audio_debug_line("audio: unsupported wav ", tag, "\n");
@@ -577,6 +775,7 @@ int audio_play_wav_async_start(struct audio_async_playback *playback, const char
     playback->last_chunk_ticks = 0u;
     playback->use_kernel_async = audio_should_use_kernel_async(tag);
     str_copy_limited(playback->tag, tag ? tag : "audio", (int)sizeof(playback->tag));
+    str_copy_limited(playback->path, path, (int)sizeof(playback->path));
 
     if (playback->use_kernel_async && sys_audio_event_subscribe() == 0) {
         playback->audio_event_subscription = 1;
@@ -611,8 +810,15 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
     params = (struct audio_swpar *)playback->params_storage;
 
     if (playback->waiting_for_idle) {
+        if (playback->finalizing && playback->streamed >= playback->data_size &&
+            !audio_debug_progress_enabled(playback->tag)) {
+            audio_debug_line("audio: async wait call ", playback->tag, "\n");
+        }
         if (audio_async_wait_event_idle(playback) || audio_playback_is_idle()) {
             playback->waiting_for_idle = 0;
+            if (playback->finalizing && !audio_debug_progress_enabled(playback->tag)) {
+                audio_debug_line("audio: async wait ok ", playback->tag, "\n");
+            }
             if (!playback->finalizing) {
                 if (audio_debug_progress_enabled(playback->tag)) {
                     audio_debug_line("audio: queued ", playback->tag, "\n");
@@ -644,6 +850,7 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
 
     {
         uint32_t chunk_size = playback->data_size - playback->streamed;
+        int first_chunk = playback->streamed == 0u;
         int written;
 
         if (playback->use_kernel_async) {
@@ -665,10 +872,15 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
         } else if (chunk_size > (uint32_t)sizeof(buffer)) {
             chunk_size = (uint32_t)sizeof(buffer);
         }
-        if (fs_read_node_bytes(playback->node,
-                               (int)(playback->data_offset + playback->streamed),
-                               buffer,
-                               (int)chunk_size) != (int)chunk_size) {
+        if ((playback->builtin_wav
+                ? fs_read_builtin_asset_bytes(playback->path,
+                                              (int)(playback->data_offset + playback->streamed),
+                                              buffer,
+                                              (int)chunk_size)
+                : fs_read_node_bytes(playback->node,
+                                     (int)(playback->data_offset + playback->streamed),
+                                     buffer,
+                                     (int)chunk_size)) != (int)chunk_size) {
             audio_set_last_playback_error("read-failed");
             audio_update_last_playback_detail();
             audio_debug_line("audio: read failed ", playback->tag, "\n");
@@ -677,9 +889,21 @@ int audio_play_wav_async_poll(struct audio_async_playback *playback) {
             return -1;
         }
 
+        if (first_chunk && !audio_debug_progress_enabled(playback->tag)) {
+            audio_debug_line("audio: async write call ", playback->tag, "\n");
+        }
+
         written = playback->use_kernel_async ?
                   sys_audio_write_async(buffer, chunk_size) :
                   sys_audio_write(buffer, chunk_size);
+
+        if (first_chunk && !audio_debug_progress_enabled(playback->tag)) {
+            if (written > 0) {
+                audio_debug_line("audio: async write ok ", playback->tag, "\n");
+            } else {
+                audio_debug_line("audio: async write ret<=0 ", playback->tag, "\n");
+            }
+        }
         if (written == 0 && playback->backend_kind == AUDIO_BACKEND_COMPAT_AC97) {
             return 1;
         }
