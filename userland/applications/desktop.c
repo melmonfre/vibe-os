@@ -32,6 +32,8 @@
 #define DESKTOP_NETWORK_PROFILE_MAX 4
 #define DESKTOP_STARTUP_SOUND_DELAY_TICKS 80u
 #define DESKTOP_STARTUP_SOUND_SECONDARY_DELAY_TICKS 180u
+#define DESKTOP_STARTUP_RUNTIME_HELPER_DELAY_TICKS 1200u
+#define DESKTOP_STARTUP_STORAGE_RELEASE_DELAY_TICKS 6000u
 #define DESKTOP_PRESENT_RETRY_TICKS 4u
 #define DESKTOP_PRESENT_BACKPRESSURE_TICKS 1u
 #define DESKTOP_PRESENT_PENDING_LIMIT 2u
@@ -299,8 +301,10 @@ static struct network_profile g_network_profiles[DESKTOP_NETWORK_PROFILE_MAX];
 static char g_network_auto_ssid[MK_NETWORK_SSID_MAX + 1];
 static uint32_t g_sound_applet_last_sync_ticks = 0u;
 static uint32_t g_network_applet_last_sync_ticks = 0u;
-static uint32_t g_sound_applet_last_export_ticks = 0u;
 static uint32_t g_network_applet_last_export_ticks = 0u;
+static int g_desktop_runtime_helper_gate_open = 0;
+static int g_desktop_startup_io_ready = 0;
+static uint32_t g_desktop_runtime_helper_gate_tick = 0u;
 static uint32_t g_network_autoconnect_last_attempt_ticks = 0u;
 static int g_desktop_audio_event_subscription = 0;
 static int g_desktop_network_event_subscription = 0;
@@ -326,7 +330,11 @@ static const char *g_sound_inputs_hda[] = {"Microfone", "Line-in"};
 static void desktop_append_uint(char *buf, int value, int max_len);
 
 static int desktop_async_runtime_services_allowed(void) {
-    return g_desktop_visual_ready != 0;
+    return g_desktop_visual_ready != 0 && g_desktop_runtime_helper_gate_open != 0;
+}
+
+static int desktop_runtime_helper_launch_allowed(void) {
+    return desktop_async_runtime_services_allowed();
 }
 
 static int desktop_present_retry_ready(uint32_t ticks) {
@@ -342,6 +350,7 @@ static void desktop_note_present_success(void) {
     g_desktop_present_retry_tick = 0u;
     if (!g_desktop_visual_ready) {
         g_desktop_visual_ready = 1;
+        sys_write_debug("desktop: startup phase compositor\n");
         sys_write_debug("desktop: visual ready\n");
     }
 }
@@ -375,32 +384,69 @@ static void desktop_log_video_event_pressure(const struct mk_video_event *event)
     sys_write_debug(buffer);
 }
 
-static void desktop_try_play_startup_sound(uint32_t *armed_ticks,
-                                           int *pending,
-                                           uint32_t ticks) {
+static int desktop_try_play_startup_sound(uint32_t *armed_ticks,
+                                          int *pending,
+                                          uint32_t ticks) {
     if (armed_ticks == 0 || pending == 0) {
-        return;
+        return 0;
     }
-    if (!desktop_async_runtime_services_allowed()) {
-        return;
+    if (!g_desktop_visual_ready || !g_desktop_startup_io_ready) {
+        return 0;
     }
     if (*pending == 0) {
-        return;
+        return 0;
     }
 
     if ((uint32_t)(ticks - *armed_ticks) < DESKTOP_STARTUP_SOUND_DELAY_TICKS) {
-        return;
+        return 0;
     }
 
     *pending = 0;
     if (!audio_desktop_startup_wav_allowed()) {
         sys_write_debug("desktop: startup sound deferred for backend\n");
-        return;
+        return 1;
     }
     sys_write_debug("desktop: startup sound begin\n");
     if (sys_launch_builtin_user(USERLAND_BUILTIN_DESKTOP_AUDIO) <= 0) {
+        if (!g_desktop_runtime_helper_gate_open) {
+            g_desktop_runtime_helper_gate_open = 1;
+            sys_write_debug("desktop: startup phase runtime helpers\n");
+        }
         sys_write_debug("desktop: startup sound launch failed\n");
+        return 1;
     }
+    g_desktop_runtime_helper_gate_tick = ticks + DESKTOP_STARTUP_RUNTIME_HELPER_DELAY_TICKS;
+    sys_write_debug("desktop: startup sound returned\n");
+    return 1;
+}
+
+static int desktop_startup_work_pending(uint32_t sound_armed_ticks,
+                                        int sound_pending,
+                                        uint32_t startup_task_gate_tick,
+                                        uint32_t startup_release_tick,
+                                        int startup_sync_held) {
+    if (!g_desktop_visual_ready) {
+        return 1;
+    }
+    if (g_desktop_startup_tasks != 0u) {
+        return 1;
+    }
+    if (!g_desktop_startup_io_ready) {
+        return 1;
+    }
+    if (sound_pending) {
+        return 1;
+    }
+    if (sound_armed_ticks != 0u && g_desktop_runtime_helper_gate_tick != 0u) {
+        return 1;
+    }
+    if (startup_task_gate_tick != 0u) {
+        return 1;
+    }
+    if (startup_sync_held && startup_release_tick != 0u) {
+        return 1;
+    }
+    return 0;
 }
 
 static const char *sound_applet_output_label(int index) {
@@ -792,10 +838,10 @@ static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT
     {"Network restart", "kill network", APP_TERMINAL, START_MENU_TAB_APPS, "kill network"},
     {"Spawn clock", "spawn clock", APP_TERMINAL, START_MENU_TAB_APPS, "spawn clock"},
     {"Rede", "netmgrd status", APP_TERMINAL, START_MENU_TAB_APPS, "netmgrd status"},
-    {"Som", "soundctl status", APP_TERMINAL, START_MENU_TAB_APPS, "soundctl status"},
+    {"Audio Player", "Midia Som", APP_AUDIO_PLAYER, START_MENU_TAB_APPS, 0},
     {"Calculadora", "Acessorios", APP_CALCULATOR, START_MENU_TAB_APPS, 0},
     {"Imagens", "Midia", APP_IMAGEVIEWER, START_MENU_TAB_APPS, 0},
-    {"Audio Player", "Midia", APP_AUDIO_PLAYER, START_MENU_TAB_APPS, 0},
+    {"Som CLI", "soundctl status", APP_TERMINAL, START_MENU_TAB_APPS, "soundctl status"},
     {"Sketchpad", "Criacao", APP_SKETCHPAD, START_MENU_TAB_APPS, 0},
     {"Personalizar", "Desktop", APP_PERSONALIZE, START_MENU_TAB_APPS, 0},
     {"Snake", "Classicos", APP_SNAKE, START_MENU_TAB_GAMES, 0},
@@ -874,13 +920,14 @@ static void network_applet_invalidate_backend_cache(void);
 static void network_applet_sync_backend(int force);
 static int network_applet_set_autoconnect(const char *ssid);
 static int network_applet_forget_profile(const char *ssid);
-static void sound_applet_export_service_state(void);
 static int sound_applet_apply_saved_settings(void);
 static void network_applet_export_service_state(void);
 static int desktop_launch_detached(int argc, char **argv);
 static int desktop_launch_detached_with_failure_log(int argc, char **argv, const char *failure_log);
 static void desktop_queue_startup_background_tasks(void);
-static void desktop_process_startup_background_tasks(void);
+static int desktop_process_startup_background_tasks(uint32_t ticks,
+                                                    uint32_t *sound_armed_ticks,
+                                                    uint32_t *release_tick);
 static void free_window(int widx);
 static void clamp_window_rect(struct rect *r);
 static void append_uint_limited(char *buf, unsigned value, int max_len);
@@ -5445,6 +5492,25 @@ static uint32_t start_menu_entry_restart_service_type(const struct start_menu_en
     return MK_SERVICE_NONE;
 }
 
+static int start_menu_entry_is_detached_game_app(const struct start_menu_entry *entry) {
+    const char *cmd;
+
+    if (!entry || entry->type != APP_TERMINAL || entry->tab != START_MENU_TAB_GAMES) {
+        return 0;
+    }
+    cmd = entry->command;
+    if (!cmd || cmd[0] == '\0') {
+        return 0;
+    }
+    while (*cmd) {
+        if (*cmd == ' ' || *cmd == '\t') {
+            return 0;
+        }
+        ++cmd;
+    }
+    return 1;
+}
+
 static int launch_start_menu_entry(const struct start_menu_entry *entry, int *focused) {
     uint32_t restart_service_type;
 
@@ -5455,6 +5521,10 @@ static int launch_start_menu_entry(const struct start_menu_entry *entry, int *fo
         restart_service_type = start_menu_entry_restart_service_type(entry);
         if (restart_service_type != MK_SERVICE_NONE) {
             desktop_arm_restart_smoke(restart_service_type, entry->command, focused);
+        } else if (start_menu_entry_is_detached_game_app(entry)) {
+            if (desktop_launch_detached(1, (char **)&entry->command) != 0) {
+                desktop_request_open_terminal_command(entry->command);
+            }
         } else {
             desktop_request_open_terminal_command(entry->command);
         }
@@ -5736,6 +5806,108 @@ static int sound_applet_load_runtime_state(void) {
     return 0;
 }
 
+static int sound_applet_read_level_percent(int control_id, int *percent_out) {
+    mixer_ctrl_t control = {0};
+    int level;
+
+    if (percent_out == 0) {
+        return -1;
+    }
+
+    control.dev = control_id;
+    control.type = AUDIO_MIXER_VALUE;
+    if (sys_audio_mixer_read(&control) != 0) {
+        return -1;
+    }
+    if (control.type != AUDIO_MIXER_VALUE || control.un.value.num_channels <= 0) {
+        return -1;
+    }
+
+    level = control.un.value.level[0];
+    *percent_out = (level * 100) / AUDIO_MAX_GAIN;
+    return 0;
+}
+
+static int sound_applet_read_enum_value(int control_id, int *value_out) {
+    mixer_ctrl_t control = {0};
+
+    if (value_out == 0) {
+        return -1;
+    }
+
+    control.dev = control_id;
+    control.type = AUDIO_MIXER_ENUM;
+    if (sys_audio_mixer_read(&control) != 0) {
+        return -1;
+    }
+    if (control.type != AUDIO_MIXER_ENUM) {
+        return -1;
+    }
+
+    *value_out = control.un.ord;
+    return 0;
+}
+
+static int sound_applet_load_runtime_state_direct(void) {
+    struct mk_audio_info info;
+    struct audio_status status;
+    int output_count;
+    int input_count;
+    int selected_output = 0;
+    int selected_input = 0;
+    int output_volume = 0;
+    int input_volume = 0;
+    int output_muted = 0;
+    int input_muted = 0;
+    unsigned output_mask;
+
+    if (sys_audio_get_info(&info) != 0 || sys_audio_get_status(&status) != 0) {
+        return -1;
+    }
+    if (sound_applet_read_level_percent(MK_AUDIO_MIXER_OUTPUT_LEVEL, &output_volume) != 0 ||
+        sound_applet_read_level_percent(MK_AUDIO_MIXER_INPUT_LEVEL, &input_volume) != 0 ||
+        sound_applet_read_enum_value(MK_AUDIO_MIXER_OUTPUT_MUTE, &output_muted) != 0 ||
+        sound_applet_read_enum_value(MK_AUDIO_MIXER_INPUT_MUTE, &input_muted) != 0 ||
+        sound_applet_read_enum_value(MK_AUDIO_MIXER_OUTPUT_DEFAULT, &selected_output) != 0 ||
+        sound_applet_read_enum_value(MK_AUDIO_MIXER_INPUT_DEFAULT, &selected_input) != 0) {
+        return -1;
+    }
+
+    g_sound_applet.backend_kind = status._spare[0] & 0xff;
+    output_count = (int)info.parameters._spare[1];
+    input_count = (int)info.parameters._spare[2];
+    output_mask = info.parameters._spare[3] != 0u ? info.parameters._spare[3] : 0x1u;
+
+    if (output_count < 1) {
+        output_count = 1;
+    }
+    if (input_count < 0) {
+        input_count = 0;
+    }
+
+    g_sound_applet.output_count = output_count;
+    g_sound_applet.input_count = input_count;
+    g_sound_applet.output_mask = output_mask;
+    g_sound_applet.output_volume = output_volume;
+    g_sound_applet.input_volume = input_volume;
+    g_sound_applet.output_muted = output_muted != 0;
+    g_sound_applet.input_muted = input_muted != 0;
+    if (selected_output >= 0 && selected_output < g_sound_applet.output_count) {
+        g_sound_applet.selected_output = selected_output;
+    } else if (g_sound_applet.selected_output >= g_sound_applet.output_count) {
+        g_sound_applet.selected_output = 0;
+    }
+    if (g_sound_applet.input_count == 0) {
+        g_sound_applet.selected_input = 0;
+    } else if (selected_input >= 0 && selected_input < g_sound_applet.input_count) {
+        g_sound_applet.selected_input = selected_input;
+    } else if (g_sound_applet.selected_input >= g_sound_applet.input_count) {
+        g_sound_applet.selected_input = 0;
+    }
+
+    return 0;
+}
+
 static void sound_applet_invalidate_backend_cache(void) {
     g_sound_applet_last_sync_ticks = 0u;
 }
@@ -5749,6 +5921,9 @@ static void sound_applet_sync_backend(int force) {
         return;
     }
     g_sound_applet_last_sync_ticks = now;
+    if (sound_applet_load_runtime_state_direct() == 0) {
+        return;
+    }
     (void)sound_applet_load_runtime_state();
 }
 
@@ -5776,27 +5951,12 @@ static void sound_applet_save_settings(void) {
     (void)fs_write_file(DESKTOP_AUDIO_SETTINGS_PATH, text, 0);
 }
 
-static void sound_applet_export_service_state(void) {
-    char *export_argv[3];
-    uint32_t now = sys_ticks();
-
-    if (g_sound_applet_last_export_ticks != 0u &&
-        (uint32_t)(now - g_sound_applet_last_export_ticks) < APPLET_EXPORT_REFRESH_TICKS) {
-        return;
-    }
-    g_sound_applet_last_export_ticks = now;
-
-    export_argv[0] = "audiosvc";
-    export_argv[1] = "export-state";
-    export_argv[2] = 0;
-    (void)desktop_launch_detached_with_failure_log(2,
-                                                   export_argv,
-                                                   "desktop: audio export launch failed\n");
-}
-
 static int sound_applet_apply_saved_settings(void) {
     char *apply_argv[4];
 
+    if (!desktop_runtime_helper_launch_allowed()) {
+        return 0;
+    }
     apply_argv[0] = "audiosvc";
     apply_argv[1] = "apply-settings";
     apply_argv[2] = (char *)DESKTOP_AUDIO_SETTINGS_PATH;
@@ -6220,17 +6380,38 @@ static void desktop_queue_startup_background_tasks(void) {
     }
 }
 
-static void desktop_process_startup_background_tasks(void) {
+static int desktop_process_startup_background_tasks(uint32_t ticks,
+                                                    uint32_t *sound_armed_ticks,
+                                                    uint32_t *release_tick) {
     if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_UI_ASSETS) != 0u) {
         g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_UI_ASSETS;
+        sys_write_debug("desktop: startup phase wallpaper\n");
         ui_complete_startup();
-        return;
+        g_desktop_startup_io_ready = 1;
+        if (release_tick != 0 && *release_tick == 0u) {
+            *release_tick = ticks + DESKTOP_STARTUP_STORAGE_RELEASE_DELAY_TICKS;
+        }
+        if (sound_armed_ticks != 0 && *sound_armed_ticks == 0u) {
+            *sound_armed_ticks = ticks;
+            sys_write_debug("desktop: startup phase audio armed\n");
+        }
+        sys_write_debug("desktop: startup phase io ready\n");
+        return 1;
     }
     if ((g_desktop_startup_tasks & DESKTOP_STARTUP_TASK_NETWORK_RECONCILE) != 0u) {
+        if (!desktop_runtime_helper_launch_allowed()) {
+            return 0;
+        }
         g_desktop_startup_tasks &= ~DESKTOP_STARTUP_TASK_NETWORK_RECONCILE;
+        sys_write_debug("desktop: startup phase network\n");
         (void)network_applet_run_reconcile();
-        return;
+        if (sound_armed_ticks != 0 && *sound_armed_ticks == 0u) {
+            *sound_armed_ticks = ticks;
+            sys_write_debug("desktop: startup phase audio armed\n");
+        }
+        return 1;
     }
+    return 0;
 }
 
 static int network_applet_disconnect_interface(const char *fallback_if) {
@@ -6257,6 +6438,9 @@ static void network_applet_export_service_state(void) {
     char *export_argv[3];
     uint32_t now = sys_ticks();
 
+    if (!desktop_runtime_helper_launch_allowed()) {
+        return;
+    }
     if (g_network_applet_last_export_ticks != 0u &&
         (uint32_t)(now - g_network_applet_last_export_ticks) < APPLET_EXPORT_REFRESH_TICKS) {
         return;
@@ -6678,10 +6862,7 @@ static uint32_t desktop_pump_async_applet_events(void) {
 
     if (allow_runtime_services && (flags & DESKTOP_ASYNC_REFRESH_AUDIO) != 0u) {
         sound_applet_invalidate_backend_cache();
-        sound_applet_export_service_state();
-        if (g_sound_applet.popup_open) {
-            sound_applet_sync_backend(1);
-        }
+        sound_applet_sync_backend(1);
     }
     if (allow_runtime_services && (flags & DESKTOP_ASYNC_REFRESH_NETWORK) != 0u) {
         network_applet_invalidate_backend_cache();
@@ -8147,9 +8328,13 @@ void desktop_main(void) {
     int running = 1;
     uint32_t desktop_sound_armed_ticks = 0u;
     uint32_t desktop_startup_task_gate_tick = 0u;
+    uint32_t desktop_startup_release_tick = 0u;
     int desktop_sound_pending = 1;
+    int desktop_startup_sync_held = 1;
 
     sys_write_debug("desktop: session start\n");
+    fs_suspend_sync();
+    ui_hold_startup_persist();
     ui_init();
     (void)sys_gfx_set_present_policy(VIDEO_PRESENT_POLICY_DESKTOP);
     g_desktop_startup_tasks = 0u;
@@ -8161,10 +8346,13 @@ void desktop_main(void) {
     g_desktop_video_pending_depth = 0u;
     g_desktop_service_event_subscriptions = 0u;
     g_desktop_visual_ready = 0;
+    g_desktop_runtime_helper_gate_open = 0;
+    g_desktop_startup_io_ready = 0;
+    g_desktop_runtime_helper_gate_tick = 0u;
     g_desktop_present_retry_tick = 0u;
     g_desktop_video_overflow_last_tick = 0u;
     g_desktop_input_compat_mode = 0;
-    desktop_sound_armed_ticks = sys_ticks();
+    desktop_sound_armed_ticks = 0u;
     start_button = ui_taskbar_start_button_rect();
     menu_rect = ui_start_menu_rect();
     context_menu = desktop_context_menu_rect(0, 0);
@@ -8176,7 +8364,7 @@ void desktop_main(void) {
     sound_applet_load_settings();
     network_applet_load_settings();
     desktop_queue_startup_background_tasks();
-    desktop_startup_task_gate_tick = sys_ticks() + DESKTOP_STARTUP_TASK_GATE_TICKS;
+    desktop_startup_task_gate_tick = 0u;
 
     for (int i = 0; i < MAX_WINDOWS; ++i) g_windows[i].active = 0;
     for (int i = 0; i < MAX_TERMINALS; ++i) g_term_used[i] = 0;
@@ -8217,9 +8405,39 @@ void desktop_main(void) {
         uint32_t ticks = sys_ticks();
         dirty |= desktop_process_app_cycle(&focused, ticks);
         dirty |= desktop_process_drag_stress(&focused, ticks);
-        desktop_try_play_startup_sound(&desktop_sound_armed_ticks,
-                                       &desktop_sound_pending,
-                                       ticks);
+        if (g_desktop_visual_ready && desktop_startup_task_gate_tick == 0u) {
+            desktop_startup_task_gate_tick = ticks + DESKTOP_STARTUP_TASK_GATE_TICKS;
+            dirty = 1;
+        }
+        if (desktop_startup_task_gate_tick != 0u &&
+            (int32_t)(ticks - desktop_startup_task_gate_tick) >= 0) {
+            dirty |= desktop_process_startup_background_tasks(ticks,
+                                                              &desktop_sound_armed_ticks,
+                                                              &desktop_startup_release_tick);
+            if (g_desktop_startup_tasks == 0u) {
+                desktop_startup_task_gate_tick = 0u;
+            }
+        }
+        dirty |= desktop_try_play_startup_sound(&desktop_sound_armed_ticks,
+                                                &desktop_sound_pending,
+                                                ticks);
+        if (!g_desktop_runtime_helper_gate_open &&
+            g_desktop_runtime_helper_gate_tick != 0u &&
+            (int32_t)(ticks - g_desktop_runtime_helper_gate_tick) >= 0) {
+            g_desktop_runtime_helper_gate_open = 1;
+            g_desktop_runtime_helper_gate_tick = 0u;
+            sys_write_debug("desktop: startup phase runtime helpers\n");
+            dirty = 1;
+        }
+        if (desktop_startup_sync_held &&
+            desktop_startup_release_tick != 0u &&
+            (int32_t)(ticks - desktop_startup_release_tick) >= 0) {
+            fs_resume_sync();
+            ui_release_startup_persist();
+            desktop_startup_sync_held = 0;
+            desktop_startup_release_tick = 0u;
+            dirty = 1;
+        }
         int start_hover;
         int left_pressed;
         int mouse_event;
@@ -9373,13 +9591,26 @@ void desktop_main(void) {
             network_applet_try_autoconnect();
         }
 
-        if (ticks >= desktop_startup_task_gate_tick) {
-            desktop_process_startup_background_tasks();
+        /*
+         * Give detached helpers such as audio-host a guaranteed scheduling
+         * point between desktop frames so playback progress does not depend on
+         * pointer/input traffic to shake the scheduler.
+         */
+        sys_yield();
+        if (desktop_startup_work_pending(desktop_sound_armed_ticks,
+                                         desktop_sound_pending,
+                                         desktop_startup_task_gate_tick,
+                                         desktop_startup_release_tick,
+                                         desktop_startup_sync_held)) {
+            continue;
         }
-
         sys_sleep();
     }
 
+    if (desktop_startup_sync_held) {
+        fs_resume_sync();
+        ui_release_startup_persist();
+    }
     sys_leave_graphics();
     sys_write_debug("desktop: session stop\n");
 }

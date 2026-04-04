@@ -306,10 +306,16 @@ int imageviewer_handle_click(struct imageviewer_state *viewer, int x, int y) {
     } else if (point_in_rect(&next, x, y)) {
         node = imageviewer_find_adjacent_node(viewer->image_node, 1);
     } else if (point_in_rect(&wallpaper, x, y)) {
-        node = imageviewer_wallpaper_node();
-        if (node < 0) {
-            node = imageviewer_find_first_supported_node();
+        if (!image_node_is_supported(viewer->image_node)) {
+            imageviewer_set_message(viewer, "Abra uma imagem para definir o plano");
+            return 1;
         }
+        if (ui_wallpaper_set_from_node(viewer->image_node) != 0) {
+            imageviewer_set_message(viewer, "Falha ao definir wallpaper");
+            return 1;
+        }
+        imageviewer_set_message(viewer, "Wallpaper aplicado");
+        return 1;
     } else {
         return 0;
     }

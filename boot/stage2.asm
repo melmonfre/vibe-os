@@ -6,6 +6,9 @@ ORG 0x9000
 %define PMODE_FAULT_STACK_TOP 0x6F000
 %define BACKGROUND_LOAD_SEG 0x8000
 %define BACKGROUND_DRAW_ADDR 0x00080000
+%define BOOT_AUDIO_LOAD_SEG 0x8800
+%define BOOT_AUDIO_LOAD_ADDR 0x00088000
+%define BOOT_AUDIO_BUFFER_CAP 16384
 %define BACKGROUND_SOURCE_WIDTH 192
 %define BACKGROUND_SOURCE_HEIGHT 144
 %define BACKGROUND_DRAW_BYTES (BACKGROUND_SOURCE_WIDTH * BACKGROUND_SOURCE_HEIGHT)
@@ -73,6 +76,9 @@ ORG 0x9000
 %define MENU_TIMEOUT_SECONDS 5
 %define PIT_COUNTS_PER_SECOND 1193182
 %define MENU_TIMEOUT_COUNTS (PIT_COUNTS_PER_SECOND * MENU_TIMEOUT_SECONDS)
+%define BOOT_AUDIO_SAMPLE_RATE 4000
+%define BOOT_AUDIO_SAMPLE_COUNTS ((PIT_COUNTS_PER_SECOND + (BOOT_AUDIO_SAMPLE_RATE / 2)) / BOOT_AUDIO_SAMPLE_RATE)
+%define BOOT_AUDIO_PWM_COUNTS (BOOT_AUDIO_SAMPLE_COUNTS - 2)
 %define GRAPHICS_MIN_FB_ADDR 0x00100000
 %define GRAPHICS_MAX_WIDTH 4096
 %define GRAPHICS_MAX_HEIGHT 2160
@@ -148,6 +154,8 @@ stage2_entry:
 
     DEBUG_BOOT_CHAR 'F'
     call load_optional_background
+    DEBUG_BOOT_CHAR 'A'
+    call load_optional_boot_audio
     DEBUG_BOOT_CHAR 'V'
     call detect_vesa_modes
     DEBUG_BOOT_CHAR 'B'
@@ -483,6 +491,29 @@ load_optional_background:
     jc .done
 
     mov byte [background_available], 1
+.done:
+    clc
+    ret
+
+load_optional_boot_audio:
+    mov byte [boot_audio_available], 0
+    mov dword [boot_audio_size], 0
+    mov si, boot_audio_name
+    call find_root_entry
+    jc .done
+
+    mov eax, [file_size]
+    cmp eax, 1
+    jb .done
+    cmp eax, BOOT_AUDIO_BUFFER_CAP
+    ja .done
+
+    mov [boot_audio_size], eax
+    mov word [load_segment], BOOT_AUDIO_LOAD_SEG
+    call load_file_to_memory
+    jc .done
+
+    mov byte [boot_audio_available], 1
 .done:
     clc
     ret
@@ -1885,6 +1916,7 @@ realmode_idtr:
 
 kernel_name db 'KERNEL  BIN'
 background_name db 'VIBEBG  BIN'
+boot_audio_name db 'VIBEBOOTRAW'
 disk_error_msg db 'VIBELOADER ERROR ', 0
 a20_error_msg db 'VIBELOADER A20 FAIL', 0
 last_label db 'LAST ', 0
@@ -1911,6 +1943,9 @@ a20_kbc_write_label db ' W', 0
 a20_legend_msg db 'P=PRE B=INT15 C=92 D=8042', 0
 boot_drive db 0
 background_available db 0
+boot_audio_available db 0
+boot_audio_played db 0
+boot_audio_saved_port61 db 0
 debug_last_code db '?'
 debug_trace_len db 0
 debug_trace_buf times DEBUG_TRACE_MAX db 0
@@ -1956,7 +1991,9 @@ load_segment dw KERNEL_LOAD_SEG
 search_name_ptr dw 0
 vesa_mode_list_seg dw 0
 vesa_mode_list_off dw 0
+boot_audio_prev_pit dw 0
 align 4
+boot_audio_size dd 0
 catalog_area_left dd 0
 catalog_area_right dd 0
 
@@ -2223,6 +2260,10 @@ vibeloader_menu:
     mov dword [menu_selection], 0
     mov byte [menu_initialized], 1
     mov byte [menu_force_full_redraw], 1
+    mov byte [menu_dirty], 1
+    call menu_render
+    mov byte [menu_dirty], 0
+    call boot_audio_maybe_play_once
     call menu_restart_timer
     mov byte [menu_dirty], 1
 
@@ -2279,6 +2320,7 @@ vibeloader_menu_maybe_draw:
     call menu_render
     DEBUG_PMODE_CHAR 'r'
     mov byte [menu_dirty], 0
+    call boot_audio_maybe_play_once
     jmp vibeloader_menu_loop
 
 vibeloader_menu_change_video:
@@ -2292,6 +2334,7 @@ vibeloader_menu_boot_now:
 
 vibeloader_menu_default_boot:
     DEBUG_PMODE_CHAR 'D'
+    call boot_audio_maybe_play_once
     call menu_apply_selection
     ret
 
@@ -2549,6 +2592,90 @@ pit_read_counter:
     mov ah, al
     in al, 0x40
     xchg al, ah
+    ret
+
+boot_audio_maybe_play_once:
+    pushad
+
+    cmp byte [boot_audio_available], 1
+    jne .done
+    cmp byte [boot_audio_played], 0
+    jne .done
+    cmp dword [boot_audio_size], 0
+    je .done
+
+    mov byte [boot_audio_played], 1
+    DEBUG_PMODE_CHAR 'S'
+    call boot_audio_speaker_begin
+    call pit_read_counter
+    mov [boot_audio_prev_pit], ax
+    mov edi, BOOT_AUDIO_LOAD_ADDR
+    mov ecx, [boot_audio_size]
+
+.sample_loop:
+    test ecx, ecx
+    jz .finish
+
+.wait_sample:
+    call pit_read_counter
+    movzx ebx, word [boot_audio_prev_pit]
+    movzx edx, ax
+    sub ebx, edx
+    and ebx, 0xFFFF
+    cmp ebx, BOOT_AUDIO_SAMPLE_COUNTS
+    jb .wait_sample
+    mov [boot_audio_prev_pit], ax
+
+    movzx eax, byte [edi]
+    inc edi
+    dec ecx
+    call boot_audio_output_sample
+    jmp .sample_loop
+
+.finish:
+    call boot_audio_speaker_end
+    DEBUG_PMODE_CHAR 's'
+    cmp byte [menu_initialized], 0
+    je .done
+    call menu_restart_timer
+    mov byte [menu_dirty], 1
+
+.done:
+    popad
+    ret
+
+boot_audio_speaker_begin:
+    push eax
+    in al, 0x61
+    mov [boot_audio_saved_port61], al
+    or al, 0x03
+    out 0x61, al
+    pop eax
+    ret
+
+boot_audio_speaker_end:
+    push eax
+    mov al, [boot_audio_saved_port61]
+    out 0x61, al
+    pop eax
+    ret
+
+boot_audio_output_sample:
+    push ebx
+
+    imul eax, eax, BOOT_AUDIO_PWM_COUNTS
+    shr eax, 8
+    add eax, 1
+    mov bx, ax
+
+    mov al, 0xB0
+    out 0x43, al
+    mov al, bl
+    out 0x42, al
+    mov al, bh
+    out 0x42, al
+
+    pop ebx
     ret
 
 menu_flush_keyboard_buffer:

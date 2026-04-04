@@ -128,7 +128,7 @@ static int soundctl_wait_for_capture_ready(int subscribed);
 static void soundctl_emit_record_capture_debug(void);
 static void soundctl_write_record_summary(const char *target, unsigned duration_ms, unsigned captured);
 
-static unsigned soundctl_status_flags(const struct audio_status *status) {
+static __attribute__((unused)) unsigned soundctl_status_flags(const struct audio_status *status) {
     if (status == 0) {
         return 0u;
     }
@@ -875,7 +875,6 @@ static int soundctl_command_status(void) {
     struct audio_status status;
     int input_count;
     unsigned feature_flags;
-    unsigned status_flags;
     char hardware_diag[160];
 
     soundctl_debug("soundctl: status begin\n");
@@ -913,7 +912,6 @@ static int soundctl_command_status(void) {
            (unsigned int)status._spare[3]);
     input_count = soundctl_input_count(&info);
     feature_flags = soundctl_feature_flags(&info);
-    status_flags = soundctl_status_flags(&status);
     soundctl_print_target("output", MK_AUDIO_MIXER_OUTPUT_LEVEL, MK_AUDIO_MIXER_OUTPUT_MUTE);
     soundctl_print_default_target(&info, "output", MK_AUDIO_MIXER_OUTPUT_DEFAULT);
     if (input_count > 0) {
@@ -921,30 +919,6 @@ static int soundctl_command_status(void) {
         soundctl_print_default_target(&info, "input", MK_AUDIO_MIXER_INPUT_DEFAULT);
     }
     soundctl_debug("soundctl: status mixer-ok\n");
-    printf("features: %sirq %scapture %s %scodecready-quirk %smultichannel %scapture-dma %scorb-rirb %scodec-probe %swidget-probe %spath-programmed %susb-attach-ready %susb-attached-ready %scontrol-owner-audiosvc %skernel-backend-executor %sui-progress-decoupled irq-count=%u\n",
-           (feature_flags & 0x2u) != 0u ? "" : "no-",
-           (feature_flags & 0x8u) != 0u ? "" : "no-",
-           (feature_flags & 0x80u) != 0u ? "mmio" : "io",
-           (feature_flags & 0x100u) != 0u ? "" : "no-",
-           (feature_flags & 0x200u) != 0u ? "" : "no-",
-           (feature_flags & 0x400u) != 0u ? "" : "no-",
-           (feature_flags & 0x800u) != 0u ? "" : "no-",
-           (feature_flags & 0x1000u) != 0u ? "" : "no-",
-           (feature_flags & 0x2000u) != 0u ? "" : "no-",
-           (feature_flags & 0x4000u) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_USB_ATTACH_READY) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_USB_ATTACHED_READY) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_CONTROL_OWNER_AUDIOSVC) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_KERNEL_BACKEND_EXECUTOR) != 0u ? "" : "no-",
-           (feature_flags & MK_AUDIO_FEATURE_UI_PROGRESS_DECOUPLED) != 0u ? "" : "no-",
-           info.parameters._spare[0]);
-    printf("runtime: %sirq-seen %sno-valid-irq %sstarvation %sunderrun %scapture-data %scapture-xrun\n",
-           (status_flags & MK_AUDIO_STATUS_FLAG_IRQ_SEEN) != 0u ? "" : "no-",
-           (status_flags & MK_AUDIO_STATUS_FLAG_NO_VALID_IRQ) != 0u ? "" : "no-",
-           (status_flags & MK_AUDIO_STATUS_FLAG_STARVATION) != 0u ? "" : "no-",
-           (status_flags & MK_AUDIO_STATUS_FLAG_UNDERRUN) != 0u ? "" : "no-",
-           (status_flags & MK_AUDIO_STATUS_FLAG_CAPTURE_DATA) != 0u ? "" : "no-",
-           (status_flags & MK_AUDIO_STATUS_FLAG_CAPTURE_XRUN) != 0u ? "" : "no-");
     if (soundctl_status_backend(&status) == 2) {
         soundctl_debug("soundctl: backend=compat-azalia\n");
     } else if (soundctl_status_backend(&status) == 4) {

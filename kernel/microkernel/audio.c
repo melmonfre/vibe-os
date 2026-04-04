@@ -8,6 +8,7 @@
 #include <kernel/memory/heap.h>
 #include <kernel/memory/physmem.h>
 #include <kernel/microkernel/audio.h>
+#include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/service.h>
 #include <kernel/scheduler.h>
@@ -1110,6 +1111,13 @@ static void mk_audio_cooperative_delay(uint32_t iteration) {
     }
 }
 
+static void mk_audio_azalia_stream_delay(uint32_t iteration) {
+    mk_audio_compat_delay();
+    if ((iteration & 0x3ffu) == 0x3ffu) {
+        yield();
+    }
+}
+
 static void mk_audio_azalia_busy_delay(uint32_t count) {
     for (uint32_t i = 0u; i < count; ++i) {
         mk_audio_compat_delay();
@@ -1121,7 +1129,7 @@ static int mk_audio_azalia_wait32(uint16_t reg, uint32_t mask, uint32_t value, u
         if ((mk_audio_azalia_read32(g_audio_state.azalia_base, reg) & mask) == value) {
             return 0;
         }
-        mk_audio_cooperative_delay(i);
+        mk_audio_azalia_stream_delay(i);
     }
     return -1;
 }
@@ -1131,7 +1139,7 @@ static int mk_audio_azalia_wait16(uint16_t reg, uint16_t mask, uint16_t value, u
         if ((mk_audio_azalia_read16(g_audio_state.azalia_base, reg) & mask) == value) {
             return 0;
         }
-        mk_audio_cooperative_delay(i);
+        mk_audio_azalia_stream_delay(i);
     }
     return -1;
 }
@@ -1141,7 +1149,7 @@ static int mk_audio_azalia_wait8(uint16_t reg, uint8_t mask, uint8_t value, uint
         if ((mk_audio_azalia_read8(g_audio_state.azalia_base, reg) & mask) == value) {
             return 0;
         }
-        mk_audio_cooperative_delay(i);
+        mk_audio_azalia_stream_delay(i);
     }
     return -1;
 }
@@ -1235,6 +1243,33 @@ static int mk_audio_current_process_is_service_worker(void) {
     process_t *current = scheduler_current();
 
     return current != 0 && current->service_type == MK_SERVICE_AUDIO;
+}
+
+static int mk_audio_current_prefers_kernel_hot_path(void) {
+    process_t *current = scheduler_current();
+    const struct mk_launch_context *context;
+
+    if (current == 0) {
+        return 0;
+    }
+    if (current->service_type == MK_SERVICE_AUDIO) {
+        return 1;
+    }
+
+    context = mk_launch_context_current();
+    if (context == 0) {
+        return 1;
+    }
+
+    if ((context->flags & (MK_LAUNCH_FLAG_BOOTSTRAP |
+                           MK_LAUNCH_FLAG_CRITICAL |
+                           MK_LAUNCH_FLAG_USER_DESKTOP)) != 0u) {
+        return 1;
+    }
+
+    return context->task_class == MK_TASK_CLASS_AUDIO_IO ||
+           context->task_class == MK_TASK_CLASS_DESKTOP ||
+           context->task_class == MK_TASK_CLASS_APP_RUNTIME;
 }
 
 static int mk_audio_prepare_request(struct mk_message *message,
@@ -4884,7 +4919,15 @@ static int mk_audio_try_azalia_backend_cb(const struct kernel_pci_device_info *i
         ctx->selected = 1;
         return 1;
     }
-    return 0;
+    /*
+     * Keep the real HDA backend selected even when the first probe does not
+     * produce a usable playback path yet. Runtime reprobe/output-path
+     * programming can still recover it, while falling back to pcspkr here
+     * makes the system stay mute on machines where audio used to come up
+     * after a later codec/path settle.
+     */
+    ctx->selected = 1;
+    return 1;
 }
 
 static int mk_audio_try_compat_backend_cb(const struct kernel_pci_device_info *info, void *ctx_ptr) {
@@ -4907,7 +4950,8 @@ static int mk_audio_try_compat_backend_cb(const struct kernel_pci_device_info *i
         ctx->selected = 1;
         return 1;
     }
-    return 0;
+    ctx->selected = 1;
+    return 1;
 }
 
 static int mk_audio_try_azalia_backends(void) {
@@ -7819,7 +7863,7 @@ static int mk_audio_azalia_stream_reset(void) {
         return -1;
     }
     for (uint32_t settle = 0u; settle < 64u; ++settle) {
-        mk_audio_cooperative_delay(settle);
+        mk_audio_compat_delay();
     }
 
     sts = mk_audio_azalia_read8(g_audio_state.azalia_base, (uint16_t)(base + HDA_SD_STS));
@@ -7850,7 +7894,7 @@ static int mk_audio_azalia_stream_prepare_fast(void) {
         if ((ctl & HDA_SD_CTL_RUN) == 0u) {
             break;
         }
-        mk_audio_cooperative_delay(i);
+        mk_audio_azalia_stream_delay(i);
     }
     if ((ctl & HDA_SD_CTL_RUN) != 0u) {
         kernel_debug_puts("audio: hda fast prepare run-clear timeout\n");
@@ -7908,6 +7952,7 @@ static void mk_audio_azalia_stream_halt(void) {
 }
 
 static int mk_audio_azalia_stream_start_buffer(uint32_t bytes) {
+    static int trace_budget = 0;
     uint32_t base;
     uint32_t bdl_addr;
     uint32_t intctl;
@@ -7925,6 +7970,13 @@ static int mk_audio_azalia_stream_start_buffer(uint32_t bytes) {
     uint8_t stream_bound = 0u;
     uint8_t reprobed = 0u;
     uint8_t rotated = 0u;
+    int trace = 0;
+
+    if (trace_budget > 0) {
+        trace = 1;
+        trace_budget--;
+        kernel_debug_puts("audio: hda stream start enter\n");
+    }
 
     if (g_audio_state.azalia_base == 0u || g_audio_state.azalia_output_regbase == 0u || bytes == 0u) {
         return -1;
@@ -8081,6 +8133,9 @@ retry_stream:
         return -1;
     }
     lvi = (uint16_t)(lvi - 1u);
+    if (trace) {
+        kernel_debug_puts("audio: hda stream start bdl-ready\n");
+    }
 
     mk_audio_azalia_write32(g_audio_state.azalia_base, (uint16_t)(base + HDA_SD_BDPL), 0u);
     mk_audio_azalia_write32(g_audio_state.azalia_base, (uint16_t)(base + HDA_SD_BDPU), 0u);
@@ -8134,6 +8189,9 @@ retry_stream:
             }
         }
         return -1;
+    }
+    if (trace) {
+        kernel_debug_puts("audio: hda stream start run-latched\n");
     }
     g_audio_state.azalia_output_running = 1u;
     g_audio_state.azalia_output_bytes = bytes;
@@ -9173,7 +9231,15 @@ static int mk_audio_backend_azalia_stop(void) {
 }
 
 static int mk_audio_backend_azalia_write(const uint8_t *data, uint32_t size) {
+    static int trace_budget = 0;
     uint32_t bytes;
+    int trace = 0;
+
+    if (trace_budget > 0) {
+        trace = 1;
+        trace_budget--;
+        kernel_debug_puts("audio: hda write enter\n");
+    }
 
     if (!g_audio_state.azalia_ready || data == 0 || size == 0u) {
         return -1;
@@ -9229,8 +9295,17 @@ static int mk_audio_backend_azalia_write(const uint8_t *data, uint32_t size) {
         return -1;
     }
 
+    if (trace) {
+        kernel_debug_puts("audio: hda write copy\n");
+    }
     mk_audio_azalia_copy_output_buffer(data, bytes);
+    if (trace) {
+        kernel_debug_puts("audio: hda write start-buffer\n");
+    }
     if (mk_audio_azalia_stream_start_buffer(bytes) != 0) {
+        if (trace) {
+            kernel_debug_puts("audio: hda write start-buffer failed\n");
+        }
         g_audio_state.info.status.active = 0;
         if (mk_audio_azalia_config_is_fatal(g_audio_state.info.device.config)) {
             mk_audio_failover_from_unusable_hda();
@@ -9240,6 +9315,9 @@ static int mk_audio_backend_azalia_write(const uint8_t *data, uint32_t size) {
     g_audio_state.playback_bytes_written += bytes;
     g_audio_state.playback_write_calls++;
     g_audio_state.info.status.active = 1;
+    if (trace) {
+        kernel_debug_puts("audio: hda write return\n");
+    }
     return (int)bytes;
 }
 
@@ -9716,7 +9794,7 @@ int mk_audio_service_get_info(struct mk_audio_info *info) {
     if (info == 0) {
         return -1;
     }
-    if (mk_audio_current_process_is_service_worker()) {
+    if (mk_audio_current_prefers_kernel_hot_path()) {
         mk_audio_refresh_topology_snapshot();
         mk_audio_refresh_status_snapshot();
         *info = g_audio_state.info;
@@ -9743,7 +9821,7 @@ int mk_audio_service_get_status(struct audio_status *status) {
     if (status == 0) {
         return -1;
     }
-    if (mk_audio_current_process_is_service_worker()) {
+    if (mk_audio_current_prefers_kernel_hot_path()) {
         mk_audio_refresh_status_snapshot();
         *status = g_audio_state.info.status;
         return 0;
@@ -9770,7 +9848,7 @@ int mk_audio_service_set_params(const struct audio_swpar *params) {
     if (params == 0) {
         return -1;
     }
-    if (mk_audio_current_process_is_service_worker()) {
+    if (mk_audio_current_prefers_kernel_hot_path()) {
         g_audio_state.info.parameters = *params;
         if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_COMPAT_UAUDIO) {
             mk_audio_normalize_uaudio_params(&g_audio_state.info.parameters);
@@ -9801,7 +9879,7 @@ int mk_audio_service_start(void) {
     struct mk_message reply;
     struct mk_audio_result result;
 
-    if (mk_audio_current_process_is_service_worker()) {
+    if (mk_audio_current_prefers_kernel_hot_path()) {
         if (g_audio_backend->start == 0 || g_audio_backend->start() != 0) {
             return -1;
         }
@@ -9826,7 +9904,7 @@ int mk_audio_service_stop(void) {
     struct mk_message reply;
     struct mk_audio_result result;
 
-    if (mk_audio_current_process_is_service_worker()) {
+    if (mk_audio_current_prefers_kernel_hot_path()) {
         if (g_audio_backend->stop == 0 || g_audio_backend->stop() != 0) {
             return -1;
         }
@@ -9857,7 +9935,7 @@ int mk_audio_service_write(const void *data, uint32_t size) {
     if (data == 0 || size == 0u) {
         return -1;
     }
-    if (mk_audio_current_process_is_service_worker()) {
+    if (mk_audio_current_prefers_kernel_hot_path()) {
         if (g_audio_backend == 0 || g_audio_backend->write == 0) {
             return -1;
         }
@@ -9915,7 +9993,7 @@ int mk_audio_service_write_async(const void *data, uint32_t size) {
     if (data == 0 || size == 0u) {
         return -1;
     }
-    if (mk_audio_current_process_is_service_worker()) {
+    if (mk_audio_current_prefers_kernel_hot_path()) {
         uint32_t written = mk_audio_async_ring_write((const uint8_t *)data, size);
 
         mk_audio_refresh_status_snapshot();

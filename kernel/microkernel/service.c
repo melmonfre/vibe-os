@@ -98,8 +98,35 @@ int mk_service_backend_bridge_allowed_current(uint32_t service_type) {
 
 static int mk_service_current_prefers_local_handler(const struct mk_service_record *service,
                                                     const struct mk_message *request) {
+    const struct mk_launch_context *context;
+
     if (service == 0 || request == 0) {
         return 0;
+    }
+
+    if (service->type == MK_SERVICE_AUDIO &&
+        request->type >= MK_MSG_AUDIO_GETINFO &&
+        request->type <= MK_MSG_AUDIO_PLAY_ASSET) {
+        context = mk_launch_context_current();
+        if (context == 0) {
+            return 1;
+        }
+
+        /*
+         * Keep the compat-backed audio datapath in the kernel hot path so
+         * startup/session playback doesn't pend on an extra service hop while
+         * the userland control daemon is still bootstrapping.
+         */
+        if ((context->flags & (MK_LAUNCH_FLAG_BOOTSTRAP |
+                               MK_LAUNCH_FLAG_CRITICAL |
+                               MK_LAUNCH_FLAG_USER_DESKTOP)) != 0u) {
+            return 1;
+        }
+        if (context->task_class == MK_TASK_CLASS_AUDIO_IO ||
+            context->task_class == MK_TASK_CLASS_DESKTOP ||
+            context->task_class == MK_TASK_CLASS_APP_RUNTIME) {
+            return 1;
+        }
     }
 
     return 0;

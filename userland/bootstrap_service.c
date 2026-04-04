@@ -7,6 +7,7 @@
 #include <kernel/microkernel/storage.h>
 #include <kernel/microkernel/video.h>
 #include <kernel/drivers/storage/ata.h>
+#include <userland/modules/include/fs.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/utils.h>
 #include <string.h>
@@ -1874,6 +1875,7 @@ __attribute__((section(".entry"))) void userland_audio_service_entry(void) {
     }
 
     source_pid = (uint32_t)info.pid;
+    fs_init();
     service_log_online(&info);
 
     for (;;) {

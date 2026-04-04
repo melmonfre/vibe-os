@@ -266,14 +266,15 @@ static void bootstrap_storage_smoke_test(void) {
 }
 
 static void bootstrap_prime_kernel_service_stack(void) {
-    struct video_capabilities caps = {0};
     struct mk_audio_info audio_info = {0};
 
-    if (sys_gfx_caps(&caps) == 0) {
-        sys_write_debug("init: video service primed\n");
-    } else {
-        sys_write_debug("init: video service prime failed\n");
-    }
+    /*
+     * Early video GET_CAPS probing regressed desktop boot by waking the video
+     * service before the new bootstrap path had fully settled. Keep the audio
+     * prime, which is cheap and directly useful for backend diagnostics, and
+     * defer video probing to the desktop/runtime path.
+     */
+    sys_write_debug("init: video service prime deferred\n");
 
     if (sys_audio_get_info(&audio_info) == 0) {
         sys_write_debug("init: audio service primed\n");
@@ -285,6 +286,7 @@ static void bootstrap_prime_kernel_service_stack(void) {
 static void bootstrap_try_play_boot_sound(void) {
     if (sys_launch_builtin_user(USERLAND_BUILTIN_BOOT_AUDIO) > 0) {
         sys_write_debug("init: boot audio host launched\n");
+        sys_write_debug("init: boot sound returned\n");
         return;
     }
     sys_write_debug("init: boot audio host launch failed\n");
@@ -345,12 +347,7 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     kernel_debug_puts("init: fs_init returned\n");
     bootstrap_storage_smoke_test();
     bootstrap_prime_kernel_service_stack();
-    if ((info.boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) == 0u ||
-        (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) != 0u) {
-        bootstrap_try_play_boot_sound();
-    } else {
-        sys_write_debug("init: boot sound deferred for desktop boot\n");
-    }
+    bootstrap_try_play_boot_sound();
 
     sys_write_debug("init: appfs launcher ready\n");
     kernel_debug_puts("init: appfs launcher ready\n");
