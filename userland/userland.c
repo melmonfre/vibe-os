@@ -18,15 +18,21 @@ void kernel_debug_puts(const char *msg) {
 
 int vibe_app_main(int argc, char **argv) {
     struct userland_launch_info info;
+    int boot_to_desktop = 0;
 
     (void)argc;
     (void)argv;
     userland_app_boot_debug("userland.app: shell start\n");
-    if (sys_launch_info(&info) == 0 &&
-        (info.boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u &&
-        (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) == 0u) {
+    if (sys_launch_info(&info) == 0) {
+        boot_to_desktop =
+            (info.boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u &&
+            (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) == 0u;
+    }
+    if (boot_to_desktop) {
         if (sys_launch_app("startx") > 0) {
             userland_app_boot_debug("userland.app: autostart startx\n");
+            userland_app_boot_debug("userland.app: desktop handoff complete\n");
+            return 0;
         } else {
             userland_app_boot_debug("userland.app: autostart startx failed\n");
         }

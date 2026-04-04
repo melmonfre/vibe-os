@@ -124,6 +124,13 @@ static void host_debug_argv(int argc, char **argv) {
     sys_write_debug(msg);
 }
 
+static void host_play_wav_and_wait(const char *path, const char *tag) {
+    if (path == 0 || path[0] == '\0') {
+        return;
+    }
+    (void)audio_play_wav_best_effort(path, tag);
+}
+
 static int host_wait_for_task_exit(uint32_t pid) {
     struct mk_task_event event;
 
@@ -454,48 +461,59 @@ void userland_shell_session_entry(void) {
     host_debug("shell: session returned", 0);
 }
 
-static int host_launch_external_nonblocking(int argc, char **argv) {
-    if (argc <= 0 || argv == 0 || argv[0] == 0) {
-        return -1;
-    }
-
-    lang_invalidate_directory_cache();
-    if (!lang_can_run(argv[0])) {
-        return -1;
-    }
-
-    host_debug_argv(argc, argv);
-    return argc == 1 ? sys_launch_app(argv[0]) : sys_launch_app_argv(argc, argv);
-}
-
-static int host_async_audio_play(const char *path, const char *tag) {
-    /* Always launch audiosvc directly - sys_audio_play_asset is now fire-and-forget */
-    char *argv[4] = {"audiosvc", "play-asset", (char *)path, 0};
-    int pid = host_launch_external_nonblocking(3, argv);
-    
-    if (pid > 0) {
-        host_debug("host: async audio background launch", tag);
-        return 0;
-    }
-
-    host_debug("host: async audio launch failed", tag);
-    return -1;
-}
-
 void userland_desktop_audio_host_entry(void) {
     host_debug("host: desktop audio start", 0);
-    console_init();
-    fs_init();
-
-    /* Immediately return after launching async task */
-    (void)host_async_audio_play("/assets/vibe_os_desktop.wav", "desktop-session");
+    console_set_output_handler(host_background_console_sink);
+    if (!fs_ready()) {
+        fs_init();
+    }
+    host_play_wav_and_wait("/assets/vibe_os_desktop.wav", "desktop-session");
+    console_set_output_handler(0);
 }
 
 void userland_boot_audio_host_entry(void) {
     host_debug("host: boot audio start", 0);
-    console_init();
-    fs_init();
+    console_set_output_handler(host_background_console_sink);
+    if (!fs_ready()) {
+        fs_init();
+    }
+    host_play_wav_and_wait("/assets/vibe_os_boot.wav", "boot");
+    console_set_output_handler(0);
+}
 
-    /* Immediately return after launching async task */
-    (void)host_async_audio_play("/assets/vibe_os_boot.wav", "boot");
+void userland_audio_asset_host_entry(void) {
+    struct userland_launch_info info;
+    char argv_storage[USERLAND_LAUNCH_ARGV_BYTES];
+    char *argv[USERLAND_LAUNCH_ARGC_MAX + 1];
+    int argc;
+    const char *path = 0;
+
+    console_set_output_handler(host_background_console_sink);
+    if (!fs_ready()) {
+        fs_init();
+    }
+    host_debug("host: audio asset start", 0);
+
+    if (sys_launch_info(&info) != 0) {
+        host_debug("host: audio asset missing launch info", 0);
+        console_set_output_handler(0);
+        return;
+    }
+
+    argc = host_decode_launch_argv(&info,
+                                   argv_storage,
+                                   sizeof(argv_storage),
+                                   argv,
+                                   (int)(sizeof(argv) / sizeof(argv[0])));
+    if (argc > 1 && argv[1] != 0 && argv[1][0] != '\0') {
+        path = argv[1];
+    }
+    if (path == 0) {
+        host_debug("host: audio asset missing path", 0);
+        console_set_output_handler(0);
+        return;
+    }
+
+    host_play_wav_and_wait(path, "audio-player");
+    console_set_output_handler(0);
 }

@@ -1,6 +1,7 @@
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/drivers/storage/block_device.h>
 #include <kernel/kernel_string.h>
+#include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/service.h>
 #include <kernel/microkernel/storage.h>
@@ -19,6 +20,36 @@ static int mk_storage_current_process_is_service_worker(void) {
     process_t *current = scheduler_current();
 
     return current != 0 && current->service_type == MK_SERVICE_STORAGE;
+}
+
+static int mk_storage_current_prefers_kernel_hot_path(void) {
+    process_t *current = scheduler_current();
+    const struct mk_launch_context *context;
+
+    if (current == 0) {
+        return 0;
+    }
+    if (current->service_type == MK_SERVICE_STORAGE) {
+        return 1;
+    }
+
+    context = mk_launch_context_current();
+    if (context == 0) {
+        return 1;
+    }
+
+    if ((context->flags & (MK_LAUNCH_FLAG_BOOTSTRAP |
+                           MK_LAUNCH_FLAG_CRITICAL)) != 0u) {
+        return 1;
+    }
+
+    /*
+     * Keep the direct kernel storage bypass narrowly scoped.
+     * Audio hosts benefit from avoiding storage IPC on startup WAV playback,
+     * but broadening this to the desktop/app-runtime path regresses modular
+     * boot because ELF/AppFS loads rely on the regular service boundary.
+     */
+    return context->task_class == MK_TASK_CLASS_AUDIO_IO;
 }
 
 static int mk_storage_reply_result(struct mk_message *reply, int value) {
@@ -196,7 +227,8 @@ int mk_storage_service_read_sectors(uint32_t lba, void *dst, uint32_t sector_cou
     if (dst == 0 || sector_count == 0u) {
         return -1;
     }
-    if (mk_storage_current_process_is_service_worker()) {
+    if (mk_storage_current_process_is_service_worker() ||
+        mk_storage_current_prefers_kernel_hot_path()) {
         return kernel_storage_read_sectors(lba, dst, sector_count);
     }
 
@@ -242,7 +274,8 @@ int mk_storage_service_write_sectors(uint32_t lba, const void *src, uint32_t sec
     if (src == 0 || sector_count == 0u) {
         return -1;
     }
-    if (mk_storage_current_process_is_service_worker()) {
+    if (mk_storage_current_process_is_service_worker() ||
+        mk_storage_current_prefers_kernel_hot_path()) {
         return kernel_storage_write_sectors(lba, src, sector_count);
     }
 
@@ -286,7 +319,8 @@ int mk_storage_service_load(void *dst, uint32_t size) {
     if (dst == 0 || size == 0u) {
         return -1;
     }
-    if (mk_storage_current_process_is_service_worker()) {
+    if (mk_storage_current_process_is_service_worker() ||
+        mk_storage_current_prefers_kernel_hot_path()) {
         return kernel_storage_load(dst, size);
     }
 
@@ -328,7 +362,8 @@ int mk_storage_service_save(const void *src, uint32_t size) {
     if (src == 0 || size == 0u) {
         return -1;
     }
-    if (mk_storage_current_process_is_service_worker()) {
+    if (mk_storage_current_process_is_service_worker() ||
+        mk_storage_current_prefers_kernel_hot_path()) {
         return kernel_storage_save(src, size);
     }
 

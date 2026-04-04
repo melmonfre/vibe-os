@@ -4,6 +4,7 @@
 #include <kernel/drivers/video/drm/drm.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/kernel_string.h>
+#include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/service.h>
 #include <kernel/microkernel/transfer.h>
@@ -72,6 +73,7 @@ static int g_video_control_worker_pid = 0;
 static int g_video_backend_faulted = 0;
 
 static int mk_video_current_process_is_service_worker(void);
+static int mk_video_current_prefers_kernel_hot_path(void);
 static void mk_video_event_init_subscribers(void);
 static uint32_t mk_video_next_event_sequence(void);
 static uint32_t mk_video_publish_event_with_sequence(uint32_t event_type,
@@ -570,6 +572,32 @@ static int mk_video_current_process_is_service_worker(void) {
     process_t *current = scheduler_current();
 
     return current != 0 && current->service_type == MK_SERVICE_VIDEO;
+}
+
+static int mk_video_current_prefers_kernel_hot_path(void) {
+    process_t *current = scheduler_current();
+    const struct mk_launch_context *context;
+
+    if (current == 0) {
+        return 0;
+    }
+    if (current->service_type == MK_SERVICE_VIDEO) {
+        return 1;
+    }
+
+    context = mk_launch_context_current();
+    if (context == 0) {
+        return 1;
+    }
+
+    if ((context->flags & (MK_LAUNCH_FLAG_BOOTSTRAP |
+                           MK_LAUNCH_FLAG_CRITICAL |
+                           MK_LAUNCH_FLAG_USER_DESKTOP)) != 0u) {
+        return 1;
+    }
+
+    return context->task_class == MK_TASK_CLASS_DESKTOP ||
+           context->task_class == MK_TASK_CLASS_APP_RUNTIME;
 }
 
 static int mk_video_share_transfer(uint32_t transfer_id, uint32_t permissions) {
@@ -1198,7 +1226,7 @@ void mk_video_service_init(void) {
                                  mk_video_local_handler,
                                  0,
                                  userland_video_service_entry,
-                                 8192u,
+                                 32768u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN |
                                  MK_LAUNCH_FLAG_CRITICAL);
@@ -1209,7 +1237,8 @@ int mk_video_service_clear(uint8_t color) {
     struct mk_message reply;
     struct mk_video_color_request payload;
 
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         kernel_video_clear(color);
         return 0;
     }
@@ -1229,7 +1258,8 @@ int mk_video_service_rect(int x, int y, int w, int h, uint8_t color) {
     struct mk_message reply;
     struct mk_video_rect_request payload;
 
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         kernel_gfx_rect(x, y, w, h, color);
         return 0;
     }
@@ -1259,7 +1289,8 @@ int mk_video_service_text(int x, int y, uint8_t color, const char *text) {
     if (text == 0) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         kernel_gfx_draw_text(x, y, text, color);
         return 0;
     }
@@ -1316,7 +1347,8 @@ int mk_video_service_flip_mode(uint32_t mode) {
     struct mk_message reply;
     struct mk_video_present_request payload;
 
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         return mk_video_submit_present_job(mode, 0);
     }
 
@@ -1335,7 +1367,8 @@ int mk_video_service_present_submit(uint32_t mode, uint32_t *sequence_out) {
     struct mk_message reply;
     struct mk_video_present_request payload;
 
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         return mk_video_submit_present_job(mode, sequence_out);
     }
 
@@ -1354,7 +1387,8 @@ static int mk_video_service_u32_request(uint32_t type, uint32_t value) {
     struct mk_message reply;
     struct mk_video_u32_request payload;
 
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         if (type == MK_MSG_VIDEO_SET_PRESENT_POLICY) {
             kernel_video_set_present_policy(value);
             return 0;
@@ -1431,7 +1465,10 @@ static int mk_video_palette_request_common(uint32_t type, uint8_t *palette) {
     if (palette == 0) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    /* Palette flips happen in the desktop/bootstrap critical path; avoid
+       transfer + service hops there and hit the kernel video backend directly. */
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         if (type == MK_MSG_VIDEO_SET_PALETTE) {
             return kernel_video_set_palette(palette);
         }
@@ -1493,7 +1530,8 @@ int mk_video_service_blit8_transfer(uint32_t transfer_id, uint32_t byte_count,
     if (byte_count < (uint32_t)(src_w * src_h)) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         src = (const uint8_t *)mk_transfer_data_read(transfer_id);
         if (src == 0 || mk_transfer_size(transfer_id) < byte_count) {
             return -1;
@@ -1535,7 +1573,8 @@ int mk_video_service_blit8_present_transfer(uint32_t transfer_id, uint32_t byte_
     if (byte_count < (uint32_t)(src_w * src_h)) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         src = (const uint8_t *)mk_transfer_data_read(transfer_id);
         if (src == 0 || mk_transfer_size(transfer_id) < byte_count) {
             return -1;
@@ -1573,7 +1612,8 @@ int mk_video_service_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, 
     if (src == 0 || src_w <= 0 || src_h <= 0) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         if (scale <= 0) {
             return -1;
         }
@@ -1634,7 +1674,8 @@ int mk_video_service_blit8_present(const uint8_t *src, int src_w, int src_h,
     if (src == 0 || src_w <= 0 || src_h <= 0) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         if (scale <= 0) {
             return -1;
         }
@@ -1705,7 +1746,8 @@ int mk_video_service_blit8_stretch_transfer(uint32_t transfer_id, uint32_t byte_
     if (byte_count < (uint32_t)(src_w * src_h)) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         src = (const uint8_t *)mk_transfer_data_read(transfer_id);
         if (src == 0 || mk_transfer_size(transfer_id) < byte_count) {
             return -1;
@@ -1745,7 +1787,8 @@ int mk_video_service_blit8_stretch(const uint8_t *src, int src_w, int src_h,
     if (src == 0 || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         kernel_gfx_blit8_stretch(src, src_w, src_h, dst_x, dst_y, dst_w, dst_h);
         return 0;
     }
@@ -1809,7 +1852,8 @@ int mk_video_service_blit8_stretch_present_transfer(uint32_t transfer_id, uint32
     if (byte_count < (uint32_t)(src_w * src_h)) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         src = (const uint8_t *)mk_transfer_data_read(transfer_id);
         if (src == 0 || mk_transfer_size(transfer_id) < byte_count) {
             return -1;
@@ -1850,7 +1894,8 @@ int mk_video_service_blit8_stretch_present(const uint8_t *src, int src_w, int sr
     if (src == 0 || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_process_is_service_worker() ||
+        mk_video_current_prefers_kernel_hot_path()) {
         kernel_gfx_blit8_stretch(src, src_w, src_h, dst_x, dst_y, dst_w, dst_h);
         return mk_video_submit_present_job(VIDEO_PRESENT_FULL, 0);
     }
@@ -1906,7 +1951,7 @@ int mk_video_service_get_info(struct video_mode *mode) {
     if (mode == 0) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_prefers_kernel_hot_path()) {
         struct video_mode *current = kernel_video_get_mode();
 
         if (current == 0) {
@@ -1932,7 +1977,7 @@ int mk_video_service_get_caps(struct video_capabilities *caps) {
     if (caps == 0) {
         return -1;
     }
-    if (mk_video_current_process_is_service_worker()) {
+    if (mk_video_current_prefers_kernel_hot_path()) {
         kernel_video_get_capabilities(caps);
         return 0;
     }

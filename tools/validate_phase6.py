@@ -15,6 +15,15 @@ COMMON_SUCCESS_MARKERS = [
     "init: storage smoke ok",
 ]
 
+SHELL_OR_DESKTOP_READY_MARKERS = [
+    "userland.app: shell start",
+    "init: bootstrap shell active",
+    "init: desktop host launched",
+    "host: desktop session launched",
+    "host: startx start",
+    "desktop: session start",
+]
+
 
 @dataclass
 class Scenario:
@@ -155,32 +164,32 @@ def build_scenarios() -> List[Scenario]:
             description="Default IDE regression target",
             args=ide_drive + headless_tail,
             must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
-            must_have_any=["userland.app: shell start", "init: bootstrap shell active"],
-            notes="Legacy ATA path currently reaches the external AppFS shell again; the built-in rescue shell remains an accepted safety-net fallback.",
+            must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
+            notes="Legacy ATA path is accepted if it reaches either the shell fallback or the newer desktop-host/startx-host flow.",
         ),
         Scenario(
             name="core2duo",
             description="Core 2 Duo IDE regression target",
             args=["-cpu", "core2duo"] + ide_drive + headless_tail,
             must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
-            must_have_any=["userland.app: shell start", "init: bootstrap shell active"],
-            notes="Core 2 Duo uses the same ATA compatibility rule as the default IDE path and should normally reach the external shell.",
+            must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
+            notes="Core 2 Duo uses the same ATA compatibility rule as the default IDE path and may reach either shell fallback or desktop-host flow.",
         ),
         Scenario(
             name="pentium",
             description="Pentium IDE regression target",
             args=["-cpu", "pentium"] + ide_drive + headless_tail,
             must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
-            must_have_any=["userland.app: shell start", "init: bootstrap shell active"],
-            notes="Pentium uses the same ATA compatibility rule as the default IDE path and should normally reach the external shell.",
+            must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
+            notes="Pentium uses the same ATA compatibility rule as the default IDE path and may reach either shell fallback or desktop-host flow.",
         ),
         Scenario(
             name="atom-n270",
             description="Atom N270 IDE regression target",
             args=["-cpu", "n270"] + ide_drive + headless_tail,
             must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
-            must_have_any=["userland.app: shell start", "init: bootstrap shell active"],
-            notes="Atom N270 uses the same ATA compatibility rule as the default IDE path and should normally reach the external shell.",
+            must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
+            notes="Atom N270 uses the same ATA compatibility rule as the default IDE path and may reach either shell fallback or desktop-host flow.",
         ),
         Scenario(
             name="ahci-q35",
@@ -204,7 +213,7 @@ def build_scenarios() -> List[Scenario]:
                 "ahci: controller",
                 "storage: using ahci backend",
             ] + COMMON_SUCCESS_MARKERS,
-            must_have_any=["userland.app: shell start"],
+            must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
         ),
         Scenario(
             name="usb-bios-boot",

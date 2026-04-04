@@ -41,6 +41,7 @@ int g_fs_root = -1;
 int g_fs_cwd = -1;
 static uint8_t g_fs_persist_buffer[KERNEL_PERSIST_MAX_BYTES];
 static int g_fs_sync_suspended = 0;
+static uint32_t g_fs_sync_hold_depth = 0u;
 static uint32_t g_fs_total_sectors_cache = 0u;
 static int g_fs_dirty = 0;
 static uint32_t g_fs_dirty_generation = 0u;
@@ -51,12 +52,16 @@ static uint32_t g_fs_writeback_bytes = 0u;
 static uint32_t g_fs_writeback_sector_index = 0u;
 static uint32_t g_fs_writeback_progress_tick = 0xffffffffu;
 static int g_fs_allow_immediate_writeback = 0;
-static int g_fs_doom_assets_scanned = 0;
-static int g_fs_texture_assets_scanned = 0;
-static int g_fs_assets_scanned = 0;
+static int g_fs_doom_assets_registered = 0;
+static int g_fs_texture_assets_registered = 0;
+static int g_fs_assets_registered = 0;
+static int g_fs_doom_assets_registering = 0;
+static int g_fs_texture_assets_registering = 0;
+static int g_fs_assets_registering = 0;
 
 #define FS_SYNC_PERIOD_TICKS 1000u
 #define FS_WRITEBACK_SECTORS_PER_TICK 4u
+#define FS_IMAGE_READ_CHUNK_SECTORS 8u
 
 static void fs_ensure_doom_wad_registered(void);
 static void fs_ensure_craft_textures_registered(void);
@@ -306,25 +311,54 @@ static int fs_storage_read_sector_verified(uint32_t lba, uint8_t *dst) {
 }
 
 static int fs_read_image_bytes(uint32_t lba, uint32_t offset, void *dst, uint32_t size) {
-    uint8_t sector[FS_SECTOR_SIZE];
     uint8_t *out = (uint8_t *)dst;
 
     while (size > 0u) {
         uint32_t sector_index = offset / FS_SECTOR_SIZE;
         uint32_t sector_offset = offset % FS_SECTOR_SIZE;
-        uint32_t chunk = FS_SECTOR_SIZE - sector_offset;
-        if (chunk > size) {
-            chunk = size;
+        uint32_t sectors = ((sector_offset + size) + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
+
+        while (sectors > 0u) {
+            uint8_t chunk_buffer[FS_SECTOR_SIZE * FS_IMAGE_READ_CHUNK_SECTORS];
+            uint32_t read_sectors = sectors;
+            uint32_t available;
+            uint32_t chunk;
+
+            if (read_sectors > FS_IMAGE_READ_CHUNK_SECTORS) {
+                read_sectors = FS_IMAGE_READ_CHUNK_SECTORS;
+            }
+            if (sys_storage_read_sectors(lba + sector_index, chunk_buffer, read_sectors) != 0) {
+                uint32_t fallback_chunk = FS_SECTOR_SIZE - sector_offset;
+
+                if (fallback_chunk > size) {
+                    fallback_chunk = size;
+                }
+                if (fs_storage_read_sector_verified(lba + sector_index, chunk_buffer) != 0) {
+                    return -1;
+                }
+                memcpy(out, chunk_buffer + sector_offset, fallback_chunk);
+                out += fallback_chunk;
+                offset += fallback_chunk;
+                size -= fallback_chunk;
+                sector_index += 1u;
+                sector_offset = 0u;
+                sectors = ((sector_offset + size) + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
+                continue;
+            }
+
+            available = (read_sectors * FS_SECTOR_SIZE) - sector_offset;
+            chunk = available;
+            if (chunk > size) {
+                chunk = size;
+            }
+            memcpy(out, chunk_buffer + sector_offset, chunk);
+            out += chunk;
+            offset += chunk;
+            size -= chunk;
+            sector_index += read_sectors;
+            sector_offset = 0u;
+            sectors = ((sector_offset + size) + (FS_SECTOR_SIZE - 1u)) / FS_SECTOR_SIZE;
         }
-        if (fs_storage_read_sector_verified(lba + sector_index, sector) != 0) {
-            return -1;
-        }
-        for (uint32_t i = 0; i < chunk; ++i) {
-            out[i] = sector[sector_offset + i];
-        }
-        out += chunk;
-        offset += chunk;
-        size -= chunk;
     }
     return 0;
 }
@@ -454,24 +488,23 @@ static const char *fs_path_basename(const char *path) {
 }
 
 static void fs_maybe_register_boot_assets_for_path(const char *path) {
-    if (fs_path_matches_root_prefix(path, "/DOOM") && !g_fs_doom_assets_scanned) {
-        g_fs_doom_assets_scanned = 1;
+    if (fs_path_matches_root_prefix(path, "/DOOM") &&
+        !g_fs_doom_assets_registered &&
+        !g_fs_doom_assets_registering) {
         fs_ensure_doom_wad_registered();
-        g_fs_doom_assets_scanned = 0;
     }
 
-    if (fs_path_matches_root_prefix(path, "/textures") && !g_fs_texture_assets_scanned) {
-        g_fs_texture_assets_scanned = 1;
+    if (fs_path_matches_root_prefix(path, "/textures") &&
+        !g_fs_texture_assets_registered &&
+        !g_fs_texture_assets_registering) {
         fs_ensure_craft_textures_registered();
-        g_fs_texture_assets_scanned = 0;
     }
 
     if ((fs_path_matches_root_prefix(path, "/wallpaper.png") ||
          fs_path_matches_root_prefix(path, "/assets")) &&
-        !g_fs_assets_scanned) {
-        g_fs_assets_scanned = 1;
+        !g_fs_assets_registered &&
+        !g_fs_assets_registering) {
         fs_ensure_assets_registered();
-        g_fs_assets_scanned = 0;
     }
 }
 
@@ -619,7 +652,7 @@ static int fs_load_persistent_image(void) {
 static int fs_prepare_writeback(void) {
     extern void kernel_debug_puts(const char *);
 
-    if (g_fs_sync_suspended) {
+    if (g_fs_sync_suspended || g_fs_sync_hold_depth != 0u) {
         return 0;
     }
     if (!g_fs_dirty || g_fs_writeback_active) {
@@ -703,7 +736,10 @@ static void fs_mark_dirty(void) {
     g_fs_dirty = 1;
     g_fs_dirty_generation += 1u;
     g_fs_last_sync_tick = 0u;
-    if (g_fs_allow_immediate_writeback && !g_fs_sync_suspended && !g_fs_writeback_active) {
+    if (g_fs_allow_immediate_writeback &&
+        !g_fs_sync_suspended &&
+        g_fs_sync_hold_depth == 0u &&
+        !g_fs_writeback_active) {
         (void)fs_prepare_writeback();
     }
 }
@@ -718,7 +754,7 @@ void fs_flush(void) {
 void fs_tick(void) {
     uint32_t now;
 
-    if (g_fs_sync_suspended) {
+    if (g_fs_sync_suspended || g_fs_sync_hold_depth != 0u) {
         return;
     }
     now = sys_ticks();
@@ -1000,6 +1036,39 @@ int fs_read_file_bytes(const char *path, int offset, void *dst, int size) {
         return -1;
     }
     return fs_read_node_bytes(node, offset, dst, size);
+}
+
+int fs_read_builtin_asset_bytes(const char *path, int offset, void *dst, int size) {
+    uint32_t lba = 0u;
+    uint32_t total_size = 0u;
+
+    if (path == 0 || dst == 0 || size < 0 || offset < 0) {
+        return -1;
+    }
+
+    if (str_eq(path, "/assets/vibe_os_boot.wav")) {
+        lba = VIBE_BOOT_WAV_IMAGE_LBA;
+        total_size = VIBE_BOOT_WAV_IMAGE_BYTES;
+    } else if (str_eq(path, "/assets/vibe_os_desktop.wav")) {
+        lba = VIBE_DESKTOP_WAV_IMAGE_LBA;
+        total_size = VIBE_DESKTOP_WAV_IMAGE_BYTES;
+    } else {
+        return -1;
+    }
+
+    if ((uint32_t)offset >= total_size) {
+        return 0;
+    }
+    if ((uint32_t)offset + (uint32_t)size > total_size) {
+        size = (int)(total_size - (uint32_t)offset);
+    }
+    if (size <= 0) {
+        return 0;
+    }
+    if (fs_read_image_bytes(lba, (uint32_t)offset, dst, (uint32_t)size) != 0) {
+        return -1;
+    }
+    return size;
 }
 
 static int fs_resolve_parent(const char *path, int *parent_out, char *name_out) {
@@ -1285,6 +1354,13 @@ int fs_register_image_file(const char *path, uint32_t lba, uint32_t sector_count
         return -2;
     }
 
+    if (g_fs_nodes[idx].storage_kind == FS_NODE_STORAGE_IMAGE &&
+        g_fs_nodes[idx].size == size &&
+        g_fs_nodes[idx].image_lba == lba &&
+        g_fs_nodes[idx].image_sector_count == sector_count) {
+        return 0;
+    }
+
     g_fs_nodes[idx].storage_kind = FS_NODE_STORAGE_IMAGE;
     g_fs_nodes[idx].size = size;
     g_fs_nodes[idx].image_lba = lba;
@@ -1343,9 +1419,10 @@ int fs_copy_node_to_path(int src_node, const char *dst_path) {
 }
 
 static void fs_ensure_doom_wad_registered(void) {
-    if (g_fs_root < 0) {
+    if (g_fs_root < 0 || g_fs_doom_assets_registered || g_fs_doom_assets_registering) {
         return;
     }
+    g_fs_doom_assets_registering = 1;
 
     if (fs_resolve("/DOOM") < 0) {
         (void)fs_create("/DOOM", 1);
@@ -1355,12 +1432,15 @@ static void fs_ensure_doom_wad_registered(void) {
                             DOOM_WAD_IMAGE_LBA,
                             DOOM_WAD_IMAGE_SECTORS,
                             DOOM_WAD_IMAGE_BYTES);
+    g_fs_doom_assets_registering = 0;
+    g_fs_doom_assets_registered = 1;
 }
 
 static void fs_ensure_craft_textures_registered(void) {
-    if (g_fs_root < 0) {
+    if (g_fs_root < 0 || g_fs_texture_assets_registered || g_fs_texture_assets_registering) {
         return;
     }
+    g_fs_texture_assets_registering = 1;
 
     if (fs_resolve("/textures") < 0) {
         (void)fs_create("/textures", 1);
@@ -1382,12 +1462,15 @@ static void fs_ensure_craft_textures_registered(void) {
                             CRAFT_SIGN_IMAGE_LBA,
                             CRAFT_SIGN_IMAGE_SECTORS,
                             CRAFT_SIGN_IMAGE_BYTES);
+    g_fs_texture_assets_registering = 0;
+    g_fs_texture_assets_registered = 1;
 }
 
 static void fs_ensure_assets_registered(void) {
-    if (g_fs_root < 0) {
+    if (g_fs_root < 0 || g_fs_assets_registered || g_fs_assets_registering) {
         return;
     }
+    g_fs_assets_registering = 1;
 
     if (fs_resolve("/assets") < 0) {
         (void)fs_create("/assets", 1);
@@ -1413,6 +1496,8 @@ static void fs_ensure_assets_registered(void) {
                             BOOTLOADER_BG_IMAGE_LBA,
                             BOOTLOADER_BG_IMAGE_SECTORS,
                             BOOTLOADER_BG_IMAGE_BYTES);
+    g_fs_assets_registering = 0;
+    g_fs_assets_registered = 1;
 }
 
 void fs_build_path(int node, char *out, int max_len) {
@@ -1455,6 +1540,7 @@ void fs_init(void) {
     extern void kernel_debug_puts(const char *);
 
     g_fs_sync_suspended = 1;
+    g_fs_sync_hold_depth = 0u;
     g_fs_dirty = 0;
     g_fs_dirty_generation = 0u;
     g_fs_last_sync_tick = 0u;
@@ -1464,9 +1550,12 @@ void fs_init(void) {
     g_fs_writeback_sector_index = 0u;
     g_fs_writeback_progress_tick = 0xffffffffu;
     g_fs_allow_immediate_writeback = 0;
-    g_fs_doom_assets_scanned = 0;
-    g_fs_texture_assets_scanned = 0;
-    g_fs_assets_scanned = 0;
+    g_fs_doom_assets_registered = 0;
+    g_fs_texture_assets_registered = 0;
+    g_fs_assets_registered = 0;
+    g_fs_doom_assets_registering = 0;
+    g_fs_texture_assets_registering = 0;
+    g_fs_assets_registering = 0;
     memset(g_fs_persist_buffer, 0, sizeof(g_fs_persist_buffer));
     for (i = 0; i < FS_MAX_NODES; ++i) {
         fs_reset_node(i);
@@ -1480,10 +1569,7 @@ void fs_init(void) {
         kernel_debug_puts("fs: persistent image valid\n");
         kernel_debug_puts("fs: asset scans deferred\n");
         g_fs_sync_suspended = 0;
-        fs_mark_dirty();
-        g_fs_last_sync_tick = 0u;
         g_fs_allow_immediate_writeback = 1;
-        kernel_debug_puts("fs: initial sync deferred\n");
         return;
     }
 
@@ -1529,4 +1615,23 @@ void fs_init(void) {
     g_fs_last_sync_tick = 0u;
     g_fs_allow_immediate_writeback = 1;
     kernel_debug_puts("fs: initial sync deferred\n");
+}
+
+int fs_ready(void) {
+    return g_fs_root >= 0 &&
+           g_fs_root < FS_MAX_NODES &&
+           g_fs_nodes[g_fs_root].used != 0 &&
+           g_fs_nodes[g_fs_root].is_dir != 0;
+}
+
+void fs_suspend_sync(void) {
+    if (g_fs_sync_hold_depth != 0xffffffffu) {
+        g_fs_sync_hold_depth += 1u;
+    }
+}
+
+void fs_resume_sync(void) {
+    if (g_fs_sync_hold_depth != 0u) {
+        g_fs_sync_hold_depth -= 1u;
+    }
 }
