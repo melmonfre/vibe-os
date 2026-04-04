@@ -158,6 +158,28 @@ def wait_for_all_since(session: QemuSession, markers: List[str], timeout: float,
     raise RuntimeError("Timed out waiting for markers: " + ", ".join(pending))
 
 
+def scenario_boot_rescue_shell(session: QemuSession) -> None:
+    log = session.read_log()
+    if "boot mode: rescue shell" in log and "shell: ready" in log:
+        return
+
+    def send_rescue_selection() -> None:
+        session.send_key("s", pause=0.12)
+        session.send_key("s", pause=0.12)
+        session.send_key("ret", pause=0.2)
+
+    for delay in (1.0, 0.8, 0.8):
+        time.sleep(delay)
+        send_rescue_selection()
+        log = session.read_log()
+        if "boot mode: rescue shell" in log or \
+           "init: rescue shell requested, skipping desktop launch" in log or \
+           "host: shell start" in log:
+            break
+
+    session.wait_for_all(["boot mode: rescue shell", "shell: ready"], timeout=60.0)
+
+
 def run_command_expect(session: QemuSession, command: str, markers: List[str], timeout: float = 8.0) -> None:
     start = len(session.read_log())
     command_marker = command.split(" ", 1)[0]
@@ -186,6 +208,7 @@ def validate_network_surface(qemu_binary: str, image_path: Path, memory_mb: int,
         ("route", ["Routing tables"]),
         ("netstat", ["netstat: state=", "sockets: open=", "backend: rx-frames="]),
         ("ping localhost", ["1 packets transmitted, 1 packets received", "ping: loopback-ok"]),
+        ("ping 10.0.2.2", ["bytes from 10.0.2.2", "1 packets transmitted, 1 packets received"]),
         ("host localhost", ["localhost has address 127.0.0.1", "host: loopback-ok"]),
         ("dig localhost", ["localhost.\t0\tIN\tA\t127.0.0.1", "dig: loopback-ok"]),
         ("curl file:///runtime/netmgrd-surface.txt", ["manager=", "lease_state=", "curl: file-ok"]),
@@ -201,7 +224,7 @@ def validate_network_surface(qemu_binary: str, image_path: Path, memory_mb: int,
         shutil.copyfile(image_path, scenario_image)
         session = QemuSession(qemu_binary, scenario_image, memory_mb, workspace)
         try:
-            session.wait_for_all(BOOT_MARKERS, timeout=60.0)
+            scenario_boot_rescue_shell(session)
             for command, markers in commands:
                 run_command_expect(session, command, markers)
                 lines.append(f"- PASS `{command}`")
