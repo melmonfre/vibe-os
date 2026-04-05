@@ -1841,6 +1841,17 @@ static int mk_network_local_handler(const struct mk_message *request,
     return 0;
 }
 
+static int mk_network_service_launch_deferred(void) {
+    return mk_service_launch_task(MK_SERVICE_NETWORK,
+                                  "network",
+                                  mk_network_local_handler,
+                                  0,
+                                  userland_network_service_entry,
+                                  8192u,
+                                  MK_LAUNCH_FLAG_BOOTSTRAP |
+                                  MK_LAUNCH_FLAG_BUILTIN);
+}
+
 void mk_network_service_init(void) {
     memset(&g_last_network_request, 0, sizeof(g_last_network_request));
     memset(&g_last_network_reply, 0, sizeof(g_last_network_reply));
@@ -1899,15 +1910,8 @@ void mk_network_service_init(void) {
     mk_network_log_probe();
 
     network_queue_set_ready_event_callback(mk_network_queue_ready_callback);
-
-    (void)mk_service_launch_task(MK_SERVICE_NETWORK,
-                                 "network",
-                                 mk_network_local_handler,
-                                 0,
-                                 userland_network_service_entry,
-                                 8192u,
-                                 MK_LAUNCH_FLAG_BOOTSTRAP |
-                                 MK_LAUNCH_FLAG_BUILTIN);
+    (void)mk_service_register_deferred_launcher(MK_SERVICE_NETWORK,
+                                                mk_network_service_launch_deferred);
 }
 
 int mk_network_service_ready(void) {

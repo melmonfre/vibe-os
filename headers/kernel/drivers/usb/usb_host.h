@@ -128,6 +128,7 @@ struct kernel_usb_probe_snapshot {
     uint8_t descriptor_valid;
     uint8_t config_valid;
     uint8_t audio_class_detected;
+    uint8_t mass_storage_detected;
     uint8_t hid_boot_keyboard_detected;
     uint8_t hid_boot_mouse_detected;
     uint8_t hid_interface_number;
@@ -145,6 +146,13 @@ struct kernel_usb_probe_snapshot {
     uint8_t configuration_value;
     uint8_t interface_count;
     uint8_t endpoint_count;
+    uint8_t mass_storage_interface_number;
+    uint8_t mass_storage_subclass;
+    uint8_t mass_storage_protocol;
+    uint8_t mass_storage_bulk_in_endpoint_address;
+    uint8_t mass_storage_bulk_out_endpoint_address;
+    uint16_t mass_storage_bulk_in_max_packet;
+    uint16_t mass_storage_bulk_out_max_packet;
     uint8_t audio_control_interface_number;
     uint8_t audio_streaming_interface_number;
     uint8_t audio_streaming_interface_count;
@@ -202,6 +210,7 @@ struct kernel_usb_probe_execution {
     uint8_t descriptor_valid;
     uint8_t config_valid;
     uint8_t audio_class_detected;
+    uint8_t mass_storage_detected;
     uint8_t hid_boot_keyboard_detected;
     uint8_t hid_boot_mouse_detected;
     uint8_t hid_interface_number;
@@ -218,6 +227,13 @@ struct kernel_usb_probe_execution {
     uint8_t configuration_value;
     uint8_t interface_count;
     uint8_t endpoint_count;
+    uint8_t mass_storage_interface_number;
+    uint8_t mass_storage_subclass;
+    uint8_t mass_storage_protocol;
+    uint8_t mass_storage_bulk_in_endpoint_address;
+    uint8_t mass_storage_bulk_out_endpoint_address;
+    uint16_t mass_storage_bulk_in_max_packet;
+    uint16_t mass_storage_bulk_out_max_packet;
     uint8_t audio_control_interface_number;
     uint8_t audio_streaming_interface_number;
     uint8_t audio_streaming_interface_count;
@@ -265,8 +281,11 @@ uint32_t kernel_usb_audio_probe_configured_ready_count(void);
 uint32_t kernel_usb_probe_attached_ready_count(void);
 uint32_t kernel_usb_audio_probe_attached_ready_count(void);
 uint32_t kernel_usb_audio_class_probe_count(void);
+uint32_t kernel_usb_mass_storage_probe_count(void);
 int kernel_usb_audio_probe_first_configured(struct kernel_usb_probe_snapshot *info_out,
                                             uint32_t *match_index_out);
+int kernel_usb_mass_storage_probe_first_configured(struct kernel_usb_probe_snapshot *info_out,
+                                                   uint32_t *match_index_out);
 int kernel_usb_audio_probe_attach_first_configured(struct kernel_usb_probe_snapshot *info_out,
                                                    uint32_t *match_index_out);
 int kernel_usb_audio_refresh_probe_state(void);
@@ -276,6 +295,28 @@ int kernel_usb_audio_playback_supported(void);
 int kernel_usb_audio_playback_write(const uint8_t *data,
                                     uint32_t size,
                                     uint32_t *written_out);
+int kernel_usb_probe_dispatch_context_for_index(uint32_t snapshot_index,
+                                                struct kernel_usb_probe_dispatch_context *info_out);
+int kernel_usb_control_read(uint32_t snapshot_index,
+                            uint8_t request_type,
+                            uint8_t request,
+                            uint16_t request_value,
+                            uint16_t request_index,
+                            uint8_t *data_buffer,
+                            uint32_t data_capacity,
+                            uint32_t *actual_length_out);
+int kernel_usb_no_data_request(uint32_t snapshot_index,
+                               uint8_t request_type,
+                               uint8_t request,
+                               uint16_t request_value,
+                               uint16_t request_index);
+int kernel_usb_bulk_transfer(uint32_t snapshot_index,
+                             uint8_t endpoint_address,
+                             uint16_t max_packet_size,
+                             uint8_t *data_toggle_io,
+                             uint8_t *buffer,
+                             uint32_t transfer_length,
+                             uint32_t *actual_length_out);
 int kernel_usb_probe_dispatch_next(uint8_t audio_only,
                                    struct kernel_usb_probe_snapshot *info_out,
                                    uint32_t *match_index_out);

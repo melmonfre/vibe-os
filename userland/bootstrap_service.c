@@ -1874,9 +1874,17 @@ __attribute__((section(".entry"))) void userland_audio_service_entry(void) {
         }
     }
 
+    sys_text_write("audiosvc: launch_info\n");
+    sys_write_debug("audiosvc: launch_info\n");
     source_pid = (uint32_t)info.pid;
+    sys_text_write("audiosvc: before fs_init\n");
+    sys_write_debug("audiosvc: before fs_init\n");
     fs_init();
+    sys_text_write("audiosvc: after fs_init\n");
+    sys_write_debug("audiosvc: after fs_init\n");
     service_log_online(&info);
+    sys_text_write("audiosvc: online\n");
+    sys_write_debug("audiosvc: online\n");
 
     for (;;) {
         if (sys_service_receive(&request) != (int)sizeof(request)) {

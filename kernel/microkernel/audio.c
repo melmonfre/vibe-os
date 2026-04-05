@@ -5,6 +5,7 @@
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/drivers/usb/usb_host.h>
+#include <kernel/drivers/video/video.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/physmem.h>
 #include <kernel/microkernel/audio.h>
@@ -608,6 +609,7 @@ static const struct mk_audio_control_info g_audio_controls[] = {
 static struct mk_message g_last_audio_request;
 static struct mk_message g_last_audio_reply;
 static struct mk_audio_service_state g_audio_state;
+static uint8_t g_audio_bootstrap_defer_probe = 0u;
 static void mk_audio_event_init_subscribers(void);
 static void mk_audio_publish_event(uint32_t event_type, uint32_t queued_bytes, uint32_t underruns);
 static int mk_audio_current_underruns(void);
@@ -3895,8 +3897,10 @@ static void mk_audio_apply_uaudio_params(void) {
 static void mk_audio_refresh_topology_snapshot(void) {
     static uint8_t reconcile_in_progress = 0u;
 
-    mk_audio_refresh_usb_attach_snapshot();
-    if (!reconcile_in_progress) {
+    if (!g_audio_bootstrap_defer_probe) {
+        mk_audio_refresh_usb_attach_snapshot();
+    }
+    if (!g_audio_bootstrap_defer_probe && !reconcile_in_progress) {
         reconcile_in_progress = 1u;
         if (g_audio_state.backend_kind == MK_AUDIO_BACKEND_COMPAT_UAUDIO &&
             !mk_audio_backend_current_is_usable()) {
@@ -9724,6 +9728,7 @@ void mk_audio_service_init(void) {
     memset(&g_last_audio_request, 0, sizeof(g_last_audio_request));
     memset(&g_last_audio_reply, 0, sizeof(g_last_audio_reply));
     memset(&g_audio_state, 0, sizeof(g_audio_state));
+    g_audio_bootstrap_defer_probe = 1u;
 
     g_audio_state.info.flags = MK_AUDIO_CAPS_MIXER |
                                MK_AUDIO_CAPS_PLAYBACK |
@@ -9752,26 +9757,38 @@ void mk_audio_service_init(void) {
     mk_audio_state_reset_capture();
     mk_audio_event_init_subscribers();
     (void)kernel_timer_register_tick_hook(mk_audio_service_tick);
+    kernel_text_puts("    audio: soft\n");
     mk_audio_select_soft_backend();
+    kernel_text_puts("    audio: usb-snap\n");
     mk_audio_refresh_usb_attach_snapshot();
     kernel_debug_puts("audio: service init enter\n");
 
+    kernel_text_puts("    audio: azalia?\n");
     if (mk_audio_try_azalia_backends() == 0) {
+        kernel_text_puts("    audio: azalia ok\n");
         kernel_debug_puts("audio: using azalia hardware backend\n");
+        kernel_text_puts("    audio: topo\n");
     } else if (mk_audio_try_compat_backends() == 0) {
+        kernel_text_puts("    audio: compat ok\n");
         kernel_debug_puts("audio: using compat ac97 backend\n");
+        kernel_text_puts("    audio: topo\n");
     } else if (kernel_timer_pc_speaker_available()) {
+        kernel_text_puts("    audio: pcspkr\n");
         mk_audio_select_pcspkr_backend();
         kernel_debug_puts("audio: using pcspkr fallback backend\n");
+        kernel_text_puts("    audio: topo\n");
     } else {
+        kernel_text_puts("    audio: forced-soft\n");
         mk_audio_select_soft_backend();
         mk_audio_set_softmix_reason("forced-soft-backend");
         kernel_debug_puts("audio: using forced soft backend to avoid hardware issues\n");
+        kernel_text_puts("    audio: topo\n");
     }
 
     mk_audio_refresh_topology_snapshot();
     mk_audio_debug_backend_state("audio: service init exit backend=");
 
+    kernel_text_puts("    audio: launch\n");
     (void)mk_service_launch_task(MK_SERVICE_AUDIO,
                                  "audio",
                                  mk_audio_local_handler,
@@ -9781,6 +9798,8 @@ void mk_audio_service_init(void) {
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
                                  MK_LAUNCH_FLAG_BUILTIN |
                                  MK_LAUNCH_FLAG_CRITICAL);
+    g_audio_bootstrap_defer_probe = 0u;
+    kernel_text_puts("    audio: done\n");
 }
 
 int mk_audio_service_ready(void) {

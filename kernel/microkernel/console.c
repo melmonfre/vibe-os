@@ -155,16 +155,21 @@ static int mk_console_local_handler(const struct mk_message *request,
     }
 }
 
+static int mk_console_service_launch_deferred(void) {
+    return mk_service_launch_task(MK_SERVICE_CONSOLE,
+                                  "console",
+                                  mk_console_local_handler,
+                                  0,
+                                  userland_console_service_entry,
+                                  8192u,
+                                  MK_LAUNCH_FLAG_BOOTSTRAP |
+                                  MK_LAUNCH_FLAG_BUILTIN |
+                                  MK_LAUNCH_FLAG_CRITICAL);
+}
+
 void mk_console_service_init(void) {
-    (void)mk_service_launch_task(MK_SERVICE_CONSOLE,
-                                 "console",
-                                 mk_console_local_handler,
-                                 0,
-                                 userland_console_service_entry,
-                                 8192u,
-                                 MK_LAUNCH_FLAG_BOOTSTRAP |
-                                 MK_LAUNCH_FLAG_BUILTIN |
-                                 MK_LAUNCH_FLAG_CRITICAL);
+    (void)mk_service_register_deferred_launcher(MK_SERVICE_CONSOLE,
+                                                mk_console_service_launch_deferred);
 }
 
 static int mk_console_service_string_request(uint32_t type, const char *message) {

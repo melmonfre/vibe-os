@@ -10,6 +10,7 @@
 #include <kernel/smp.h>
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/timer/timer.h>
+#include <kernel/drivers/video/video.h>
 #include <kernel/event.h>
 #include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/service.h>
@@ -26,6 +27,9 @@ static int g_scheduler_switch_trace_budget = 24;
 static int g_scheduler_block_trace_budget = 24;
 static int g_scheduler_timeout_trace_budget = 16;
 static volatile int g_scheduler_preemption_ready = 0;
+static volatile int g_scheduler_task_events_ready = 0;
+static uint8_t g_audio_task_added_trace_emitted = 0u;
+static uint8_t g_audio_first_dispatch_trace_emitted = 0u;
 
 #define SCHEDULER_TASK_EVENT_SUBSCRIBERS 8u
 #define SCHEDULER_TASK_EVENT_QUEUE_SIZE 32u
@@ -343,6 +347,7 @@ void scheduler_init(void) {
     }
     spinlock_init(&g_scheduler_lock);
     g_scheduler_preemption_ready = 0;
+    g_scheduler_task_events_ready = 0;
     scheduler_task_event_init();
     (void)kernel_timer_register_tick_hook(scheduler_timeout_tick_hook);
 }
@@ -528,6 +533,9 @@ static void scheduler_publish_task_event(uint32_t event_type, const process_t *t
     if (task == NULL || task->pid <= 0 || event_type == MK_TASK_EVENT_NONE) {
         return;
     }
+    if (!g_scheduler_task_events_ready) {
+        return;
+    }
 
     event_mask = scheduler_task_event_mask_for_type(event_type);
     if (event_mask == 0u) {
@@ -565,17 +573,6 @@ static void scheduler_publish_task_event(uint32_t event_type, const process_t *t
             &g_task_event_subscriptions[index];
 
         if (subscription->pid == 0u) {
-            continue;
-        }
-        if (scheduler_find_task_by_pid((int)subscription->pid) == NULL) {
-            memset(subscription, 0, sizeof(*subscription));
-            kernel_mailbox_init(&subscription->mailbox,
-                                subscription->events,
-                                sizeof(subscription->events[0]),
-                                SCHEDULER_TASK_EVENT_QUEUE_SIZE,
-                                KERNEL_MAILBOX_DROP_OLDEST,
-                                TASK_WAIT_CLASS_SUPERVISION,
-                                0u);
             continue;
         }
         if ((subscription->event_mask & event_mask) == 0u) {
@@ -629,8 +626,22 @@ void scheduler_add_task(process_t *proc) {
         p->next = proc;
     }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+    if (!g_audio_task_added_trace_emitted &&
+        proc->service_type == MK_SERVICE_AUDIO) {
+        g_audio_task_added_trace_emitted = 1u;
+        kernel_text_puts("audiosvc: task added\n");
+    }
+    if (proc->service_type == MK_SERVICE_AUDIO) {
+        kernel_text_puts("audiosvc: before publish\n");
+    }
     scheduler_publish_task_event(MK_TASK_EVENT_LAUNCHED, proc);
+    if (proc->service_type == MK_SERVICE_AUDIO) {
+        kernel_text_puts("audiosvc: after publish\n");
+    }
     smp_wake_sleeping_cpus();
+    if (proc->service_type == MK_SERVICE_AUDIO) {
+        kernel_text_puts("audiosvc: wake sent\n");
+    }
 }
 
 static process_t *find_next(uint32_t cpu_index, process_t *current) {
@@ -676,6 +687,10 @@ static process_t *find_next(uint32_t cpu_index, process_t *current) {
 
 void scheduler_set_preemption_ready(int ready) {
     g_scheduler_preemption_ready = ready != 0 ? 1 : 0;
+}
+
+void scheduler_set_task_events_ready(int ready) {
+    g_scheduler_task_events_ready = ready != 0 ? 1 : 0;
 }
 
 kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int preemptive) {
@@ -780,6 +795,11 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         g_current[cpu_index] = next;
         resume_frame = next->context;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+        if (!g_audio_first_dispatch_trace_emitted &&
+            next->service_type == MK_SERVICE_AUDIO) {
+            g_audio_first_dispatch_trace_emitted = 1u;
+            kernel_text_puts("audiosvc: first dispatch\n");
+        }
         if (old_task == NULL && !g_scheduler_boot_trace_emitted) {
             g_scheduler_boot_trace_emitted = 1;
             kernel_debug_printf("scheduler: first dispatch cpu=%d pid=%d kind=%d service=%d eip=%x esp=%x\n",
@@ -1017,6 +1037,7 @@ int scheduler_task_event_subscribe(process_t *subscriber,
     struct scheduler_task_event_subscription *subscription;
     int rc;
 
+    scheduler_set_task_events_ready(1);
     flags = spinlock_lock_irqsave(&g_task_event_lock);
     subscription = scheduler_alloc_task_event_subscription_locked(subscriber);
     if (subscription != NULL) {

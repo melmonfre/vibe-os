@@ -5,6 +5,7 @@
 #include <kernel/bootinfo.h>
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/microkernel/audio.h>
+#include <kernel/microkernel/service.h>
 
 #define BOOTSTRAP_STORAGE_SMOKE_SECTOR (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT - 1u)
 #define BOOTSTRAP_STORAGE_SMOKE_SIZE 512u
@@ -322,6 +323,26 @@ static void bootstrap_launch_runtime_service_apps(uint32_t boot_flags) {
     }
 }
 
+static void bootstrap_start_deferred_kernel_services(void) {
+    if (sys_service_restart(MK_SERVICE_INPUT) == 0) {
+        sys_write_debug("init: deferred inputsvc launch ok\n");
+    } else {
+        sys_write_debug("init: deferred inputsvc launch failed\n");
+    }
+
+    if (sys_service_restart(MK_SERVICE_CONSOLE) == 0) {
+        sys_write_debug("init: deferred consolesvc launch ok\n");
+    } else {
+        sys_write_debug("init: deferred consolesvc launch failed\n");
+    }
+
+    if (sys_service_restart(MK_SERVICE_NETWORK) == 0) {
+        sys_write_debug("init: deferred networksvc launch ok\n");
+    } else {
+        sys_write_debug("init: deferred networksvc launch failed\n");
+    }
+}
+
 __attribute__((section(".entry"))) void userland_entry(void) {
     extern void kernel_debug_puts(const char *);
     int rc;
@@ -354,6 +375,7 @@ __attribute__((section(".entry"))) void userland_entry(void) {
 
     bootstrap_print_banner();
     kernel_debug_puts("init: banner returned\n");
+    bootstrap_start_deferred_kernel_services();
     bootstrap_launch_runtime_service_apps(info.boot_flags);
 
     rc = bootstrap_run_startup_apps();

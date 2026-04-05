@@ -273,17 +273,22 @@ static int mk_input_local_handler(const struct mk_message *request,
     }
 }
 
+static int mk_input_service_launch_deferred(void) {
+    return mk_service_launch_task(MK_SERVICE_INPUT,
+                                  "input",
+                                  mk_input_local_handler,
+                                  0,
+                                  userland_input_service_entry,
+                                  8192u,
+                                  MK_LAUNCH_FLAG_BOOTSTRAP |
+                                  MK_LAUNCH_FLAG_BUILTIN |
+                                  MK_LAUNCH_FLAG_CRITICAL);
+}
+
 void mk_input_service_init(void) {
     g_input_service_transport_degraded = 0;
-    (void)mk_service_launch_task(MK_SERVICE_INPUT,
-                                 "input",
-                                 mk_input_local_handler,
-                                 0,
-                                 userland_input_service_entry,
-                                 8192u,
-                                 MK_LAUNCH_FLAG_BOOTSTRAP |
-                                 MK_LAUNCH_FLAG_BUILTIN |
-                                 MK_LAUNCH_FLAG_CRITICAL);
+    (void)mk_service_register_deferred_launcher(MK_SERVICE_INPUT,
+                                                mk_input_service_launch_deferred);
 }
 
 int mk_input_service_next_event(struct input_event *event) {
