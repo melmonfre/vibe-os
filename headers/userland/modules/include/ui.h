@@ -91,6 +91,7 @@ struct rect ui_taskbar_sound_applet_rect(void);
 struct rect ui_start_menu_rect(void);
 struct rect ui_start_menu_item_rect(int index);
 struct rect ui_desktop_files_icon_rect(void);
+struct rect ui_desktop_browser_icon_rect(void);
 struct rect ui_desktop_craft_icon_rect(void);
 struct rect ui_desktop_trash_icon_rect(void);
 uint8_t ui_color_canvas(void);
