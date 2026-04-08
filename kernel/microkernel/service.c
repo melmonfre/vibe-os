@@ -918,6 +918,9 @@ static int mk_service_request_process(const struct mk_service_record *service,
     if (request_copy.abi_version == 0u) {
         request_copy.abi_version = MK_MESSAGE_ABI_VERSION;
     }
+    if (mk_message_validate(&request_copy) != 0) {
+        return -1;
+    }
     request_copy.source_pid = (uint32_t)current->pid;
     if (service->pid > 0) {
         request_copy.target_pid = (uint32_t)service->pid;

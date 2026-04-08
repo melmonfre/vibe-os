@@ -27,8 +27,13 @@ struct kernel_pci_device_info {
     uint8_t class_code;
     uint8_t header_type;
     uint8_t irq_line;
+    uint8_t secondary_bus;
     uint16_t vendor_id;
     uint16_t device_id;
+    uint16_t command;
+    uint16_t status;
+    uint16_t subsystem_vendor_id;
+    uint16_t subsystem_device_id;
     uint32_t bars[6];
 };
 
@@ -47,7 +52,9 @@ int kernel_pci_find_by_class(uint8_t class_code,
                              uint8_t subclass,
                              int subclass_any,
                              struct kernel_pci_device_info *info_out);
+int kernel_pci_bar_is_io(uint32_t bar_value);
 int kernel_pci_bar_is_mmio(uint32_t bar_value);
+uintptr_t kernel_pci_io_bar_base(uint32_t bar_value);
 uintptr_t kernel_pci_bar_base(uint32_t bar_value);
 size_t kernel_pci_bar_size(uint8_t bus,
                            uint8_t slot,

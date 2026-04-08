@@ -41,8 +41,10 @@ int kernel_pci_get_device_info(uint8_t bus,
                                uint8_t function,
                                struct kernel_pci_device_info *info_out) {
     uint32_t vendor_device;
+    uint32_t command_status_reg;
     uint32_t class_reg;
     uint32_t header_reg;
+    uint32_t subsystem_reg;
 
     if (info_out == 0) {
         return -1;
@@ -53,20 +55,31 @@ int kernel_pci_get_device_info(uint8_t bus,
         return -1;
     }
 
+    command_status_reg = kernel_pci_config_read_u32(bus, slot, function, 0x04u);
     class_reg = kernel_pci_config_read_u32(bus, slot, function, 0x08u);
     header_reg = kernel_pci_config_read_u32(bus, slot, function, 0x0Cu);
+    subsystem_reg = kernel_pci_config_read_u32(bus, slot, function, 0x2Cu);
 
     info_out->bus = bus;
     info_out->slot = slot;
     info_out->function = function;
     info_out->vendor_id = (uint16_t)(vendor_device & 0xFFFFu);
     info_out->device_id = (uint16_t)(vendor_device >> 16);
+    info_out->command = (uint16_t)(command_status_reg & 0xFFFFu);
+    info_out->status = (uint16_t)(command_status_reg >> 16);
     info_out->revision = (uint8_t)(class_reg & 0xFFu);
     info_out->prog_if = (uint8_t)((class_reg >> 8) & 0xFFu);
     info_out->subclass = (uint8_t)((class_reg >> 16) & 0xFFu);
     info_out->class_code = (uint8_t)(class_reg >> 24);
     info_out->header_type = (uint8_t)((header_reg >> 16) & 0xFFu);
     info_out->irq_line = kernel_pci_config_read_u8(bus, slot, function, 0x3Cu);
+    info_out->secondary_bus = 0u;
+    info_out->subsystem_vendor_id = (uint16_t)(subsystem_reg & 0xFFFFu);
+    info_out->subsystem_device_id = (uint16_t)(subsystem_reg >> 16);
+
+    if ((info_out->header_type & 0x7Fu) == 0x01u) {
+        info_out->secondary_bus = kernel_pci_config_read_u8(bus, slot, function, 0x19u);
+    }
 
     for (int i = 0; i < 6; ++i) {
         info_out->bars[i] = kernel_pci_config_read_u32(bus, slot, function, (uint8_t)(0x10u + (i * 4u)));
@@ -156,6 +169,17 @@ int kernel_pci_bar_is_mmio(uint32_t bar_value) {
     return (bar_value & 0x1u) == 0u && (bar_value & 0xFFFFFFF0u) != 0u;
 }
 
+int kernel_pci_bar_is_io(uint32_t bar_value) {
+    return (bar_value & 0x1u) != 0u && (bar_value & 0xFFFFFFFCu) != 0u;
+}
+
+uintptr_t kernel_pci_io_bar_base(uint32_t bar_value) {
+    if (!kernel_pci_bar_is_io(bar_value)) {
+        return (uintptr_t)0;
+    }
+    return (uintptr_t)(bar_value & 0xFFFFFFFCu);
+}
+
 uintptr_t kernel_pci_bar_base(uint32_t bar_value) {
     if (!kernel_pci_bar_is_mmio(bar_value)) {
         return (uintptr_t)0;
@@ -178,6 +202,18 @@ size_t kernel_pci_bar_size(uint8_t bus,
 
     offset = (uint8_t)(0x10u + (bar_index * 4u));
     original = kernel_pci_config_read_u32(bus, slot, function, offset);
+    if (kernel_pci_bar_is_io(original)) {
+        kernel_pci_config_write_u32(bus, slot, function, offset, 0xFFFFFFFFu);
+        sized = kernel_pci_config_read_u32(bus, slot, function, offset);
+        kernel_pci_config_write_u32(bus, slot, function, offset, original);
+
+        mask = sized & 0xFFFFFFFCu;
+        if (mask == 0u || mask == 0xFFFFFFFCu) {
+            return 0u;
+        }
+
+        return (size_t)(~mask + 1u);
+    }
     if (!kernel_pci_bar_is_mmio(original)) {
         return 0u;
     }

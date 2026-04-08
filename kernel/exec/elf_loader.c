@@ -9,6 +9,14 @@
 /* minimal ELF definitions */
 #define ELF_MAGIC 0x464C457Fu
 #define PT_LOAD   1
+#define ELFCLASS32 1u
+#define ELFDATA2LSB 1u
+#define EV_CURRENT 1u
+#define ELFOSABI_NONE 0u
+#define ELFOSABI_GNU 3u
+#define ET_EXEC 2u
+#define ET_DYN 3u
+#define EM_386 3u
 
 /* use the same stack size as the process subsystem */
 #define PROCESS_STACK_SIZE 4096
@@ -48,13 +56,42 @@ typedef struct {
     uint32_t p_align;
 } Elf32_Phdr;
 
+static int elf_u32_add_overflow(uint32_t a, uint32_t b, uint32_t *out) {
+    uint32_t sum = a + b;
+
+    if (sum < a) {
+        return 1;
+    }
+    if (out != NULL) {
+        *out = sum;
+    }
+    return 0;
+}
+
 process_t *elf_load(const void *elf_data, size_t size) {
     if (elf_data == NULL || size < sizeof(Elf32_Ehdr)) {
         return NULL;
     }
     const Elf32_Ehdr *ehdr = (const Elf32_Ehdr *)elf_data;
-    if (ehdr->e_magic != ELF_MAGIC || ehdr->e_class != 1 ||
-        ehdr->e_data != 1) {
+    if (ehdr->e_magic != ELF_MAGIC ||
+        ehdr->e_class != ELFCLASS32 ||
+        ehdr->e_data != ELFDATA2LSB ||
+        ehdr->e_version != EV_CURRENT ||
+        ehdr->e_version2 != EV_CURRENT) {
+        return NULL;
+    }
+    if ((ehdr->e_osabi != ELFOSABI_NONE && ehdr->e_osabi != ELFOSABI_GNU) ||
+        ehdr->e_abiversion != 0u) {
+        return NULL;
+    }
+    if ((ehdr->e_type != ET_EXEC && ehdr->e_type != ET_DYN) ||
+        ehdr->e_machine != EM_386 ||
+        ehdr->e_phentsize != sizeof(Elf32_Phdr) ||
+        ehdr->e_phnum == 0u) {
+        return NULL;
+    }
+    if ((size_t)ehdr->e_phoff > size ||
+        (size_t)ehdr->e_phnum > (size - (size_t)ehdr->e_phoff) / sizeof(Elf32_Phdr)) {
         return NULL;
     }
     /* compute span of loadable segments */
@@ -62,14 +99,27 @@ process_t *elf_load(const void *elf_data, size_t size) {
     const Elf32_Phdr *phdr = (const Elf32_Phdr *)((const uint8_t *)elf_data +
                                                   ehdr->e_phoff);
     for (int i = 0; i < ehdr->e_phnum; i++) {
+        uint32_t seg_high;
+
         if (phdr[i].p_type != PT_LOAD)
             continue;
+        if (phdr[i].p_memsz < phdr[i].p_filesz ||
+            elf_u32_add_overflow(phdr[i].p_vaddr, phdr[i].p_memsz, &seg_high)) {
+            return NULL;
+        }
+        if ((size_t)phdr[i].p_offset > size ||
+            (size_t)phdr[i].p_filesz > size - (size_t)phdr[i].p_offset) {
+            return NULL;
+        }
         if (phdr[i].p_vaddr < low)
             low = phdr[i].p_vaddr;
-        if (phdr[i].p_vaddr + phdr[i].p_memsz > high)
-            high = phdr[i].p_vaddr + phdr[i].p_memsz;
+        if (seg_high > high)
+            high = seg_high;
     }
     if (low == UINT32_MAX || high <= low) {
+        return NULL;
+    }
+    if (ehdr->e_entry < low || ehdr->e_entry >= high) {
         return NULL;
     }
     size_t total = high - low;
