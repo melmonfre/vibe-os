@@ -1,5 +1,6 @@
 #include "compat/include/compat.h"
 #include <lang/include/vibe_app_runtime.h>
+#include "applications/ported/include/network_diag_common.h"
 
 static void route_usage(void) {
     fprintf(stderr, "usage: route\n");
@@ -34,5 +35,8 @@ int vibe_app_main(int argc, char **argv) {
     if (status.ip_address[0] != '\0') {
         printf("%-18s %-18s %-8s %s\n", status.ip_address, status.ip_address, "UH", if_name);
     }
+    netdiag_debugf("route: table ok iface=%s gateway=%s\n",
+                   if_name,
+                   status.gateway[0] != '\0' ? status.gateway : "-");
     return 0;
 }

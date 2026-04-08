@@ -898,6 +898,24 @@ def wait_for_terminal_command_done(session: QemuSession, command: str, timeout: 
         raise
 
 
+def run_terminal_command_expect(session: QemuSession,
+                                command: str,
+                                markers: List[str],
+                                timeout: float = 16.0) -> None:
+    start_offset = len(session.read_log())
+    command_name = command.split(" ", 1)[0] if command else ""
+
+    run_command(session, command, timeout=max(8.0, timeout / 2.0), marker="")
+    wait_for_all_since(session,
+                       [
+                           f"shell: command {command_name}",
+                           f"terminal: command done {command_name}",
+                           *markers,
+                       ],
+                       timeout=timeout,
+                       start_offset=start_offset)
+
+
 def scenario_boot_rescue_shell(session: QemuSession) -> None:
     if log_contains(session, "boot mode: rescue shell") and log_contains(session, SHELL_READY_MARKER):
         return
@@ -1050,6 +1068,30 @@ def scenario_terminal_vidmodes(session: QemuSession) -> None:
     )
     time.sleep(1.0)
     desktop_assert_visual_proof(session)
+
+
+def scenario_network_terminal_surface(session: QemuSession) -> None:
+    scenario_startx(session)
+    time.sleep(1.0)
+
+    commands = [
+        ("ifconfig", ["ifconfig: status ok"]),
+        ("route", ["route: table ok"]),
+        ("netstat", ["netstat: telemetry ok"]),
+        ("ping localhost", ["ping: loopback-ok target=localhost"]),
+        ("host localhost", ["host: local-ok query=localhost"]),
+        ("dig localhost", ["dig: local-ok query=localhost"]),
+        ("curl file:///runtime/netmgrd-status.txt", ["curl: file-ok target=/runtime/netmgrd-status.txt"]),
+        ("ftp example.com", ["ftp: transport unavailable"]),
+    ]
+
+    for command, markers in commands:
+        run_terminal_command_expect(session, command, markers, timeout=18.0)
+
+    run_terminal_command_expect(session,
+                                "spawn clock",
+                                ["spawn: launched pid=", "host: argv clock"],
+                                timeout=16.0)
 
 
 def scenario_desktop_visual_proof(session: QemuSession) -> None:
@@ -1476,6 +1518,33 @@ SCENARIOS = [
             *AUTODESKTOP_BOOT_MARKERS,
         ],
         action=scenario_phase_e_terminal_writeback,
+    ),
+    Scenario(
+        name="network-terminal-surface",
+        description="Desktop stable-shortcut path runs the network CLI surface inside the Terminal app and confirms the graphical userspace stays alive by launching clock afterwards",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "terminal: command done vibefetch",
+            "ifconfig: status ok",
+            "route: table ok",
+            "netstat: telemetry ok",
+            "ping: loopback-ok target=localhost",
+            "host: local-ok query=localhost",
+            "dig: local-ok query=localhost",
+            "curl: file-ok target=/runtime/netmgrd-status.txt",
+            "ftp: transport unavailable",
+            "terminal: command done ftp",
+            "spawn: launched pid=",
+            "host: argv clock",
+            "terminal: command done spawn",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_network_terminal_surface,
     ),
     Scenario(
         name="doom-assets-app",

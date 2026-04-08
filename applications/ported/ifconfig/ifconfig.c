@@ -1,5 +1,6 @@
 #include "compat/include/compat.h"
 #include <lang/include/vibe_app_runtime.h>
+#include "applications/ported/include/network_diag_common.h"
 
 static const char *ifconfig_kind_name(uint32_t kind) {
     switch (kind) {
@@ -39,6 +40,7 @@ static void ifconfig_print_loopback(void) {
     printf("lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST>\n");
     printf("        inet 127.0.0.1 netmask 0xff000000\n");
     printf("        status: active\n");
+    netdiag_write_debug("ifconfig: status ok active=lo0\n");
 }
 
 static void ifconfig_print_active(const struct mk_network_status *status) {
@@ -116,5 +118,6 @@ int vibe_app_main(int argc, char **argv) {
         putchar('\n');
     }
     ifconfig_print_active(&status);
+    netdiag_debugf("ifconfig: status ok active=%s\n", status.active_if);
     return 0;
 }

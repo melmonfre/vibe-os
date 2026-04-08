@@ -25,5 +25,9 @@ int vibe_app_main(int argc, char **argv) {
             argv[1],
             status.active_if[0] != '\0' ? status.active_if : "-",
             status.dns_server[0] != '\0' ? status.dns_server : "-");
+    netdiag_debugf("ftp: ftp transport pending target=%s active=%s dns=%s\n",
+                   argv[1],
+                   status.active_if[0] != '\0' ? status.active_if : "-",
+                   status.dns_server[0] != '\0' ? status.dns_server : "-");
     return 1;
 }
