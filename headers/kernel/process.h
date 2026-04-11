@@ -29,6 +29,13 @@ enum process_priority_tier {
     PROCESS_PRIORITY_BACKGROUND = 7,
 };
 
+enum process_abi_kind {
+    PROCESS_ABI_UNKNOWN = 0,
+    PROCESS_ABI_NATIVE = 1,
+    PROCESS_ABI_ELF32 = 2,
+    PROCESS_ABI_APPFS = 3,
+};
+
 /*
  * Saved trap frame layout used by timer/yield preemption.
  * It matches the stack produced by:
@@ -76,6 +83,13 @@ typedef struct process {
     uint32_t wait_event_class;
     uint32_t wait_owner_service;
     uint32_t wake_boost_budget;
+    uint32_t abi_kind;
+    uint32_t abi_version;
+    uint32_t abi_osabi;
+    uint32_t abi_machine;
+    uintptr_t image_base;
+    uint32_t image_size;
+    uintptr_t entry_point;
     struct process *wait_next;
     struct process *next;   /* linked‑list pointer for scheduler */
 } process_t;
@@ -93,6 +107,14 @@ process_t *process_create_with_stack(void (*entry)(void),
 void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top);
 void process_terminate(process_t *proc);
 void process_destroy(process_t *proc);
+void process_set_abi_metadata(process_t *proc,
+                              uint32_t abi_kind,
+                              uint32_t abi_version,
+                              uint32_t abi_osabi,
+                              uint32_t abi_machine,
+                              uintptr_t image_base,
+                              uint32_t image_size,
+                              uintptr_t entry_point);
 
 static inline uint32_t process_saved_eip(const process_t *proc) {
     return (proc != NULL && proc->context != NULL) ? proc->context->eip : 0u;

@@ -14,6 +14,8 @@ int dup(int fd);
 int dup2(int fd, int newfd);
 unsigned int sleep(unsigned int seconds);
 int usleep(unsigned int usec);
+unsigned int alarm(unsigned int seconds);
+int pause(void);
 void _exit(int status);
 char *getcwd(char *buf, size_t size);
 int rmdir(const char *path);

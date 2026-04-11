@@ -99,4 +99,17 @@ struct cmsghdr {
     int cmsg_type;
 };
 
+int socket(int domain, int type, int protocol);
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int listen(int sockfd, int backlog);
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+ssize_t send(int sockfd, const void *buf, size_t len, int flags);
+ssize_t recv(int sockfd, void *buf, size_t len, int flags);
+ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags);
+ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags);
+int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
+int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
+int shutdown(int sockfd, int how);
+
 #endif

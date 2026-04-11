@@ -8,6 +8,30 @@ struct stat {
     off_t st_size;
 };
 
+/*
+ * Preserve the legacy two-field layout in `struct stat` for the current
+ * userland ABI. A richer BSD-shaped layout is exposed separately so we can
+ * evolve callers without silently changing the binary contract.
+ */
+struct stat_compat {
+    dev_t st_dev;
+    ino_t st_ino;
+    mode_t st_mode;
+    nlink_t st_nlink;
+    uid_t st_uid;
+    gid_t st_gid;
+    dev_t st_rdev;
+    off_t st_size;
+    time_t st_atime;
+    time_t st_mtime;
+    time_t st_ctime;
+    blksize_t st_blksize;
+    blkcnt_t st_blocks;
+};
+
+#define VIBE_STAT_ABI_LEGACY 1
+#define VIBE_STAT_ABI_COMPAT 2
+
 #define S_ISUID 0004000
 #define S_ISGID 0002000
 #define S_ISTXT 0001000

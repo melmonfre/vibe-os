@@ -137,9 +137,20 @@ static inline int sigismember(const sigset_t *set, int signo) {
 }
 
 sighandler_t signal(int signo, sighandler_t handler);
+sighandler_t bsd_signal(int signo, sighandler_t handler);
 int raise(int signo);
 int kill(pid_t pid, int signo);
 int sigaction(int signo, const struct sigaction *act, struct sigaction *oldact);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int sigpending(sigset_t *set);
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+int sigsuspend(const sigset_t *mask);
+int killpg(pid_t pgrp, int signo);
+int siginterrupt(int signo, int flag);
+int sigpause(int mask);
+int sigsetmask(int mask);
+int sigwait(const sigset_t *set, int *sig);
+int sigaltstack(const stack_t *ss, stack_t *oss);
+void psignal(unsigned int sig, const char *s);
 
 #endif

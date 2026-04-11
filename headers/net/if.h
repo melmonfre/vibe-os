@@ -1,6 +1,7 @@
 #ifndef VIBE_NET_IF_H
 #define VIBE_NET_IF_H
 
+#include <sys/socket.h>
 #include <sys/types.h>
 
 #define IF_NAMESIZE 16
@@ -11,6 +12,36 @@ struct if_nameindex {
     unsigned int if_index;
     char *if_name;
 };
+
+struct ifreq {
+    char ifr_name[IFNAMSIZ];
+    union {
+        struct sockaddr ifru_addr;
+        struct sockaddr ifru_dstaddr;
+        struct sockaddr ifru_broadaddr;
+        short ifru_flags;
+        int ifru_metric;
+        char *ifru_data;
+    } ifr_ifru;
+};
+
+#define ifr_addr ifr_ifru.ifru_addr
+#define ifr_dstaddr ifr_ifru.ifru_dstaddr
+#define ifr_broadaddr ifr_ifru.ifru_broadaddr
+#define ifr_flags ifr_ifru.ifru_flags
+#define ifr_metric ifr_ifru.ifru_metric
+#define ifr_data ifr_ifru.ifru_data
+
+struct ifconf {
+    int ifc_len;
+    union {
+        char *ifcu_buf;
+        struct ifreq *ifcu_req;
+    } ifc_ifcu;
+};
+
+#define ifc_buf ifc_ifcu.ifcu_buf
+#define ifc_req ifc_ifcu.ifcu_req
 
 #define IFF_UP 0x1
 #define IFF_BROADCAST 0x2

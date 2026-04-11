@@ -29,6 +29,32 @@ Inventario inicial para a Fase 0 do plano em [abi-improvements.md](./abi-improve
   - partes ja alinhadas semanticamente
 - Estruturas antigas expostas para userland existente precisam continuar aceitas; quando o layout atual e mais curto que o BSD, a evolucao deve ser aditiva ou versionada.
 
+## Layouts e contratos compartilhados
+
+| ABI/estrutura | Layout atual | Contrato compartilhado | Estrategia |
+| --- | --- | --- | --- |
+| `vibe_app_header` / AppFS | legado e atual coexistem no loader | contrato de boot e arena de carga | fallback explicito por versao/layout |
+| ELF32 i386 | `kernel/exec/elf_loader.c` | header ELF e `PT_LOAD` | aceitar variantes simples de OSABI sem mudar layout |
+| Launch info | `headers/include/userland_api.h` | processo, argv e launch builtin/app | evolucao aditiva e fallback para layouts antigos |
+| `struct stat` | legado de 2 campos em `headers/sys/stat.h` | ABI publica consumida pelo userland atual | preservar layout e expor forma rica separada |
+| `struct stat_compat` | forma BSD-shaped auxiliar | alvo de migracao futura de ABI | introduzir versao nova, nao substituir em silencio |
+| `struct termios` / `winsize` | shape BSD em headers | `ioctl`, TTY e apps interativos | manter layout e completar semantica no runtime |
+| `fd_set`, `timeval`, `timespec`, `pollfd` | shape publica ja exposta | waits e multiplexacao | manter layout e alinhar backends |
+| `struct sockaddr*`, `iovec`, `msghdr` | headers publicos BSD-shaped | sockets, rede e ports | manter layout e completar casos avancados sem ancillary fake |
+| `struct ifreq` / `ifconf` | publicados nos headers | `ioctl(SIOCGIF*)` e diagnostico de rede | manter forma BSD e crescer por opcodes, nao por mudanca de struct |
+| `sigset_t`, `sigaction`, `siginfo_t`, `stack_t` | headers publicos de sinais | entrega de sinais e waits | manter layout e ampliar semantica do runtime |
+| `mk_*_event` compartilhados | `headers/include/userland_api.h` | eventos de audio/video/network/task | qualquer crescimento deve ser por versao explicita ou append-only |
+
+## Politica de versionamento estrutural
+
+| Estrutura/ABI | Politica |
+| --- | --- |
+| Layouts de boot e load (`AppFS`, launch) | aceitar legado e atual enquanto houver userland dependente |
+| Headers publicos de forma BSD ja expostos (`termios`, `sockaddr`, `timeval`, `pollfd`) | manter layout estavel; evoluir por semantica e opcodes |
+| Estruturas pequenas e legadas do `vibeOS` (`struct stat`) | nao substituir em silencio; criar versao/forma paralela |
+| Eventos `mk_*` compartilhados | append-only quando possivel; se houver quebra, versao nova explicita |
+| ABI de driver/control-plane futuro | versionamento explicito desde a primeira publicacao |
+
 ## Proximo bloco sugerido
 
 1. fechar a Fase 1 com headers base faltantes e divergencias documentadas

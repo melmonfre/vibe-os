@@ -5,10 +5,11 @@
 #include <sys/types.h>
 
 #define CLOCKS_PER_SEC 100
+#define CLK_TCK CLOCKS_PER_SEC
 
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 4
-#define TIME_UTC CLOCK_REALTIME
+#define TIME_UTC 1
 
 struct tm {
     int tm_sec;
@@ -20,7 +21,13 @@ struct tm {
     int tm_wday;
     int tm_yday;
     int tm_isdst;
+    long tm_gmtoff;
+    const char *tm_zone;
 };
+
+extern int daylight;
+extern long timezone;
+extern char *tzname[2];
 
 clock_t clock(void);
 time_t time(time_t *timer);
@@ -33,7 +40,17 @@ struct tm *localtime_r(const time_t *timer, struct tm *result);
 char *asctime(const struct tm *tm);
 char *ctime(const time_t *timer);
 size_t strftime(char *dst, size_t size, const char *format, const struct tm *tm);
+char *strptime(const char *buf, const char *fmt, struct tm *tm);
+char *asctime_r(const struct tm *tm, char *buf);
+char *ctime_r(const time_t *timer, char *buf);
 int nanosleep(const struct timespec *req, struct timespec *rem);
+int clock_getres(clockid_t clock_id, struct timespec *tp);
 int clock_gettime(clockid_t clock_id, struct timespec *tp);
+int clock_settime(clockid_t clock_id, const struct timespec *tp);
+int timespec_get(struct timespec *ts, int base);
+void tzset(void);
+void tzsetwall(void);
+time_t timelocal(struct tm *tm);
+time_t timegm(struct tm *tm);
 
 #endif
