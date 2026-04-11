@@ -43,17 +43,17 @@ Fechar as lacunas de ABI do `vibeOS` com compatibilidade progressiva, usando `co
 - [x] Endurecer validação de ELF: `e_ident`, `e_ehsize`, `e_machine`, `PT_LOAD`, alinhamento e entrada
 - [x] Rejeitar `PT_INTERP`, `PT_DYNAMIC` e `PT_TLS` até existir backend real
 - [x] Registrar metadados ABI no `process_t`
-- [ ] Definir política formal de versionamento ABI para apps `vibe`
-- [ ] Planejar o caminho para `ELF64`
+- [x] Definir política formal de versionamento ABI para apps `vibe`
+- [x] Planejar o caminho para `ELF64`
 
 ## Fase 3: Processo e semântica de syscall
 
 - [x] Expor `getpid()` real na camada compat
 - [x] Preservar a ABI de launch existente com fallback para layouts antigos
-- [ ] Formalizar retorno e erro de syscall em estilo BSD de ponta a ponta
-- [ ] Revisar `exit`, estados de término e snapshots
-- [ ] Definir acomodação ABI para `execve` e `waitpid`
-- [ ] Definir estratégia para `fork` ou equivalente
+- [x] Formalizar retorno e erro de syscall em estilo BSD de ponta a ponta
+- [x] Revisar `exit`, estados de término e snapshots
+- [x] Definir acomodação ABI para `execve` e `waitpid`
+- [x] Definir estratégia para `fork` ou equivalente
 
 ## Fase 4: Arquivos, descritores e controle
 
@@ -63,9 +63,9 @@ Fechar as lacunas de ABI do `vibeOS` com compatibilidade progressiva, usando `co
 - [x] Implementar `fcntl(F_GETFD/F_SETFD/F_GETFL/F_SETFL/F_DUPFD/F_DUPFD_CLOEXEC/F_GETOWN/F_SETOWN/F_ISATTY)`
 - [x] Implementar `flock` e `fcntl(F_GETLK/F_SETLK/F_SETLKW)` com estado real na camada compat
 - [x] Implementar `ioctl(FIOCLEX/FIONCLEX/FIONBIO/FIOASYNC/FIONREAD/FIOGETOWN/FIOSETOWN)`
-- [ ] Revisar `stat` e `off_t` para maior compatibilidade binária BSD
-- [ ] Definir a política de `ioctl`: nativo, traduzido ou userland
-- [ ] Revisar locking para conflitos reais entre processos e integração com backend futuro
+- [x] Revisar `stat` e `off_t` para maior compatibilidade binária BSD
+- [x] Definir a política de `ioctl`: nativo, traduzido ou userland
+- [x] Revisar locking para conflitos reais entre processos e integração com backend futuro
 
 ## Fase 5: TTY e `termios`
 
@@ -74,8 +74,8 @@ Fechar as lacunas de ABI do `vibeOS` com compatibilidade progressiva, usando `co
 - [x] Implementar `TIOCGETA`, `TIOCSETA*`, `TIOCGWINSZ`, `TIOCSWINSZ`, `TIOCGPGRP`, `TIOCSPGRP`
 - [x] Inferir `winsize` a partir de `SYSCALL_GFX_INFO` quando possível
 - [x] Dar efeito real a canonical mode e raw mode sobre entrada
-- [ ] Implementar sinais de terminal
-- [ ] Planejar pseudo-terminal
+- [x] Implementar sinais de terminal
+- [x] Planejar pseudo-terminal
 
 ## Fase 6: Sockets e rede
 
@@ -94,25 +94,25 @@ Fechar as lacunas de ABI do `vibeOS` com compatibilidade progressiva, usando `co
 - [x] Implementar sinais básicos na camada compat: `signal`, `sigaction`, `raise`, `kill`, `sigprocmask`, `sigpending`, `sigsuspend`, `sigwait`, `alarm`, `pause`
 - [x] Conectar `poll` e `select` a backends reais de espera do microkernel
 - [x] Integrar sinais pendentes aos waits bloqueantes básicos (`poll`/`select`)
-- [ ] Integrar entrega de sinais com I/O e eventos de processo reais de ponta a ponta
-- [ ] Deixar `kqueue` para fase posterior
+- [x] Integrar entrega de sinais com I/O e eventos de processo reais de ponta a ponta
+- [x] Deixar `kqueue` para fase posterior
 
 ## Fase 8: Audio, input, storage e device control
 
 - [x] Aproximar a superfície pública de `audioio`
 - [x] Adicionar caminho explícito de backend de storage para o host de serviço
-- [ ] Completar mixer ABI e ferramentas de controle
-- [ ] Revisar contratos de bloco, flush, sync e erros em storage
-- [ ] Estabilizar melhor semântica de input e eventos
-- [ ] Revisar superfícies de controle de dispositivo com base em `compat/sys/dev/*`
+- [x] Completar mixer ABI e ferramentas de controle
+- [x] Revisar contratos de bloco, flush, sync e erros em storage
+- [x] Estabilizar melhor semântica de input e eventos
+- [x] Revisar superfícies de controle de dispositivo com base em `compat/sys/dev/*`
 
 ## Fase 9: ABI de hardware e driver boundary
 
-- [ ] Padronizar enumeração PCI com vendor/device, subsystem IDs, class/subclass/prog-if, command/status, BARs e bridges
-- [ ] Definir contrato para lease de IRQ
-- [ ] Definir contrato para mapeamento de BAR
-- [ ] Definir contrato para registro de buffers DMA
-- [ ] Planejar notificações de hotplug
+- [x] Padronizar enumeração PCI com vendor/device, subsystem IDs, class/subclass/prog-if, command/status, BARs e bridges
+- [x] Definir contrato para lease de IRQ
+- [x] Definir contrato para mapeamento de BAR
+- [x] Definir contrato para registro de buffers DMA
+- [x] Planejar notificações de hotplug
 
 ## Fase 10: Validação
 
@@ -121,23 +121,23 @@ Fechar as lacunas de ABI do `vibeOS` com compatibilidade progressiva, usando `co
 - [x] Usar apps simples e ports como indicador de progresso
 - [x] Melhorar o caminho AppFS e storage para boot modular
 - [x] Rodar `validate-startx-800x600` com melhora material do cenário
-- [ ] Transformar cenários ABI em suíte estável de regressão
+- [x] Transformar cenários ABI em suíte estável de regressão
 - [ ] Validar utilitários BSD representativos sem shim especial por app
 - [ ] Validar software interativo mais pesado como `mg` e `vi`
 
 ## Prioridade Atual
 
-- [ ] Fechar evolução binária de `stat` e semântica de FD
-- [ ] Dar efeito real a `termios` sobre entrada e sinais de terminal
-- [ ] Formalizar modelo de erro e retorno de syscall
-- [ ] Completar ABI de sockets e rede avançada (`ioctl`, ancillary data, casos avançados`)
-- [ ] Integrar sinais básicos ao restante do runtime bloqueante e eventos reais
-- [ ] Consolidar fronteiras ABI de hardware e driver
+- [x] Fechar evolução binária de `stat` e semântica de FD
+- [x] Dar efeito real a `termios` sobre entrada e sinais de terminal
+- [x] Formalizar modelo de erro e retorno de syscall
+- [x] Completar ABI de sockets e rede avançada (`ioctl`, ancillary data, casos avançados`)
+- [x] Integrar sinais básicos ao restante do runtime bloqueante e eventos reais
+- [x] Consolidar fronteiras ABI de hardware e driver
 
 ## Definição de pronto
 
-- [ ] ABIs compartilhadas documentadas e versionadas
-- [ ] Kernel aceitando caminhos legados e novos sem quebrar o userland
+- [x] ABIs compartilhadas documentadas e versionadas
+- [x] Kernel aceitando caminhos legados e novos sem quebrar o userland
 - [ ] Programas BSD simples rodando sem shim especial por app
-- [ ] Serviços do microkernel expondo contratos estáveis e previsíveis
-- [ ] Evolução futura protegida por testes de regressão ABI
+- [x] Serviços do microkernel expondo contratos estáveis e previsíveis
+- [x] Evolução futura protegida por testes de regressão ABI
