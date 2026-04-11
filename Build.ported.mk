@@ -636,6 +636,64 @@ $(SED_APP): $(SED_ELF)
 
 ported-sed: $(SED_APP)
 
+# === EXTENDED PORTED APPS ===
+
+define DEFINE_PORTED_APP
+$(1)_SRCS := $(3)
+$(1)_OBJS := $$(patsubst applications/ported/$(2)/%.c,build/ported/$(2)/%.o,$$($(1)_SRCS)) \
+	build/app_entry_$(2).o \
+	build/app_runtime_$(2).o
+$(1)_ELF := build/ported/$(2).elf
+$(1)_APP := build/ported/$(2).app
+
+build/app_entry_$(2).o: $$(APP_ENTRY) | build
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(CFLAGS) $$(INCLUDES) \
+		-DVIBE_APP_BUILD_NAME=\"$(2)\" \
+		-DVIBE_APP_BUILD_HEAP_SIZE=$(4) \
+		-c $$< -o $$@
+
+build/app_runtime_$(2).o: $$(APP_RUNTIME) | build
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(CFLAGS) $$(INCLUDES) -c $$< -o $$@
+
+build/ported/$(2)/%.o: applications/ported/$(2)/%.c $$(COMPAT_LIB) | build
+	@mkdir -p $$(dir $$@)
+	$$(CC) $$(CFLAGS) $$(INCLUDES) -c $$< -o $$@
+
+$$($(1)_ELF): $$($(1)_OBJS) $$(COMPAT_LIB) linker/app.ld | build
+	@mkdir -p $$(dir $$@)
+	$$(LD) $$(LDFLAGS) $$($(1)_OBJS) $$(COMPAT_LIB) -o $$@ $$(LIBGCC_A)
+
+$$($(1)_APP): $$($(1)_ELF)
+	@mkdir -p $$(dir $$@)
+	$$(OBJCOPY) -O binary $$< $$@
+	$$(PYTHON) tools/patch_app_header.py --nm $$(NM) --elf $$< --bin $$@
+	@echo "✓ $(2) app: $$@"
+
+ported-$(2): $$($(1)_APP)
+
+ported-$(2)-clean:
+	rm -f $$($(1)_OBJS) $$($(1)_ELF) $$($(1)_APP)
+	rm -rf build/ported/$(2)
+
+EXTRA_PORTED_APP_TARGETS += $$($(1)_APP)
+EXTRA_PORTED_CLEAN_TARGETS += ported-$(2)-clean
+EXTRA_PORTED_PHONY_TARGETS += ported-$(2) ported-$(2)-clean
+endef
+
+$(eval $(call DEFINE_PORTED_APP,UNAME,uname,applications/ported/uname/uname.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,SYNC,sync,applications/ported/sync/sync.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,TR,tr,applications/ported/tr/tr.c applications/ported/tr/str.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,IFCONFIG,ifconfig,applications/ported/ifconfig/ifconfig.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,ROUTE,route,applications/ported/route/route.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,NETSTAT,netstat,applications/ported/netstat/netstat.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,PING,ping,applications/ported/ping/ping.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,HOST,host,applications/ported/host/host.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,DIG,dig,applications/ported/dig/dig.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,FTP,ftp,applications/ported/ftp/ftp.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,CURL,curl,applications/ported/curl/curl.c,65536u))
+
 # General rules
 build:
 	@mkdir -p $@
@@ -700,10 +758,11 @@ PORTED_APP_TARGETS := \
 	$(MKDIR_APP) \
 	$(TRUE_APP) \
 	$(FALSE_APP) \
-	$(PRINTF_APP)
+	$(PRINTF_APP) \
+	$(EXTRA_PORTED_APP_TARGETS)
 
 ported-all: $(PORTED_APP_TARGETS)
 
-ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean
+ported-clean: ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean $(EXTRA_PORTED_CLEAN_TARGETS)
 
-.PHONY: ported-all ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-mkdir ported-true ported-false ported-printf ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean
+.PHONY: ported-all ported-echo ported-cat ported-wc ported-pwd ported-head ported-sleep ported-rmdir ported-tail ported-grep ported-sed ported-loadkeys ported-mkdir ported-true ported-false ported-printf ported-clean ported-echo-clean ported-cat-clean ported-wc-clean ported-pwd-clean ported-head-clean ported-sleep-clean ported-rmdir-clean ported-tail-clean ported-grep-clean ported-sed-clean ported-loadkeys-clean ported-mkdir-clean ported-true-clean ported-false-clean ported-printf-clean $(EXTRA_PORTED_PHONY_TARGETS)

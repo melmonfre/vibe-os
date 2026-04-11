@@ -119,6 +119,7 @@ Fechar as lacunas de ABI do `vibeOS` com compatibilidade progressiva, usando `co
 - [x] Validar build completo com `make -j4`
 - [x] Validar `build/libcompat.a` com `make compat-build`
 - [x] Usar apps simples e ports como indicador de progresso
+- [x] Fechar lacunas do `Build.ported.mk` para os ports já exigidos pelo `Makefile`
 - [x] Melhorar o caminho AppFS e storage para boot modular
 - [x] Rodar `validate-startx-800x600` com melhora material do cenário
 - [x] Transformar cenários ABI em suíte estável de regressão
