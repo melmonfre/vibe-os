@@ -18,6 +18,8 @@
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/drivers/usb/usb_host.h>
 #include <kernel/drivers/input/input.h>
+#include <kernel/drivers/network/virtio_net.h>
+#include <kernel/drivers/network/wifi_pci.h>
 #include <kernel/microkernel.h>
 #include <kernel/userland.h>
 #include <lang/include/vibe_app.h>
@@ -495,6 +497,8 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
 
     kernel_text_puts("Initializing storage...\n");
     kernel_storage_init();
+           kernel_virtio_net_init(); /* registers virtio-net with driver manager */
+           kernel_wifi_pci_init();   /* registers wi-fi pci detector with driver manager */
     kernel_text_puts(kernel_storage_ready() ? "Storage OK\n" : "Storage unavailable\n");
 
     kernel_text_puts("Initializing scheduler/driver manager...\n");

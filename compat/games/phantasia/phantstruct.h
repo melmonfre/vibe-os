@@ -8,6 +8,10 @@
 #include <limits.h>
 #include <stdbool.h>
 
+#ifndef LOGIN_NAME_MAX
+#define LOGIN_NAME_MAX 256
+#endif
+
 struct	player	    	/* player statistics */
     {
     double	p_experience;	/* experience */

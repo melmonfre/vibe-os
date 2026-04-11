@@ -40,6 +40,10 @@ enum mk_network_socket_type_bits {
     MK_NETWORK_SOCKET_RAW = 1u << 2
 };
 
+enum mk_network_limits {
+    MK_NETWORK_WIFI_SCAN_MAX_APS = 6u
+};
+
 struct mk_network_socket_request {
     uint32_t domain;
     uint32_t type;
@@ -104,6 +108,25 @@ struct mk_network_info {
     uint32_t socket_rx_capacity;
     uint32_t event_queue_depth;
     uint32_t listen_backlog_max;
+    uint16_t wifi_vendor_id;
+    uint16_t wifi_device_id;
+    char wifi_chip_name[48];
+};
+
+struct mk_network_wifi_ap {
+    char ssid[33];
+    int8_t rssi;
+    uint8_t channel;
+    uint8_t encrypted;
+    uint8_t reserved0;
+    uint8_t reserved1;
+    uint8_t reserved2;
+    uint8_t reserved3;
+};
+
+struct mk_network_wifi_scan_result {
+    uint32_t count;
+    struct mk_network_wifi_ap aps[MK_NETWORK_WIFI_SCAN_MAX_APS];
 };
 
 struct mk_network_status {
@@ -160,6 +183,7 @@ struct mk_network_ethernet_config {
 void mk_network_service_init(void);
 int mk_network_service_ready(void);
 int mk_network_service_get_info(struct mk_network_info *info);
+int mk_network_service_wifi_scan(struct mk_network_wifi_scan_result *result);
 int mk_network_service_get_status(struct mk_network_status *status);
 int mk_network_service_get_scan(uint32_t index, struct mk_network_scan_info *info);
 int mk_network_service_connect_wifi(const struct mk_network_connect_request *request);
