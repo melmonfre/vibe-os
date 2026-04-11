@@ -164,6 +164,40 @@ uint32_t sys_storage_partition_start_lba(void) {
     return (uint32_t)syscall5(SYSCALL_STORAGE_PARTITION_START_LBA, 0, 0, 0, 0, 0);
 }
 
+int sys_storage_backend_load(void *dst, uint32_t size) {
+    return syscall5(SYSCALL_STORAGE_BACKEND_LOAD, (int)(uintptr_t)dst, (int)size, 0, 0, 0);
+}
+
+int sys_storage_backend_save(const void *src, uint32_t size) {
+    return syscall5(SYSCALL_STORAGE_BACKEND_SAVE, (int)(uintptr_t)src, (int)size, 0, 0, 0);
+}
+
+int sys_storage_backend_read_sectors(uint32_t lba, void *dst, uint32_t sector_count) {
+    return syscall5(SYSCALL_STORAGE_BACKEND_READ_SECTORS,
+                    (int)lba,
+                    (int)(uintptr_t)dst,
+                    (int)sector_count,
+                    0,
+                    0);
+}
+
+int sys_storage_backend_write_sectors(uint32_t lba, const void *src, uint32_t sector_count) {
+    return syscall5(SYSCALL_STORAGE_BACKEND_WRITE_SECTORS,
+                    (int)lba,
+                    (int)(uintptr_t)src,
+                    (int)sector_count,
+                    0,
+                    0);
+}
+
+uint32_t sys_storage_backend_total_sectors(void) {
+    return (uint32_t)syscall5(SYSCALL_STORAGE_BACKEND_TOTAL_SECTORS, 0, 0, 0, 0, 0);
+}
+
+uint32_t sys_storage_backend_partition_start_lba(void) {
+    return (uint32_t)syscall5(SYSCALL_STORAGE_BACKEND_PARTITION_START_LBA, 0, 0, 0, 0, 0);
+}
+
 int sys_open(const char *path, int flags) {
     return syscall5(SYSCALL_OPEN, (int)(uintptr_t)path, flags, 0, 0, 0);
 }

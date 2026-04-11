@@ -558,9 +558,9 @@ static int storage_service_handle_request(const struct mk_message *request,
             if (sys_transfer_size(payload->transfer_id) < byte_count) {
                 return storage_service_reply_result(reply, request, source_pid, -1);
             }
-            rc = sys_storage_read_sectors(payload->lba,
-                                          g_storage_service_buffer,
-                                          payload->sector_count);
+            rc = sys_storage_backend_read_sectors(payload->lba,
+                                                  g_storage_service_buffer,
+                                                  payload->sector_count);
             if (rc == 0 &&
                 sys_transfer_write(payload->transfer_id, g_storage_service_buffer, byte_count) != 0) {
                 rc = -1;
@@ -577,7 +577,7 @@ static int storage_service_handle_request(const struct mk_message *request,
                 sys_transfer_size(payload->transfer_id) < payload->size) {
                 return storage_service_reply_result(reply, request, source_pid, -1);
             }
-            rc = sys_storage_load(g_storage_service_buffer, payload->size);
+            rc = sys_storage_backend_load(g_storage_service_buffer, payload->size);
             if (rc == 0 &&
                 sys_transfer_write(payload->transfer_id, g_storage_service_buffer, payload->size) != 0) {
                 rc = -1;
@@ -603,9 +603,9 @@ static int storage_service_handle_request(const struct mk_message *request,
                 sys_transfer_read(payload->transfer_id, g_storage_service_buffer, byte_count) != 0) {
                 return storage_service_reply_result(reply, request, source_pid, -1);
             }
-            rc = sys_storage_write_sectors(payload->lba,
-                                           g_storage_service_buffer,
-                                           payload->sector_count);
+            rc = sys_storage_backend_write_sectors(payload->lba,
+                                                   g_storage_service_buffer,
+                                                   payload->sector_count);
             return storage_service_reply_result(reply, request, source_pid, rc);
         }
 
@@ -619,7 +619,7 @@ static int storage_service_handle_request(const struct mk_message *request,
                 sys_transfer_read(payload->transfer_id, g_storage_service_buffer, payload->size) != 0) {
                 return storage_service_reply_result(reply, request, source_pid, -1);
             }
-            rc = sys_storage_save(g_storage_service_buffer, payload->size);
+            rc = sys_storage_backend_save(g_storage_service_buffer, payload->size);
             return storage_service_reply_result(reply, request, source_pid, rc);
         }
 
@@ -630,8 +630,8 @@ static int storage_service_handle_request(const struct mk_message *request,
         struct mk_storage_info info;
 
         memset(&info, 0, sizeof(info));
-        info.total_sectors = sys_storage_total_sectors();
-        info.partition_start_lba = sys_storage_partition_start_lba();
+        info.total_sectors = sys_storage_backend_total_sectors();
+        info.partition_start_lba = sys_storage_backend_partition_start_lba();
         service_prepare_reply(reply, request, source_pid);
         return service_set_payload(reply, &info, sizeof(info));
     }

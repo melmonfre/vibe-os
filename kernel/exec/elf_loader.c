@@ -14,6 +14,8 @@
 #define EV_CURRENT 1u
 #define ELFOSABI_NONE 0u
 #define ELFOSABI_GNU 3u
+#define ELFOSABI_FREEBSD 9u
+#define ELFOSABI_OPENBSD 12u
 #define ET_EXEC 2u
 #define ET_DYN 3u
 #define EM_386 3u
@@ -68,6 +70,19 @@ static int elf_u32_add_overflow(uint32_t a, uint32_t b, uint32_t *out) {
     return 0;
 }
 
+static int elf_osabi_supported(uint8_t osabi, uint8_t abiversion) {
+    switch (osabi) {
+    case ELFOSABI_NONE:
+    case ELFOSABI_GNU:
+        return abiversion == 0u;
+    case ELFOSABI_FREEBSD:
+    case ELFOSABI_OPENBSD:
+        return abiversion <= 1u;
+    default:
+        return 0;
+    }
+}
+
 process_t *elf_load(const void *elf_data, size_t size) {
     if (elf_data == NULL || size < sizeof(Elf32_Ehdr)) {
         return NULL;
@@ -80,8 +95,7 @@ process_t *elf_load(const void *elf_data, size_t size) {
         ehdr->e_version2 != EV_CURRENT) {
         return NULL;
     }
-    if ((ehdr->e_osabi != ELFOSABI_NONE && ehdr->e_osabi != ELFOSABI_GNU) ||
-        ehdr->e_abiversion != 0u) {
+    if (!elf_osabi_supported(ehdr->e_osabi, ehdr->e_abiversion)) {
         return NULL;
     }
     if ((ehdr->e_type != ET_EXEC && ehdr->e_type != ET_DYN) ||

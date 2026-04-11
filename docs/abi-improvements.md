@@ -400,6 +400,14 @@ Esta iniciativa pode ser considerada madura quando:
 - os servicos do microkernel expuserem contratos estaveis e previsiveis
 - a evolucao futura do kernel estiver presa a testes de compatibilidade ABI
 
+## Andamento atual da Fase 2
+
+- o loader AppFS agora distingue layout atual de header e layout legado, em vez de tratar qualquer `abi_version = 1` como se fosse identico
+- o kernel continua aceitando o layout atual sem rebuild geral
+- aliases de `load_address` da geracao `0x02000000/0x04000000/0x06000000` passam a ser reconhecidos como a mesma classe de arena para compatibilidade controlada
+- o layout AppFS mais antigo, que nao carregava `load_address` no header, passa a falhar com diagnostico explicito em vez de incompatibilidade silenciosa
+- o loader ELF deixa de aceitar so `System V/GNU` e passa a tolerar tambem `FreeBSD/OpenBSD` nos casos simples de `ELF32/i386`
+
 
 Melhorei a base de compat OpenBSD sem mexer na ABI já consumida pelo userland atual. Entraram `errno`, `ioctl`, `ioccom`, `termios`, `select`, `poll` e `sys/time`, além de uma expansão cuidadosa de `fcntl` em [headers/fcntl.h](/home/mel/Documentos/vibe-os/headers/fcntl.h#L13), [headers/errno.h](/home/mel/Documentos/vibe-os/headers/errno.h#L1), [headers/sys/ioctl.h](/home/mel/Documentos/vibe-os/headers/sys/ioctl.h#L10), [headers/sys/termios.h](/home/mel/Documentos/vibe-os/headers/sys/termios.h#L82), [headers/sys/select.h](/home/mel/Documentos/vibe-os/headers/sys/select.h#L32), [headers/poll.h](/home/mel/Documentos/vibe-os/headers/poll.h#L7) e [headers/sys/time.h](/home/mel/Documentos/vibe-os/headers/sys/time.h#L6).
 
@@ -408,3 +416,39 @@ O ponto mais útil agora é que a camada pública já fala muito mais “BSD”:
 Verificação: `make -j4` passou inteiro.
 
 Limite atual, de forma bem franca: isso melhora bastante a compat de headers e ABI de superfície, mas ainda não é compat binária completa de OpenBSD. O próximo passo certo é ligar essas interfaces a backends reais no kernel e no runtime: `ioctl`/TTY, `poll`/`select`, `fcntl(F_SETFL)` e depois `stat`/`off_t`/socket ioctls.
+Rodei o teste no QEMU com `make QEMU=qemu-system-x86_64 validate-startx-800x600`.
+
+Resultado: falhou antes do desktop subir. O cenário não chegou em `desktop.app: launch startx` nem em `desktop: session ready`. O serial log do run ficou em `/tmp/vmod-ylnip_46/s.log`.
+
+O ponto útil do log é este:
+```text
+host: argv audiosvc apply-settings
+lang: pid ok before reset
+lang: pid ok after reset
+lang: try_run begin
+service: storage request type=16 from pid=12 to pid=1
+scheduler: block pid=12 ... deadline=524
+
+host: argv userland
+lang: pid ok before reset
+lang: pid ok after reset
+lang: try_run begin
+service: storage request type=16 from pid=13 to pid=1
+scheduler: block pid=13 ... deadline=686
+
+scheduler: timeout pid=12 ...
+scheduler: timeout pid=13 ...
+timer: tick=2000
+```
+
+Leitura prática: o boot trava no caminho AppFS/storage antes de `userland.app` ou `startx` realmente arrancarem. Então a melhoria de ABI não quebrou o build, mas ainda não resolveu o gargalo real do desktop neste cenário; o próximo alvo certo é `userland/modules/lang_loader.c` no fluxo de leitura do catálogo/AppFS e a superfície `storage request type=16`.
+
+Se quiser, eu sigo agora direto nessa trilha e fecho o loop: reproduzo esse timeout com logs mais cirúrgicos no loader/storage e tento corrigir a causa real.
+
+Continuei a implementação da trilha de ABI e fechei a parte que faltava no caminho de loader/storage.
+
+Entrou suporte explícito a backend de storage no userland service host: adicionei `sys_storage_backend_*` em [headers/userland/modules/include/syscalls.h](/home/mel/Documentos/vibe-os/headers/userland/modules/include/syscalls.h), implementei as wrappers em [userland/modules/syscalls.c](/home/mel/Documentos/vibe-os/userland/modules/syscalls.c) e troquei o host de storage em [userland/bootstrap_service.c](/home/mel/Documentos/vibe-os/userland/bootstrap_service.c) para usar esse caminho direto ao backend, em vez de depender do syscall público de storage dentro do próprio serviço. Isso deixou o fluxo bem mais robusto para AppFS e persistência durante boot modular.
+
+As mudanças anteriores no loader ficaram preservadas e agora trabalham melhor juntas: [lang/include/vibe_app.h](/home/mel/Documentos/vibe-os/lang/include/vibe_app.h) mantém os layouts legado/atual do header AppFS, [userland/modules/lang_loader.c](/home/mel/Documentos/vibe-os/userland/modules/lang_loader.c) decodifica os headers com fallback/controlado e aceita os aliases antigos de arena, e [kernel/exec/elf_loader.c](/home/mel/Documentos/vibe-os/kernel/exec/elf_loader.c) passou a tolerar `ELFOSABI_FREEBSD` e `ELFOSABI_OPENBSD` para os casos simples de `ELF32/i386`.
+
+Verificação: `make -j4` passou. `make QEMU=qemu-system-x86_64 validate-startx-800x600` ficou muito melhor e passou em 5 de 6 cenários; o único fail foi `input-restart-desktop`, mas o replay isolado desse cenário passou com `python3 tools/validate_modular_apps.py --scenario input-restart-desktop --expect-boot-mode 800x600 --image build/boot.img --report build/input-restart-validation.md --qemu qemu-system-x86_64 --memory-mb 3072`, então no momento isso parece mais intermitência da suíte completa do que regressão funcional direta dessa ABI.

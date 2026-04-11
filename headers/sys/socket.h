@@ -48,6 +48,18 @@ typedef uint8_t sa_family_t;
 #define AF_LINK        18
 #define AF_MAX         37
 
+#define PF_UNSPEC      AF_UNSPEC
+#define PF_LOCAL       AF_LOCAL
+#define PF_UNIX        AF_UNIX
+#define PF_INET        AF_INET
+#define PF_INET6       AF_INET6
+
+#define SOMAXCONN      128
+
+#define SHUT_RD        0
+#define SHUT_WR        1
+#define SHUT_RDWR      2
+
 #define MSG_OOB        0x0001
 #define MSG_PEEK       0x0002
 #define MSG_DONTROUTE  0x0004
