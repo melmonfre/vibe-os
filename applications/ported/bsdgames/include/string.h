@@ -18,5 +18,6 @@ size_t strlcpy(char *dst, const char *src, size_t size);
 size_t strlcat(char *dst, const char *src, size_t size);
 char *strsep(char **stringp, const char *delim);
 char *strerror(int errnum);
+char *strncpy(char *dst, const char *src, size_t n);
 
 #endif

@@ -1753,6 +1753,26 @@ run-headless-usb-debug: $(IMAGE)
 		fi; \
 	fi
 
+run-headless-virtio-net-debug: $(IMAGE)
+	@if command -v $(QEMU) >/dev/null 2>&1; then \
+		$(QEMU) -m $(QEMU_MEMORY_MB) \
+			-drive $(QEMU_IMAGE_OPTS) \
+			-netdev user,id=net0 \
+			-device virtio-net-pci,netdev=net0 \
+			-boot c -display none -serial stdio -monitor none; \
+	else \
+		if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+			qemu-system-x86_64 -m $(QEMU_MEMORY_MB) \
+				-drive $(QEMU_IMAGE_OPTS) \
+				-netdev user,id=net0 \
+				-device virtio-net-pci,netdev=net0 \
+				-boot c -display none -serial stdio -monitor none; \
+		else \
+			echo "Erro: QEMU não encontrado"; \
+			exit 1; \
+		fi; \
+	fi
+
 validate-phase6: $(IMAGE)
 	$(PYTHON) tools/validate_phase6.py --image $(IMAGE) --report $(PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 

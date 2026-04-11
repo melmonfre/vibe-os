@@ -216,5 +216,6 @@ int overwrite(const WINDOW *src, WINDOW *dst);
 int overlay(const WINDOW *src, WINDOW *dst);
 chtype winch_at(WINDOW *win, int y, int x);
 char *unctrl(chtype ch);
+int delay_output(int ms);
 
 #endif

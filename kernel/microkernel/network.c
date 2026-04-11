@@ -10,6 +10,8 @@
 #include <kernel/microkernel/service.h>
 #include <kernel/scheduler.h>
 #include <kernel/userland_service.h>
+#include <kernel/drivers/network/virtio_net.h>
+#include <kernel/drivers/network/wifi_pci.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -112,6 +114,7 @@ struct mk_network_event_subscription {
 
 struct mk_network_pci_probe_state {
     int present;
+    int is_wifi;
     int virtio_legacy_ready;
     int virtio_queue_ready;
     int virtio_link_up;
@@ -1310,31 +1313,45 @@ static void mk_network_select_pci_backend(const struct kernel_pci_device_info *i
         { 0x14EAu, 0xAB06u, "rl0", "compat-rtl81x9" },
         { 0x4033u, 0x1360u, "rl0", "compat-rtl81x9" }
     };
+    int is_wifi = 0;
 
     if (info == 0 || probe == 0) {
         return;
     }
 
-    if (info->vendor_id == 0x1AF4u) {
+    /* Check for WiFi devices first */
+    if (kernel_wifi_pci_is_wifi_device(info->vendor_id, info->device_id)) {
+        if_name = "wlan0";
+        backend_name = "wifi-hw";
+        is_wifi = 1;
+    }
+    /* VirtIO Network */
+    else if (info->vendor_id == 0x1AF4u) {
         if_name = "vio0";
         backend_name = "compat-virtio";
-    } else if (mk_network_match_pci_alias(info,
-                                          rtl81x9_aliases,
-                                          sizeof(rtl81x9_aliases) / sizeof(rtl81x9_aliases[0]),
-                                          &if_name,
-                                          &backend_name)) {
+    }
+    /* Intel Ethernet */
+    else if (mk_network_match_pci_alias(info,
+                                        rtl81x9_aliases,
+                                        sizeof(rtl81x9_aliases) / sizeof(rtl81x9_aliases[0]),
+                                        &if_name,
+                                        &backend_name)) {
     } else if (info->vendor_id == 0x8086u) {
         if_name = "em0";
         backend_name = "compat-em";
-    } else if (info->vendor_id == 0x10ECu) {
+    }
+    /* Realtek */
+    else if (info->vendor_id == 0x10ECu) {
         if (info->device_id == 0x8029u) {
             if_name = "ne0";
             backend_name = "compat-ne2000";
         } else {
             if_name = "re0";
-            backend_name = "compat-realtek";
+            backend_name = "compat-rtl81x9";
         }
-    } else if (info->vendor_id == 0x1022u && info->device_id == 0x2000u) {
+    }
+    /* AMD PCNet */
+    else if (info->vendor_id == 0x1022u && info->device_id == 0x2000u) {
         if_name = "pcn0";
         backend_name = "compat-pcnet";
     }
@@ -1345,9 +1362,17 @@ static void mk_network_select_pci_backend(const struct kernel_pci_device_info *i
     probe->function = info->function;
     probe->vendor_id = info->vendor_id;
     probe->device_id = info->device_id;
+    probe->is_wifi = is_wifi;
     (void)mk_network_copy_string(probe->if_name, sizeof(probe->if_name), if_name);
     (void)mk_network_copy_string(probe->backend_name, sizeof(probe->backend_name), backend_name);
-    mk_network_probe_virtio_legacy_config(probe);
+    
+    if (is_wifi) {
+        /* WiFi device detected - let the WiFi driver handle it */
+        probe->virtio_legacy_ready = 0;
+        probe->virtio_queue_ready = 0;
+    } else {
+        mk_network_probe_virtio_legacy_config(probe);
+    }
 }
 
 static int mk_network_probe_pci_cb(const struct kernel_pci_device_info *info, void *ctx) {
@@ -1943,6 +1968,20 @@ void mk_network_service_init(void) {
     g_network_state.info.socket_rx_capacity = MK_NETWORK_SOCKET_RX_CAPACITY;
     g_network_state.info.event_queue_depth = MK_NETWORK_EVENT_QUEUE_SIZE;
     g_network_state.info.listen_backlog_max = 1u;
+
+    /* Populate WiFi hardware info if WiFi device detected */
+    if (g_network_state.pci_probe.is_wifi) {
+        g_network_state.info.wifi_vendor_id = g_network_state.pci_probe.vendor_id;
+        g_network_state.info.wifi_device_id = g_network_state.pci_probe.device_id;
+        kernel_wifi_pci_get_chip_name(g_network_state.pci_probe.vendor_id,
+                                      g_network_state.pci_probe.device_id,
+                                      g_network_state.info.wifi_chip_name,
+                                      sizeof(g_network_state.info.wifi_chip_name));
+    } else {
+        g_network_state.info.wifi_vendor_id = 0;
+        g_network_state.info.wifi_device_id = 0;
+        g_network_state.info.wifi_chip_name[0] = '\0';
+    }
 
     g_network_state.scan_count = 4u;
     (void)mk_network_copy_string(g_network_state.scans[0].ssid, sizeof(g_network_state.scans[0].ssid), "VibeNet");
