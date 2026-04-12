@@ -124,7 +124,7 @@ Fechar as lacunas de ABI do `vibeOS` com compatibilidade progressiva, usando `co
 - [x] Rodar `validate-startx-800x600` com melhora material do cenário
 - [x] Transformar cenários ABI em suíte estável de regressão
 - [ ] Validar utilitários BSD representativos sem shim especial por app
-- [ ] Validar software interativo mais pesado como `mg` e `vi`
+- [ ] Validar software interativo mais pesado como `mg` e `vi` via aliases compat atuais
 
 ## Prioridade Atual
 

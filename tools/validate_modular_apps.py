@@ -898,10 +898,27 @@ def wait_for_terminal_command_done(session: QemuSession, command: str, timeout: 
         raise
 
 
+def wait_for_terminal_command_exit(session: QemuSession,
+                                   command: str,
+                                   rc: int = 0,
+                                   timeout: float = 12.0) -> None:
+    exit_marker = f"terminal: command exit {command} rc={rc}"
+    if log_contains(session, exit_marker):
+        return
+    try:
+        session.wait_for_log(exit_marker, timeout=timeout)
+    except RuntimeError:
+        if log_contains(session, f"terminal: command start {command}") or \
+           log_contains(session, f"shell: command {command}"):
+            raise RuntimeError(f"Timed out waiting for marker: {exit_marker}")
+        raise
+
+
 def run_terminal_command_expect(session: QemuSession,
                                 command: str,
                                 markers: List[str],
-                                timeout: float = 16.0) -> None:
+                                timeout: float = 16.0,
+                                rc: int = 0) -> None:
     start_offset = len(session.read_log())
     command_name = command.split(" ", 1)[0] if command else ""
 
@@ -909,6 +926,7 @@ def run_terminal_command_expect(session: QemuSession,
     wait_for_all_since(session,
                        [
                            f"shell: command {command_name}",
+                           f"terminal: command exit {command_name} rc={rc}",
                            f"terminal: command done {command_name}",
                            *markers,
                        ],
@@ -1092,6 +1110,54 @@ def scenario_network_terminal_surface(session: QemuSession) -> None:
                                 "spawn clock",
                                 ["spawn: launched pid=", "host: argv clock"],
                                 timeout=16.0)
+
+
+def scenario_bsd_utils_terminal_surface(session: QemuSession) -> None:
+    scenario_startx(session)
+    time.sleep(1.0)
+
+    commands = [
+        ("uname -a", [], 0),
+        ("pwd", [], 0),
+        ("printf abi-smoke", [], 0),
+        ("grep print /hello.c", ["grep: match ok"], 0),
+        ("mkdir /docs/abi-bsd-dir", [], 0),
+        ("rmdir /docs/abi-bsd-dir", [], 0),
+        ("sync", [], 0),
+        ("sleep 1", [], 0),
+        ("true", [], 0),
+        ("false", [], 1),
+    ]
+
+    for command, markers, rc in commands:
+        run_terminal_command_expect(session, command, markers, timeout=20.0, rc=rc)
+
+
+def scenario_editor_compat(session: QemuSession, command_name: str, text: str) -> None:
+    scenario_startx(session)
+    time.sleep(1.0)
+    run_command(session, command_name, timeout=8.0, marker="")
+    session.wait_for_all(
+        [
+            f"shell: command {command_name}",
+            f"terminal: command exit {command_name} rc=0",
+            f"terminal: command done {command_name}",
+            "desktop: open-editor",
+        ],
+        timeout=20.0,
+    )
+    time.sleep(1.0)
+    session.type_text(text, pause=0.08)
+    session.send_key("ctrl-s", pause=0.2)
+    session.wait_for_log("editor: save ok path=/docs/nota", timeout=12.0)
+
+
+def scenario_vi_compat_editor(session: QemuSession) -> None:
+    scenario_editor_compat(session, "vi", "vi smoke")
+
+
+def scenario_mg_compat_editor(session: QemuSession) -> None:
+    scenario_editor_compat(session, "mg", "mg smoke")
 
 
 def scenario_desktop_visual_proof(session: QemuSession) -> None:
@@ -1545,6 +1611,66 @@ SCENARIOS = [
             *AUTODESKTOP_BOOT_MARKERS,
         ],
         action=scenario_network_terminal_surface,
+    ),
+    Scenario(
+        name="bsd-utils-terminal-surface",
+        description="Desktop stable-shortcut path runs representative BSD utilities through the generic terminal/external-app boundary and checks their exit status markers",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "terminal: command done vibefetch",
+            "terminal: command exit uname rc=0",
+            "terminal: command exit pwd rc=0",
+            "terminal: command exit printf rc=0",
+            "grep: match ok",
+            "terminal: command exit grep rc=0",
+            "terminal: command exit mkdir rc=0",
+            "terminal: command exit rmdir rc=0",
+            "terminal: command exit sync rc=0",
+            "terminal: command exit sleep rc=0",
+            "terminal: command exit true rc=0",
+            "terminal: command exit false rc=1",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_bsd_utils_terminal_surface,
+    ),
+    Scenario(
+        name="vi-compat-editor",
+        description="Desktop terminal launches the compat vi alias, reaches the editor path, accepts typing, and saves a document",
+        command=None,
+        must_have=[
+            "shell: command vi",
+            "terminal: command done vibefetch",
+            "terminal: command exit vi rc=0",
+            "terminal: command done vi",
+            "desktop: open-editor",
+            "editor: save ok path=/docs/nota",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_vi_compat_editor,
+    ),
+    Scenario(
+        name="mg-compat-editor",
+        description="Desktop terminal launches the compat mg alias, reaches the nano-style editor path, accepts typing, and saves a document",
+        command=None,
+        must_have=[
+            "shell: command mg",
+            "terminal: command done vibefetch",
+            "terminal: command exit mg rc=0",
+            "terminal: command done mg",
+            "desktop: open-editor",
+            "editor: save ok path=/docs/nota",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_mg_compat_editor,
     ),
     Scenario(
         name="doom-assets-app",

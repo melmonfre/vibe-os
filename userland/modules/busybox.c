@@ -4510,6 +4510,8 @@ static const struct command g_commands[] = {
     {"history", cmd_history},
     {"edit", cmd_edit},
     {"nano", cmd_nano},
+    {"vi", cmd_edit},
+    {"mg", cmd_nano},
     {"lua", cmd_lua},
     {"sectorc", cmd_sectorc},
     {"cc", cmd_sectorc},

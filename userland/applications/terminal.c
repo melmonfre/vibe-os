@@ -22,6 +22,48 @@ static void terminal_debug_cmd(const char *prefix, const char *cmd) {
     sys_write_debug(msg);
 }
 
+static void terminal_append_int(char *buf, int max_len, int value) {
+    char digits[16];
+    unsigned int magnitude;
+    int length = 0;
+
+    if (max_len <= 0) {
+        return;
+    }
+    if (value < 0) {
+        str_append(buf, "-", max_len);
+        magnitude = (unsigned int)(-value);
+    } else {
+        magnitude = (unsigned int)value;
+    }
+    if (magnitude == 0u) {
+        str_append(buf, "0", max_len);
+        return;
+    }
+    while (magnitude != 0u && length < (int)sizeof(digits)) {
+        digits[length++] = (char)('0' + (magnitude % 10u));
+        magnitude /= 10u;
+    }
+    while (length > 0) {
+        char text[2];
+        text[0] = digits[--length];
+        text[1] = '\0';
+        str_append(buf, text, max_len);
+    }
+}
+
+static void terminal_debug_cmd_status(const char *cmd, int rc) {
+    char msg[96];
+
+    msg[0] = '\0';
+    str_append(msg, "terminal: command exit ", (int)sizeof(msg));
+    str_append(msg, cmd ? cmd : "(null)", (int)sizeof(msg));
+    str_append(msg, " rc=", (int)sizeof(msg));
+    terminal_append_int(msg, (int)sizeof(msg), rc);
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
+}
+
 /* Callback that receives console output and adds to terminal */
 static void terminal_output_callback(const char *buf, int len) {
     int i;
@@ -110,6 +152,7 @@ int terminal_execute_command(struct terminal_state *t) {
     char *cursor;
     int argc;
     int i;
+    int rc;
 
     for (i = 0; i < t->input_len && i < INPUT_MAX; ++i) {
         line[i] = t->input[i];
@@ -153,7 +196,7 @@ int terminal_execute_command(struct terminal_state *t) {
     console_set_output_handler(terminal_output_callback);
     
     /* Execute via busybox */
-    busybox_main(argc, argv);
+    rc = busybox_main(argc, argv);
     
     /* Flush any remaining buffered output */
     if (g_output_line_pos > 0) {
@@ -166,6 +209,7 @@ int terminal_execute_command(struct terminal_state *t) {
     console_set_output_handler(0);
     g_term_capture_ctx = 0;
 
+    terminal_debug_cmd_status(argv[0], rc);
     terminal_debug_cmd("terminal: command done ", argv[0]);
 
     terminal_reset_input(t);

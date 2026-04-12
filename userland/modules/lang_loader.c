@@ -18,6 +18,7 @@ static volatile uint32_t g_lang_arena_owner[3];
 static void lang_debug_vga(int row, const char *text);
 static int lang_has_runtime_stub(const char *name);
 static int lang_catalog_command_exists(const char *name);
+static const char *lang_command_alias_target(const char *name);
 static int lang_load_directory(struct vibe_appfs_directory *directory);
 static const struct vibe_appfs_entry *lang_find_entry(const struct vibe_appfs_directory *directory,
                                                       const char *name);
@@ -760,15 +761,30 @@ static int lang_catalog_command_exists(const char *name) {
     return 0;
 }
 
+static const char *lang_command_alias_target(const char *name) {
+    if (name == 0 || name[0] == '\0') {
+        return 0;
+    }
+    if (str_eq(name, "vi") || str_eq(name, "vim")) {
+        return "edit";
+    }
+    if (str_eq(name, "mg")) {
+        return "nano";
+    }
+    return 0;
+}
+
 int lang_normalize_command_name(const char *name_or_path, char *normalized, int max_len) {
     int node;
+    const char *alias_target;
 
     if (name_or_path == 0 || normalized == 0 || max_len <= 0 || name_or_path[0] == '\0') {
         return -1;
     }
 
     if (!lang_has_slash(name_or_path)) {
-        str_copy_limited(normalized, name_or_path, max_len);
+        alias_target = lang_command_alias_target(name_or_path);
+        str_copy_limited(normalized, alias_target ? alias_target : name_or_path, max_len);
         return 0;
     }
 
@@ -777,11 +793,18 @@ int lang_normalize_command_name(const char *name_or_path, char *normalized, int 
         if (g_fs_nodes[node].is_dir) {
             return -1;
         }
-        str_copy_limited(normalized, lang_path_basename(name_or_path), max_len);
+        alias_target = lang_command_alias_target(lang_path_basename(name_or_path));
+        str_copy_limited(normalized,
+                         alias_target ? alias_target : lang_path_basename(name_or_path),
+                         max_len);
         return 0;
     }
 
     if (fs_lookup_executable_alias(name_or_path, normalized, max_len) == 0) {
+        alias_target = lang_command_alias_target(normalized);
+        if (alias_target != 0) {
+            str_copy_limited(normalized, alias_target, max_len);
+        }
         return 0;
     }
 
