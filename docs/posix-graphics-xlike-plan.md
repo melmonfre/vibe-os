@@ -36,28 +36,49 @@ Criar uma camada de compatibilidade grafica estilo `X11` para apps POSIX/BSD/Lin
 
 ## Fase 0: Inventario e Contratos
 
-- [ ] Inventariar apps/ports candidatos que hoje pedem `X11`
-- [ ] Separar apps `Xlib` puros, apps `SDL`, apps `GLFW` e apps mistos
-- [ ] Mapear o menor subconjunto de API necessario para os primeiros ports
-- [ ] Definir o contrato entre cliente compat, servidor grafico compat e desktop nativo
-- [ ] Documentar quais semanticas serao reais e quais serao shim/fallback
+- [x] Inventariar apps/ports candidatos que hoje pedem `X11`
+- [x] Separar apps `Xlib` puros, apps `SDL`, apps `GLFW` e apps mistos
+- [x] Mapear o menor subconjunto de API necessario para os primeiros ports
+- [x] Definir o contrato entre cliente compat, servidor grafico compat e desktop nativo
+- [x] Documentar quais semanticas serao reais e quais serao shim/fallback
+
+Referencia inicial desta fase:
+
+- `docs/posix-graphics-xlike-inventory.md`
+- `headers/include/posix_gfx_compat.h`
 
 ## Fase 1: ABI e Headers Graficos
 
-- [ ] Publicar headers minimos estilo `X11/Xlib.h`, `X11/Xutil.h`, `X11/Xatom.h`
-- [ ] Definir tipos, handles, eventos e IDs estaveis
-- [ ] Versionar structs compartilhadas do protocolo grafico compat
-- [ ] Definir politica de endian, alinhamento e padding do protocolo
-- [ ] Reservar espaco para extensoes futuras sem quebrar ABI
+- [x] Publicar headers minimos estilo `X11/Xlib.h`, `X11/Xutil.h`, `X11/Xatom.h`
+- [x] Definir tipos, handles, eventos e IDs estaveis
+- [x] Versionar structs compartilhadas do protocolo grafico compat
+- [x] Definir politica de endian, alinhamento e padding do protocolo
+- [x] Reservar espaco para extensoes futuras sem quebrar ABI
+
+Headers publicados nesta rodada:
+
+- `compat/include/X11/X.h`
+- `compat/include/X11/Xlib.h`
+- `compat/include/X11/Xutil.h`
+- `compat/include/X11/Xatom.h`
+- `compat/include/X11/Xlocale.h`
+- `compat/include/X11/keysymdef.h`
+- `compat/include/X11/Xproto.h`
 
 ## Fase 2: Runtime Cliente
 
-- [ ] Criar `libX11` minima em `compat/` ou camada dedicada equivalente
-- [ ] Implementar `XOpenDisplay`, `XCloseDisplay`, `DefaultScreen`, `RootWindow`
-- [ ] Implementar criacao/destruicao/map de janela
-- [ ] Implementar surface/pixmap minima
-- [ ] Implementar `XNextEvent`, `XPending`, `XFlush`, `XSync`
-- [ ] Implementar `XSelectInput` para eventos basicos
+- [x] Criar `libX11` minima em `compat/` ou camada dedicada equivalente
+- [x] Implementar `XOpenDisplay`, `XCloseDisplay`, `DefaultScreen`, `RootWindow`
+- [x] Implementar criacao/destruicao/map de janela
+- [x] Implementar surface/pixmap minima
+- [x] Implementar `XNextEvent`, `XPending`, `XFlush`, `XSync`
+- [x] Implementar `XSelectInput` para eventos basicos
+
+Implementacao atual:
+
+- `compat/src/x11/xlib.c`
+- nesta rodada o cliente usa shim local sobre os syscalls graficos/input existentes
+- isso destrava pilotos `Xlib` simples, mas ainda nao substitui o servidor isolado da fase seguinte
 
 ## Fase 3: Servidor Grafico Compat
 
@@ -67,21 +88,36 @@ Criar uma camada de compatibilidade grafica estilo `X11` para apps POSIX/BSD/Lin
 - [ ] Implementar roteamento de eventos para cliente correto
 - [ ] Garantir isolamento de falha por processo cliente
 
+Observacao desta rodada:
+
+- o contrato wire ja existe em `headers/include/posix_gfx_compat.h`
+- a implementacao ainda esta em modo cliente+shim local; o processo/servico separado continua pendente
+
 ## Fase 4: Desenho 2D
 
 - [ ] Implementar `GC` basico
-- [ ] Implementar `XCreateGC`, `XFreeGC`, `XSetForeground`, `XSetBackground`
-- [ ] Implementar `XDrawPoint`, `XDrawLine`, `XDrawRectangle`, `XFillRectangle`
-- [ ] Implementar `XPutImage` e `XCopyArea` MVP
-- [ ] Implementar caminho previsivel para redraw/expose
+- [x] Implementar `XCreateGC`, `XFreeGC`, `XSetForeground`, `XSetBackground`
+- [x] Implementar `XDrawPoint`, `XDrawLine`, `XDrawRectangle`, `XFillRectangle`
+- [x] Implementar `XPutImage` e `XCopyArea` MVP
+- [x] Implementar caminho previsivel para redraw/expose
+
+Cobertura adicional MVP:
+
+- `XDrawArc`, `XFillArc`, `XClearWindow`
 
 ## Fase 5: Entrada e Loop de Eventos
 
 - [ ] Mapear teclado do `vibeOS` para keycodes/keysym compativeis
-- [ ] Mapear botoes e movimento de mouse
-- [ ] Implementar `Expose`, `KeyPress`, `KeyRelease`, `ButtonPress`, `ButtonRelease`, `MotionNotify`
+- [x] Mapear botoes e movimento de mouse
+- [x] Implementar `Expose`, `KeyPress`, `KeyRelease`, `ButtonPress`, `ButtonRelease`, `MotionNotify`
 - [ ] Implementar foco, enter/leave e close request basicos
 - [ ] Integrar waits graficos com `select`/`poll` sem travar a sessao
+
+Estado atual:
+
+- teclado chega no cliente como keycode bruto do runtime atual
+- foco inicial e `FocusIn`/`FocusOut` basicos existem no shim local
+- ainda faltam `EnterNotify`, `LeaveNotify`, `WM_DELETE_WINDOW` e FD/wait real integravel a `poll`
 
 ## Fase 6: Janela, WM e Integracao
 
@@ -123,8 +159,8 @@ Criar uma camada de compatibilidade grafica estilo `X11` para apps POSIX/BSD/Lin
 ## Ordem de Execucao
 
 - [x] Primeiro fechar `docs/abi-improvements.md`
-- [ ] Depois estabilizar `storage/AppFS` e a ultima validacao ABI pendente
-- [ ] So entao iniciar Fase 0 deste plano
+- [x] Depois estabilizar `storage/AppFS` e a ultima validacao ABI pendente
+- [X] So entao iniciar Fase 0 deste plano
 
 ## Definicao de Pronto
 

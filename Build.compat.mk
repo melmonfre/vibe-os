@@ -60,6 +60,7 @@ COMPAT_SRCS := \
 	compat/src/posix/select.c \
 	compat/src/posix/sched.c \
 	compat/src/posix/pthread.c \
+	compat/src/x11/xlib.c \
 	compat/lib/libc/regex/regcomp.c \
 	compat/lib/libc/regex/regexec.c \
 	compat/lib/libc/regex/regfree.c \
