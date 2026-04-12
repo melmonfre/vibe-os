@@ -299,6 +299,17 @@ static void bootstrap_launch_runtime_service_apps(uint32_t boot_flags) {
         return;
     }
 
+    if ((boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u) {
+        /*
+         * The desktop session already reapplies persisted audio/network state
+         * after its own startup gates open. Deferring those helpers keeps the
+         * autoboot path lighter on slower machines without changing shell boot.
+         */
+        sys_write_debug("init: boot audio state sync deferred to desktop session\n");
+        sys_write_debug("init: boot network reconcile deferred to desktop session\n");
+        return;
+    }
+
     {
         char *audio_apply_argv[4] = {"audiosvc", "apply-settings", "/config/audio.cfg", 0};
         if (sys_launch_app_argv(3, audio_apply_argv) > 0) {
@@ -306,11 +317,6 @@ static void bootstrap_launch_runtime_service_apps(uint32_t boot_flags) {
         } else {
             sys_write_debug("init: boot audio state sync launch failed\n");
         }
-    }
-
-    if ((boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u) {
-        sys_write_debug("init: boot network reconcile deferred to desktop session\n");
-        return;
     }
 
     {
