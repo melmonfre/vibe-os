@@ -284,7 +284,12 @@ static void bootstrap_prime_kernel_service_stack(void) {
     }
 }
 
-static void bootstrap_try_play_boot_sound(void) {
+static void bootstrap_try_play_boot_sound(uint32_t boot_flags) {
+    if ((boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u) {
+        sys_write_debug("init: boot sound deferred for desktop boot\n");
+        return;
+    }
+
     if (sys_launch_builtin_user(USERLAND_BUILTIN_BOOT_AUDIO) > 0) {
         sys_write_debug("init: boot audio host launched\n");
         sys_write_debug("init: boot sound returned\n");
@@ -374,7 +379,7 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     kernel_debug_puts("init: fs_init returned\n");
     bootstrap_storage_smoke_test();
     bootstrap_prime_kernel_service_stack();
-    bootstrap_try_play_boot_sound();
+    bootstrap_try_play_boot_sound(info.boot_flags);
 
     sys_write_debug("init: appfs launcher ready\n");
     kernel_debug_puts("init: appfs launcher ready\n");

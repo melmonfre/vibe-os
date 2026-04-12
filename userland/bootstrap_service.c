@@ -985,6 +985,22 @@ static int audio_service_reply_result(struct mk_message *reply,
     return service_set_payload(reply, &payload, sizeof(payload));
 }
 
+static int audio_service_ensure_fs_ready(void) {
+    static int g_audio_service_fs_ready = 0;
+
+    if (g_audio_service_fs_ready) {
+        return 0;
+    }
+
+    sys_text_write("audiosvc: lazy fs_init begin\n");
+    sys_write_debug("audiosvc: lazy fs_init begin\n");
+    fs_init();
+    g_audio_service_fs_ready = 1;
+    sys_text_write("audiosvc: lazy fs_init done\n");
+    sys_write_debug("audiosvc: lazy fs_init done\n");
+    return 0;
+}
+
 static int audio_service_handle_request(const struct mk_message *request,
                                         struct mk_message *reply,
                                         uint32_t source_pid) {
@@ -1075,6 +1091,9 @@ static int audio_service_handle_request(const struct mk_message *request,
         }
         payload = (const struct mk_audio_play_asset_request *)request->payload;
         if (payload->path[0] == '\0') {
+            return audio_service_reply_result(reply, request, source_pid, -1);
+        }
+        if (audio_service_ensure_fs_ready() != 0) {
             return audio_service_reply_result(reply, request, source_pid, -1);
         }
         return audio_service_reply_result(reply,
@@ -1877,11 +1896,8 @@ __attribute__((section(".entry"))) void userland_audio_service_entry(void) {
     sys_text_write("audiosvc: launch_info\n");
     sys_write_debug("audiosvc: launch_info\n");
     source_pid = (uint32_t)info.pid;
-    sys_text_write("audiosvc: before fs_init\n");
-    sys_write_debug("audiosvc: before fs_init\n");
-    fs_init();
-    sys_text_write("audiosvc: after fs_init\n");
-    sys_write_debug("audiosvc: after fs_init\n");
+    sys_text_write("audiosvc: fs_init deferred\n");
+    sys_write_debug("audiosvc: fs_init deferred\n");
     service_log_online(&info);
     sys_text_write("audiosvc: online\n");
     sys_write_debug("audiosvc: online\n");

@@ -124,16 +124,21 @@ Fechar as lacunas de ABI do `vibeOS` com compatibilidade progressiva, usando `co
 - [x] Rodar `validate-startx-800x600` com melhora material do cenário
 - [x] Transformar cenários ABI em suíte estável de regressão
 - [ ] Validar utilitários BSD representativos sem shim especial por app
-- [ ] Validar software interativo mais pesado como `mg` e `vi` via aliases compat atuais
+- [x] Validar software interativo mais pesado como `mg` e `vi` via aliases compat atuais
 
 ## Prioridade Atual
 
+- [x] Manter a prioridade em fechar o plano ABI antes de abrir a trilha gráfica POSIX/X-like
 - [x] Fechar evolução binária de `stat` e semântica de FD
 - [x] Dar efeito real a `termios` sobre entrada e sinais de terminal
 - [x] Formalizar modelo de erro e retorno de syscall
 - [x] Completar ABI de sockets e rede avançada (`ioctl`, ancillary data, casos avançados`)
 - [x] Integrar sinais básicos ao restante do runtime bloqueante e eventos reais
 - [x] Consolidar fronteiras ABI de hardware e driver
+
+## Próximo Trilho
+
+- [ ] Iniciar a execução de `docs/posix-graphics-xlike-plan.md` depois que a validação final da Fase 10 ficar fechada
 
 ## Definição de pronto
 

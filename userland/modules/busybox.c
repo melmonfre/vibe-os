@@ -4421,7 +4421,6 @@ static int cmd_edit(int argc, char **argv) {
     } else {
         desktop_request_open_editor("");
     }
-    desktop_main();
     return 0;
 #endif
 }
@@ -4439,7 +4438,6 @@ static int cmd_nano(int argc, char **argv) {
     } else {
         desktop_request_open_nano("");
     }
-    desktop_main();
     return 0;
 #endif
 }
