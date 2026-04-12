@@ -153,6 +153,7 @@ int terminal_execute_command(struct terminal_state *t) {
     int argc;
     int i;
     int rc;
+    int use_external_handoff = 0;
 
     for (i = 0; i < t->input_len && i < INPUT_MAX; ++i) {
         line[i] = t->input[i];
@@ -187,27 +188,37 @@ int terminal_execute_command(struct terminal_state *t) {
         return 0;
     }
 
+    use_external_handoff = busybox_command_uses_external_app(argc, argv);
+
     terminal_debug_cmd("shell: command ", argv[0]);
     terminal_debug_cmd("terminal: command start ", argv[0]);
 
-    /* Set up output capture */
-    g_term_capture_ctx = t;
-    g_output_line_pos = 0;
-    console_set_output_handler(terminal_output_callback);
-    
-    /* Execute via busybox */
+    if (!use_external_handoff) {
+        /* Set up output capture for builtins that really run inline here. */
+        g_term_capture_ctx = t;
+        g_output_line_pos = 0;
+        console_set_output_handler(terminal_output_callback);
+    } else {
+        /*
+         * External modular apps are not attached to the embedded terminal
+         * buffer. Hand them the real text console instead of blocking the
+         * desktop while pretending output will appear in-window.
+         */
+        sys_leave_graphics();
+    }
+
     rc = busybox_main(argc, argv);
-    
-    /* Flush any remaining buffered output */
-    if (g_output_line_pos > 0) {
+
+    if (!use_external_handoff && g_output_line_pos > 0) {
         g_output_line_buffer[g_output_line_pos] = '\0';
         terminal_push_line(t, g_output_line_buffer);
         g_output_line_pos = 0;
     }
-    
-    /* Restore console output */
-    console_set_output_handler(0);
-    g_term_capture_ctx = 0;
+
+    if (!use_external_handoff) {
+        console_set_output_handler(0);
+        g_term_capture_ctx = 0;
+    }
 
     terminal_debug_cmd_status(argv[0], rc);
     terminal_debug_cmd("terminal: command done ", argv[0]);

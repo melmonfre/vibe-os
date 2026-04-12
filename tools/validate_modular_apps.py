@@ -475,6 +475,7 @@ class QemuSession:
             "-": "minus",
             ".": "dot",
             "/": "slash",
+            "\\": "backslash",
             "_": "shift-minus",
         }
         for ch in text:

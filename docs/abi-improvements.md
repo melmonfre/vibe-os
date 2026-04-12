@@ -123,7 +123,7 @@ Fechar as lacunas de ABI do `vibeOS` com compatibilidade progressiva, usando `co
 - [x] Melhorar o caminho AppFS e storage para boot modular
 - [x] Rodar `validate-startx-800x600` com melhora material do cenário
 - [x] Transformar cenários ABI em suíte estável de regressão
-- [ ] Validar utilitários BSD representativos sem shim especial por app
+- [x] Validar utilitários BSD representativos sem shim especial por app
 - [x] Validar software interativo mais pesado como `mg` e `vi` via aliases compat atuais
 
 ## Prioridade Atual
@@ -138,12 +138,12 @@ Fechar as lacunas de ABI do `vibeOS` com compatibilidade progressiva, usando `co
 
 ## Próximo Trilho
 
-- [ ] Iniciar a execução de `docs/posix-graphics-xlike-plan.md` depois que a validação final da Fase 10 ficar fechada
+- [x] Liberar a execução de `docs/posix-graphics-xlike-plan.md` depois que a validação final da Fase 10 ficar fechada
 
 ## Definição de pronto
 
 - [x] ABIs compartilhadas documentadas e versionadas
 - [x] Kernel aceitando caminhos legados e novos sem quebrar o userland
-- [ ] Programas BSD simples rodando sem shim especial por app
+- [x] Programas BSD simples rodando sem shim especial por app
 - [x] Serviços do microkernel expondo contratos estáveis e previsíveis
 - [x] Evolução futura protegida por testes de regressão ABI

@@ -722,6 +722,30 @@ static int should_prefer_external(const char *cmd) {
     return 0;
 }
 
+int busybox_command_uses_external_app(int argc, char **argv) {
+    if (argc <= 0 || argv == 0 || argv[0] == 0 || argv[0][0] == '\0') {
+        return 0;
+    }
+
+    if (should_prefer_external(argv[0]) && lang_can_run(argv[0])) {
+        return 1;
+    }
+
+    for (int i = 0; i < (int)(sizeof(g_builtin_help_commands) / sizeof(g_builtin_help_commands[0])); ++i) {
+        if (strcmp(argv[0], g_builtin_help_commands[i]) == 0) {
+            if ((strcmp(argv[0], "cc") == 0 ||
+                 strcmp(argv[0], "lua") == 0 ||
+                 strcmp(argv[0], "sectorc") == 0) &&
+                lang_can_run(argv[0])) {
+                return 1;
+            }
+            return 0;
+        }
+    }
+
+    return lang_can_run(argv[0]) ? 1 : 0;
+}
+
 static int command_exists_in_builtin_help(const char *name) {
     for (int i = 0; i < (int)(sizeof(g_builtin_help_commands) / sizeof(g_builtin_help_commands[0])); ++i) {
         if (strcmp(name, g_builtin_help_commands[i]) == 0) {

@@ -1927,6 +1927,11 @@ validate-abi-compat-surface:
 	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=800 -DBOOT_PREFERRED_VIDEO_HEIGHT=600" $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --scenario bsd-utils-terminal-surface --scenario vi-compat-editor --scenario mg-compat-editor --expect-boot-mode 800x600 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
+validate-abi-final:
+	$(MAKE) compat-build
+	$(PYTHON) tools/validate_abi_contracts.py
+	$(MAKE) validate-abi-compat-surface
+
 validate-doom-800x600:
 	rm -f $(STAGE2_BIN) $(IMAGE)
 	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=800 -DBOOT_PREFERRED_VIDEO_HEIGHT=600" $(IMAGE)
