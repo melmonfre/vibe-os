@@ -117,8 +117,12 @@ int vibe_app_main(int argc, char **argv) {
     const char *app_name = desktop_app_name(argc, argv);
 
     desktop_app_debug_launch(app_name);
-    sys_write_debug("desktop.app: fs init\n");
-    fs_init();
+    if (!fs_ready()) {
+        sys_write_debug("desktop.app: fs init\n");
+        fs_init();
+    } else {
+        sys_write_debug("desktop.app: fs ready\n");
+    }
     sys_write_debug("desktop.app: prepare launch\n");
     desktop_prepare_launch(argc, argv);
     sys_write_debug("desktop.app: enter desktop_main\n");
