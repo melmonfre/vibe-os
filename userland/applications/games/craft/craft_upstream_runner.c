@@ -141,20 +141,19 @@ void craft_upstream_resize(int width, int height);
 
 static void craft_apply_quality_profile(int width, int height, int fullscreen) {
     int area = width * height;
-    int create_radius = fullscreen ? 2 : 1;
-    int render_radius = fullscreen ? 3 : 2;
-    int delete_radius = fullscreen ? 6 : 4;
+    int create_radius = 1;
+    int render_radius = fullscreen ? 2 : 1;
+    int delete_radius = fullscreen ? 4 : 3;
     int sign_radius = fullscreen ? 2 : 1;
 
-    if (area >= 1280 * 720) {
-        create_radius += 1;
+    if (area >= 1024 * 768) {
         render_radius += 1;
         delete_radius += 1;
-        sign_radius += 1;
     }
 
-    if (render_radius < 2) {
-        render_radius = 2;
+    if (area >= 1600 * 900 && fullscreen) {
+        create_radius += 1;
+        delete_radius += 1;
     }
     if (delete_radius <= render_radius) {
         delete_radius = render_radius + 2;
@@ -438,7 +437,7 @@ int craft_upstream_frame(void) {
         return -1;
     }
     craft_debug_stage("craft: frame begin");
-    craft_thread_pump(2);
+    craft_thread_pump(1);
 
     me = g->players;
     s = &g->players->state;

@@ -1188,7 +1188,7 @@ def scenario_open_terminal(session: QemuSession, timeout: float = 45.0) -> None:
 def scenario_doom(session: QemuSession) -> None:
     scenario_open_terminal(session)
     run_command(session, "doom", timeout=8.0, marker="")
-    session.wait_for_all(["desktop.app: launch doom", "desktop: open-new w=0 t=16 i=0"], timeout=20.0)
+    session.wait_for_all(["desktop: open-new w=1 t=16 i=0"], timeout=20.0)
     time.sleep(0.8)
     session.send_key("ret", pause=0.15)
     session.wait_for_all(
@@ -1204,7 +1204,7 @@ def scenario_doom(session: QemuSession) -> None:
 def scenario_craft(session: QemuSession) -> None:
     scenario_open_terminal(session)
     run_command(session, "craft", timeout=8.0, marker="")
-    session.wait_for_all(["desktop.app: launch craft", "desktop: open-new w=0 t=17 i=0"], timeout=20.0)
+    session.wait_for_all(["desktop: open-new w=1 t=17 i=0"], timeout=20.0)
     session.wait_for_all(
         [
             "fs: asset file /textures/texture.png",
@@ -1671,9 +1671,8 @@ SCENARIOS = [
         description="Desktop autostart opens a terminal, launches DOOM and reaches the real WAD runtime",
         command=None,
         must_have=[
-            "desktop.app: launch doom",
             "desktop: open-new w=0 t=1 i=0",
-            "desktop: open-new w=0 t=16 i=0",
+            "desktop: open-new w=1 t=16 i=0",
             "doom: key enter",
             "fs: asset file /DOOM/DOOM.WAD",
             "doom: port run begin",
@@ -1688,9 +1687,8 @@ SCENARIOS = [
         description="Desktop autostart opens a terminal, launches Craft and reaches real texture loads and first frame",
         command=None,
         must_have=[
-            "desktop.app: launch craft",
             "desktop: open-new w=0 t=1 i=0",
-            "desktop: open-new w=0 t=17 i=0",
+            "desktop: open-new w=1 t=17 i=0",
             "fs: asset file /textures/texture.png",
             "fs: asset file /textures/font.png",
             "fs: asset file /textures/sky.png",

@@ -30,6 +30,7 @@ extern void compute_chunk(craft_worker_item *item);
 
 static craft_worker *g_workers[8];
 static int g_worker_count = 0;
+static int g_worker_rr_cursor = 0;
 
 int thrd_create(thrd_t *thr, thrd_start_t func, void *arg) {
     (void)func;
@@ -105,12 +106,19 @@ int cnd_wait(cnd_t *cond, mtx_t *mtx) {
 
 void craft_thread_pump(int max_jobs) {
     int jobs = 0;
+    int scanned = 0;
 
-    for (int i = 0; i < g_worker_count; ++i) {
-        craft_worker *worker = g_workers[i];
+    if (max_jobs <= 0) {
+        max_jobs = 1;
+    }
+    while (g_worker_count > 0 && scanned < g_worker_count && jobs < max_jobs) {
+        int index = g_worker_rr_cursor % g_worker_count;
+        craft_worker *worker = g_workers[index];
         craft_worker_item *item;
 
-        if (!worker || worker->state != CRAFT_WORKER_BUSY || jobs >= max_jobs) {
+        g_worker_rr_cursor = (index + 1) % g_worker_count;
+        scanned += 1;
+        if (!worker || worker->state != CRAFT_WORKER_BUSY) {
             continue;
         }
         if (!worker->cnd.signaled) {
@@ -129,6 +137,7 @@ void craft_thread_pump(int max_jobs) {
 }
 
 void craft_thread_reset(void) {
+    g_worker_rr_cursor = 0;
     for (int i = 0; i < g_worker_count; ++i) {
         if (g_workers[i]) {
             g_workers[i]->state = CRAFT_WORKER_IDLE;

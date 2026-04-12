@@ -72,6 +72,10 @@ __attribute__((weak)) void desktop_request_open_nano(const char *path) {
     (void)path;
 }
 
+__attribute__((weak)) void desktop_request_open_app(enum app_type type) {
+    (void)type;
+}
+
 __attribute__((weak)) void desktop_main(void) {
 }
 
@@ -711,6 +715,28 @@ static int try_run_external_as(int argc, char **argv, const char *name) {
     patched_argv[0] = (char *)name;
     patched_argv[patched_argc] = 0;
     return try_run_external_prepared(patched_argc, patched_argv);
+}
+
+static int try_open_desktop_shell_app(int argc, char **argv) {
+#ifdef VIBE_USERLAND_APP
+    (void)argc;
+    (void)argv;
+    return -1;
+#else
+    enum app_type type;
+
+    if (argc != 1 || argv == 0 || argv[0] == 0 || argv[0][0] == '\0') {
+        return -1;
+    }
+
+    type = shell_app_type_from_name(argv[0]);
+    if (type != APP_DOOM && type != APP_CRAFT) {
+        return -1;
+    }
+
+    desktop_request_open_app(type);
+    return 0;
+#endif
 }
 
 static int should_prefer_external(const char *cmd) {
@@ -4540,6 +4566,14 @@ static const struct command g_commands[] = {
 };
 
 int busybox_main(int argc, char **argv) {
+    {
+        int inline_rc = try_open_desktop_shell_app(argc, argv);
+
+        if (inline_rc >= 0) {
+            return inline_rc;
+        }
+    }
+
     if (should_prefer_external(argv[0])) {
         int ext = try_run_external(argc, argv);
         if (ext >= 0) {
