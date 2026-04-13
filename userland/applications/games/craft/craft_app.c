@@ -3,8 +3,10 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/utils.h>
 
-#define CRAFT_EMBED_MAX_WIDTH 960
-#define CRAFT_EMBED_MAX_HEIGHT 720
+#define CRAFT_EMBED_MAX_WIDTH 800
+#define CRAFT_EMBED_MAX_HEIGHT 600
+#define CRAFT_FULLSCREEN_MAX_WIDTH 960
+#define CRAFT_FULLSCREEN_MAX_HEIGHT 720
 #define CRAFT_DEFAULT_WIDTH 800
 #define CRAFT_DEFAULT_HEIGHT 600
 #define CRAFT_WINDOW_CHROME_W 8
@@ -33,6 +35,48 @@ static int craft_clamp_dimension(int value, int minimum, int maximum) {
     return value;
 }
 
+static void craft_fit_render_size(int width, int height,
+                                  int max_width, int max_height,
+                                  int *render_w, int *render_h) {
+    int scaled_width = width;
+    int scaled_height = height;
+
+    if (scaled_width < 64) {
+        scaled_width = 64;
+    }
+    if (scaled_height < 64) {
+        scaled_height = 64;
+    }
+    if (max_width < 64) {
+        max_width = 64;
+    }
+    if (max_height < 64) {
+        max_height = 64;
+    }
+
+    if (scaled_width > max_width) {
+        scaled_height = (scaled_height * max_width) / scaled_width;
+        scaled_width = max_width;
+    }
+    if (scaled_height > max_height) {
+        scaled_width = (scaled_width * max_height) / scaled_height;
+        scaled_height = max_height;
+    }
+    if (scaled_width < 64) {
+        scaled_width = 64;
+    }
+    if (scaled_height < 64) {
+        scaled_height = 64;
+    }
+
+    if (render_w) {
+        *render_w = scaled_width;
+    }
+    if (render_h) {
+        *render_h = scaled_height;
+    }
+}
+
 static void craft_embedded_render_size(const struct rect *client,
                                        int fullscreen,
                                        int *render_w,
@@ -43,9 +87,21 @@ static void craft_embedded_render_size(const struct rect *client,
     if (fullscreen) {
         width = craft_clamp_dimension(width, 64, (int)SCREEN_WIDTH);
         height = craft_clamp_dimension(height, 64, (int)SCREEN_HEIGHT);
+        craft_fit_render_size(width,
+                              height,
+                              CRAFT_FULLSCREEN_MAX_WIDTH,
+                              CRAFT_FULLSCREEN_MAX_HEIGHT,
+                              &width,
+                              &height);
     } else {
         width = craft_clamp_dimension(width, 64, CRAFT_EMBED_MAX_WIDTH);
         height = craft_clamp_dimension(height, 64, CRAFT_EMBED_MAX_HEIGHT);
+        craft_fit_render_size(width,
+                              height,
+                              CRAFT_EMBED_MAX_WIDTH,
+                              CRAFT_EMBED_MAX_HEIGHT,
+                              &width,
+                              &height);
     }
     if (render_w) {
         *render_w = width;

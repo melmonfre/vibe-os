@@ -369,6 +369,9 @@ void craft_glfw_set_window_size(int width, int height) {
         return;
     }
     craft_glfw_clamp_window_size(&width, &height);
+    if (g_window.width == width && g_window.height == height) {
+        return;
+    }
     g_window.width = width;
     g_window.height = height;
     craft_gl_init_window(width, height);
