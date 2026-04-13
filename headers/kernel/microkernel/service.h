@@ -18,6 +18,7 @@ typedef int (*mk_service_local_handler_fn)(const struct mk_message *request,
                                            struct mk_message *reply,
                                            void *context);
 typedef void (*mk_service_entry_fn)(void);
+typedef int (*mk_service_deferred_launcher_fn)(void);
 
 enum mk_service_type {
     MK_SERVICE_NONE = 0,
@@ -50,6 +51,11 @@ struct mk_service_record {
     uint32_t stack_size;
     uint32_t restart_count;
     uint32_t transport_degraded;
+    uint32_t retry_attempts;
+    uint32_t retry_next_tick;
+    uint32_t retry_scheduled;
+    uint32_t retry_exhausted;
+    uint32_t subscriptions_ready;
     struct mk_service_event_subscription subscribers[MK_SERVICE_EVENT_SUBSCRIBERS];
 };
 
@@ -60,6 +66,8 @@ int mk_service_register_local_handler(uint32_t type,
                                       const char *name,
                                       mk_service_local_handler_fn handler,
                                       void *context);
+int mk_service_register_deferred_launcher(uint32_t type,
+                                          mk_service_deferred_launcher_fn launcher);
 int mk_service_launch_worker(uint32_t type,
                              const char *name,
                              mk_service_local_handler_fn handler,
@@ -72,6 +80,13 @@ int mk_service_launch_task(uint32_t type,
                            mk_service_entry_fn entry,
                            uint32_t stack_size,
                            uint32_t launch_flags);
+int mk_service_prepare_task(uint32_t type,
+                            const char *name,
+                            mk_service_local_handler_fn handler,
+                            void *context,
+                            mk_service_entry_fn entry,
+                            uint32_t stack_size,
+                            uint32_t launch_flags);
 int mk_service_is_online(uint32_t type);
 int mk_service_ensure(uint32_t type);
 int mk_service_restart(uint32_t type);

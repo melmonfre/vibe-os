@@ -558,9 +558,9 @@ static int storage_service_handle_request(const struct mk_message *request,
             if (sys_transfer_size(payload->transfer_id) < byte_count) {
                 return storage_service_reply_result(reply, request, source_pid, -1);
             }
-            rc = sys_storage_read_sectors(payload->lba,
-                                          g_storage_service_buffer,
-                                          payload->sector_count);
+            rc = sys_storage_backend_read_sectors(payload->lba,
+                                                  g_storage_service_buffer,
+                                                  payload->sector_count);
             if (rc == 0 &&
                 sys_transfer_write(payload->transfer_id, g_storage_service_buffer, byte_count) != 0) {
                 rc = -1;
@@ -577,7 +577,7 @@ static int storage_service_handle_request(const struct mk_message *request,
                 sys_transfer_size(payload->transfer_id) < payload->size) {
                 return storage_service_reply_result(reply, request, source_pid, -1);
             }
-            rc = sys_storage_load(g_storage_service_buffer, payload->size);
+            rc = sys_storage_backend_load(g_storage_service_buffer, payload->size);
             if (rc == 0 &&
                 sys_transfer_write(payload->transfer_id, g_storage_service_buffer, payload->size) != 0) {
                 rc = -1;
@@ -603,9 +603,9 @@ static int storage_service_handle_request(const struct mk_message *request,
                 sys_transfer_read(payload->transfer_id, g_storage_service_buffer, byte_count) != 0) {
                 return storage_service_reply_result(reply, request, source_pid, -1);
             }
-            rc = sys_storage_write_sectors(payload->lba,
-                                           g_storage_service_buffer,
-                                           payload->sector_count);
+            rc = sys_storage_backend_write_sectors(payload->lba,
+                                                   g_storage_service_buffer,
+                                                   payload->sector_count);
             return storage_service_reply_result(reply, request, source_pid, rc);
         }
 
@@ -619,7 +619,7 @@ static int storage_service_handle_request(const struct mk_message *request,
                 sys_transfer_read(payload->transfer_id, g_storage_service_buffer, payload->size) != 0) {
                 return storage_service_reply_result(reply, request, source_pid, -1);
             }
-            rc = sys_storage_save(g_storage_service_buffer, payload->size);
+            rc = sys_storage_backend_save(g_storage_service_buffer, payload->size);
             return storage_service_reply_result(reply, request, source_pid, rc);
         }
 
@@ -630,8 +630,8 @@ static int storage_service_handle_request(const struct mk_message *request,
         struct mk_storage_info info;
 
         memset(&info, 0, sizeof(info));
-        info.total_sectors = sys_storage_total_sectors();
-        info.partition_start_lba = sys_storage_partition_start_lba();
+        info.total_sectors = sys_storage_backend_total_sectors();
+        info.partition_start_lba = sys_storage_backend_partition_start_lba();
         service_prepare_reply(reply, request, source_pid);
         return service_set_payload(reply, &info, sizeof(info));
     }
@@ -985,6 +985,22 @@ static int audio_service_reply_result(struct mk_message *reply,
     return service_set_payload(reply, &payload, sizeof(payload));
 }
 
+static int audio_service_ensure_fs_ready(void) {
+    static int g_audio_service_fs_ready = 0;
+
+    if (g_audio_service_fs_ready) {
+        return 0;
+    }
+
+    sys_text_write("audiosvc: lazy fs_init begin\n");
+    sys_write_debug("audiosvc: lazy fs_init begin\n");
+    fs_init();
+    g_audio_service_fs_ready = 1;
+    sys_text_write("audiosvc: lazy fs_init done\n");
+    sys_write_debug("audiosvc: lazy fs_init done\n");
+    return 0;
+}
+
 static int audio_service_handle_request(const struct mk_message *request,
                                         struct mk_message *reply,
                                         uint32_t source_pid) {
@@ -1075,6 +1091,9 @@ static int audio_service_handle_request(const struct mk_message *request,
         }
         payload = (const struct mk_audio_play_asset_request *)request->payload;
         if (payload->path[0] == '\0') {
+            return audio_service_reply_result(reply, request, source_pid, -1);
+        }
+        if (audio_service_ensure_fs_ready() != 0) {
             return audio_service_reply_result(reply, request, source_pid, -1);
         }
         return audio_service_reply_result(reply,
@@ -1874,9 +1893,14 @@ __attribute__((section(".entry"))) void userland_audio_service_entry(void) {
         }
     }
 
+    sys_text_write("audiosvc: launch_info\n");
+    sys_write_debug("audiosvc: launch_info\n");
     source_pid = (uint32_t)info.pid;
-    fs_init();
+    sys_text_write("audiosvc: fs_init deferred\n");
+    sys_write_debug("audiosvc: fs_init deferred\n");
     service_log_online(&info);
+    sys_text_write("audiosvc: online\n");
+    sys_write_debug("audiosvc: online\n");
 
     for (;;) {
         if (sys_service_receive(&request) != (int)sizeof(request)) {

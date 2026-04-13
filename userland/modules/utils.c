@@ -9,7 +9,7 @@
 #define AUDIO_WAV_STREAM_CHUNK 960
 #define AUDIO_WAV_AZALIA_CHUNK 16384
 #define AUDIO_WAV_AZALIA_ASYNC_CHUNK 2048
-#define AUDIO_WAV_COMPAT_ASYNC_CHUNK 2048
+#define AUDIO_WAV_COMPAT_ASYNC_CHUNK 512
 #define AUDIO_WAV_UAUDIO_ASYNC_CHUNK 16384
 #define AUDIO_WAV_ASYNC_QUEUE_CHUNK 16384
 #define AUDIO_STATUS_BACKEND_MASK 0x000000ffu
@@ -231,11 +231,13 @@ static int audio_debug_progress_enabled(const char *tag) {
 }
 
 static int audio_should_use_kernel_async(const char *tag) {
+    int backend_kind = audio_backend_kind();
+
     if (tag != 0 &&
         (str_eq(tag, "desktop-session") ||
          str_eq(tag, "boot") ||
          str_eq(tag, "audio-player"))) {
-        return 0;
+        return backend_kind == AUDIO_BACKEND_COMPAT_AC97;
     }
     return audio_is_desktop_async_tag(tag);
 }

@@ -15,6 +15,8 @@ netctl	NETCTL_APP_BIN	1	0	/bin/netctl
 startx	STARTX_APP_BIN	1	1	/bin/startx
 edit	EDIT_APP_BIN	1	1	/bin/edit
 nano	NANO_APP_BIN	1	1	/bin/nano
+vi	EDIT_APP_BIN	0	0	/bin/vi,/usr/bin/vi,/compat/bin/vi
+mg	NANO_APP_BIN	0	0	/bin/mg,/usr/bin/mg,/compat/bin/mg
 terminal	TERMINAL_APP_BIN	1	0	/bin/terminal
 clock	CLOCK_APP_BIN	1	0	/bin/clock
 filemanager	FILEMANAGER_APP_BIN	1	0	/bin/filemanager

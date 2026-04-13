@@ -505,6 +505,13 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     scheduler_init();
     driver_manager_init(); /* second call to debug init performs HW setup */
     kernel_usb_host_init();
+    if (!kernel_storage_ready()) {
+        kernel_text_puts("Reprobing storage after USB...\n");
+        kernel_storage_init();
+        if (kernel_storage_ready()) {
+            kernel_text_puts("USB Storage OK\n");
+        }
+    }
     kernel_text_puts("Scheduler OK\n");
 
     if (kernel_cpu_is_smp_capable() &&
@@ -534,13 +541,21 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     }
 
     kernel_text_puts("Initializing VFS...\n");
+    kernel_text_puts("  vfs\n");
     vfs_init();
+    kernel_text_puts("  storage svc\n");
     mk_storage_service_init();
+    kernel_text_puts("  video svc\n");
     mk_video_service_init();
+    kernel_text_puts("  audio svc\n");
     mk_audio_service_init();
+    kernel_text_puts("  filesystem svc\n");
     mk_filesystem_service_init();
+    kernel_text_puts("  input svc\n");
     mk_input_service_init();
+    kernel_text_puts("  console svc\n");
     mk_console_service_init();
+    kernel_text_puts("  network svc\n");
     mk_network_service_init();
     kernel_text_puts("VFS OK\n");
 

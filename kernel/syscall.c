@@ -28,6 +28,10 @@
 #define MAX_SYSCALLS 111
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
+static uint8_t g_audio_boot_trace_launch_info = 0u;
+static uint8_t g_audio_boot_trace_text_write = 0u;
+static uint8_t g_audio_boot_trace_write_debug = 0u;
+static uint8_t g_audio_boot_trace_storage_load = 0u;
 
 extern void userland_shell_host_entry(void);
 extern void userland_shell_session_entry(void);
@@ -44,6 +48,12 @@ static int sys_launch_app_copy_argv(const char *const *argv,
                                     uint32_t argc,
                                     struct mk_launch_descriptor *descriptor);
 static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor);
+
+static int sys_boot_trace_is_audio_service_current(void) {
+    process_t *current = scheduler_current();
+
+    return current != 0 && current->service_type == MK_SERVICE_AUDIO;
+}
 
 static const char *sys_launch_path_basename(const char *path) {
     const char *last = path;
@@ -241,6 +251,10 @@ static uint32_t sys_gfx_get_palette(uint32_t ptr, uint32_t b, uint32_t c,
 static uint32_t sys_storage_load(uint32_t ptr, uint32_t size, uint32_t c,
                                  uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
+    if (!g_audio_boot_trace_storage_load && sys_boot_trace_is_audio_service_current()) {
+        g_audio_boot_trace_storage_load = 1u;
+        kernel_text_puts("audiosvc: syscall storage_load\n");
+    }
     return (uint32_t)mk_storage_service_load((void *)(uintptr_t)ptr, size);
 }
 
@@ -490,6 +504,10 @@ static uint32_t sys_launch_info(uint32_t out_ptr, uint32_t b, uint32_t c,
     struct userland_launch_info *out;
 
     (void)b; (void)c; (void)d; (void)e;
+    if (!g_audio_boot_trace_launch_info && sys_boot_trace_is_audio_service_current()) {
+        g_audio_boot_trace_launch_info = 1u;
+        kernel_text_puts("audiosvc: syscall launch_info\n");
+    }
     if (out_ptr == 0u) {
         return (uint32_t)-1;
     }
@@ -515,6 +533,10 @@ static uint32_t sys_yield(uint32_t a, uint32_t b, uint32_t c,
 static uint32_t sys_write_debug(uint32_t a, uint32_t b, uint32_t c,
                                 uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
+    if (!g_audio_boot_trace_write_debug && sys_boot_trace_is_audio_service_current()) {
+        g_audio_boot_trace_write_debug = 1u;
+        kernel_text_puts("audiosvc: syscall write_debug\n");
+    }
     kernel_debug_puts((const char *)(uintptr_t)a);
     return 0;
 }
@@ -549,6 +571,10 @@ static uint32_t sys_text_putc(uint32_t a, uint32_t b, uint32_t c,
 static uint32_t sys_text_write(uint32_t a, uint32_t b, uint32_t c,
                                uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
+    if (!g_audio_boot_trace_text_write && sys_boot_trace_is_audio_service_current()) {
+        g_audio_boot_trace_text_write = 1u;
+        kernel_text_puts("audiosvc: syscall text_write\n");
+    }
     kernel_text_puts((const char *)(uintptr_t)a);
     return 0;
 }

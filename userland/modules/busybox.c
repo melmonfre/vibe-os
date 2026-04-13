@@ -72,6 +72,10 @@ __attribute__((weak)) void desktop_request_open_nano(const char *path) {
     (void)path;
 }
 
+__attribute__((weak)) void desktop_request_open_app(enum app_type type) {
+    (void)type;
+}
+
 __attribute__((weak)) void desktop_main(void) {
 }
 
@@ -713,6 +717,28 @@ static int try_run_external_as(int argc, char **argv, const char *name) {
     return try_run_external_prepared(patched_argc, patched_argv);
 }
 
+static int try_open_desktop_shell_app(int argc, char **argv) {
+#ifdef VIBE_USERLAND_APP
+    (void)argc;
+    (void)argv;
+    return -1;
+#else
+    enum app_type type;
+
+    if (argc != 1 || argv == 0 || argv[0] == 0 || argv[0][0] == '\0') {
+        return -1;
+    }
+
+    type = shell_app_type_from_name(argv[0]);
+    if (type != APP_DOOM && type != APP_CRAFT) {
+        return -1;
+    }
+
+    desktop_request_open_app(type);
+    return 0;
+#endif
+}
+
 static int should_prefer_external(const char *cmd) {
     for (int i = 0; i < (int)G_APP_CATALOG_PREFER_EXTERNAL_COUNT; ++i) {
         if (strcmp(cmd, g_app_catalog_prefer_external[i]) == 0) {
@@ -720,6 +746,30 @@ static int should_prefer_external(const char *cmd) {
         }
     }
     return 0;
+}
+
+int busybox_command_uses_external_app(int argc, char **argv) {
+    if (argc <= 0 || argv == 0 || argv[0] == 0 || argv[0][0] == '\0') {
+        return 0;
+    }
+
+    if (should_prefer_external(argv[0]) && lang_can_run(argv[0])) {
+        return 1;
+    }
+
+    for (int i = 0; i < (int)(sizeof(g_builtin_help_commands) / sizeof(g_builtin_help_commands[0])); ++i) {
+        if (strcmp(argv[0], g_builtin_help_commands[i]) == 0) {
+            if ((strcmp(argv[0], "cc") == 0 ||
+                 strcmp(argv[0], "lua") == 0 ||
+                 strcmp(argv[0], "sectorc") == 0) &&
+                lang_can_run(argv[0])) {
+                return 1;
+            }
+            return 0;
+        }
+    }
+
+    return lang_can_run(argv[0]) ? 1 : 0;
 }
 
 static int command_exists_in_builtin_help(const char *name) {
@@ -4421,7 +4471,6 @@ static int cmd_edit(int argc, char **argv) {
     } else {
         desktop_request_open_editor("");
     }
-    desktop_main();
     return 0;
 #endif
 }
@@ -4439,7 +4488,6 @@ static int cmd_nano(int argc, char **argv) {
     } else {
         desktop_request_open_nano("");
     }
-    desktop_main();
     return 0;
 #endif
 }
@@ -4510,12 +4558,22 @@ static const struct command g_commands[] = {
     {"history", cmd_history},
     {"edit", cmd_edit},
     {"nano", cmd_nano},
+    {"vi", cmd_edit},
+    {"mg", cmd_nano},
     {"lua", cmd_lua},
     {"sectorc", cmd_sectorc},
     {"cc", cmd_sectorc},
 };
 
 int busybox_main(int argc, char **argv) {
+    {
+        int inline_rc = try_open_desktop_shell_app(argc, argv);
+
+        if (inline_rc >= 0) {
+            return inline_rc;
+        }
+    }
+
     if (should_prefer_external(argv[0])) {
         int ext = try_run_external(argc, argv);
         if (ext >= 0) {

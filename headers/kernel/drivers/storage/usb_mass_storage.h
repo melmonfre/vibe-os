@@ -1,0 +1,6 @@
+#ifndef KERNEL_DRIVERS_STORAGE_USB_MASS_STORAGE_H
+#define KERNEL_DRIVERS_STORAGE_USB_MASS_STORAGE_H
+
+int kernel_usb_mass_storage_init(void);
+
+#endif

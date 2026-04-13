@@ -20,12 +20,21 @@ void craft_glfw_set_mouse_state(int x, int y, int dx, int dy,
 void craft_glfw_set_window_size(int width, int height);
 void craft_glfw_request_close(void);
 void craft_glfw_reset_embedded(void);
-void craft_gl_blit_to(int x, int y);
+void craft_gl_blit_to(int x, int y, int width, int height);
+void craft_thread_pump(int max_jobs);
+void craft_thread_reset(void);
 
 static unsigned int g_craft_runner_rng_state = 1u;
 
 static void craft_debug_stage(const char *message) {
-    (void)message;
+    static int g_craft_debug_budget = 128;
+
+    if (!message || !message[0] || g_craft_debug_budget <= 0) {
+        return;
+    }
+    g_craft_debug_budget -= 1;
+    sys_write_debug(message);
+    sys_write_debug("\n");
 }
 
 static void *craft_runner_calloc(size_t count, size_t size) {
@@ -117,6 +126,12 @@ static int craft_runner_rand(void) {
 struct craft_runtime_state {
     int bootstrapped;
     int session_active;
+    int fullscreen;
+    int target_create_radius;
+    int target_render_radius;
+    int target_delete_radius;
+    int target_sign_radius;
+    int warmup_frames;
     GLuint sky_buffer;
     FPS fps;
     double previous;
@@ -135,6 +150,67 @@ static Attrib g_sky_attrib;
 // static Attrib sky_attrib;
 
 void craft_upstream_resize(int width, int height);
+
+static void craft_sync_quality_profile(void) {
+    int create_radius = g_runtime.target_create_radius;
+    int render_radius = g_runtime.target_render_radius;
+    int delete_radius = g_runtime.target_delete_radius;
+    int sign_radius = g_runtime.target_sign_radius;
+
+    if (g_runtime.session_active) {
+        if (g_runtime.warmup_frames <= 0) {
+            create_radius = 0;
+            render_radius = 0;
+            sign_radius = 0;
+        } else if (g_runtime.warmup_frames < 6) {
+            create_radius = 0;
+            if (render_radius > 1) {
+                render_radius = 1;
+            }
+            if (sign_radius > 1) {
+                sign_radius = 1;
+            }
+        } else if (g_runtime.warmup_frames < 12 && create_radius > 1) {
+            create_radius = 1;
+        }
+    }
+
+    if (delete_radius <= render_radius) {
+        delete_radius = render_radius + 2;
+    }
+    if (sign_radius > render_radius) {
+        sign_radius = render_radius;
+    }
+
+    g->create_radius = create_radius;
+    g->render_radius = render_radius;
+    g->delete_radius = delete_radius;
+    g->sign_radius = sign_radius;
+}
+
+static void craft_apply_quality_profile(int width, int height, int fullscreen) {
+    int area = width * height;
+    int create_radius = 1;
+    int render_radius = 1;
+    int delete_radius = 3;
+    int sign_radius = 1;
+
+    if (area <= 640 * 480) {
+        delete_radius = 2;
+    }
+    if (fullscreen && area >= 1280 * 720) {
+        delete_radius += 1;
+    }
+    if (delete_radius <= render_radius) {
+        delete_radius = render_radius + 2;
+    }
+
+    g_runtime.target_create_radius = create_radius;
+    g_runtime.target_render_radius = render_radius;
+    g_runtime.target_delete_radius = delete_radius;
+    g_runtime.target_sign_radius = sign_radius;
+    craft_sync_quality_profile();
+}
 
 static int craft_upstream_bootstrap(void) {
     GLuint texture;
@@ -256,11 +332,7 @@ static int craft_upstream_bootstrap(void) {
 
     g->mode = MODE_OFFLINE;
     doom_snprintf(g->db_path, MAX_PATH_LENGTH, "%s", DB_PATH);
-    /* Embedded mode stays on a synchronous, low-footprint world update path. */
-    g->create_radius = 0;
-    g->render_radius = 1;
-    g->delete_radius = 2;
-    g->sign_radius = 1;
+    craft_apply_quality_profile(800, 600, 0);
 
     craft_debug_stage("craft: before workers");
     for (int i = 0; i < WORKERS; ++i) {
@@ -356,7 +428,9 @@ static int craft_upstream_begin_session(void) {
     }
 
     g_runtime.previous = glfwGetTime();
+    g_runtime.warmup_frames = 0;
     g_runtime.session_active = 1;
+    craft_sync_quality_profile();
     craft_debug_stage("craft: session ready");
     return 0;
 }
@@ -378,6 +452,7 @@ static void craft_upstream_end_session(void) {
     g_runtime.sky_buffer = 0;
     delete_all_chunks();
     delete_all_players();
+    craft_thread_reset();
     g_runtime.session_active = 0;
 }
 
@@ -386,6 +461,7 @@ int craft_upstream_start(int width, int height) {
         return -1;
     }
     craft_glfw_set_window_size(width, height);
+    craft_apply_quality_profile(width, height, g_runtime.fullscreen);
     if (craft_upstream_begin_session() != 0) {
         craft_upstream_end_session();
         return -1;
@@ -410,6 +486,7 @@ int craft_upstream_frame(void) {
         return -1;
     }
     craft_debug_stage("craft: frame begin");
+    craft_thread_pump(g_runtime.warmup_frames < 6 ? 2 : 1);
 
     me = g->players;
     s = &g->players->state;
@@ -586,6 +663,10 @@ int craft_upstream_frame(void) {
             return -1;
         }
     }
+    if (g_runtime.warmup_frames < 16) {
+        g_runtime.warmup_frames += 1;
+        craft_sync_quality_profile();
+    }
     return 1;
 }
 
@@ -602,6 +683,12 @@ void craft_upstream_stop(void) {
 
 void craft_upstream_resize(int width, int height) {
     craft_glfw_set_window_size(width, height);
+    craft_apply_quality_profile(width, height, g_runtime.fullscreen);
+}
+
+void craft_upstream_set_fullscreen(int fullscreen, int width, int height) {
+    g_runtime.fullscreen = fullscreen != 0;
+    craft_upstream_resize(width, height);
 }
 
 void craft_upstream_queue_key(int key) {
@@ -613,8 +700,8 @@ void craft_upstream_set_mouse(int x, int y, int dx, int dy, int wheel,
     craft_glfw_set_mouse_state(x, y, dx, dy, wheel, buttons, focused, inside);
 }
 
-void craft_upstream_blit(int x, int y) {
-    craft_gl_blit_to(x, y);
+void craft_upstream_blit(int x, int y, int width, int height) {
+    craft_gl_blit_to(x, y, width, height);
 }
 
 void craft_upstream_request_close(void) {

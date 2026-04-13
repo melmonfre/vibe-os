@@ -11,6 +11,22 @@ void mk_message_init(struct mk_message *message, uint32_t type) {
     message->type = type;
 }
 
+int mk_message_validate(const struct mk_message *message) {
+    if (message == 0) {
+        return -1;
+    }
+    if (message->abi_version != MK_MESSAGE_ABI_VERSION) {
+        return -1;
+    }
+    if (message->type == MK_MSG_NONE) {
+        return -1;
+    }
+    if (message->payload_size > MK_MESSAGE_PAYLOAD_MAX) {
+        return -1;
+    }
+    return 0;
+}
+
 int mk_message_set_payload(struct mk_message *message, const void *payload, size_t payload_size) {
     if (message == 0) {
         return -1;

@@ -9,6 +9,12 @@ void kernel_debug_puts(const char *msg) {
 }
 
 static enum app_type desktop_app_type(const char *app_name) {
+    if (str_eq(app_name, "vi") || str_eq(app_name, "vim")) {
+        app_name = "edit";
+    } else if (str_eq(app_name, "mg")) {
+        app_name = "nano";
+    }
+
     if (str_eq(app_name, "terminal")) {
         return APP_TERMINAL;
     }
@@ -98,9 +104,9 @@ static void desktop_prepare_launch(int argc, char **argv) {
         path = argv[1];
     }
 
-    if (str_eq(app_name, "edit")) {
+    if (str_eq(app_name, "edit") || str_eq(app_name, "vi") || str_eq(app_name, "vim")) {
         desktop_request_open_editor(path);
-    } else if (str_eq(app_name, "nano")) {
+    } else if (str_eq(app_name, "nano") || str_eq(app_name, "mg")) {
         desktop_request_open_nano(path);
     } else if (type != APP_NONE) {
         desktop_request_open_app(type);
@@ -111,8 +117,12 @@ int vibe_app_main(int argc, char **argv) {
     const char *app_name = desktop_app_name(argc, argv);
 
     desktop_app_debug_launch(app_name);
-    sys_write_debug("desktop.app: fs init\n");
-    fs_init();
+    if (!fs_ready()) {
+        sys_write_debug("desktop.app: fs init\n");
+        fs_init();
+    } else {
+        sys_write_debug("desktop.app: fs ready\n");
+    }
     sys_write_debug("desktop.app: prepare launch\n");
     desktop_prepare_launch(argc, argv);
     sys_write_debug("desktop.app: enter desktop_main\n");

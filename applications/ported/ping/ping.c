@@ -11,43 +11,6 @@ struct vibe_ping_sockaddr_in {
     uint8_t sin_zero[8];
 };
 
-static int ping_parse_ipv4(const char *text, uint8_t out[4]) {
-    unsigned int octet = 0u;
-    unsigned int part = 0u;
-    int saw_digit = 0;
-    size_t index = 0u;
-
-    if (text == 0 || out == 0) {
-        return -1;
-    }
-    while (text[index] != '\0') {
-        char ch = text[index];
-
-        if (ch >= '0' && ch <= '9') {
-            octet = (octet * 10u) + (unsigned int)(ch - '0');
-            if (octet > 255u) {
-                return -1;
-            }
-            saw_digit = 1;
-        } else if (ch == '.') {
-            if (!saw_digit || part >= 3u) {
-                return -1;
-            }
-            out[part++] = (uint8_t)octet;
-            octet = 0u;
-            saw_digit = 0;
-        } else {
-            return -1;
-        }
-        ++index;
-    }
-    if (!saw_digit || part != 3u) {
-        return -1;
-    }
-    out[3] = (uint8_t)octet;
-    return 0;
-}
-
 static void ping_usage(void) {
     fprintf(stderr, "usage: ping host\n");
 }
@@ -56,6 +19,9 @@ int vibe_app_main(int argc, char **argv) {
     struct mk_network_info info;
     struct mk_network_status status;
     const char *target;
+    const char *resolved_source = 0;
+    char canonical[64];
+    char target_addr[16];
     struct vibe_ping_sockaddr_in address;
     uint8_t payload[56];
     uint8_t reply[96];
@@ -71,26 +37,44 @@ int vibe_app_main(int argc, char **argv) {
     }
 
     target = argv[1];
-    if (netdiag_is_loopback_target(target)) {
+    memset(canonical, 0, sizeof(canonical));
+    memset(target_addr, 0, sizeof(target_addr));
+    memset(&address, 0, sizeof(address));
+    address.sin_len = (uint8_t)sizeof(address);
+    address.sin_family = AF_INET;
+    if (netdiag_resolve_name_local(target,
+                                   0,
+                                   address.sin_addr,
+                                   canonical,
+                                   sizeof(canonical),
+                                   &resolved_source) == 0 &&
+        netdiag_is_loopback_target(canonical[0] != '\0' ? canonical : target)) {
         printf("PING %s (127.0.0.1): 56 data bytes\n", target);
         printf("64 bytes from 127.0.0.1: icmp_seq=0 ttl=255 time=0.0 ms\n");
         printf("\n--- %s ping statistics ---\n", target);
         printf("1 packets transmitted, 1 packets received, 0.0%% packet loss\n");
         printf("ping: loopback-ok target=%s\n", target);
+        netdiag_debugf("ping: loopback-ok target=%s\n", target);
         return 0;
     }
 
     if (netdiag_load_snapshot("ping", &info, &status) != 0) {
         return 1;
     }
-    if (netdiag_require_real_packet_path("ping", "icmp echo", &info, &status) != 0) {
+    if (netdiag_resolve_name_local(target,
+                                   &status,
+                                   address.sin_addr,
+                                   canonical,
+                                   sizeof(canonical),
+                                   &resolved_source) != 0) {
+        fprintf(stderr, "ping: hostname resolution not available yet target=%s\n", target);
+        netdiag_debugf("ping: resolve pending target=%s dns=%s\n",
+                       target,
+                       status.dns_server[0] != '\0' ? status.dns_server : "-");
         return 1;
     }
-    memset(&address, 0, sizeof(address));
-    address.sin_len = (uint8_t)sizeof(address);
-    address.sin_family = AF_INET;
-    if (ping_parse_ipv4(target, address.sin_addr) != 0) {
-        fprintf(stderr, "ping: only dotted IPv4 is supported right now target=%s\n", target);
+    netdiag_format_ipv4(target_addr, sizeof(target_addr), address.sin_addr);
+    if (netdiag_require_real_packet_path("ping", "icmp echo", &info, &status) != 0) {
         return 1;
     }
 
@@ -111,12 +95,9 @@ int vibe_app_main(int argc, char **argv) {
         payload[i] = (uint8_t)('a' + (char)(i % 26u));
     }
 
-    printf("PING %s (%u.%u.%u.%u): %u data bytes\n",
+    printf("PING %s (%s): %u data bytes\n",
            target,
-           (unsigned int)address.sin_addr[0],
-           (unsigned int)address.sin_addr[1],
-           (unsigned int)address.sin_addr[2],
-           (unsigned int)address.sin_addr[3],
+           target_addr,
            (unsigned int)sizeof(payload));
 
     started_ms = vibe_app_millis();
@@ -134,10 +115,15 @@ int vibe_app_main(int argc, char **argv) {
             unsigned long long elapsed_ms = vibe_app_millis() - started_ms;
             printf("%d bytes from %s: icmp_seq=0 ttl=64 time=%llu ms\n",
                    rc,
-                   target,
+                   target_addr,
                    elapsed_ms);
             printf("\n--- %s ping statistics ---\n", target);
             printf("1 packets transmitted, 1 packets received, 0.0%% packet loss\n");
+            netdiag_debugf("ping: reply-ok target=%s addr=%s source=%s bytes=%d\n",
+                           target,
+                           target_addr,
+                           resolved_source != 0 ? resolved_source : "-",
+                           rc);
             (void)vibe_app_network_close(handle);
             return 0;
         }
@@ -148,6 +134,10 @@ int vibe_app_main(int argc, char **argv) {
     fprintf(stderr, "ping: timeout waiting for reply target=%s\n", target);
     printf("\n--- %s ping statistics ---\n", target);
     printf("1 packets transmitted, 0 packets received, 100.0%% packet loss\n");
+    netdiag_debugf("ping: timeout target=%s addr=%s source=%s\n",
+                   target,
+                   target_addr,
+                   resolved_source != 0 ? resolved_source : "-");
     (void)vibe_app_network_close(handle);
     return 1;
 }

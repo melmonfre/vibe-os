@@ -210,6 +210,15 @@ brew install qemu
 brew install i686-elf-gcc nasm
 ```
 
+### Gentoo Without `dosfstools`
+If `mkfs.fat` is unavailable but `mtools` is installed, use the bundled wrapper:
+
+```bash
+make MKFS_FAT_TOOL=./tools/mkfs-fat-mtools.sh
+```
+
+This keeps the Linux host toolchain path and formats the FAT32 boot partition via `mformat`, including the reserved-sector layout expected by the bootloader image.
+
 ## Performance Notes
 
 - **Kernel compilation**: ~10 seconds

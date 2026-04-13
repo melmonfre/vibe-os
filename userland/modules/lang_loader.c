@@ -18,6 +18,7 @@ static volatile uint32_t g_lang_arena_owner[3];
 static void lang_debug_vga(int row, const char *text);
 static int lang_has_runtime_stub(const char *name);
 static int lang_catalog_command_exists(const char *name);
+static const char *lang_command_alias_target(const char *name);
 static int lang_load_directory(struct vibe_appfs_directory *directory);
 static const struct vibe_appfs_entry *lang_find_entry(const struct vibe_appfs_directory *directory,
                                                       const char *name);
@@ -73,10 +74,13 @@ static uintptr_t align_down_uintptr(uintptr_t value, uintptr_t align) {
 static int lang_arena_slot_for_load_address(uint32_t load_address) {
     switch (load_address) {
     case VIBE_APP_LOAD_ADDR:
+    case VIBE_APP_COMPAT_LOAD_ADDR_20260325:
         return 0;
     case VIBE_APP_DESKTOP_LOAD_ADDR:
+    case VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325:
         return 1;
     case VIBE_APP_BOOT_LOAD_ADDR:
+    case VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325:
         return 2;
     default:
         return -1;
@@ -688,10 +692,54 @@ static const struct vibe_app_host_api g_host_api = {
     host_sync_filesystem
 };
 
+static int lang_decode_app_header(const void *raw_header,
+                                  struct vibe_app_header *header_out) {
+    const struct vibe_app_header *current;
+    const struct vibe_app_header_legacy *legacy;
+
+    if (raw_header == 0 || header_out == 0) {
+        return -1;
+    }
+
+    current = (const struct vibe_app_header *)raw_header;
+    if (current->magic != VIBE_APP_MAGIC) {
+        return -1;
+    }
+    if (current->abi_version != VIBE_APP_ABI_VERSION) {
+        sys_write_debug("lang: header abi mismatch\n");
+        return -1;
+    }
+    if (current->header_size >= sizeof(struct vibe_app_header)) {
+        lang_memcpy(header_out, current, (uint32_t)sizeof(*header_out));
+        return 0;
+    }
+
+    if (current->header_size == sizeof(struct vibe_app_header_legacy)) {
+        /*
+         * The oldest AppFS layout predates the dedicated load-address field.
+         * Those binaries were linked against an earlier low-memory arena map,
+         * so on the current kernel we fail loudly instead of pretending the
+         * layout is interchangeable.
+         */
+        legacy = (const struct vibe_app_header_legacy *)raw_header;
+        if (legacy->magic == VIBE_APP_MAGIC &&
+            legacy->abi_version == VIBE_APP_ABI_VERSION) {
+            sys_write_debug("lang: legacy header layout requires rebuild\n");
+        }
+        return -1;
+    }
+
+    sys_write_debug("lang: header size unsupported\n");
+    return -1;
+}
+
 static int lang_load_address_valid(uint32_t load_address) {
     return load_address == VIBE_APP_LOAD_ADDR ||
+           load_address == VIBE_APP_COMPAT_LOAD_ADDR_20260325 ||
            load_address == VIBE_APP_DESKTOP_LOAD_ADDR ||
-           load_address == VIBE_APP_BOOT_LOAD_ADDR;
+           load_address == VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 ||
+           load_address == VIBE_APP_BOOT_LOAD_ADDR ||
+           load_address == VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325;
 }
 
 void lang_invalidate_directory_cache(void) {
@@ -713,15 +761,30 @@ static int lang_catalog_command_exists(const char *name) {
     return 0;
 }
 
+static const char *lang_command_alias_target(const char *name) {
+    if (name == 0 || name[0] == '\0') {
+        return 0;
+    }
+    if (str_eq(name, "vi") || str_eq(name, "vim")) {
+        return "edit";
+    }
+    if (str_eq(name, "mg")) {
+        return "nano";
+    }
+    return 0;
+}
+
 int lang_normalize_command_name(const char *name_or_path, char *normalized, int max_len) {
     int node;
+    const char *alias_target;
 
     if (name_or_path == 0 || normalized == 0 || max_len <= 0 || name_or_path[0] == '\0') {
         return -1;
     }
 
     if (!lang_has_slash(name_or_path)) {
-        str_copy_limited(normalized, name_or_path, max_len);
+        alias_target = lang_command_alias_target(name_or_path);
+        str_copy_limited(normalized, alias_target ? alias_target : name_or_path, max_len);
         return 0;
     }
 
@@ -730,11 +793,18 @@ int lang_normalize_command_name(const char *name_or_path, char *normalized, int 
         if (g_fs_nodes[node].is_dir) {
             return -1;
         }
-        str_copy_limited(normalized, lang_path_basename(name_or_path), max_len);
+        alias_target = lang_command_alias_target(lang_path_basename(name_or_path));
+        str_copy_limited(normalized,
+                         alias_target ? alias_target : lang_path_basename(name_or_path),
+                         max_len);
         return 0;
     }
 
     if (fs_lookup_executable_alias(name_or_path, normalized, max_len) == 0) {
+        alias_target = lang_command_alias_target(normalized);
+        if (alias_target != 0) {
+            str_copy_limited(normalized, alias_target, max_len);
+        }
         return 0;
     }
 
@@ -890,10 +960,7 @@ static int lang_read_header_copy(const struct vibe_appfs_entry *entry,
         return -1;
     }
 
-    lang_memcpy(header_out, first_sector, (uint32_t)sizeof(*header_out));
-    if (header_out->magic != VIBE_APP_MAGIC ||
-        header_out->abi_version != VIBE_APP_ABI_VERSION ||
-        header_out->header_size < sizeof(struct vibe_app_header)) {
+    if (lang_decode_app_header(first_sector, header_out) != 0) {
         sys_write_debug("lang: header invalid before read\n");
         return -1;
     }
@@ -942,12 +1009,11 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
     lang_debug_vga(19, "lang: app read ok");
 
     header = (struct vibe_app_header *)load_base;
-    if (header->magic != VIBE_APP_MAGIC ||
-        header->abi_version != VIBE_APP_ABI_VERSION ||
-        header->header_size < sizeof(struct vibe_app_header)) {
+    if (lang_decode_app_header(load_base, &header_copy) != 0) {
         sys_write_debug("lang: header invalid after read\n");
         return -1;
     }
+    lang_memcpy(header, &header_copy, (uint32_t)sizeof(header_copy));
     lang_debug_vga(20, "lang: hdr ok");
 
     if (header->load_address != (uint32_t)load_address) {

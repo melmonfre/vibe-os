@@ -94,6 +94,7 @@ struct mk_message {
 };
 
 void mk_message_init(struct mk_message *message, uint32_t type);
+int mk_message_validate(const struct mk_message *message);
 int mk_message_set_payload(struct mk_message *message, const void *payload, size_t payload_size);
 
 #endif

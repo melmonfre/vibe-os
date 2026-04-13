@@ -1,42 +1,41 @@
-#include "../include/compat/posix/unistd.h"
+#include <compat/posix/unistd.h>
 #include <compat/posix/fcntl.h>
 #include <compat/posix/stat.h>
 #include <compat/posix/errno.h>
+#include <stdint.h>
 #include <lang/include/vibe_app_runtime.h>
+#include <include/userland_api.h>
 
-#define COMPAT_MAX_FDS 16
+#include "compat_fd_state.h"
+#include "compat_tty_input.h"
+
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
 
-struct compat_fd_entry {
-    int used;
-    int host_fd;
-};
+static int compat_syscall5(int num, int a, int b, int c, int d, int e) {
+    int ret;
 
-static struct compat_fd_entry g_compat_fds[COMPAT_MAX_FDS];
-
-static int compat_alloc_fd(void) {
-    int i;
-
-    for (i = 3; i < COMPAT_MAX_FDS; ++i) {
-        if (!g_compat_fds[i].used) {
-            return i;
-        }
-    }
-    return -1;
+    __asm__ volatile("int $0x80"
+                     : "=a"(ret)
+                     : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
+                     : "memory", "cc");
+    return ret;
 }
 
 int open(const char *path, int oflag, ...) {
     int fd;
     int host_fd;
+    struct flock lock;
 
     if (path == 0) {
         errno = EINVAL;
         return -1;
     }
 
-    fd = compat_alloc_fd();
+    compat_fd_bootstrap();
+
+    fd = compat_fd_allocate(3);
     if (fd < 0) {
         errno = EMFILE;
         return -1;
@@ -48,13 +47,57 @@ int open(const char *path, int oflag, ...) {
         return -1;
     }
 
-    g_compat_fds[fd].used = 1;
-    g_compat_fds[fd].host_fd = host_fd;
+    (void)compat_fd_bind(fd, host_fd, oflag, 0, 0);
+
+    if ((oflag & (O_SHLOCK | O_EXLOCK)) != 0) {
+        memset(&lock, 0, sizeof(lock));
+        lock.l_type = (oflag & O_EXLOCK) ? F_WRLCK : F_RDLCK;
+        lock.l_whence = SEEK_SET;
+        if (compat_fd_set_lock(fd, &lock, 0) != 0) {
+            (void)close(fd);
+            return -1;
+        }
+    }
+
     return fd;
+}
+
+int access(const char *path, int mode) {
+    struct stat st;
+
+    if (path == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if ((mode & ~(F_OK | R_OK | W_OK | X_OK)) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (stat(path, &st) != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int creat(const char *path, mode_t mode) {
+    (void)mode;
+    return open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
+}
+
+int openat(int dirfd, const char *path, int oflag, ...) {
+    if (dirfd != AT_FDCWD) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return open(path, oflag);
 }
 
 ssize_t read(int fd, void *buf, size_t count) {
     int rc;
+    const struct compat_fd_entry *entry;
 
     if (buf == 0) {
         errno = EINVAL;
@@ -62,24 +105,28 @@ ssize_t read(int fd, void *buf, size_t count) {
     }
 
     if (fd == STDIN_FILENO) {
-        if (count == 0u) {
-            return 0;
-        }
-        for (;;) {
-            int c = vibe_app_poll_key();
-            if (c != 0) {
-                ((char *)buf)[0] = (char)c;
-                return 1;
-            }
-            vibe_app_yield();
-        }
+        return compat_tty_read(fd, buf, count);
     }
 
-    if (fd < 0 || fd >= COMPAT_MAX_FDS || !g_compat_fds[fd].used) {
+    entry = compat_fd_get_const(fd);
+    if (entry == 0) {
         errno = EBADF;
         return -1;
     }
-    rc = vibe_app_read(g_compat_fds[fd].host_fd, buf, (int)count);
+    if (entry->kind == COMPAT_FD_KIND_SOCKET) {
+        rc = compat_syscall5(SYSCALL_NETWORK_RECV,
+                             entry->host_fd,
+                             (int)(uintptr_t)buf,
+                             (int)count,
+                             0,
+                             0);
+        if (rc < 0) {
+            errno = entry->socket_error != 0 ? entry->socket_error : EIO;
+            return -1;
+        }
+        return (ssize_t)rc;
+    }
+    rc = vibe_app_read(entry->host_fd, buf, (int)count);
     if (rc < 0) {
         errno = EBADF;
         return -1;
@@ -89,6 +136,7 @@ ssize_t read(int fd, void *buf, size_t count) {
 
 ssize_t write(int fd, const void *buf, size_t count) {
     size_t i;
+    const struct compat_fd_entry *entry;
 
     if (buf == 0) {
         errno = EINVAL;
@@ -103,13 +151,27 @@ ssize_t write(int fd, const void *buf, size_t count) {
         return (ssize_t)count;
     }
 
-    if (fd < 0 || fd >= COMPAT_MAX_FDS || !g_compat_fds[fd].used) {
+    entry = compat_fd_get_const(fd);
+    if (entry == 0) {
         errno = EBADF;
         return -1;
     }
+    if (entry->kind == COMPAT_FD_KIND_SOCKET) {
+        int rc = compat_syscall5(SYSCALL_NETWORK_SEND,
+                                 entry->host_fd,
+                                 (int)(uintptr_t)buf,
+                                 (int)count,
+                                 0,
+                                 0);
+        if (rc < 0) {
+            errno = entry->socket_error != 0 ? entry->socket_error : EPIPE;
+            return -1;
+        }
+        return (ssize_t)rc;
+    }
 
     {
-        int rc = vibe_app_write(g_compat_fds[fd].host_fd, buf, (int)count);
+        int rc = vibe_app_write(entry->host_fd, buf, (int)count);
         if (rc < 0) {
             errno = EBADF;
             return -1;
@@ -119,65 +181,54 @@ ssize_t write(int fd, const void *buf, size_t count) {
 }
 
 int close(int fd) {
-    int i;
+    const struct compat_fd_entry *entry;
+    int host_fd;
 
-    if (fd < 0 || fd >= COMPAT_MAX_FDS) {
+    entry = compat_fd_get_const(fd);
+    if (entry == 0) {
         errno = EBADF;
         return -1;
     }
+
     if (fd <= STDERR_FILENO) {
         return 0;
     }
-    if (!g_compat_fds[fd].used) {
-        errno = EBADF;
-        return -1;
-    }
 
-    for (i = 3; i < COMPAT_MAX_FDS; ++i) {
-        if (i != fd &&
-            g_compat_fds[i].used &&
-            g_compat_fds[i].host_fd == g_compat_fds[fd].host_fd) {
-            g_compat_fds[fd].used = 0;
-            g_compat_fds[fd].host_fd = -1;
-            return 0;
+    host_fd = entry->host_fd;
+    if (host_fd >= 0 && !compat_fd_refs_host(host_fd, entry->kind, fd)) {
+        if (entry->kind == COMPAT_FD_KIND_SOCKET) {
+            (void)compat_syscall5(SYSCALL_NETWORK_CLOSE, host_fd, 0, 0, 0, 0);
+        } else {
+            (void)vibe_app_close(host_fd);
         }
     }
-
-    (void)vibe_app_close(g_compat_fds[fd].host_fd);
-    g_compat_fds[fd].used = 0;
-    g_compat_fds[fd].host_fd = -1;
+    compat_fd_reset(fd);
     return 0;
 }
 
 int dup(int fd) {
     int newfd;
 
-    if (fd < 0 || fd >= COMPAT_MAX_FDS) {
-        errno = EBADF;
-        return -1;
-    }
-    if (fd > STDERR_FILENO && !g_compat_fds[fd].used) {
+    if (!compat_fd_is_valid(fd)) {
         errno = EBADF;
         return -1;
     }
 
-    newfd = compat_alloc_fd();
+    newfd = compat_fd_allocate(0);
     if (newfd < 0) {
         errno = EMFILE;
         return -1;
     }
 
-    g_compat_fds[newfd] = g_compat_fds[fd];
-    g_compat_fds[newfd].used = 1;
+    if (compat_fd_duplicate(fd, newfd, 0) != 0) {
+        errno = EBADF;
+        return -1;
+    }
     return newfd;
 }
 
 int dup2(int fd, int newfd) {
-    if (fd < 0 || fd >= COMPAT_MAX_FDS || newfd < 0 || newfd >= COMPAT_MAX_FDS) {
-        errno = EBADF;
-        return -1;
-    }
-    if (fd > STDERR_FILENO && !g_compat_fds[fd].used) {
+    if (!compat_fd_is_valid(fd) || newfd < 0 || newfd >= COMPAT_MAX_FDS) {
         errno = EBADF;
         return -1;
     }
@@ -186,19 +237,27 @@ int dup2(int fd, int newfd) {
     }
 
     (void)close(newfd);
-    g_compat_fds[newfd] = g_compat_fds[fd];
-    g_compat_fds[newfd].used = 1;
+    if (compat_fd_duplicate(fd, newfd, 0) != 0) {
+        errno = EBADF;
+        return -1;
+    }
     return newfd;
 }
 
 off_t lseek(int fd, off_t offset, int whence) {
     int rc;
+    const struct compat_fd_entry *entry;
 
-    if (fd < 0 || fd >= COMPAT_MAX_FDS || !g_compat_fds[fd].used) {
+    entry = compat_fd_get_const(fd);
+    if (entry == 0) {
         errno = EBADF;
         return -1;
     }
-    rc = vibe_app_lseek(g_compat_fds[fd].host_fd, (int)offset, whence);
+    if (entry->kind == COMPAT_FD_KIND_SOCKET) {
+        errno = ESPIPE;
+        return -1;
+    }
+    rc = vibe_app_lseek(entry->host_fd, (int)offset, whence);
     if (rc < 0) {
         errno = EINVAL;
         return -1;
@@ -207,7 +266,7 @@ off_t lseek(int fd, off_t offset, int whence) {
 }
 
 int isatty(int fd) {
-    if (fd >= STDIN_FILENO && fd <= STDERR_FILENO) {
+    if (compat_fd_is_tty(fd)) {
         return 1;
     }
     errno = ENOTTY;
@@ -237,6 +296,7 @@ int stat(const char *path, struct stat *buf) {
 
 int fstat(int fd, struct stat *buf) {
     struct vibe_app_stat vibe_stat;
+    const struct compat_fd_entry *entry;
 
     if (buf == 0) {
         errno = EINVAL;
@@ -248,11 +308,18 @@ int fstat(int fd, struct stat *buf) {
         buf->st_nlink = 1;
         return 0;
     }
-    if (fd < 0 || fd >= COMPAT_MAX_FDS || !g_compat_fds[fd].used) {
+    entry = compat_fd_get_const(fd);
+    if (entry == 0) {
         errno = EBADF;
         return -1;
     }
-    if (vibe_app_fstat(g_compat_fds[fd].host_fd, &vibe_stat) != 0) {
+    if (entry->kind == COMPAT_FD_KIND_SOCKET) {
+        memset(buf, 0, sizeof(*buf));
+        buf->st_mode = 0140666;
+        buf->st_nlink = 1;
+        return 0;
+    }
+    if (vibe_app_fstat(entry->host_fd, &vibe_stat) != 0) {
         errno = EBADF;
         return -1;
     }
@@ -271,14 +338,110 @@ int lstat(const char *path, struct stat *buf) {
 }
 
 int fcntl(int fd, int cmd, ...) {
-    (void)fd;
-    (void)cmd;
+    va_list ap;
+    long arg = 0;
+    struct compat_fd_entry *entry;
+    int newfd;
+
+    entry = compat_fd_get(fd);
+    if (entry == 0) {
+        errno = EBADF;
+        return -1;
+    }
+
+    va_start(ap, cmd);
+    arg = va_arg(ap, long);
+    va_end(ap);
+
+    switch (cmd) {
+    case F_DUPFD:
+        newfd = compat_fd_allocate((int)arg);
+        if (newfd < 0) {
+            errno = EMFILE;
+            return -1;
+        }
+        if (compat_fd_duplicate(fd, newfd, 0) != 0) {
+            errno = EBADF;
+            return -1;
+        }
+        return newfd;
+    case F_DUPFD_CLOEXEC:
+        newfd = compat_fd_allocate((int)arg);
+        if (newfd < 0) {
+            errno = EMFILE;
+            return -1;
+        }
+        if (compat_fd_duplicate(fd, newfd, 1) != 0) {
+            errno = EBADF;
+            return -1;
+        }
+        return newfd;
+    case F_GETFD:
+        return entry->fd_flags;
+    case F_SETFD:
+        entry->fd_flags = (int)arg & FD_CLOEXEC;
+        return 0;
+    case F_GETFL:
+        return entry->flags;
+    case F_SETFL:
+        entry->flags &= ~(O_APPEND | O_NONBLOCK | O_ASYNC | O_SYNC);
+        entry->flags |= (int)arg & (O_APPEND | O_NONBLOCK | O_ASYNC | O_SYNC);
+        return 0;
+    case F_GETOWN:
+        return getpid();
+    case F_SETOWN:
+        return 0;
+    case F_ISATTY:
+        return entry->is_tty ? 1 : 0;
+    case F_GETLK:
+        return compat_fd_get_lock(fd, (struct flock *)(uintptr_t)arg);
+    case F_SETLK:
+        return compat_fd_set_lock(fd, (const struct flock *)(uintptr_t)arg, 0);
+    case F_SETLKW:
+        return compat_fd_set_lock(fd, (const struct flock *)(uintptr_t)arg, 1);
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+}
+
+int flock(int fd, int operation) {
+    struct flock lock;
+
+    if (!compat_fd_is_valid(fd)) {
+        errno = EBADF;
+        return -1;
+    }
+    if ((operation & LOCK_UN) != 0) {
+        memset(&lock, 0, sizeof(lock));
+        lock.l_type = F_UNLCK;
+        lock.l_whence = SEEK_SET;
+        return compat_fd_set_lock(fd, &lock, 0);
+    }
+    if ((operation & LOCK_EX) != 0) {
+        memset(&lock, 0, sizeof(lock));
+        lock.l_type = F_WRLCK;
+        lock.l_whence = SEEK_SET;
+        return compat_fd_set_lock(fd, &lock, (operation & LOCK_NB) == 0);
+    }
+    if ((operation & LOCK_SH) != 0) {
+        memset(&lock, 0, sizeof(lock));
+        lock.l_type = F_RDLCK;
+        lock.l_whence = SEEK_SET;
+        return compat_fd_set_lock(fd, &lock, (operation & LOCK_NB) == 0);
+    }
+
     errno = EINVAL;
     return -1;
 }
 
 pid_t getpid(void) {
-    return 1;
+    int pid = compat_syscall5(SYSCALL_GETPID, 0, 0, 0, 0, 0);
+
+    if (pid <= 0) {
+        return 1;
+    }
+    return (pid_t)pid;
 }
 
 pid_t getppid(void) {
@@ -350,21 +513,17 @@ int mkdir(const char *path, mode_t mode) {
 }
 
 unsigned int sleep(unsigned int seconds) {
-    unsigned int i;
-
-    for (i = 0; i < (seconds * 100u); ++i) {
-        vibe_app_yield();
-    }
+    (void)vibe_app_sleep_ms(seconds * 1000u);
     return 0;
 }
 
 int usleep(unsigned int usec) {
-    unsigned int loops = (usec / 1000u) + 1u;
-    unsigned int i;
+    unsigned int ms = usec / 1000u;
 
-    for (i = 0; i < loops; ++i) {
-        vibe_app_yield();
+    if (ms == 0u && usec != 0u) {
+        ms = 1u;
     }
+    (void)vibe_app_sleep_ms(ms);
     return 0;
 }
 

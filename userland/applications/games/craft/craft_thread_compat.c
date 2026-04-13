@@ -28,11 +28,17 @@ typedef struct {
 extern void load_chunk(craft_worker_item *item);
 extern void compute_chunk(craft_worker_item *item);
 
+static craft_worker *g_workers[8];
+static int g_worker_count = 0;
+static int g_worker_rr_cursor = 0;
+
 int thrd_create(thrd_t *thr, thrd_start_t func, void *arg) {
     (void)func;
-    (void)arg;
     if (thr) {
         thr->active = 1;
+    }
+    if (arg && g_worker_count < (int)(sizeof(g_workers) / sizeof(g_workers[0]))) {
+        g_workers[g_worker_count++] = (craft_worker *)arg;
     }
     return thrd_success;
 }
@@ -86,17 +92,6 @@ void cnd_destroy(cnd_t *cond) {
 int cnd_signal(cnd_t *cond) {
     if (cond) {
         cond->signaled = 1;
-        if (cond->owner) {
-            craft_worker *worker = (craft_worker *)cond->owner;
-            if (worker->state == CRAFT_WORKER_BUSY) {
-                craft_worker_item *item = &worker->item;
-                if (item->load) {
-                    load_chunk(item);
-                }
-                compute_chunk(item);
-                worker->state = CRAFT_WORKER_DONE;
-            }
-        }
     }
     return thrd_success;
 }
@@ -104,7 +99,49 @@ int cnd_signal(cnd_t *cond) {
 int cnd_wait(cnd_t *cond, mtx_t *mtx) {
     (void)mtx;
     if (cond) {
-        cond->signaled = 0;
+        return cond->signaled ? thrd_success : thrd_busy;
     }
     return thrd_success;
+}
+
+void craft_thread_pump(int max_jobs) {
+    int jobs = 0;
+    int scanned = 0;
+
+    if (max_jobs <= 0) {
+        max_jobs = 1;
+    }
+    while (g_worker_count > 0 && scanned < g_worker_count && jobs < max_jobs) {
+        int index = g_worker_rr_cursor % g_worker_count;
+        craft_worker *worker = g_workers[index];
+        craft_worker_item *item;
+
+        g_worker_rr_cursor = (index + 1) % g_worker_count;
+        scanned += 1;
+        if (!worker || worker->state != CRAFT_WORKER_BUSY) {
+            continue;
+        }
+        if (!worker->cnd.signaled) {
+            continue;
+        }
+
+        item = &worker->item;
+        if (item->load) {
+            load_chunk(item);
+        }
+        compute_chunk(item);
+        worker->state = CRAFT_WORKER_DONE;
+        worker->cnd.signaled = 0;
+        jobs += 1;
+    }
+}
+
+void craft_thread_reset(void) {
+    g_worker_rr_cursor = 0;
+    for (int i = 0; i < g_worker_count; ++i) {
+        if (g_workers[i]) {
+            g_workers[i]->state = CRAFT_WORKER_IDLE;
+            g_workers[i]->cnd.signaled = 0;
+        }
+    }
 }

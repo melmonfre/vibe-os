@@ -93,13 +93,15 @@ static struct craft_texture g_textures[CRAFT_MAX_TEXTURES];
 static struct craft_program g_programs[CRAFT_MAX_PROGRAMS];
 static struct craft_attrib_state g_attribs[8];
 static uint8_t *g_framebuffer = NULL;
+static uint8_t *g_blitbuffer = NULL;
 static float *g_depthbuffer = NULL;
 static int g_fb_width = 0;
 static int g_fb_height = 0;
 static int g_output_width = 0;
 static int g_output_height = 0;
-static uint8_t g_saved_palette[256 * 3];
-static int g_saved_palette_valid = 0;
+static uint8_t g_desktop_palette[256 * 3];
+static uint8_t g_palette_lut[256];
+static int g_desktop_palette_valid = 0;
 static GLuint g_next_shader_id = 1u;
 static GLuint g_next_buffer_id = 1u;
 static GLuint g_next_texture_id = 1u;
@@ -128,6 +130,10 @@ static int g_reported_alloc_failure = 0;
 
 #define CRAFT_MIN_RENDER_WIDTH 200
 #define CRAFT_MIN_RENDER_HEIGHT 150
+
+static void craft_rebuild_blitbuffer(void);
+static void craft_store_pixel_index(int index, uint8_t color);
+static void craft_fill_span(int y, int x0, int x1, uint8_t color);
 
 static int craft_choose_render_dim(int output, int minimum, int maximum) {
     int value = output;
@@ -234,7 +240,7 @@ static void craft_plot(int x, int y, float depth, float r, float g, float b, flo
     }
 
     if (g_enable_logic_op) {
-        g_framebuffer[index] ^= 0xFFu;
+        craft_store_pixel_index(index, (uint8_t)(g_framebuffer[index] ^ 0xFFu));
         return;
     }
 
@@ -244,17 +250,91 @@ static void craft_plot(int x, int y, float depth, float r, float g, float b, flo
         g = g * a + dg * (1.0f - a);
         b = b * a + db * (1.0f - a);
     }
-    g_framebuffer[index] = craft_rgb_to_index(r, g, b);
+    craft_store_pixel_index(index, craft_rgb_to_index(r, g, b));
 }
 
-static void craft_make_rgb332_palette(void) {
-    uint8_t palette[256 * 3];
-    for (int i = 0; i < 256; ++i) {
-        palette[i * 3 + 0] = (uint8_t)((((i >> 5) & 0x07) * 255) / 7);
-        palette[i * 3 + 1] = (uint8_t)((((i >> 2) & 0x07) * 255) / 7);
-        palette[i * 3 + 2] = (uint8_t)(((i & 0x03) * 255) / 3);
+static int craft_palette_distance_sq(int r1, int g1, int b1,
+                                     int r2, int g2, int b2) {
+    int dr = r1 - r2;
+    int dg = g1 - g2;
+    int db = b1 - b2;
+    return dr * dr + dg * dg + db * db;
+}
+
+static void craft_rebuild_blitbuffer(void) {
+    size_t pixel_count;
+
+    if (!g_framebuffer || !g_blitbuffer || g_fb_width <= 0 || g_fb_height <= 0) {
+        return;
     }
-    (void)sys_gfx_set_palette(palette);
+
+    pixel_count = (size_t)g_fb_width * (size_t)g_fb_height;
+    for (size_t i = 0; i < pixel_count; ++i) {
+        g_blitbuffer[i] = g_palette_lut[g_framebuffer[i]];
+    }
+}
+
+static void craft_store_pixel_index(int index, uint8_t color) {
+    if (!g_framebuffer || !g_blitbuffer || index < 0) {
+        return;
+    }
+
+    g_framebuffer[index] = color;
+    g_blitbuffer[index] = g_palette_lut[color];
+}
+
+static void craft_fill_span(int y, int x0, int x1, uint8_t color) {
+    size_t offset;
+    size_t count;
+    uint8_t mapped;
+
+    if (!g_framebuffer || !g_blitbuffer || y < 0 || y >= g_fb_height || x1 <= x0) {
+        return;
+    }
+
+    offset = (size_t)y * (size_t)g_fb_width + (size_t)x0;
+    count = (size_t)(x1 - x0);
+    mapped = g_palette_lut[color];
+    memset(g_framebuffer + offset, color, count);
+    memset(g_blitbuffer + offset, mapped, count);
+}
+
+static void craft_refresh_palette_lut(void) {
+    if (!g_desktop_palette_valid) {
+        g_desktop_palette_valid = (sys_gfx_get_palette(g_desktop_palette) == 0);
+    }
+    if (!g_desktop_palette_valid) {
+        for (int i = 0; i < 256; ++i) {
+            g_palette_lut[i] = (uint8_t)i;
+        }
+        craft_rebuild_blitbuffer();
+        return;
+    }
+
+    for (int i = 0; i < 256; ++i) {
+        int r = (((i >> 5) & 0x07) * 255) / 7;
+        int g = (((i >> 2) & 0x07) * 255) / 7;
+        int b = ((i & 0x03) * 255) / 3;
+        int best_index = 0;
+        int best_distance = 0x7fffffff;
+
+        for (int j = 0; j < 256; ++j) {
+            int base = j * 3;
+            int distance = craft_palette_distance_sq(r, g, b,
+                                                     g_desktop_palette[base + 0],
+                                                     g_desktop_palette[base + 1],
+                                                     g_desktop_palette[base + 2]);
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_index = j;
+                if (distance == 0) {
+                    break;
+                }
+            }
+        }
+        g_palette_lut[i] = (uint8_t)best_index;
+    }
+    craft_rebuild_blitbuffer();
 }
 
 static void craft_gl_reset_state(void) {
@@ -280,7 +360,6 @@ static void craft_gl_reset_state(void) {
 }
 
 void craft_gl_init_window(int width, int height) {
-    size_t pixel_count;
     int render_width;
     int render_height;
 
@@ -295,8 +374,8 @@ void craft_gl_init_window(int width, int height) {
     render_height = craft_choose_render_dim(height, CRAFT_MIN_RENDER_HEIGHT, height);
 
     if (render_width == g_fb_width && render_height == g_fb_height && g_framebuffer && g_depthbuffer) {
-        if (!g_saved_palette_valid) {
-            g_saved_palette_valid = (sys_gfx_get_palette(g_saved_palette) == 0);
+        if (!g_desktop_palette_valid) {
+            craft_refresh_palette_lut();
         }
         craft_gl_reset_state();
         return;
@@ -307,6 +386,10 @@ void craft_gl_init_window(int width, int height) {
         free(g_framebuffer);
         g_framebuffer = NULL;
     }
+    if (g_blitbuffer) {
+        free(g_blitbuffer);
+        g_blitbuffer = NULL;
+    }
     if (g_depthbuffer) {
         craft_gl_debug("craft: gl free depth");
         free(g_depthbuffer);
@@ -314,24 +397,28 @@ void craft_gl_init_window(int width, int height) {
     }
     g_fb_width = render_width;
     g_fb_height = render_height;
-    pixel_count = (size_t)render_width * (size_t)render_height;
     craft_gl_debug("craft: gl alloc framebuffer");
-    g_framebuffer = (uint8_t *)malloc(pixel_count);
+    g_framebuffer = (uint8_t *)malloc((size_t)render_width * (size_t)render_height);
+    g_blitbuffer = (uint8_t *)malloc((size_t)render_width * (size_t)render_height);
     craft_gl_debug("craft: gl alloc depth");
-    g_depthbuffer = (float *)malloc(sizeof(float) * pixel_count);
-    if (!g_framebuffer || !g_depthbuffer) {
+    g_depthbuffer = (float *)malloc(sizeof(float) * (size_t)render_width * (size_t)render_height);
+    if (!g_framebuffer || !g_blitbuffer || !g_depthbuffer) {
         craft_report_alloc_failure("craft: alloc failed framebuffer/depth");
     }
     if (g_framebuffer) {
         craft_gl_debug("craft: gl clear framebuffer");
-        memset(g_framebuffer, 0, pixel_count);
+        memset(g_framebuffer, 0, (size_t)render_width * (size_t)render_height);
+    }
+    if (g_blitbuffer) {
+        memset(g_blitbuffer, 0, (size_t)render_width * (size_t)render_height);
     }
     if (g_depthbuffer) {
         craft_gl_debug("craft: gl clear depth");
-        for (size_t i = 0; i < pixel_count; ++i) {
+        for (size_t i = 0; i < (size_t)render_width * (size_t)render_height; ++i) {
             g_depthbuffer[i] = 1.0e30f;
         }
     }
+    craft_refresh_palette_lut();
     craft_gl_debug("craft: gl reset state");
     craft_gl_reset_state();
     craft_gl_debug("craft: gl init done");
@@ -352,18 +439,23 @@ void craft_gl_present(void) {
     }
 }
 
-void craft_gl_blit_to(int x, int y) {
+void craft_gl_blit_to(int x, int y, int width, int height) {
     if (!g_framebuffer || g_fb_width <= 0 || g_fb_height <= 0) {
         return;
     }
-    craft_make_rgb332_palette();
-    sys_gfx_blit8_present(g_framebuffer, g_fb_width, g_fb_height, x, y, 1);
+    if (!g_blitbuffer) {
+        return;
+    }
+
+    if (width == g_fb_width && height == g_fb_height) {
+        sys_gfx_blit8(g_blitbuffer, g_fb_width, g_fb_height, x, y, 1);
+    } else {
+        sys_gfx_blit8_stretch(g_blitbuffer, g_fb_width, g_fb_height, x, y, width, height);
+    }
 }
 
 void craft_gl_shutdown_window(void) {
-    if (g_saved_palette_valid) {
-        (void)sys_gfx_set_palette(g_saved_palette);
-    }
+    g_desktop_palette_valid = 0;
 }
 
 static struct craft_program *craft_program(GLuint id) {
@@ -477,7 +569,7 @@ static float craft_edge(float ax, float ay, float bx, float by, float px, float 
 static void craft_fill_gradient(float timer) {
     int width = g_fb_width;
     int height = g_fb_height;
-    if (!g_framebuffer) {
+    if (!g_framebuffer || !g_blitbuffer) {
         return;
     }
     for (int y = 0; y < height; ++y) {
@@ -487,7 +579,7 @@ static void craft_fill_gradient(float timer) {
         float g = craft_clampf(0.35f + 0.35f * (1.0f - t), 0.0f, 1.0f);
         float b = craft_clampf(0.65f + 0.30f * (1.0f - t), 0.0f, 1.0f);
         uint8_t color = craft_rgb_to_index(r, g, b);
-        memset(g_framebuffer + (size_t)y * (size_t)width, color, (size_t)width);
+        craft_fill_span(y, 0, width, color);
     }
 }
 
@@ -818,12 +910,12 @@ void glClear(GLbitfield mask) {
             int x1 = craft_clampi(g_scissor_x + g_scissor_w, 0, g_fb_width);
             int y1 = craft_clampi(g_scissor_y + g_scissor_h, 0, g_fb_height);
             for (int y = y0; y < y1; ++y) {
-                memset(g_framebuffer + (size_t)y * (size_t)g_fb_width + (size_t)x0,
-                       color,
-                       (size_t)(x1 - x0));
+                craft_fill_span(y, x0, x1, color);
             }
         } else {
-            memset(g_framebuffer, color, (size_t)g_fb_width * (size_t)g_fb_height);
+            for (int y = 0; y < g_fb_height; ++y) {
+                craft_fill_span(y, 0, g_fb_width, color);
+            }
         }
     }
     if (mask & GL_DEPTH_BUFFER_BIT) {

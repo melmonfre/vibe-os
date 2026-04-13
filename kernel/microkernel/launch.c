@@ -13,6 +13,39 @@ struct mk_launch_record {
 
 static struct mk_launch_record g_launch_records[MK_LAUNCH_SLOTS];
 
+#define MK_LAUNCH_FLAG_USER_MASK \
+    (MK_LAUNCH_FLAG_USER_SHELL | MK_LAUNCH_FLAG_USER_DESKTOP | MK_LAUNCH_FLAG_USER_APP)
+
+static int mk_launch_validate_argv_data(const struct mk_launch_descriptor *descriptor) {
+    uint32_t arg_index;
+    uint32_t offset = 0u;
+
+    if (descriptor->argc > MK_LAUNCH_ARGC_MAX) {
+        return -1;
+    }
+    if (descriptor->argc == 0u) {
+        return 0;
+    }
+
+    for (arg_index = 0u; arg_index < descriptor->argc; ++arg_index) {
+        uint32_t start = offset;
+
+        while (offset < MK_LAUNCH_ARGV_BYTES &&
+               descriptor->argv_data[offset] != '\0') {
+            offset += 1u;
+        }
+        if (offset >= MK_LAUNCH_ARGV_BYTES) {
+            return -1;
+        }
+        if (offset == start) {
+            return -1;
+        }
+        offset += 1u;
+    }
+
+    return 0;
+}
+
 void mk_launch_init(void) {
     memset(g_launch_records, 0, sizeof(g_launch_records));
 }
@@ -38,10 +71,21 @@ int mk_launch_validate_descriptor(const struct mk_launch_descriptor *descriptor)
         descriptor->service_type == MK_SERVICE_NONE) {
         return -1;
     }
+    if (descriptor->kind != MK_LAUNCH_KIND_SERVICE &&
+        descriptor->service_type != MK_SERVICE_NONE) {
+        return -1;
+    }
     if (descriptor->task_class > MK_TASK_CLASS_VIDEO_CONTROL) {
         return -1;
     }
     if (descriptor->stack_size != 0u && descriptor->stack_size < 1024u) {
+        return -1;
+    }
+    if (mk_launch_validate_argv_data(descriptor) != 0) {
+        return -1;
+    }
+    if (descriptor->kind != MK_LAUNCH_KIND_USER &&
+        (descriptor->flags & MK_LAUNCH_FLAG_USER_MASK) != 0u) {
         return -1;
     }
 

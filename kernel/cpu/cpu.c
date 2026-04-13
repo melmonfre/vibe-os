@@ -145,6 +145,78 @@ static void cpu_cpuid(uint32_t leaf, uint32_t *eax, uint32_t *ebx, uint32_t *ecx
     if (edx) *edx = d;
 }
 
+static void cpu_cpuid_count(uint32_t leaf,
+                            uint32_t subleaf,
+                            uint32_t *eax,
+                            uint32_t *ebx,
+                            uint32_t *ecx,
+                            uint32_t *edx) {
+    uint32_t a;
+    uint32_t b;
+    uint32_t c;
+    uint32_t d;
+
+    __asm__ volatile("cpuid"
+                     : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+                     : "a"(leaf), "c"(subleaf)
+                     : "cc");
+
+    if (eax) *eax = a;
+    if (ebx) *ebx = b;
+    if (ecx) *ecx = c;
+    if (edx) *edx = d;
+}
+
+static uint32_t cpu_cpuid_max_basic_leaf(void) {
+    uint32_t eax = 0u;
+
+    cpu_cpuid(0u, &eax, NULL, NULL, NULL);
+    return eax;
+}
+
+static uint32_t cpu_cpuid_max_extended_leaf(void) {
+    uint32_t eax = 0u;
+
+    cpu_cpuid(0x80000000u, &eax, NULL, NULL, NULL);
+    return eax;
+}
+
+static void cpu_apply_topology_leaf(uint32_t leaf, uint32_t *logical_out, uint32_t *cores_out) {
+    uint32_t smt_width = 0u;
+    uint32_t package_width = 0u;
+
+    for (uint32_t subleaf = 0u; subleaf < 8u; ++subleaf) {
+        uint32_t eax;
+        uint32_t ebx;
+        uint32_t ecx_level;
+        uint32_t level_type;
+
+        cpu_cpuid_count(leaf, subleaf, &eax, &ebx, &ecx_level, NULL);
+        if (ebx == 0u) {
+            break;
+        }
+
+        level_type = (ecx_level >> 8) & 0xFFu;
+        if (level_type == 1u) {
+            smt_width = ebx & 0xFFFFu;
+        } else if (level_type == 2u) {
+            package_width = ebx & 0xFFFFu;
+        } else if (level_type == 0u) {
+            break;
+        }
+    }
+
+    if (package_width != 0u) {
+        *logical_out = package_width;
+        if (smt_width != 0u && package_width >= smt_width) {
+            uint32_t cores = package_width / smt_width;
+            if (cores != 0u) {
+                *cores_out = cores;
+            }
+        }
+    }
+}
+
 static void cpu_try_enable_sse(void) {
     uint32_t cr0;
     uint32_t cr4;
@@ -516,6 +588,8 @@ void cpu_init(void) {
     uint32_t ebx = 0u;
     uint32_t ecx = 0u;
     uint32_t edx = 0u;
+    uint32_t max_basic_leaf = 0u;
+    uint32_t max_extended_leaf = 0u;
     uint32_t boot_cpu_id = 0u;
     uint32_t mp_cpu_count = 0u;
 
@@ -547,13 +621,15 @@ void cpu_init(void) {
     }
 
     if (g_cpu_topology.cpuid_supported) {
+        max_basic_leaf = cpu_cpuid_max_basic_leaf();
+        max_extended_leaf = cpu_cpuid_max_extended_leaf();
         cpu_cpuid(0u, &eax, &ebx, &ecx, &edx);
         ((uint32_t *)g_cpu_topology.vendor)[0] = ebx;
         ((uint32_t *)g_cpu_topology.vendor)[1] = edx;
         ((uint32_t *)g_cpu_topology.vendor)[2] = ecx;
         g_cpu_topology.vendor[12] = '\0';
 
-        if (eax >= 1u) {
+        if (max_basic_leaf >= 1u) {
             uint32_t base_family;
             uint32_t base_model;
             uint32_t ext_family;
@@ -583,8 +659,17 @@ void cpu_init(void) {
             g_cpu_topology.boot_cpu_id = (ebx >> 24) & 0xFFu;
         }
 
-        cpu_cpuid(0u, &eax, &ebx, &ecx, &edx);
-        if (eax >= 4u &&
+        if (max_basic_leaf >= 0x1Fu) {
+            cpu_apply_topology_leaf(0x1Fu,
+                                    &g_cpu_topology.cpuid_logical_cpus,
+                                    &g_cpu_topology.cpuid_core_cpus);
+        } else if (max_basic_leaf >= 0x0Bu) {
+            cpu_apply_topology_leaf(0x0Bu,
+                                    &g_cpu_topology.cpuid_logical_cpus,
+                                    &g_cpu_topology.cpuid_core_cpus);
+        }
+
+        if (max_basic_leaf >= 4u &&
             g_cpu_topology.vendor[0] == 'G' &&
             g_cpu_topology.vendor[1] == 'e' &&
             g_cpu_topology.vendor[2] == 'n') {
@@ -593,6 +678,22 @@ void cpu_init(void) {
                 uint32_t cores = ((eax >> 26) & 0x3Fu) + 1u;
                 if (cores > g_cpu_topology.cpuid_core_cpus) {
                     g_cpu_topology.cpuid_core_cpus = cores;
+                }
+            }
+        }
+        if (max_extended_leaf >= 0x80000008u &&
+            g_cpu_topology.vendor[0] == 'A' &&
+            g_cpu_topology.vendor[1] == 'u' &&
+            g_cpu_topology.vendor[2] == 't') {
+            cpu_cpuid(0x80000008u, &eax, &ebx, &ecx, &edx);
+            if ((ecx & 0xFFu) != 0u) {
+                uint32_t amd_cores = (ecx & 0xFFu) + 1u;
+
+                if (amd_cores > g_cpu_topology.cpuid_core_cpus) {
+                    g_cpu_topology.cpuid_core_cpus = amd_cores;
+                }
+                if (g_cpu_topology.cpuid_logical_cpus < amd_cores) {
+                    g_cpu_topology.cpuid_logical_cpus = amd_cores;
                 }
             }
         }

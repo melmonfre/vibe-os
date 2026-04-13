@@ -236,6 +236,13 @@ process_t *process_create_with_stack(void (*entry)(void),
     p->wait_event_class = TASK_WAIT_CLASS_NONE;
     p->wait_owner_service = 0u;
     p->wake_boost_budget = 0u;
+    p->abi_kind = PROCESS_ABI_UNKNOWN;
+    p->abi_version = 0u;
+    p->abi_osabi = 0u;
+    p->abi_machine = 0u;
+    p->image_base = 0u;
+    p->image_size = 0u;
+    p->entry_point = (uintptr_t)entry;
     p->wait_next = 0;
     p->next = NULL;
 
@@ -261,6 +268,27 @@ void process_terminate(process_t *proc) {
     proc->current_cpu = -1;
     proc->preferred_cpu = -1;
     proc->last_start_tick = 0u;
+}
+
+void process_set_abi_metadata(process_t *proc,
+                              uint32_t abi_kind,
+                              uint32_t abi_version,
+                              uint32_t abi_osabi,
+                              uint32_t abi_machine,
+                              uintptr_t image_base,
+                              uint32_t image_size,
+                              uintptr_t entry_point) {
+    if (proc == NULL) {
+        return;
+    }
+
+    proc->abi_kind = abi_kind;
+    proc->abi_version = abi_version;
+    proc->abi_osabi = abi_osabi;
+    proc->abi_machine = abi_machine;
+    proc->image_base = image_base;
+    proc->image_size = image_size;
+    proc->entry_point = entry_point;
 }
 
 void process_destroy(process_t *proc) {

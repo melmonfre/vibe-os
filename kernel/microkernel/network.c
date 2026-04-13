@@ -651,10 +651,12 @@ static int mk_network_socket_valid_type(uint32_t type) {
 }
 
 static uint16_t mk_network_pci_io_base(uint32_t bar_value) {
-    if ((bar_value & 0x1u) == 0u) {
+    uintptr_t io_base = kernel_pci_io_bar_base(bar_value);
+
+    if (io_base == 0u || io_base > 0xFFFFu) {
         return 0u;
     }
-    return (uint16_t)(bar_value & 0xfffcu);
+    return (uint16_t)io_base;
 }
 
 static uint32_t mk_network_align_up_u32(uint32_t value, uint32_t align) {
@@ -1262,10 +1264,55 @@ static void mk_network_probe_virtio_legacy_config(struct mk_network_pci_probe_st
     mk_network_probe_virtio_legacy_queues(probe);
 }
 
+struct mk_network_pci_alias {
+    uint16_t vendor_id;
+    uint16_t device_id;
+    const char *if_name;
+    const char *backend_name;
+};
+
+static int mk_network_match_pci_alias(const struct kernel_pci_device_info *info,
+                                      const struct mk_network_pci_alias *aliases,
+                                      uint32_t alias_count,
+                                      const char **if_name_out,
+                                      const char **backend_name_out) {
+    uint32_t i;
+
+    if (info == 0 || aliases == 0 || if_name_out == 0 || backend_name_out == 0) {
+        return 0;
+    }
+
+    for (i = 0u; i < alias_count; ++i) {
+        if (aliases[i].vendor_id == info->vendor_id &&
+            aliases[i].device_id == info->device_id) {
+            *if_name_out = aliases[i].if_name;
+            *backend_name_out = aliases[i].backend_name;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static void mk_network_select_pci_backend(const struct kernel_pci_device_info *info,
                                           struct mk_network_pci_probe_state *probe) {
     const char *if_name = "eth0";
     const char *backend_name = "compat-pci-pending";
+    static const struct mk_network_pci_alias rtl81x9_aliases[] = {
+        { 0x13D1u, 0xAB06u, "rl0", "compat-rtl81x9" },
+        { 0x1113u, 0x1211u, "rl0", "compat-rtl81x9" },
+        { 0x1500u, 0x1360u, "rl0", "compat-rtl81x9" },
+        { 0x1259u, 0xA117u, "rl0", "compat-rtl81x9" },
+        { 0x10ECu, 0x8129u, "rl0", "compat-rtl8129" },
+        { 0x10ECu, 0x8138u, "rl0", "compat-rtl81x9" },
+        { 0x10ECu, 0x8139u, "rl0", "compat-rtl81x9" },
+        { 0x1186u, 0x1300u, "rl0", "compat-rtl81x9" },
+        { 0x1186u, 0x1340u, "rl0", "compat-rtl81x9" },
+        { 0x11ADu, 0xC115u, "rl0", "compat-rtl81x9" },
+        { 0x11F6u, 0x1401u, "rl0", "compat-rtl81x9" },
+        { 0x14EAu, 0xAB06u, "rl0", "compat-rtl81x9" },
+        { 0x4033u, 0x1360u, "rl0", "compat-rtl81x9" }
+    };
     int is_wifi = 0;
 
     if (info == 0 || probe == 0) {
@@ -1284,7 +1331,12 @@ static void mk_network_select_pci_backend(const struct kernel_pci_device_info *i
         backend_name = "compat-virtio";
     }
     /* Intel Ethernet */
-    else if (info->vendor_id == 0x8086u) {
+    else if (mk_network_match_pci_alias(info,
+                                        rtl81x9_aliases,
+                                        sizeof(rtl81x9_aliases) / sizeof(rtl81x9_aliases[0]),
+                                        &if_name,
+                                        &backend_name)) {
+    } else if (info->vendor_id == 0x8086u) {
         if_name = "em0";
         backend_name = "compat-em";
     }
@@ -1866,6 +1918,17 @@ static int mk_network_local_handler(const struct mk_message *request,
     return 0;
 }
 
+static int mk_network_service_launch_deferred(void) {
+    return mk_service_launch_task(MK_SERVICE_NETWORK,
+                                  "network",
+                                  mk_network_local_handler,
+                                  0,
+                                  userland_network_service_entry,
+                                  8192u,
+                                  MK_LAUNCH_FLAG_BOOTSTRAP |
+                                  MK_LAUNCH_FLAG_BUILTIN);
+}
+
 void mk_network_service_init(void) {
     memset(&g_last_network_request, 0, sizeof(g_last_network_request));
     memset(&g_last_network_reply, 0, sizeof(g_last_network_reply));
@@ -1938,15 +2001,8 @@ void mk_network_service_init(void) {
     mk_network_log_probe();
 
     network_queue_set_ready_event_callback(mk_network_queue_ready_callback);
-
-    (void)mk_service_launch_task(MK_SERVICE_NETWORK,
-                                 "network",
-                                 mk_network_local_handler,
-                                 0,
-                                 userland_network_service_entry,
-                                 8192u,
-                                 MK_LAUNCH_FLAG_BOOTSTRAP |
-                                 MK_LAUNCH_FLAG_BUILTIN);
+    (void)mk_service_register_deferred_launcher(MK_SERVICE_NETWORK,
+                                                mk_network_service_launch_deferred);
 }
 
 int mk_network_service_ready(void) {

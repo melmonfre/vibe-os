@@ -8,6 +8,16 @@ static void editor_set_status(struct editor_state *ed, const char *msg) {
     str_copy_limited(ed->status, msg, (int)sizeof(ed->status));
 }
 
+static void editor_debug_path(const char *prefix, const char *path) {
+    char msg[160];
+
+    msg[0] = '\0';
+    str_append(msg, prefix, (int)sizeof(msg));
+    str_append(msg, path ? path : "(null)", (int)sizeof(msg));
+    str_append(msg, "\n", (int)sizeof(msg));
+    sys_write_debug(msg);
+}
+
 static int editor_default_parent(void) {
     int docs = fs_resolve("/docs");
     if (docs >= 0 && g_fs_nodes[docs].is_dir) {
@@ -76,11 +86,13 @@ static int editor_create_default_file(struct editor_state *ed) {
 
     if (fs_write_file(path, ed->buffer, 0) != 0) {
         editor_set_status(ed, "Erro ao salvar");
+        editor_debug_path("editor: save failed path=", path);
         return 0;
     }
 
     ed->file_node = fs_resolve(path);
     editor_set_status(ed, "Arquivo salvo");
+    editor_debug_path("editor: save ok path=", path);
     return ed->file_node >= 0;
 }
 
@@ -89,17 +101,20 @@ static int editor_save_to_path(struct editor_state *ed, const char *path) {
 
     if (fs_write_file(path, ed->buffer, 0) != 0) {
         editor_set_status(ed, "Erro ao salvar");
+        editor_debug_path("editor: save failed path=", path);
         return 0;
     }
 
     node = fs_resolve(path);
     if (node < 0 || g_fs_nodes[node].is_dir) {
         editor_set_status(ed, "Erro ao salvar");
+        editor_debug_path("editor: save failed path=", path);
         return 0;
     }
 
     ed->file_node = node;
     editor_set_status(ed, "Arquivo salvo");
+    editor_debug_path("editor: save ok path=", path);
     return 1;
 }
 
@@ -143,6 +158,11 @@ int editor_load_node(struct editor_state *ed, int node) {
     ed->buffer[ed->length] = '\0';
     ed->cursor = ed->length;
     editor_set_status(ed, "Arquivo aberto");
+    {
+        char path[80];
+        fs_build_path(node, path, sizeof(path));
+        editor_debug_path("editor: load ok path=", path);
+    }
     return 1;
 }
 

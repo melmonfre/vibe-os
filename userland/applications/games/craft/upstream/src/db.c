@@ -173,10 +173,7 @@ void db_commit() {
     if (!db_enabled) {
         return;
     }
-    mtx_lock(&mtx);
-    ring_put_commit(&ring);
-    cnd_signal(&cnd);
-    mtx_unlock(&mtx);
+    _db_commit();
 }
 
 void _db_commit() {
@@ -316,10 +313,7 @@ void db_insert_block(int p, int q, int x, int y, int z, int w) {
     if (!db_enabled) {
         return;
     }
-    mtx_lock(&mtx);
-    ring_put_block(&ring, p, q, x, y, z, w);
-    cnd_signal(&cnd);
-    mtx_unlock(&mtx);
+    _db_insert_block(p, q, x, y, z, w);
 }
 
 void _db_insert_block(int p, int q, int x, int y, int z, int w) {
@@ -337,10 +331,7 @@ void db_insert_light(int p, int q, int x, int y, int z, int w) {
     if (!db_enabled) {
         return;
     }
-    mtx_lock(&mtx);
-    ring_put_light(&ring, p, q, x, y, z, w);
-    cnd_signal(&cnd);
-    mtx_unlock(&mtx);
+    _db_insert_light(p, q, x, y, z, w);
 }
 
 void _db_insert_light(int p, int q, int x, int y, int z, int w) {
@@ -472,10 +463,7 @@ void db_set_key(int p, int q, int key) {
     if (!db_enabled) {
         return;
     }
-    mtx_lock(&mtx);
-    ring_put_key(&ring, p, q, key);
-    cnd_signal(&cnd);
-    mtx_unlock(&mtx);
+    _db_set_key(p, q, key);
 }
 
 void _db_set_key(int p, int q, int key) {
@@ -487,29 +475,22 @@ void _db_set_key(int p, int q, int key) {
 }
 
 void db_worker_start(char *path) {
+    (void)path;
     if (!db_enabled) {
         return;
     }
-    ring_alloc(&ring, 1024);
     mtx_init(&mtx, mtx_plain);
     mtx_init(&load_mtx, mtx_plain);
     cnd_init(&cnd);
-    thrd_create(&thrd, db_worker_run, path);
 }
 
 void db_worker_stop() {
     if (!db_enabled) {
         return;
     }
-    mtx_lock(&mtx);
-    ring_put_exit(&ring);
-    cnd_signal(&cnd);
-    mtx_unlock(&mtx);
-    thrd_join(thrd, NULL);
     cnd_destroy(&cnd);
     mtx_destroy(&load_mtx);
     mtx_destroy(&mtx);
-    ring_free(&ring);
 }
 
 int db_worker_run(void *arg) {

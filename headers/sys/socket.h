@@ -48,6 +48,18 @@ typedef uint8_t sa_family_t;
 #define AF_LINK        18
 #define AF_MAX         37
 
+#define PF_UNSPEC      AF_UNSPEC
+#define PF_LOCAL       AF_LOCAL
+#define PF_UNIX        AF_UNIX
+#define PF_INET        AF_INET
+#define PF_INET6       AF_INET6
+
+#define SOMAXCONN      128
+
+#define SHUT_RD        0
+#define SHUT_WR        1
+#define SHUT_RDWR      2
+
 #define MSG_OOB        0x0001
 #define MSG_PEEK       0x0002
 #define MSG_DONTROUTE  0x0004
@@ -86,5 +98,18 @@ struct cmsghdr {
     int cmsg_level;
     int cmsg_type;
 };
+
+int socket(int domain, int type, int protocol);
+int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+int listen(int sockfd, int backlog);
+int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+ssize_t send(int sockfd, const void *buf, size_t len, int flags);
+ssize_t recv(int sockfd, void *buf, size_t len, int flags);
+ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags);
+ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags);
+int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
+int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen);
+int shutdown(int sockfd, int how);
 
 #endif

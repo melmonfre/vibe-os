@@ -32,7 +32,7 @@
 #define DESKTOP_NETWORK_PROFILE_MAX 4
 #define DESKTOP_STARTUP_SOUND_DELAY_TICKS 80u
 #define DESKTOP_STARTUP_SOUND_SECONDARY_DELAY_TICKS 180u
-#define DESKTOP_STARTUP_RUNTIME_HELPER_DELAY_TICKS 1200u
+#define DESKTOP_STARTUP_RUNTIME_HELPER_DELAY_TICKS 3000u
 #define DESKTOP_STARTUP_STORAGE_RELEASE_DELAY_TICKS 6000u
 #define DESKTOP_PRESENT_RETRY_TICKS 4u
 #define DESKTOP_PRESENT_BACKPRESSURE_TICKS 1u
@@ -5536,25 +5536,6 @@ static uint32_t start_menu_entry_restart_service_type(const struct start_menu_en
     return MK_SERVICE_NONE;
 }
 
-static int start_menu_entry_is_detached_game_app(const struct start_menu_entry *entry) {
-    const char *cmd;
-
-    if (!entry || entry->type != APP_TERMINAL || entry->tab != START_MENU_TAB_GAMES) {
-        return 0;
-    }
-    cmd = entry->command;
-    if (!cmd || cmd[0] == '\0') {
-        return 0;
-    }
-    while (*cmd) {
-        if (*cmd == ' ' || *cmd == '\t') {
-            return 0;
-        }
-        ++cmd;
-    }
-    return 1;
-}
-
 static int launch_start_menu_entry(const struct start_menu_entry *entry, int *focused) {
     uint32_t restart_service_type;
 
@@ -5565,11 +5546,12 @@ static int launch_start_menu_entry(const struct start_menu_entry *entry, int *fo
         restart_service_type = start_menu_entry_restart_service_type(entry);
         if (restart_service_type != MK_SERVICE_NONE) {
             desktop_arm_restart_smoke(restart_service_type, entry->command, focused);
-        } else if (start_menu_entry_is_detached_game_app(entry)) {
-            if (desktop_launch_detached(1, (char **)&entry->command) != 0) {
-                desktop_request_open_terminal_command(entry->command);
-            }
         } else {
+            /*
+             * BSD/compat entries in the Games tab are terminal programs today.
+             * Running them detached steals the foreground graphics path and
+             * shows up as a black flash instead of a desktop window.
+             */
             desktop_request_open_terminal_command(entry->command);
         }
         return 0;
