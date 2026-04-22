@@ -3973,37 +3973,19 @@ static void mk_audio_compat_apply_mixer_state(void) {
     center_lfe_value = output_value;
 
     if ((output_mask & 0x2u) != 0u || (output_mask & 0x4u) != 0u || (output_mask & 0x8u) != 0u) {
-        output_value |= 0x8000u;
-        headphone_value |= 0x8000u;
-        surround_value |= 0x8000u;
-        center_lfe_value |= 0x8000u;
-
-        switch (g_audio_state.default_output) {
-        case 1u:
-            if ((output_mask & 0x2u) != 0u) {
-                headphone_value &= (uint16_t)~0x8000u;
-            } else {
-                output_value &= (uint16_t)~0x8000u;
-            }
-            break;
-        case 2u:
-            if ((output_mask & 0x4u) != 0u) {
-                surround_value &= (uint16_t)~0x8000u;
-            } else {
-                output_value &= (uint16_t)~0x8000u;
-            }
-            break;
-        case 3u:
-            if ((output_mask & 0x8u) != 0u) {
-                center_lfe_value &= (uint16_t)~0x8000u;
-            } else {
-                output_value &= (uint16_t)~0x8000u;
-            }
-            break;
-        case 0u:
-        default:
+        /*
+         * AC97 codecs on older notebooks are inconsistent about which analog
+         * volume register actually feeds the built-in speakers. Mirroring the
+         * selected gain across all exposed analog paths is safer than muting
+         * the non-default routes and avoids "works elsewhere, silent here"
+         * regressions when the codec advertises headphone/surround paths that
+         * do not line up with the machine's actual speaker wiring.
+         */
+        if (!g_audio_state.output_muted) {
             output_value &= (uint16_t)~0x8000u;
-            break;
+            headphone_value &= (uint16_t)~0x8000u;
+            surround_value &= (uint16_t)~0x8000u;
+            center_lfe_value &= (uint16_t)~0x8000u;
         }
     }
 

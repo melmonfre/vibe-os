@@ -103,6 +103,7 @@ QEMU_AUDIO_LIVE_CONTROLLER ?= intel-hda
 QEMU_AUDIO_LIVE_CODEC ?= hda-output
 QEMU_AUDIO_PROBE_BIN := $(shell if command -v $(QEMU) >/dev/null 2>&1; then printf '%s' '$(QEMU)'; elif command -v qemu-system-x86_64 >/dev/null 2>&1; then printf '%s' 'qemu-system-x86_64'; fi)
 QEMU_AUDIO_HAS_COREAUDIO := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'coreaudio'; then printf '1'; fi)
+QEMU_AUDIO_HAS_PIPEWIRE := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'pipewire'; then printf '1'; fi)
 QEMU_AUDIO_HAS_DBUS := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'dbus'; then printf '1'; fi)
 QEMU_AUDIO_HAS_PA := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'pa'; then printf '1'; fi)
 QEMU_AUDIO_HAS_ALSA := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'alsa'; then printf '1'; fi)
@@ -111,12 +112,14 @@ ifeq ($(QEMU_AUDIO_HAS_COREAUDIO),1)
 QEMU_AUDIO_DRIVER ?= coreaudio
 endif
 else ifeq ($(UNAME_S),Linux)
-ifeq ($(QEMU_AUDIO_HAS_DBUS),1)
-QEMU_AUDIO_DRIVER ?= dbus
+ifeq ($(QEMU_AUDIO_HAS_PIPEWIRE),1)
+QEMU_AUDIO_DRIVER ?= pipewire
 else ifeq ($(QEMU_AUDIO_HAS_PA),1)
 QEMU_AUDIO_DRIVER ?= pa
 else ifeq ($(QEMU_AUDIO_HAS_ALSA),1)
 QEMU_AUDIO_DRIVER ?= alsa
+else ifeq ($(QEMU_AUDIO_HAS_DBUS),1)
+QEMU_AUDIO_DRIVER ?= dbus
 endif
 endif
 ifeq ($(strip $(QEMU_AUDIO_DRIVER)),)
@@ -124,11 +127,13 @@ QEMU_AUDIO_MACHINE_OPTS ?= -machine $(QEMU_RUN_MACHINE)
 QEMU_AUDIO_OPTS ?= -device $(QEMU_AUDIO_DEVICE)
 QEMU_AUDIO_LIVE_OPTS ?= -device $(QEMU_AUDIO_DEVICE)
 QEMU_AUDIO_HDA_LIVE_OPTS ?= -device intel-hda -device hda-duplex
+QEMU_AUDIO_HDA_OUTPUT_LIVE_OPTS ?= -device intel-hda -device hda-output
 else
 QEMU_AUDIO_MACHINE_OPTS ?= -machine $(QEMU_RUN_MACHINE),pcspk-audiodev=snd0
 QEMU_AUDIO_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
-QEMU_AUDIO_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_LIVE_CONTROLLER) -device $(QEMU_AUDIO_LIVE_CODEC),audiodev=snd0
+QEMU_AUDIO_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
 QEMU_AUDIO_HDA_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0
+QEMU_AUDIO_HDA_OUTPUT_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device intel-hda -device hda-output,audiodev=snd0
 endif
 QEMU_RUN_COMMON_AUDIO_OPTS ?= $(QEMU_AUDIO_MACHINE_OPTS) -cpu $(QEMU_RUN_CPU) -smp $(QEMU_RUN_SMP) $(QEMU_RUN_VIDEO_OPTS) $(QEMU_RUN_RTC_OPTS) $(QEMU_RUN_USB_OPTS)
 QEMU_AUDIO_CAPTURE_OPTS ?= -audiodev wav,id=snd0,path=$(QEMU_AUDIO_CAPTURE_WAV) -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
@@ -1869,6 +1874,9 @@ validate-audio-stack-long: $(IMAGE)
 validate-audio-stack-roundtrip: $(IMAGE)
 	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-stack-roundtrip-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --record-ms 1500 --verify-capture-playback
 
+validate-audio-hda-output: $(IMAGE)
+	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-hda-output-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --audio-device intel-hda --audio-device hda-output --expect-backend compat-azalia --skip-capture --verify-playback-path /assets/vibe_os_desktop.wav --require-path-programmed --require-hardware-diag --require-desktop-startup-sound
+
 validate-audio-hda-smoke: $(IMAGE)
 	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-hda-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --audio-device intel-hda --audio-device hda-duplex --expect-backend compat-azalia --skip-capture
 
@@ -1877,6 +1885,18 @@ validate-audio-hda-playback: $(IMAGE)
 
 validate-audio-hda-startup: $(IMAGE)
 	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-hda-startup-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --audio-device intel-hda --audio-device hda-duplex --expect-backend compat-azalia --skip-capture --require-boot-startup-sound --require-desktop-startup-sound
+
+validate-audio-pcspkr-startup: $(IMAGE)
+	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-pcspkr-startup-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --machine 'pc,pcspk-audiodev=snd0' --no-default-audio-device --qemu-arg=-audiodev --qemu-arg=wav,id=snd0,path=build/audio-pcspkr-startup.wav --expect-backend pcspkr --skip-capture --require-boot-startup-sound --require-desktop-startup-sound
+
+validate-audio-matrix: $(IMAGE)
+	$(MAKE) validate-audio-stack
+	$(MAKE) validate-audio-stack-roundtrip
+	$(MAKE) validate-audio-hda-output
+	$(MAKE) validate-audio-hda-smoke
+	$(MAKE) validate-audio-hda-playback
+	$(MAKE) validate-audio-hda-startup
+	$(MAKE) validate-audio-pcspkr-startup
 
 validate-gpu-backends: $(IMAGE)
 	$(PYTHON) tools/validate_gpu_backends.py --image $(IMAGE) --report $(GPU_BACKENDS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)

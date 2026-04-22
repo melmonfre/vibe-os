@@ -32,7 +32,8 @@ class QemuMonitorSession:
                  memory_mb: int,
                  workspace: Path,
                  machine: Optional[str],
-                 audio_devices: List[str]):
+                 audio_devices: List[str],
+                 extra_qemu_args: List[str]):
         self.serial_log = workspace / "serial.log"
         self.monitor_socket = workspace / "monitor.sock"
         self.qmp_socket = workspace / "qmp.sock"
@@ -59,6 +60,7 @@ class QemuMonitorSession:
         ]
         if machine:
             qemu_cmd.extend(["-machine", machine])
+        qemu_cmd.extend(extra_qemu_args)
         for device in audio_devices:
             qemu_cmd.extend(["-device", device])
         qemu_cmd.extend(
@@ -555,6 +557,7 @@ def run_audio_capture_smoke(qemu_binary: str,
                             memory_mb: int,
                             machine: Optional[str],
                             audio_devices: List[str],
+                            extra_qemu_args: List[str],
                             expected_backend: str,
                             require_capture: bool,
                             record_ms: int,
@@ -643,7 +646,13 @@ def run_audio_capture_smoke(qemu_binary: str,
         scenario_image = workspace / "boot.img"
         shutil.copyfile(image_path, scenario_image)
 
-        session = QemuMonitorSession(qemu_binary, scenario_image, memory_mb, workspace, machine, audio_devices)
+        session = QemuMonitorSession(qemu_binary,
+                                     scenario_image,
+                                     memory_mb,
+                                     workspace,
+                                     machine,
+                                     audio_devices,
+                                     extra_qemu_args)
         try:
             if require_boot_startup_sound:
                 session.wait_for_all(
@@ -808,6 +817,13 @@ def main() -> int:
                         action="append",
                         dest="audio_devices",
                         help="QEMU -device entry for audio emulation; may be passed multiple times")
+    parser.add_argument("--no-default-audio-device",
+                        action="store_true",
+                        help="do not inject the default AC97 device when no --audio-device is provided")
+    parser.add_argument("--qemu-arg",
+                        action="append",
+                        default=[],
+                        help="extra raw QEMU argument appended before -device entries; may be passed multiple times")
     parser.add_argument("--expect-backend",
                         default="compat-ac97",
                         help="expected backend marker reported by audiosvc")
@@ -838,13 +854,14 @@ def main() -> int:
                         help="require the boot WAV path to run during bootstrap before startx")
     args = parser.parse_args()
 
-    audio_devices = args.audio_devices if args.audio_devices else ["AC97"]
+    audio_devices = args.audio_devices if args.audio_devices else ([] if args.no_default_audio_device else ["AC97"])
     machine = args.machine if args.machine else None
     result = run_audio_capture_smoke(args.qemu,
                                      Path(args.image),
                                      args.memory_mb,
                                      machine,
                                      audio_devices,
+                                     args.qemu_arg,
                                      args.expect_backend,
                                      not args.skip_capture,
                                      args.record_ms,

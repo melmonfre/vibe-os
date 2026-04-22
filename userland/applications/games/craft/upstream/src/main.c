@@ -1441,6 +1441,8 @@ void ensure_chunks_worker(Player *player, Worker *worker) {
 }
 
 void ensure_chunks(Player *player) {
+    int scheduled = 0;
+
     check_workers();
     force_chunks(player);
     if (g->create_radius <= 0) {
@@ -1451,8 +1453,14 @@ void ensure_chunks(Player *player) {
         mtx_lock(&worker->mtx);
         if (worker->state == WORKER_IDLE) {
             ensure_chunks_worker(player, worker);
+            if (worker->state == WORKER_BUSY) {
+                scheduled++;
+            }
         }
         mtx_unlock(&worker->mtx);
+        if (scheduled >= 1) {
+            break;
+        }
     }
 }
 
