@@ -27,6 +27,8 @@ imageviewer	IMAGEVIEWER_APP_BIN	1	0	/bin/imageviewer
 sketchpad	SKETCHPAD_APP_BIN	1	0	/bin/sketchpad
 snake	SNAKE_APP_BIN	1	0	/bin/snake
 tetris	TETRIS_APP_BIN	1	0	/bin/tetris
+2048	GAME2048_APP_BIN	1	0	/bin/2048
+minesweeper	MINESWEEPER_APP_BIN	1	0	/bin/minesweeper
 adventure	ADVENTURE_APP_BIN	1	0
 arithmetic	ARITHMETIC_APP_BIN	1	0
 atc	ATC_APP_BIN	1	0
@@ -77,29 +79,29 @@ flap_birb	FLAP_BIRB_APP_BIN	1	0	/bin/flap_birb
 doom	DOOM_APP_BIN	1	0	/bin/doom
 craft	CRAFT_APP_BIN	1	0	/bin/craft
 personalize	PERSONALIZE_APP_BIN	1	0	/bin/personalize
-echo	ECHO_APP_BIN	1	1	/compat/bin/echo
-cat	CAT_APP_BIN	1	1	/compat/bin/cat
+echo	ECHO_APP_BIN	1	0	/compat/bin/echo
+cat	CAT_APP_BIN	1	0	/compat/bin/cat
 wc	WC_APP_BIN	1	0	/compat/bin/wc
-pwd	PWD_APP_BIN	1	1	/bin/pwd,/usr/bin/pwd,/compat/bin/pwd
+pwd	PWD_APP_BIN	1	0	/bin/pwd,/usr/bin/pwd,/compat/bin/pwd
 head	HEAD_APP_BIN	1	0	/bin/head,/usr/bin/head,/compat/bin/head
 sleep	SLEEP_APP_BIN	1	0	/bin/sleep,/usr/bin/sleep,/compat/bin/sleep
 rmdir	RMDIR_APP_BIN	1	0	/bin/rmdir,/usr/bin/rmdir,/compat/bin/rmdir
-mkdir	MKDIR_APP_BIN	1	1	/bin/mkdir,/usr/bin/mkdir,/compat/bin/mkdir
+mkdir	MKDIR_APP_BIN	1	0	/bin/mkdir,/usr/bin/mkdir,/compat/bin/mkdir
 tail	TAIL_APP_BIN	1	0	/bin/tail,/usr/bin/tail,/compat/bin/tail
 grep	GREP_APP_BIN	1	0	/bin/grep,/usr/bin/grep,/compat/bin/grep
 sed	SED_APP_BIN	1	0	/bin/sed,/usr/bin/sed,/compat/bin/sed
 loadkeys	LOADKEYS_APP_BIN	1	0	/bin/loadkeys,/compat/bin/loadkeys
-true	TRUE_APP_BIN	1	1	/compat/bin/true
-false	FALSE_APP_BIN	1	1	/compat/bin/false
-printf	PRINTF_APP_BIN	1	1	/compat/bin/printf
-uname	UNAME_APP_BIN	1	1	/bin/uname,/usr/bin/uname,/compat/bin/uname
+true	TRUE_APP_BIN	1	0	/compat/bin/true
+false	FALSE_APP_BIN	1	0	/compat/bin/false
+printf	PRINTF_APP_BIN	1	0	/compat/bin/printf
+uname	UNAME_APP_BIN	1	0	/bin/uname,/usr/bin/uname,/compat/bin/uname
 sync	SYNC_APP_BIN	1	0	/bin/sync,/usr/bin/sync,/compat/bin/sync
 tr	TR_APP_BIN	1	0	/bin/tr,/usr/bin/tr,/compat/bin/tr
-ifconfig	IFCONFIG_APP_BIN	1	1	/sbin/ifconfig,/bin/ifconfig,/usr/sbin/ifconfig,/compat/sbin/ifconfig
-route	ROUTE_APP_BIN	1	1	/sbin/route,/bin/route,/usr/sbin/route,/compat/sbin/route
-netstat	NETSTAT_APP_BIN	1	1	/usr/bin/netstat,/bin/netstat,/compat/bin/netstat
-ping	PING_APP_BIN	1	1	/sbin/ping,/bin/ping,/usr/sbin/ping,/compat/sbin/ping
-host	HOST_APP_BIN	1	1	/usr/bin/host,/bin/host,/compat/bin/host
-dig	DIG_APP_BIN	1	1	/usr/bin/dig,/bin/dig,/compat/bin/dig
-ftp	FTP_APP_BIN	1	1	/usr/bin/ftp,/bin/ftp,/compat/bin/ftp
-curl	CURL_APP_BIN	1	1	/usr/bin/curl,/bin/curl,/compat/bin/curl
+ifconfig	IFCONFIG_APP_BIN	1	0	/sbin/ifconfig,/bin/ifconfig,/usr/sbin/ifconfig,/compat/sbin/ifconfig
+route	ROUTE_APP_BIN	1	0	/sbin/route,/bin/route,/usr/sbin/route,/compat/sbin/route
+netstat	NETSTAT_APP_BIN	1	0	/usr/bin/netstat,/bin/netstat,/compat/bin/netstat
+ping	PING_APP_BIN	1	0	/sbin/ping,/bin/ping,/usr/sbin/ping,/compat/sbin/ping
+host	HOST_APP_BIN	1	0	/usr/bin/host,/bin/host,/compat/bin/host
+dig	DIG_APP_BIN	1	0	/usr/bin/dig,/bin/dig,/compat/bin/dig
+ftp	FTP_APP_BIN	1	0	/usr/bin/ftp,/bin/ftp,/compat/bin/ftp
+curl	CURL_APP_BIN	1	0	/usr/bin/curl,/bin/curl,/compat/bin/curl

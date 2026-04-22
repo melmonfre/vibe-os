@@ -13,6 +13,8 @@
 #include <userland/applications/include/sketchpad.h>
 #include <userland/applications/include/games/snake.h>
 #include <userland/applications/include/games/tetris.h>
+#include <userland/applications/include/games/game_2048.h>
+#include <userland/applications/include/games/minesweeper.h>
 #include <userland/applications/include/games/pacman.h>
 #include <userland/applications/include/games/space_invaders.h>
 #include <userland/applications/include/games/pong.h>
@@ -73,6 +75,10 @@ static struct snake_state g_snakes[MAX_SNAKES];
 static int g_snake_used[MAX_SNAKES];
 static struct tetris_state g_tetris[MAX_TETRIS];
 static int g_tetris_used[MAX_TETRIS];
+static struct game_2048_state g_2048_games[MAX_2048_GAMES];
+static int g_2048_used[MAX_2048_GAMES];
+static struct minesweeper_state g_minesweepers[MAX_MINESWEEPERS];
+static int g_minesweeper_used[MAX_MINESWEEPERS];
 static struct pacman_state g_pacman[MAX_PACMAN];
 static int g_pacman_used[MAX_PACMAN];
 static struct space_invaders_state g_space_invaders[MAX_SPACE_INVADERS];
@@ -271,6 +277,7 @@ enum desktop_app_action_type {
     DESKTOP_APP_ACTION_SKETCHPAD_EXPORT,
     DESKTOP_APP_ACTION_SKETCHPAD_SELECT_COLOR,
     DESKTOP_APP_ACTION_SKETCHPAD_PAINT,
+    DESKTOP_APP_ACTION_MINESWEEPER_CLICK,
     DESKTOP_APP_ACTION_FLAP_BIRB_CLICK,
     DESKTOP_APP_ACTION_DOOM_CLICK,
     DESKTOP_APP_ACTION_CRAFT_CLICK,
@@ -663,7 +670,6 @@ enum {
     FMENU_COUNT
 };
 enum {
-    START_MENU_ENTRY_COUNT = 68,
     START_MENU_SEARCH_MAX = 24,
     START_MENU_SCROLLBAR_W = 10
 };
@@ -870,16 +876,12 @@ struct start_menu_entry {
     const char *command;
 };
 
-static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT] = {
+static const struct start_menu_entry g_start_menu_entries[] = {
     {"Terminal", "Sistema", APP_TERMINAL, START_MENU_TAB_APPS, 0},
     {"Relogio", "Acessorios", APP_CLOCK, START_MENU_TAB_APPS, 0},
     {"Arquivos", "Sistema", APP_FILEMANAGER, START_MENU_TAB_APPS, 0},
     {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS, 0},
     {"Tasks", "Sistema", APP_TASKMANAGER, START_MENU_TAB_APPS, 0},
-    {"Input restart", "kill input", APP_TERMINAL, START_MENU_TAB_APPS, "kill input"},
-    {"Audio restart", "kill audio", APP_TERMINAL, START_MENU_TAB_APPS, "kill audio"},
-    {"Video restart", "kill video", APP_TERMINAL, START_MENU_TAB_APPS, "kill video"},
-    {"Network restart", "kill network", APP_TERMINAL, START_MENU_TAB_APPS, "kill network"},
     {"Spawn clock", "spawn clock", APP_TERMINAL, START_MENU_TAB_APPS, "spawn clock"},
     {"Rede", "netmgrd status", APP_TERMINAL, START_MENU_TAB_APPS, "netmgrd status"},
     {"Audio Player", "Midia Som", APP_AUDIO_PLAYER, START_MENU_TAB_APPS, 0},
@@ -890,47 +892,8 @@ static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT
     {"Personalizar", "Desktop", APP_PERSONALIZE, START_MENU_TAB_APPS, 0},
     {"Snake", "Classicos", APP_SNAKE, START_MENU_TAB_GAMES, 0},
     {"Tetris", "Classicos", APP_TETRIS, START_MENU_TAB_GAMES, 0},
-    {"Adventure", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "adventure"},
-    {"Arithmetic", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "arithmetic"},
-    {"ATC", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "atc"},
-    {"Backgammon", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "backgammon"},
-    {"Banner", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "banner"},
-    {"BCD", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "bcd"},
-    {"Battlestar", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "battlestar"},
-    {"Boggle", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "boggle"},
-    {"Battleship", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "bs"},
-    {"Caesar", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "caesar"},
-    {"Canfield", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "canfield"},
-    {"Cribbage", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "cribbage"},
-    {"Factor", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "factor"},
-    {"Fish", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "fish"},
-    {"Fortune", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "fortune"},
-    {"Gomoku", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "gomoku"},
-    {"GRDC", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "grdc"},
-    {"Hack", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "hack"},
-    {"Hangman", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "hangman"},
-    {"Mille", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "mille"},
-    {"Monop", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "monop"},
-    {"Morse", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "morse"},
-    {"Number", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "number"},
-    {"Phantasia", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "phantasia"},
-    {"Pig", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "pig"},
-    {"Pom", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "pom"},
-    {"PPT", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "ppt"},
-    {"Primes", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "primes"},
-    {"Quiz", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "quiz"},
-    {"Rain", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "rain"},
-    {"Random", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "random"},
-    {"Robots", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "robots"},
-    {"Sail", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "sail"},
-    {"Snake BSD", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "snake-bsd"},
-    {"Teachgammon", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "teachgammon"},
-    {"Tetris BSD", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "tetris-bsd"},
-    {"Trek", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "trek"},
-    {"Wargames", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "wargames"},
-    {"Worm", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "worm"},
-    {"Worms", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "worms"},
-    {"Wump", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "wump"},
+    {"2048", "Puzzle", APP_2048, START_MENU_TAB_GAMES, 0},
+    {"Campo Minado", "Puzzle", APP_MINESWEEPER, START_MENU_TAB_GAMES, 0},
     {"Pacman", "Arcade", APP_PACMAN, START_MENU_TAB_GAMES, 0},
     {"Invaders", "Arcade", APP_SPACE_INVADERS, START_MENU_TAB_GAMES, 0},
     {"Pong", "Arcade", APP_PONG, START_MENU_TAB_GAMES, 0},
@@ -940,6 +903,8 @@ static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT
     {"DOOM", "Port", APP_DOOM, START_MENU_TAB_GAMES, 0},
     {"Craft", "Port", APP_CRAFT, START_MENU_TAB_GAMES, 0}
 };
+
+#define START_MENU_ENTRY_COUNT ((int)(sizeof(g_start_menu_entries) / sizeof(g_start_menu_entries[0])))
 
 static void sync_window_instance_rect(int widx);
 static int alloc_window(enum app_type type);
@@ -1146,6 +1111,7 @@ static int desktop_dispatch_file_dialog_click(struct file_dialog_state *file_dia
                                               int click_x,
                                               int click_y);
 static int desktop_dispatch_right_click(struct desktop_session_action_queue *session_queue,
+                                        struct desktop_app_action_queue *app_queue,
                                         struct file_dialog_state *file_dialog,
                                         int click_x,
                                         int click_y,
@@ -1298,6 +1264,8 @@ static int window_instance_valid(enum app_type type, int instance) {
     case APP_SKETCHPAD: return instance >= 0 && instance < MAX_SKETCHPADS;
     case APP_SNAKE: return instance >= 0 && instance < MAX_SNAKES;
     case APP_TETRIS: return instance >= 0 && instance < MAX_TETRIS;
+    case APP_2048: return instance >= 0 && instance < MAX_2048_GAMES;
+    case APP_MINESWEEPER: return instance >= 0 && instance < MAX_MINESWEEPERS;
     case APP_PACMAN: return instance >= 0 && instance < MAX_PACMAN;
     case APP_SPACE_INVADERS: return instance >= 0 && instance < MAX_SPACE_INVADERS;
     case APP_PONG: return instance >= 0 && instance < MAX_PONG;
@@ -1324,6 +1292,8 @@ static int sanitize_windows(int *focused) {
     int sketch_used[MAX_SKETCHPADS] = {0};
     int snake_used[MAX_SNAKES] = {0};
     int tetris_used[MAX_TETRIS] = {0};
+    int game_2048_used[MAX_2048_GAMES] = {0};
+    int minesweeper_used[MAX_MINESWEEPERS] = {0};
     int pacman_used[MAX_PACMAN] = {0};
     int space_invaders_used[MAX_SPACE_INVADERS] = {0};
     int pong_used[MAX_PONG] = {0};
@@ -1398,6 +1368,14 @@ static int sanitize_windows(int *focused) {
             duplicate = tetris_used[g_windows[i].instance];
             tetris_used[g_windows[i].instance] = 1;
             break;
+        case APP_2048:
+            duplicate = game_2048_used[g_windows[i].instance];
+            game_2048_used[g_windows[i].instance] = 1;
+            break;
+        case APP_MINESWEEPER:
+            duplicate = minesweeper_used[g_windows[i].instance];
+            minesweeper_used[g_windows[i].instance] = 1;
+            break;
         case APP_PACMAN:
             duplicate = pacman_used[g_windows[i].instance];
             pacman_used[g_windows[i].instance] = 1;
@@ -1464,6 +1442,8 @@ static int sanitize_windows(int *focused) {
     for (int i = 0; i < MAX_SKETCHPADS; ++i) g_sketch_used[i] = sketch_used[i];
     for (int i = 0; i < MAX_SNAKES; ++i) g_snake_used[i] = snake_used[i];
     for (int i = 0; i < MAX_TETRIS; ++i) g_tetris_used[i] = tetris_used[i];
+    for (int i = 0; i < MAX_2048_GAMES; ++i) g_2048_used[i] = game_2048_used[i];
+    for (int i = 0; i < MAX_MINESWEEPERS; ++i) g_minesweeper_used[i] = minesweeper_used[i];
     for (int i = 0; i < MAX_PACMAN; ++i) g_pacman_used[i] = pacman_used[i];
     for (int i = 0; i < MAX_SPACE_INVADERS; ++i) g_space_invaders_used[i] = space_invaders_used[i];
     for (int i = 0; i < MAX_PONG; ++i) g_pong_used[i] = pong_used[i];
@@ -1910,6 +1890,8 @@ static int desktop_simple_app_action_for_type(enum app_type app_type) {
         return DESKTOP_APP_ACTION_CALCULATOR_CLICK;
     case APP_SKETCHPAD:
         return DESKTOP_APP_ACTION_SKETCHPAD_CLICK;
+    case APP_MINESWEEPER:
+        return DESKTOP_APP_ACTION_MINESWEEPER_CLICK;
     case APP_FLAP_BIRB:
         return DESKTOP_APP_ACTION_FLAP_BIRB_CLICK;
     case APP_DOOM:
@@ -2342,6 +2324,7 @@ static int desktop_dispatch_file_dialog_click(struct file_dialog_state *file_dia
 }
 
 static int desktop_dispatch_right_click(struct desktop_session_action_queue *session_queue,
+                                        struct desktop_app_action_queue *app_queue,
                                         struct file_dialog_state *file_dialog,
                                         int click_x,
                                         int click_y,
@@ -2352,7 +2335,7 @@ static int desktop_dispatch_right_click(struct desktop_session_action_queue *ses
                                         int *dirty) {
     int hit_window;
 
-    if (session_queue == 0 || file_dialog == 0 || focused == 0 || dirty == 0) {
+    if (session_queue == 0 || app_queue == 0 || file_dialog == 0 || focused == 0 || dirty == 0) {
         return 0;
     }
 
@@ -2362,6 +2345,21 @@ static int desktop_dispatch_right_click(struct desktop_session_action_queue *ses
         desktop_queue_close_contexts(session_queue, click_x, click_y);
         *dirty = 1;
         return 1;
+    }
+
+    if (hit_window >= 0 && g_windows[hit_window].type == APP_MINESWEEPER) {
+        int new_index = raise_window_to_front(hit_window, focused);
+
+        *focused = new_index;
+        hit_window = new_index;
+        if (minesweeper_handle_click(&g_minesweepers[g_windows[hit_window].instance],
+                                     click_x,
+                                     click_y,
+                                     MINESWEEPER_CLICK_FLAG)) {
+            desktop_queue_close_contexts(session_queue, click_x, click_y);
+            *dirty = 1;
+            return 1;
+        }
     }
 
     if (hit_window >= 0 && g_windows[hit_window].type == APP_FILEMANAGER) {
@@ -3006,6 +3004,17 @@ static int desktop_process_app_action_queue(struct desktop_app_action_queue *que
                 sketchpad_paint_at(&g_sketches[g_windows[action->window].instance],
                                    action->x,
                                    action->y)) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_MINESWEEPER_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_MINESWEEPER &&
+                minesweeper_handle_click(&g_minesweepers[g_windows[action->window].instance],
+                                         action->x,
+                                         action->y,
+                                         action->target)) {
                 dirty = 1;
             }
             break;
@@ -4749,6 +4758,28 @@ static int alloc_tetris(void) {
     return -1;
 }
 
+static int alloc_2048_game(void) {
+    for (int i = 0; i < MAX_2048_GAMES; ++i) {
+        if (!g_2048_used[i]) {
+            g_2048_used[i] = 1;
+            game_2048_init_state(&g_2048_games[i]);
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int alloc_minesweeper(void) {
+    for (int i = 0; i < MAX_MINESWEEPERS; ++i) {
+        if (!g_minesweeper_used[i]) {
+            g_minesweeper_used[i] = 1;
+            minesweeper_init_state(&g_minesweepers[i]);
+            return i;
+        }
+    }
+    return -1;
+}
+
 static int alloc_pacman(void) {
     for (int i = 0; i < MAX_PACMAN; ++i) {
         if (!g_pacman_used[i]) {
@@ -5160,6 +5191,12 @@ static void sync_window_instance_rect(int widx) {
     case APP_TETRIS:
         g_tetris[g_windows[widx].instance].window = g_windows[widx].rect;
         break;
+    case APP_2048:
+        g_2048_games[g_windows[widx].instance].window = g_windows[widx].rect;
+        break;
+    case APP_MINESWEEPER:
+        g_minesweepers[g_windows[widx].instance].window = g_windows[widx].rect;
+        break;
     case APP_PACMAN:
         g_pacman[g_windows[widx].instance].window = g_windows[widx].rect;
         break;
@@ -5301,6 +5338,18 @@ static int alloc_window(enum app_type type) {
                 if (idx < 0) return -1;
                 instance = idx;
                 rect = g_tetris[idx].window;
+            } break;
+            case APP_2048: {
+                int idx = alloc_2048_game();
+                if (idx < 0) return -1;
+                instance = idx;
+                rect = g_2048_games[idx].window;
+            } break;
+            case APP_MINESWEEPER: {
+                int idx = alloc_minesweeper();
+                if (idx < 0) return -1;
+                instance = idx;
+                rect = g_minesweepers[idx].window;
             } break;
             case APP_PACMAN: {
                 int idx = alloc_pacman();
@@ -5490,6 +5539,8 @@ static void free_window(int widx) {
     case APP_SKETCHPAD: g_sketch_used[w->instance] = 0; break;
     case APP_SNAKE: g_snake_used[w->instance] = 0; break;
     case APP_TETRIS: g_tetris_used[w->instance] = 0; break;
+    case APP_2048: g_2048_used[w->instance] = 0; break;
+    case APP_MINESWEEPER: g_minesweeper_used[w->instance] = 0; break;
     case APP_PACMAN: g_pacman_used[w->instance] = 0; break;
     case APP_SPACE_INVADERS: g_space_invaders_used[w->instance] = 0; break;
     case APP_PONG: g_pong_used[w->instance] = 0; break;
@@ -8649,6 +8700,8 @@ void desktop_main(void) {
     for (int i = 0; i < MAX_SKETCHPADS; ++i) g_sketch_used[i] = 0;
     for (int i = 0; i < MAX_SNAKES; ++i) g_snake_used[i] = 0;
     for (int i = 0; i < MAX_TETRIS; ++i) g_tetris_used[i] = 0;
+    for (int i = 0; i < MAX_2048_GAMES; ++i) g_2048_used[i] = 0;
+    for (int i = 0; i < MAX_MINESWEEPERS; ++i) g_minesweeper_used[i] = 0;
     for (int i = 0; i < MAX_PACMAN; ++i) g_pacman_used[i] = 0;
     for (int i = 0; i < MAX_SPACE_INVADERS; ++i) g_space_invaders_used[i] = 0;
     for (int i = 0; i < MAX_PONG; ++i) g_pong_used[i] = 0;
@@ -8926,6 +8979,20 @@ void desktop_main(void) {
                 dirty = 1;
             }
         }
+        for (int i = 0; i < MAX_2048_GAMES; ++i) {
+            if (g_2048_used[i] && !has_active_window_instance(APP_2048, i)) {
+                g_2048_used[i] = 0;
+            } else if (g_2048_used[i] && game_2048_step(&g_2048_games[i], ticks)) {
+                dirty = 1;
+            }
+        }
+        for (int i = 0; i < MAX_MINESWEEPERS; ++i) {
+            if (g_minesweeper_used[i] && !has_active_window_instance(APP_MINESWEEPER, i)) {
+                g_minesweeper_used[i] = 0;
+            } else if (g_minesweeper_used[i] && minesweeper_step(&g_minesweepers[i], ticks)) {
+                dirty = 1;
+            }
+        }
         for (int i = 0; i < MAX_PACMAN; ++i) {
             if (g_pacman_used[i] && !has_active_window_instance(APP_PACMAN, i)) {
                 g_pacman_used[i] = 0;
@@ -9053,6 +9120,7 @@ void desktop_main(void) {
                 continue;
             }
             desktop_dispatch_right_click(&session_action_queue,
+                                         &app_action_queue,
                                          &file_dialog,
                                          ui_event->x,
                                          ui_event->y,
@@ -9528,8 +9596,33 @@ void desktop_main(void) {
 
             if (g_windows[focused].type == APP_TERMINAL) {
                 struct terminal_state *term = &g_terms[g_windows[focused].instance];
-                if (key == '\b') {
+                if (key == '\b' || key == 127) {
                     terminal_backspace(term);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_DELETE) {
+                    terminal_delete_char(term);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_LEFT) {
+                    terminal_move_cursor_left(term);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_RIGHT) {
+                    terminal_move_cursor_right(term);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_UP) {
+                    terminal_history_prev(term);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_DOWN) {
+                    terminal_history_next(term);
                     dirty = 1;
                     continue;
                 }
@@ -9603,6 +9696,14 @@ void desktop_main(void) {
                 }
             } else if (g_windows[focused].type == APP_TETRIS) {
                 if (tetris_handle_key(&g_tetris[g_windows[focused].instance], key)) {
+                    dirty = 1;
+                }
+            } else if (g_windows[focused].type == APP_2048) {
+                if (game_2048_handle_key(&g_2048_games[g_windows[focused].instance], key)) {
+                    dirty = 1;
+                }
+            } else if (g_windows[focused].type == APP_MINESWEEPER) {
+                if (minesweeper_handle_key(&g_minesweepers[g_windows[focused].instance], key)) {
                     dirty = 1;
                 }
             } else if (g_windows[focused].type == APP_PACMAN) {
@@ -9729,6 +9830,14 @@ void desktop_main(void) {
                 case APP_TETRIS:
                     tetris_draw_window(&g_tetris[g_windows[i].instance], active,
                                        min_hover, max_hover, close_hover);
+                    break;
+                case APP_2048:
+                    game_2048_draw_window(&g_2048_games[g_windows[i].instance], active,
+                                          min_hover, max_hover, close_hover);
+                    break;
+                case APP_MINESWEEPER:
+                    minesweeper_draw_window(&g_minesweepers[g_windows[i].instance], active,
+                                            min_hover, max_hover, close_hover);
                     break;
                 case APP_PACMAN:
                     pacman_draw_window(&g_pacman[g_windows[i].instance], active,

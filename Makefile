@@ -394,6 +394,8 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/applications/sketchpad.c \
 	$(USERLAND_DIR)/applications/games/snake.c \
 	$(USERLAND_DIR)/applications/games/tetris.c \
+	$(USERLAND_DIR)/applications/games/game_2048.c \
+	$(USERLAND_DIR)/applications/games/minesweeper.c \
 	$(USERLAND_DIR)/applications/games/pacman.c \
 	$(USERLAND_DIR)/applications/games/space_invaders.c \
 	$(USERLAND_DIR)/applications/games/pong.c \
@@ -763,6 +765,8 @@ DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/applications/sketchpad.c \
 	$(USERLAND_DIR)/applications/games/snake.c \
 	$(USERLAND_DIR)/applications/games/tetris.c \
+	$(USERLAND_DIR)/applications/games/game_2048.c \
+	$(USERLAND_DIR)/applications/games/minesweeper.c \
 	$(USERLAND_DIR)/applications/games/pacman.c \
 	$(USERLAND_DIR)/applications/games/space_invaders.c \
 	$(USERLAND_DIR)/applications/games/pong.c \
@@ -819,6 +823,8 @@ DESKTOP_LAUNCHER_APPS := \
 	sketchpad \
 	snake \
 	tetris \
+	2048 \
+	minesweeper \
 	pacman \
 	space_invaders \
 	pong \
@@ -842,6 +848,8 @@ IMAGEVIEWER_APP_BIN := $(BUILD_DIR)/lang/imageviewer.app
 SKETCHPAD_APP_BIN := $(BUILD_DIR)/lang/sketchpad.app
 SNAKE_APP_BIN := $(BUILD_DIR)/lang/snake.app
 TETRIS_APP_BIN := $(BUILD_DIR)/lang/tetris.app
+GAME2048_APP_BIN := $(BUILD_DIR)/lang/2048.app
+MINESWEEPER_APP_BIN := $(BUILD_DIR)/lang/minesweeper.app
 PACMAN_APP_BIN := $(BUILD_DIR)/lang/pacman.app
 SPACE_INVADERS_APP_BIN := $(BUILD_DIR)/lang/space_invaders.app
 PONG_APP_BIN := $(BUILD_DIR)/lang/pong.app
