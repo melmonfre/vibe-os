@@ -691,9 +691,6 @@ int fscanf(FILE *stream, const char *fmt, ...) {
 int access(const char *path, int mode) {
     int node;
     (void)mode;
-    if (!path) {
-        return -1;
-    }
     node = doom_try_resolve_wad_candidate(path, 0);
     if (node >= 0 && !g_fs_nodes[node].is_dir) {
         return 0;
@@ -765,10 +762,10 @@ int vibe_app_remove_dir(const char *path) {
     return (rc == 0) ? 0 : -1;
 }
 
-int mkdir(const char *path, int mode) {
+int mkdir(const char *path, mode_t mode) {
     int rc;
     (void)mode;
-    if (!path || path[0] == '\0') {
+    if (path[0] == '\0') {
         return -1;
     }
     rc = fs_create(path, 1);
@@ -780,9 +777,6 @@ int open(const char *path, int flags, ...) {
     int node;
     const char *resolved_path = path;
 
-    if (!path) {
-        return -1;
-    }
     if ((flags & DOOM_O_ACCMODE) != DOOM_O_RDONLY) {
         return -1;
     }
@@ -831,9 +825,6 @@ ssize_t read(int fd, void *buf, size_t count) {
     size_t available;
     int bytes_read;
 
-    if (!buf) {
-        return -1;
-    }
     if (fd == DOOM_STDIN_FD) {
         if (count == 0u) {
             return 0;
@@ -883,9 +874,6 @@ ssize_t write(int fd, const void *buf, size_t count) {
     size_t i;
     const char *text = (const char *)buf;
 
-    if (!buf) {
-        return -1;
-    }
     if (fd != DOOM_STDOUT_FD && fd != DOOM_STDERR_FD) {
         return -1;
     }
@@ -926,9 +914,6 @@ off_t lseek(int fd, off_t offset, int whence) {
 }
 
 int fstat(int fd, struct stat *buf) {
-    if (!buf) {
-        return -1;
-    }
     memset(buf, 0, sizeof(*buf));
     if (fd >= DOOM_STDIN_FD && fd <= DOOM_STDERR_FD) {
         return 0;

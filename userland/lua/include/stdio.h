@@ -15,7 +15,7 @@ extern FILE *stderr;
 int printf(const char *fmt, ...);
 int fprintf(FILE *stream, const char *fmt, ...);
 int vprintf(const char *fmt, va_list ap);
-int vfprintf(FILE *stream, va_list ap);
+int vfprintf(FILE *stream, const char *fmt, va_list ap);
 int sprintf(char *str, const char *fmt, ...);
 int vsprintf(char *str, const char *fmt, va_list ap);
 int snprintf(char *str, size_t size, const char *fmt, ...);

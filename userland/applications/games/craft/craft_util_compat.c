@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -444,4 +445,273 @@ int wrap(const char *input, int max_width, char *output, int max_length) {
     strncpy(output, input, max_length - 1);
     output[max_length - 1] = '\0';
     return 1;
+}
+
+static int craft_scan_is_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static int craft_scan_is_digit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+static void craft_scan_skip_space(const char **cursor) {
+    while (**cursor && craft_scan_is_space(**cursor)) {
+        *cursor += 1;
+    }
+}
+
+static int craft_scan_parse_int(const char **cursor, int *out_value) {
+    int sign = 1;
+    int value = 0;
+    int found = 0;
+    const char *s = *cursor;
+
+    if (*s == '-') {
+        sign = -1;
+        s += 1;
+    } else if (*s == '+') {
+        s += 1;
+    }
+    while (craft_scan_is_digit(*s)) {
+        value = value * 10 + (*s - '0');
+        s += 1;
+        found = 1;
+    }
+    if (!found) {
+        return 0;
+    }
+    *out_value = value * sign;
+    *cursor = s;
+    return 1;
+}
+
+static int craft_scan_parse_unsigned(const char **cursor, unsigned int *out_value) {
+    unsigned int value = 0;
+    int found = 0;
+    const char *s = *cursor;
+
+    while (craft_scan_is_digit(*s)) {
+        value = value * 10u + (unsigned int)(*s - '0');
+        s += 1;
+        found = 1;
+    }
+    if (!found) {
+        return 0;
+    }
+    *out_value = value;
+    *cursor = s;
+    return 1;
+}
+
+static double craft_scan_pow10(int exponent) {
+    double scale = 1.0;
+    while (exponent > 0) {
+        scale *= 10.0;
+        exponent -= 1;
+    }
+    return scale;
+}
+
+static int craft_scan_parse_double(const char **cursor, double *out_value) {
+    int sign = 1;
+    int exponent_sign = 1;
+    int exponent = 0;
+    double integer = 0.0;
+    double fraction = 0.0;
+    double scale = 1.0;
+    int found = 0;
+    const char *s = *cursor;
+
+    if (*s == '-') {
+        sign = -1;
+        s += 1;
+    } else if (*s == '+') {
+        s += 1;
+    }
+    while (craft_scan_is_digit(*s)) {
+        integer = integer * 10.0 + (double)(*s - '0');
+        s += 1;
+        found = 1;
+    }
+    if (*s == '.') {
+        s += 1;
+        while (craft_scan_is_digit(*s)) {
+            fraction = fraction * 10.0 + (double)(*s - '0');
+            scale *= 10.0;
+            s += 1;
+            found = 1;
+        }
+    }
+    if (!found) {
+        return 0;
+    }
+    if (*s == 'e' || *s == 'E') {
+        const char *exp_start = s + 1;
+        if (*exp_start == '-') {
+            exponent_sign = -1;
+            exp_start += 1;
+        } else if (*exp_start == '+') {
+            exp_start += 1;
+        }
+        if (!craft_scan_is_digit(*exp_start)) {
+            return 0;
+        }
+        s = exp_start;
+        while (craft_scan_is_digit(*s)) {
+            exponent = exponent * 10 + (*s - '0');
+            s += 1;
+        }
+    }
+
+    *out_value = (integer + (fraction / scale)) * (double)sign;
+    if (exponent != 0) {
+        double exp_scale = craft_scan_pow10(exponent);
+        if (exponent_sign < 0) {
+            *out_value /= exp_scale;
+        } else {
+            *out_value *= exp_scale;
+        }
+    }
+    *cursor = s;
+    return 1;
+}
+
+static int craft_scan_parse_string(const char **cursor, char *out, size_t width) {
+    size_t len = 0;
+    const char *s = *cursor;
+
+    if (*s == '\0' || craft_scan_is_space(*s)) {
+        return 0;
+    }
+    while (*s && !craft_scan_is_space(*s) && len + 1u < width) {
+        out[len++] = *s++;
+    }
+    if (len == 0u) {
+        return 0;
+    }
+    out[len] = '\0';
+    while (*s && !craft_scan_is_space(*s)) {
+        s += 1;
+    }
+    *cursor = s;
+    return 1;
+}
+
+size_t strnlen(const char *s, size_t maxlen) {
+    size_t len = 0;
+    while (len < maxlen && s[len] != '\0') {
+        len += 1u;
+    }
+    return len;
+}
+
+int __isoc99_vsscanf(const char *str, const char *fmt, va_list ap) {
+    const char *s = str;
+    const char *f = fmt;
+    int assigned = 0;
+
+    while (*f) {
+        size_t width = (size_t)-1;
+        int long_modifier = 0;
+
+        if (craft_scan_is_space(*f)) {
+            craft_scan_skip_space(&s);
+            f += 1;
+            continue;
+        }
+        if (*f != '%') {
+            if (*s != *f) {
+                break;
+            }
+            s += 1;
+            f += 1;
+            continue;
+        }
+
+        f += 1;
+        if (*f == '%') {
+            if (*s != '%') {
+                break;
+            }
+            s += 1;
+            f += 1;
+            continue;
+        }
+        if (craft_scan_is_digit(*f)) {
+            width = 0u;
+            while (craft_scan_is_digit(*f)) {
+                width = width * 10u + (size_t)(*f - '0');
+                f += 1;
+            }
+        }
+        if (*f == 'l') {
+            long_modifier = 1;
+            f += 1;
+        }
+
+        craft_scan_skip_space(&s);
+        if (*f == 'd') {
+            int value;
+            int *out = va_arg(ap, int *);
+            if (!craft_scan_parse_int(&s, &value)) {
+                break;
+            }
+            *out = value;
+            assigned += 1;
+            f += 1;
+            continue;
+        }
+        if (*f == 'u') {
+            unsigned int value;
+            unsigned int *out = va_arg(ap, unsigned int *);
+            if (!craft_scan_parse_unsigned(&s, &value)) {
+                break;
+            }
+            *out = value;
+            assigned += 1;
+            f += 1;
+            continue;
+        }
+        if (*f == 'f') {
+            double value;
+            if (!craft_scan_parse_double(&s, &value)) {
+                break;
+            }
+            if (long_modifier) {
+                double *out = va_arg(ap, double *);
+                *out = value;
+            } else {
+                float *out = va_arg(ap, float *);
+                *out = (float)value;
+            }
+            assigned += 1;
+            f += 1;
+            continue;
+        }
+        if (*f == 's') {
+            char *out = va_arg(ap, char *);
+            size_t max_width = width == (size_t)-1 ? (size_t)4096u : width + 1u;
+            if (!craft_scan_parse_string(&s, out, max_width)) {
+                break;
+            }
+            assigned += 1;
+            f += 1;
+            continue;
+        }
+
+        break;
+    }
+
+    return assigned;
+}
+
+int __isoc99_sscanf(const char *str, const char *fmt, ...) {
+    int result;
+    va_list ap;
+
+    va_start(ap, fmt);
+    result = __isoc99_vsscanf(str, fmt, ap);
+    va_end(ap);
+    return result;
 }

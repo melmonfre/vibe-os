@@ -1,13 +1,10 @@
 #ifndef VIBE_DOOM_LIBC_SHIM_H
 #define VIBE_DOOM_LIBC_SHIM_H
 
+#include <userland/lua/include/lua_port.h>
 #include <stdarg.h>
-#include <stddef.h>
+#include <sys/stat.h>
 #include <sys/types.h>
-
-typedef struct FILE FILE;
-
-struct stat;
 
 extern FILE *stdout;
 extern FILE *stderr;
@@ -37,7 +34,7 @@ void setbuf(FILE *stream, char *buf);
 int sscanf(const char *str, const char *fmt, ...);
 int fscanf(FILE *stream, const char *fmt, ...);
 int access(const char *path, int mode);
-int mkdir(const char *path, int mode);
+int mkdir(const char *path, mode_t mode);
 int open(const char *path, int flags, ...);
 int close(int fd);
 ssize_t read(int fd, void *buf, size_t count);
