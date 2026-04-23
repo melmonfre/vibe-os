@@ -2,9 +2,15 @@
 #include <userland/applications/games/doom_port/doom_port.h>
 #include <userland/modules/include/console.h>
 #include <userland/modules/include/fs.h>
+#pragma push_macro("mkdir")
+#undef mkdir
 #include <userland/modules/include/syscalls.h>
+#pragma pop_macro("mkdir")
 #include <sys/types.h>
+#pragma push_macro("mkdir")
+#undef mkdir
 #include <sys/stat.h>
+#pragma pop_macro("mkdir")
 
 #include <stdarg.h>
 #include <stddef.h>

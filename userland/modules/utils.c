@@ -2,6 +2,7 @@
 #include <userland/modules/include/fs.h>
 #include <userland/modules/include/syscalls.h>
 #include <kernel/microkernel/audio.h>
+#include <stdlib.h>
 #include <sys/audioio.h>
 
 #define AUDIO_WAV_HEADER_SIZE 44

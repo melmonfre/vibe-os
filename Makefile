@@ -778,7 +778,7 @@ DOOM_SYMBOL_REMAP = \
 	-Dlseek=doom_lseek \
 	-Dfstat=doom_fstat \
 	-Dexit=doom_exit
-DOOM_CFLAGS = -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -I. -Iheaders -Iuserland -Ilang/include -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython -DNORMALUNIX -DLINUX -DSEEK_SET=0 -DSEEK_CUR=1 -DSEEK_END=2 -include stdio.h -include stdlib.h -include string.h -include userland/applications/games/doom_port/doom_libc_shim.h -Wno-sequence-point -Wno-unused-const-variable -Wno-unused-but-set-variable $(DOOM_SYMBOL_REMAP)
+DOOM_CFLAGS = -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -I. -idirafter headers -Iuserland -Ilang/include -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython -DNORMALUNIX -DLINUX -DSEEK_SET=0 -DSEEK_CUR=1 -DSEEK_END=2 -include stdio.h -include stdlib.h -include string.h -include userland/applications/games/doom_port/doom_libc_shim.h -Wno-sequence-point -Wno-unused-const-variable -Wno-unused-but-set-variable $(DOOM_SYMBOL_REMAP)
 DOOM_PORT_SRC_DIR := $(USERLAND_DIR)/applications/games/doom_port
 DOOM_PORT_CFLAGS = $(CFLAGS) -include userland/applications/games/doom_port/doom_libc_shim.h $(DOOM_SYMBOL_REMAP)
 
@@ -833,7 +833,7 @@ USERLAND_MAIN_BIN := $(BUILD_DIR)/userland-main.bin
 BOOTLOADER_BG_BIN := $(BUILD_DIR)/bootloader-bg.bin
 IMAGE := $(BUILD_DIR)/boot.img
 
-CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
+CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -I. -idirafter headers -Iuserland -Ilang/include -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
 CFLAGS += -I$(APP_CATALOG_GENERATED_DIR)
 CFLAGS += -MMD -MP
 LUA_CFLAGS := -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src
@@ -841,6 +841,7 @@ INTEL_I915_EXPERIMENTAL_COMMIT ?= 0
 CFLAGS += -DINTEL_I915_EXPERIMENTAL_COMMIT=$(INTEL_I915_EXPERIMENTAL_COMMIT)
 VIDEO_DRM_TEST_FORCE_HANDOFF_FAIL ?= 0
 CFLAGS += -DVIDEO_DRM_TEST_FORCE_HANDOFF_FAIL=$(VIDEO_DRM_TEST_FORCE_HANDOFF_FAIL)
+KERNEL_CFLAGS := $(CFLAGS) -D__VIBE_KERNEL__
 LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N --allow-multiple-definition
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
 LDFLAGS_APP := -m elf_i386 -T $(LINKER_DIR)/app.ld -nostdlib -N
@@ -1319,11 +1320,11 @@ $(BUILD_DIR)/userland/applications/games/craft:
 	@true
 $(BUILD_DIR)/userland/applications/games/DOOM:
 	@true
-$(BUILD_DIR)/kernel/drivers/video/video.o: CFLAGS += -msse2
+$(BUILD_DIR)/kernel/drivers/video/video.o: KERNEL_CFLAGS += -msse2
 
 $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(if $(filter kernel/%,$<),$(KERNEL_CFLAGS),$(CFLAGS)) -c $< -o $@
 
 $(BUILD_DIR)/userland/applications/games/craft/upstream/deps/lodepng/lodepng.o: userland/applications/games/craft/upstream/deps/lodepng/lodepng.c
 	@mkdir -p $(dir $@)

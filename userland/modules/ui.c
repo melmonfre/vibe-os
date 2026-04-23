@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <string.h>
 
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/fs.h>

@@ -3,9 +3,11 @@
 
 #include <stdarg.h>
 #include <stddef.h>
-#include <stdio.h>
-#include <sys/stat.h>
 #include <sys/types.h>
+
+typedef struct FILE FILE;
+
+struct stat;
 
 extern FILE *stdout;
 extern FILE *stderr;

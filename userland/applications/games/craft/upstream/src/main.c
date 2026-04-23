@@ -2232,7 +2232,9 @@ void parse_command(const char *buffer, int forward) {
     else if (sscanf(buffer, "/offline %128s", filename) == 1) {
         g->mode_changed = 1;
         g->mode = MODE_OFFLINE;
-        snprintf(g->db_path, MAX_PATH_LENGTH, "%s.db", filename);
+        size_t name_len = strnlen(filename, MAX_PATH_LENGTH - 4);
+        memcpy(g->db_path, filename, name_len);
+        memcpy(g->db_path + name_len, ".db", 4);
     }
     else if (strcmp(buffer, "/offline") == 0) {
         g->mode_changed = 1;
