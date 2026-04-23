@@ -156,6 +156,30 @@ typedef struct {
 static Model model;
 static Model *g = &model;
 
+int craft_thread_parallel_workers(void);
+void craft_thread_reset(void);
+int doom_snprintf(char *str, size_t size, const char *fmt, ...);
+void sys_write_debug(const char *s);
+
+static void craft_debug_chunk_event(const char *label,
+                                    int p, int q,
+                                    int a, int b, int c) {
+    static int budget = 64;
+    char line[128];
+
+    if (budget <= 0 || label == 0) {
+        return;
+    }
+    if (ABS(p) > 1 || ABS(q) > 1) {
+        return;
+    }
+    budget--;
+    doom_snprintf(line, sizeof(line),
+                  "%s p=%d q=%d a=%d b=%d c=%d\n",
+                  label, p, q, a, b, c);
+    sys_write_debug(line);
+}
+
 int chunked(float x) {
     return floorf(roundf(x) / CHUNK_SIZE);
 }
@@ -1160,11 +1184,18 @@ void generate_chunk(Chunk *chunk, WorkerItem *item) {
     del_buffer(chunk->buffer);
     if (item->faces > 0 && item->data) {
         chunk->buffer = gen_faces(10, item->faces, item->data);
+        item->data = 0;
     } else {
         free(item->data);
+        item->data = 0;
         chunk->buffer = 0;
     }
     gen_sign_buffer(chunk);
+    craft_debug_chunk_event("craft: gen chunk",
+                            chunk->p, chunk->q,
+                            chunk->faces,
+                            (int)chunk->buffer,
+                            chunk->dirty);
 }
 
 void gen_chunk_buffer(Chunk *chunk) {
@@ -1243,6 +1274,11 @@ void create_chunk(Chunk *chunk, int p, int q) {
     item->block_maps[1][1] = &chunk->map;
     item->light_maps[1][1] = &chunk->lights;
     load_chunk(item);
+    craft_debug_chunk_event("craft: load chunk",
+                            p, q,
+                            (int)chunk->map.size,
+                            (int)chunk->lights.size,
+                            chunk->dirty);
 
     request_chunk(p, q);
 }
@@ -1316,10 +1352,12 @@ void check_workers() {
                     if (block_map) {
                         map_free(block_map);
                         free(block_map);
+                        item->block_maps[a][b] = 0;
                     }
                     if (light_map) {
                         map_free(light_map);
                         free(light_map);
+                        item->light_maps[a][b] = 0;
                     }
                 }
             }
@@ -1329,18 +1367,44 @@ void check_workers() {
     }
 }
 
-void force_chunks(Player *player) {
+static int chunk_ready_to_draw(Chunk *chunk) {
+    return chunk != 0 && chunk->faces > 0 && chunk->buffer != 0;
+}
+
+static int count_drawable_chunks(int p, int q, int radius) {
+    int count = 0;
+
+    if (radius < 0) {
+        radius = 0;
+    }
+    for (int i = 0; i < g->chunk_count; ++i) {
+        Chunk *chunk = g->chunks + i;
+        if (chunk_distance(chunk, p, q) > radius) {
+            continue;
+        }
+        if (chunk_ready_to_draw(chunk)) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+void force_chunks_radius(Player *player, int radius) {
     State *s = &player->state;
     int p = chunked(s->x);
     int q = chunked(s->z);
-    int r = 1;
+    int r = radius;
+
+    if (r < 1) {
+        r = 1;
+    }
     for (int dp = -r; dp <= r; dp++) {
         for (int dq = -r; dq <= r; dq++) {
             int a = p + dp;
             int b = q + dq;
             Chunk *chunk = find_chunk(a, b);
             if (chunk) {
-                if (chunk->dirty) {
+                if (chunk->dirty || chunk->buffer == 0) {
                     gen_chunk_buffer(chunk);
                 }
             }
@@ -1351,6 +1415,10 @@ void force_chunks(Player *player) {
             }
         }
     }
+}
+
+void force_chunks(Player *player) {
+    force_chunks_radius(player, 1);
 }
 
 void ensure_chunks_worker(Player *player, Worker *worker) {
@@ -1441,24 +1509,34 @@ void ensure_chunks_worker(Player *player, Worker *worker) {
 }
 
 void ensure_chunks(Player *player) {
-    int scheduled = 0;
+    int inflight = 0;
+    int worker_limit = craft_thread_parallel_workers();
 
     check_workers();
     force_chunks(player);
     if (g->create_radius <= 0) {
         return;
     }
+    if (worker_limit < 1) {
+        worker_limit = 1;
+    }
+    if (worker_limit > WORKERS) {
+        worker_limit = WORKERS;
+    }
     for (int i = 0; i < WORKERS; i++) {
         Worker *worker = g->workers + i;
         mtx_lock(&worker->mtx);
-        if (worker->state == WORKER_IDLE) {
+        if (worker->state == WORKER_BUSY) {
+            inflight++;
+        }
+        else if (worker->state == WORKER_IDLE && inflight < worker_limit) {
             ensure_chunks_worker(player, worker);
             if (worker->state == WORKER_BUSY) {
-                scheduled++;
+                inflight++;
             }
         }
         mtx_unlock(&worker->mtx);
-        if (scheduled >= 1) {
+        if (inflight >= worker_limit) {
             break;
         }
     }
@@ -1674,11 +1752,71 @@ int render_chunks(Attrib *attrib, Player *player) {
         {
             continue;
         }
-        if (chunk->faces <= 0 || chunk->buffer == 0) {
+        if (!chunk_ready_to_draw(chunk)) {
             continue;
         }
         draw_chunk(attrib, chunk);
         result += chunk->faces;
+    }
+    if (result > 0) {
+        return result;
+    }
+    craft_debug_chunk_event("craft: render empty",
+                            p, q,
+                            g->chunk_count,
+                            count_drawable_chunks(p, q, 1),
+                            count_drawable_chunks(p, q, 2));
+
+    /*
+     * If the frustum path draws nothing, recover locally before giving up on
+     * the frame. This preserves a visible voxel bootstrap while the async
+     * chunk pipeline is still warming up.
+     */
+    if (count_drawable_chunks(p, q, 2) == 0) {
+        force_chunks_radius(player, 2);
+    }
+    for (int i = 0; i < g->chunk_count; i++) {
+        Chunk *chunk = g->chunks + i;
+        if (chunk_distance(chunk, p, q) > MAX(g->render_radius, 2)) {
+            continue;
+        }
+        if (!chunk_ready_to_draw(chunk)) {
+            continue;
+        }
+        draw_chunk(attrib, chunk);
+        result += chunk->faces;
+    }
+    if (result > 0) {
+        return result;
+    }
+
+    if (count_drawable_chunks(p, q, 3) == 0) {
+        force_chunks_radius(player, 3);
+        for (int i = 0; i < g->chunk_count; i++) {
+            Chunk *chunk = g->chunks + i;
+            if (chunk_distance(chunk, p, q) > MAX(g->render_radius, 3)) {
+                continue;
+            }
+            if (!chunk_ready_to_draw(chunk)) {
+                continue;
+            }
+            draw_chunk(attrib, chunk);
+            result += chunk->faces;
+        }
+    }
+    if (result == 0 && count_drawable_chunks(p, q, 4) == 0) {
+        force_chunks_radius(player, 4);
+        for (int i = 0; i < g->chunk_count; i++) {
+            Chunk *chunk = g->chunks + i;
+            if (chunk_distance(chunk, p, q) > MAX(g->render_radius, 4)) {
+                continue;
+            }
+            if (!chunk_ready_to_draw(chunk)) {
+                continue;
+            }
+            draw_chunk(attrib, chunk);
+            result += chunk->faces;
+        }
     }
     return result;
 }
@@ -2986,6 +3124,7 @@ int main(int argc, char **argv) {
         }
 
         // SHUTDOWN //
+        craft_thread_reset();
         db_save_state(s->x, s->y, s->z, s->rx, s->ry);
         db_close();
         db_disable();

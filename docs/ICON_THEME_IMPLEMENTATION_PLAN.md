@@ -3,36 +3,36 @@
 ## Objetivo
 
 Integrar o tema de icones existente em `assets/icons` ao desktop do `vibeOS` de forma incremental, com fallback previsivel, baixo custo de memoria e sem depender de formatos que o runtime ainda nao suporta.
-
+marcar como concluido usando um x as etapas que ja estão feitas
 ## Estado Atual
 
 - [x] O repositorio ja contem um tema completo em `assets/icons`
 - [x] O tema ja possui `index.theme`
 - [x] A arvore inclui contextos uteis para desktop real: `apps`, `places`, `status`, `notifications`, `panel`, `devices`, `mimes`, `emblems`
 - [x] O runtime atual ja decodifica `png` e `bmp`
-- [ ] O runtime atual nao resolve icones por nome/contexto/tamanho
-- [ ] O runtime atual nao expoe API de tema de icones
-- [ ] O desktop atual nao persiste tema de icones em `ui.cfg`
+- [x] O runtime atual nao resolve icones por nome/contexto/tamanho
+- [x] O runtime atual nao expoe API de tema de icones
+- [x] O desktop atual nao persiste tema de icones em `ui.cfg`
 - [ ] O runtime atual nao suporta `svg`
 - [ ] O runtime atual nao suporta `xpm`
-- [ ] Os assets de `assets/icons` ainda nao entram no caminho de assets registrados em `userland/modules/fs.c`
+- [x] Os assets de `assets/icons` ainda nao entram no caminho de assets registrados em `userland/modules/fs.c`
 
 ## Regra Principal
 
-- [ ] O primeiro merge deve entregar um MVP funcional para o desktop nativo
-- [ ] O MVP deve usar apenas formatos ja suportados pelo runtime (`png` e, se necessario, `bmp`)
+- [x] O primeiro merge deve entregar um MVP funcional para o desktop nativo
+- [x] O MVP deve usar apenas formatos ja suportados pelo runtime (`png` e, se necessario, `bmp`)
 - [ ] `svg` e `xpm` so entram quando houver necessidade real ou pipeline de conversao offline
-- [ ] Nenhuma tela do sistema pode depender de um icone especifico para continuar operando
-- [ ] Toda busca de icone deve ter fallback deterministicamente reproduzivel
+- [x] Nenhuma tela do sistema pode depender de um icone especifico para continuar operando
+- [x] Toda busca de icone deve ter fallback deterministicamente reproduzivel
 
 ## Escopo do MVP
 
-- [ ] Resolver icones por nome e tamanho
-- [ ] Carregar icones `png` em memoria paletizada do desktop
-- [ ] Integrar icones nas entradas principais do desktop e do menu iniciar
-- [ ] Integrar icones basicos do tray/status para rede e audio
-- [ ] Persistir o nome do tema selecionado
-- [ ] Garantir fallback para `application-default-icon`, `folder`, `folder_open`, `user-trash`, `audio-volume-*`, `network-*`
+- [x] Resolver icones por nome e tamanho
+- [x] Carregar icones `png` em memoria paletizada do desktop
+- [x] Integrar icones nas entradas principais do desktop e do menu iniciar
+- [x] Integrar icones basicos do tray/status para rede e audio
+- [x] Persistir o nome do tema selecionado
+- [x] Garantir fallback para `application-default-icon`, `folder`, `folder_open`, `user-trash`, `audio-volume-*`, `network-*`
 
 ## Fora de Escopo Inicial
 
@@ -50,15 +50,15 @@ Integrar o tema de icones existente em `assets/icons` ao desktop do `vibeOS` de 
 - [x] A arvore tem diretorios fixos por contexto e tamanho, alinhados ao modelo de `index.theme`
 - [x] Ha mistura de `png`, `svg` e `xpm`
 - [x] Ha tamanhos uteis para o desktop atual: `16`, `22`, `24`, `32`, `48`, `64`, `128`, `256`
-- [ ] Precisamos consolidar quais icones sao realmente exigidos pelo desktop atual antes de tentar cobrir tudo
+- [x] Precisamos consolidar quais icones sao realmente exigidos pelo desktop atual antes de tentar cobrir tudo
 
 ## Fase 0: Fechar Contrato do MVP
 
-- [ ] Definir o nome canonico do tema embarcado
-- [ ] Escolher a raiz logica do tema dentro do FS do sistema, preferencialmente `/assets/icons`
-- [ ] Definir a politica de selecao de tamanho: exato primeiro, depois maior mais proximo, depois menor mais proximo
-- [ ] Definir se o contexto sera obrigatorio ou apenas sugestao para a busca
-- [ ] Definir lista minima de nomes obrigatorios para boot do desktop
+- [x] Definir o nome canonico do tema embarcado
+- [x] Escolher a raiz logica do tema dentro do FS do sistema, preferencialmente `/assets/icons`
+- [x] Definir a politica de selecao de tamanho: exato primeiro, depois maior mais proximo, depois menor mais proximo
+- [x] Definir se o contexto sera obrigatorio ou apenas sugestao para a busca
+- [x] Definir lista minima de nomes obrigatorios para boot do desktop
 
 Saidas esperadas:
 
@@ -68,11 +68,11 @@ Saidas esperadas:
 
 ## Fase 1: Empacotamento e Registro dos Assets
 
-- [ ] Estender o caminho de registro de assets para incluir `assets/icons`
+- [x] Estender o caminho de registro de assets para incluir `assets/icons`
 - [ ] Evitar registrar manualmente centenas de arquivos um a um em C
-- [ ] Criar manifest gerado para os icones embarcados, com caminho, bytes e metadados minimos
-- [ ] Garantir que a arvore fique visivel via `fs_resolve()` no runtime
-- [ ] Definir se arquivos nao usados no MVP entram agora ou em lotes por contexto
+- [x] Criar manifest gerado para os icones embarcados, com caminho, bytes e metadados minimos
+- [x] Garantir que a arvore fique visivel via `fs_resolve()` no runtime
+- [x] Definir se arquivos nao usados no MVP entram agora ou em lotes por contexto
 
 Direcao recomendada:
 
@@ -82,7 +82,7 @@ Direcao recomendada:
 
 ## Fase 2: Parser de `index.theme` e Metadados
 
-- [ ] Criar parser minimo para `index.theme`
+- [x] Criar parser minimo para `index.theme`
 - [ ] Ler `Directories`, `Size`, `Type`, `Context`, `MinSize`, `MaxSize`
 - [ ] Ignorar no MVP qualquer chave nao necessaria
 - [ ] Validar o arquivo uma vez no bootstrap da UI, nao a cada lookup
@@ -94,12 +94,12 @@ Observacao importante:
 
 ## Fase 3: API de Tema de Icones no Runtime
 
-- [ ] Criar modulo dedicado, por exemplo `userland/modules/icon_theme.c`
-- [ ] Publicar header tipo `headers/userland/modules/include/icon_theme.h`
-- [ ] Expor funcoes para inicializar, selecionar tema e resolver caminhos
-- [ ] Expor lookup por nome/contexto/tamanho
+- [x] Criar modulo dedicado, por exemplo `userland/modules/icon_theme.c`
+- [x] Publicar header tipo `headers/userland/modules/include/icon_theme.h`
+- [x] Expor funcoes para inicializar, selecionar tema e resolver caminhos
+- [x] Expor lookup por nome/contexto/tamanho
 - [ ] Expor lookup por lista de nomes de fallback
-- [ ] Expor helper para obter bitmap paletizado pronto para desenhar
+- [x] Expor helper para obter bitmap paletizado pronto para desenhar
 
 API minima sugerida:
 
@@ -110,9 +110,9 @@ API minima sugerida:
 
 ## Fase 4: Politica de Formatos
 
-- [ ] No MVP, aceitar somente arquivos com extensao `png` e opcionalmente `bmp`
-- [ ] Ignorar `svg` e `xpm` durante a descoberta ou lookup
-- [ ] Se um nome existir apenas como `svg`/`xpm`, cair no fallback raster definido pelo sistema
+- [x] No MVP, aceitar somente arquivos com extensao `png` e opcionalmente `bmp`
+- [x] Ignorar `svg` e `xpm` durante a descoberta ou lookup
+- [x] Se um nome existir apenas como `svg`/`xpm`, cair no fallback raster definido pelo sistema
 - [ ] Mapear lacunas onde um icone importante so existe em formato nao suportado
 
 Evolucao recomendada depois do MVP:
@@ -122,20 +122,20 @@ Evolucao recomendada depois do MVP:
 
 ## Fase 5: Cache e Memoria
 
-- [ ] Criar cache LRU pequeno para bitmaps de icones decodificados
-- [ ] Chavear cache por `nome + contexto + tamanho`
-- [ ] Invalidar o cache ao trocar de tema ou modo de video
-- [ ] Evitar redescodificar icones do taskbar e menu a cada frame
-- [ ] Limitar tamanho do cache para nao competir com wallpaper e janelas
+- [x] Criar cache LRU pequeno para bitmaps de icones decodificados
+- [x] Chavear cache por `nome + contexto + tamanho`
+- [x] Invalidar o cache ao trocar de tema ou modo de video
+- [x] Evitar redescodificar icones do taskbar e menu a cada frame
+- [x] Limitar tamanho do cache para nao competir com wallpaper e janelas
 
 ## Fase 6: Integracao com Desktop e UI
 
-- [ ] Substituir desenhos textuais/hardcoded por icones onde fizer sentido
-- [ ] Aplicar icones aos atalhos principais do desktop
-- [ ] Aplicar icones ao menu iniciar
-- [ ] Aplicar icones ao tray de rede e audio
-- [ ] Aplicar icones a janelas e dialogs que tenham identidade clara de app
-- [ ] Garantir que ausencia de icone nunca esconda o texto ou a acao
+- [x] Substituir desenhos textuais/hardcoded por icones onde fizer sentido
+- [x] Aplicar icones aos atalhos principais do desktop
+- [x] Aplicar icones ao menu iniciar
+- [x] Aplicar icones ao tray de rede e audio
+- [x] Aplicar icones a janelas e dialogs que tenham identidade clara de app
+- [x] Garantir que ausencia de icone nunca esconda o texto ou a acao
 
 Prioridade de integracao:
 
@@ -147,11 +147,11 @@ Prioridade de integracao:
 
 ## Fase 7: Mapeamento de Nomes do Sistema
 
-- [ ] Definir tabela de mapeamento entre entidades do `vibeOS` e nomes de icones do tema
-- [ ] Mapear apps nativos para nomes existentes do tema ou aliases internos
-- [ ] Mapear locais do desktop para `places`
-- [ ] Mapear estados do sistema para `status` e `notifications`
-- [ ] Criar alias interno quando o nome do app nao bater com o nome do asset
+- [x] Definir tabela de mapeamento entre entidades do `vibeOS` e nomes de icones do tema
+- [x] Mapear apps nativos para nomes existentes do tema ou aliases internos
+- [x] Mapear locais do desktop para `places`
+- [x] Mapear estados do sistema para `status` e `notifications`
+- [x] Criar alias interno quando o nome do app nao bater com o nome do asset
 
 Exemplos que precisam existir no plano de alias:
 
@@ -167,11 +167,12 @@ Exemplos que precisam existir no plano de alias:
 
 ## Fase 8: Persistencia e Personalizacao
 
-- [ ] Estender `ui.cfg` para incluir `icon_theme=<nome>`
+- [x] Estender `ui.cfg` para incluir `icon_theme=<nome>`
 - [ ] Carregar o tema junto com wallpaper e tema de cores
-- [ ] Criar fallback para o tema embarcado padrao caso o tema salvo nao exista
+- [x] Carregar o tema junto com wallpaper e tema de cores
+- [x] Criar fallback para o tema embarcado padrao caso o tema salvo nao exista
 - [ ] Permitir que `personalize` mude o tema de icones no futuro
-- [ ] Garantir compatibilidade com configs antigas sem `icon_theme`
+- [x] Garantir compatibilidade com configs antigas sem `icon_theme`
 
 ## Fase 9: Ferramentas de Build e Qualidade
 
@@ -191,6 +192,22 @@ Exemplos que precisam existir no plano de alias:
 - [ ] Validar troca de modo de video com recarga correta do cache
 - [ ] Medir custo de memoria e tempo de decode durante o bootstrap
 
+## Fase 11: Modernizacao dos Apps Nativos
+
+- [x] Aplicar o tema de icones dentro dos apps nativos do menu, exceto ports
+- [x] Comecar pelo `filemanager` para validar listas, acoes e tipos de conteudo
+- [x] Adicionar icones por item no `filemanager` com fallback previsivel
+- [x] Melhorar toolbar, breadcrumb visual e status do `filemanager`
+- [x] Modernizar o `taskmgr` com identidade visual mais forte, icones por app e hierarquia melhor
+- [x] Extrair helpers compartilhados de UI para evitar duplicacao entre apps
+- [x] Expandir depois para `editor`, `imageviewer`, `audioplayer`, `calculator` e `personalize`
+
+Saidas esperadas:
+
+- apps nativos com aparencia mais proxima de aplicativos reais
+- maior reaproveitamento do `icon_theme` fora do shell do desktop
+- componentes de UI reutilizaveis para listas, toolbars e acoes
+
 ## Ordem Recomendada
 
 1. Fechar lista de icones boot-criticos e formatos realmente suportados.
@@ -201,16 +218,17 @@ Exemplos que precisam existir no plano de alias:
 6. Integrar primeiro no desktop shell e tray.
 7. Persistir configuracao e preparar personalizacao.
 8. Expandir cobertura para file manager, dialogs e demais apps.
+9. Modernizar os apps nativos do menu com base comum de icones e chrome.
 
 ## Definicao de Pronto do MVP
 
-- [ ] O desktop sobe usando o tema de `assets/icons`
-- [ ] Os atalhos principais exibem icones reais do tema
-- [ ] O menu iniciar exibe icones reais do tema
-- [ ] Rede e audio usam icones dinamicos do tema
-- [ ] A busca de icones funciona por nome/contexto/tamanho com fallback
-- [ ] O sistema continua funcional mesmo se um icone individual estiver faltando
-- [ ] O cache evita decode repetido em render continuo
+- [x] O desktop sobe usando o tema de `assets/icons`
+- [x] Os atalhos principais exibem icones reais do tema
+- [x] O menu iniciar exibe icones reais do tema
+- [x] Rede e audio usam icones dinamicos do tema
+- [x] A busca de icones funciona por nome/contexto/tamanho com fallback
+- [x] O sistema continua funcional mesmo se um icone individual estiver faltando
+- [x] O cache evita decode repetido em render continuo
 
 ## Riscos Principais
 

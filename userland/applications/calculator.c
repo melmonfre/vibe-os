@@ -206,24 +206,48 @@ void calculator_draw_window(struct calculator_state *calc, int active,
     ui_draw_surface(&body, theme->window_bg);
     ui_draw_surface(&hero, ui_color_panel());
 
+    (void)icon_theme_draw("accessories-calculator",
+                          ICON_THEME_CONTEXT_APPS,
+                          16,
+                          hero.x + 8,
+                          hero.y + 5,
+                          16,
+                          16);
     ui_draw_inset(&display, ui_color_window_bg());
-    sys_text(hero.x + 6, hero.y + 5, ui_color_muted(), "Operacoes basicas");
+    sys_text(hero.x + 30, hero.y + 5, ui_color_muted(), "Operacoes basicas");
     sys_text(display.x + 6, display.y + 9, theme->text, calc->display);
 
     for (int i = 0; i < CALCULATOR_BUTTON_COUNT; ++i) {
         struct rect button = calculator_button_rect(calc, i);
         char text[2];
         enum ui_button_style style = UI_BUTTON_NORMAL;
+        const char *icon_name = 0;
+        enum icon_theme_context icon_context = ICON_THEME_CONTEXT_ACTIONS;
+        int icon_size = 16;
 
         text[0] = calculator_button_key(i);
         text[1] = '\0';
         if (text[0] == 'C') {
             style = UI_BUTTON_DANGER;
+            icon_name = "cancel";
         } else if (text[0] == '=' ) {
             style = UI_BUTTON_ACTIVE;
+            icon_name = "gtk-apply";
         } else if (text[0] == '+' || text[0] == '-' || text[0] == '*' || text[0] == '/') {
             style = UI_BUTTON_PRIMARY;
         }
-        ui_draw_button(&button, text, style, 0);
+        if (icon_name != 0) {
+            ui_draw_button_with_icon(&button,
+                                     text,
+                                     style,
+                                     0,
+                                     icon_name,
+                                     icon_context,
+                                     icon_size,
+                                     8,
+                                     8);
+        } else {
+            ui_draw_button(&button, text, style, 0);
+        }
     }
 }

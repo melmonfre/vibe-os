@@ -68,6 +68,7 @@ int sys_task_snapshot(struct task_snapshot_summary *summary,
                       struct task_snapshot_entry *entries,
                       uint32_t max_entries);
 int sys_task_terminate(uint32_t pid);
+int sys_task_create(uintptr_t entry, void *arg, uint32_t stack_size, uint32_t task_class);
 int sys_launch_app(const char *name);
 int sys_launch_app_argv(int argc, char **argv);
 int sys_task_event_subscribe(void);

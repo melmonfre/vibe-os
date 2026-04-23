@@ -242,6 +242,8 @@ void flip_image_vertical(
 }
 
 static unsigned int g_craft_rng_state = 0x13579bdfu;
+int doom_snprintf(char *str, size_t size, const char *fmt, ...);
+void sys_write_debug(const char *s);
 
 static int craft_rand(void) {
     g_craft_rng_state = g_craft_rng_state * 1103515245u + 12345u;
@@ -273,7 +275,17 @@ void update_fps(FPS *fps) {
 
 GLuint gen_buffer(GLsizei size, GLfloat *data) {
     GLuint buffer = 0;
+    static int craft_buffer_debug_budget = 32;
+
     glGenBuffers(1, &buffer);
+    if ((buffer == 0 || size > (GLsizei)(64 * 1024)) && craft_buffer_debug_budget > 0) {
+        char line[128];
+        craft_buffer_debug_budget--;
+        doom_snprintf(line, sizeof(line),
+                      "craft: gen_buffer size=%d buffer=%u data=%u\n",
+                      (int)size, (unsigned int)buffer, data != NULL ? 1u : 0u);
+        sys_write_debug(line);
+    }
     glBindBuffer(GL_ARRAY_BUFFER, buffer);
     glBufferData(GL_ARRAY_BUFFER, size, data, GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);

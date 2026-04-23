@@ -66,6 +66,7 @@ static int g_fs_assets_registering = 0;
 static void fs_ensure_doom_wad_registered(void);
 static void fs_ensure_craft_textures_registered(void);
 static void fs_ensure_assets_registered(void);
+static void fs_ensure_dir_registered(const char *path);
 static uint32_t fs_storage_total_sectors(void);
 static int fs_validate_loaded_tree(void);
 
@@ -97,7 +98,177 @@ static int fs_validate_loaded_tree(void);
 #define BOOTLOADER_BG_IMAGE_LBA 160016u
 #define BOOTLOADER_BG_IMAGE_SECTORS 6312u
 #define BOOTLOADER_BG_IMAGE_BYTES 3231497
-
+#define ICON_APP_DEFAULT_48_IMAGE_LBA 166328u
+#define ICON_APP_DEFAULT_48_IMAGE_SECTORS 19u
+#define ICON_APP_DEFAULT_48_IMAGE_BYTES 9571
+#define ICON_APP_DEFAULT_16_IMAGE_LBA 166366u
+#define ICON_APP_DEFAULT_16_IMAGE_SECTORS 1u
+#define ICON_APP_DEFAULT_16_IMAGE_BYTES 210
+#define ICON_TERMINAL_16_IMAGE_LBA 166367u
+#define ICON_TERMINAL_16_IMAGE_SECTORS 1u
+#define ICON_TERMINAL_16_IMAGE_BYTES 399
+#define ICON_CLOCK_16_IMAGE_LBA 166368u
+#define ICON_CLOCK_16_IMAGE_SECTORS 1u
+#define ICON_CLOCK_16_IMAGE_BYTES 377
+#define ICON_CALCULATOR_16_IMAGE_LBA 166369u
+#define ICON_CALCULATOR_16_IMAGE_SECTORS 2u
+#define ICON_CALCULATOR_16_IMAGE_BYTES 646
+#define ICON_EDITOR_24_IMAGE_LBA 166371u
+#define ICON_EDITOR_24_IMAGE_SECTORS 3u
+#define ICON_EDITOR_24_IMAGE_BYTES 1112
+#define ICON_TASKS_16_IMAGE_LBA 166374u
+#define ICON_TASKS_16_IMAGE_SECTORS 2u
+#define ICON_TASKS_16_IMAGE_BYTES 836
+#define ICON_IMAGEVIEWER_16_IMAGE_LBA 166376u
+#define ICON_IMAGEVIEWER_16_IMAGE_SECTORS 2u
+#define ICON_IMAGEVIEWER_16_IMAGE_BYTES 675
+#define ICON_WALLPAPER_16_IMAGE_LBA 166378u
+#define ICON_WALLPAPER_16_IMAGE_SECTORS 1u
+#define ICON_WALLPAPER_16_IMAGE_BYTES 449
+#define ICON_PREFERENCES_16_IMAGE_LBA 166379u
+#define ICON_PREFERENCES_16_IMAGE_SECTORS 1u
+#define ICON_PREFERENCES_16_IMAGE_BYTES 333
+#define ICON_NETWORK_16_IMAGE_LBA 166380u
+#define ICON_NETWORK_16_IMAGE_SECTORS 1u
+#define ICON_NETWORK_16_IMAGE_BYTES 265
+#define ICON_FOLDER_48_IMAGE_LBA 166347u
+#define ICON_FOLDER_48_IMAGE_SECTORS 4u
+#define ICON_FOLDER_48_IMAGE_BYTES 1625
+#define ICON_TRASH_48_IMAGE_LBA 166351u
+#define ICON_TRASH_48_IMAGE_SECTORS 4u
+#define ICON_TRASH_48_IMAGE_BYTES 1941
+#define ICON_FOLDER_16_IMAGE_LBA 166381u
+#define ICON_FOLDER_16_IMAGE_SECTORS 1u
+#define ICON_FOLDER_16_IMAGE_BYTES 368
+#define ICON_TRASH_16_IMAGE_LBA 166382u
+#define ICON_TRASH_16_IMAGE_SECTORS 1u
+#define ICON_TRASH_16_IMAGE_BYTES 391
+#define ICON_FOLDER_OPEN_32_IMAGE_LBA 166383u
+#define ICON_FOLDER_OPEN_32_IMAGE_SECTORS 2u
+#define ICON_FOLDER_OPEN_32_IMAGE_BYTES 572
+#define ICON_FOLDER_DOCS_32_IMAGE_LBA 166385u
+#define ICON_FOLDER_DOCS_32_IMAGE_SECTORS 2u
+#define ICON_FOLDER_DOCS_32_IMAGE_BYTES 781
+#define ICON_FOLDER_MUSIC_32_IMAGE_LBA 166387u
+#define ICON_FOLDER_MUSIC_32_IMAGE_SECTORS 2u
+#define ICON_FOLDER_MUSIC_32_IMAGE_BYTES 755
+#define ICON_FOLDER_PICTURES_32_IMAGE_LBA 166389u
+#define ICON_FOLDER_PICTURES_32_IMAGE_SECTORS 2u
+#define ICON_FOLDER_PICTURES_32_IMAGE_BYTES 562
+#define ICON_FOLDER_VIDEO_32_IMAGE_LBA 166391u
+#define ICON_FOLDER_VIDEO_32_IMAGE_SECTORS 1u
+#define ICON_FOLDER_VIDEO_32_IMAGE_BYTES 442
+#define ICON_ACTION_GO_UP_16_IMAGE_LBA 166392u
+#define ICON_ACTION_GO_UP_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_GO_UP_16_IMAGE_BYTES 327
+#define ICON_ACTION_NEW_16_IMAGE_LBA 166393u
+#define ICON_ACTION_NEW_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_NEW_16_IMAGE_BYTES 325
+#define ICON_ACTION_COPY_16_IMAGE_LBA 166394u
+#define ICON_ACTION_COPY_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_COPY_16_IMAGE_BYTES 278
+#define ICON_ACTION_PASTE_16_IMAGE_LBA 166395u
+#define ICON_ACTION_PASTE_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_PASTE_16_IMAGE_BYTES 376
+#define ICON_ACTION_TRASH_16_IMAGE_LBA 166396u
+#define ICON_ACTION_TRASH_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_TRASH_16_IMAGE_BYTES 391
+#define ICON_AUDIO_PLAYER_24_IMAGE_LBA 166397u
+#define ICON_AUDIO_PLAYER_24_IMAGE_SECTORS 12u
+#define ICON_AUDIO_PLAYER_24_IMAGE_BYTES 5977
+#define ICON_THEME_INDEX_IMAGE_LBA 166409u
+#define ICON_THEME_INDEX_IMAGE_SECTORS 9u
+#define ICON_THEME_INDEX_IMAGE_BYTES 4605
+#define ICON_APP_MENU_16_IMAGE_LBA 166418u
+#define ICON_APP_MENU_16_IMAGE_SECTORS 2u
+#define ICON_APP_MENU_16_IMAGE_BYTES 654
+#define ICON_AUDIO_PLAYER_16_IMAGE_LBA 166420u
+#define ICON_AUDIO_PLAYER_16_IMAGE_SECTORS 1u
+#define ICON_AUDIO_PLAYER_16_IMAGE_BYTES 266
+#define ICON_TEXT_16_IMAGE_LBA 166421u
+#define ICON_TEXT_16_IMAGE_SECTORS 2u
+#define ICON_TEXT_16_IMAGE_BYTES 706
+#define ICON_SKETCHPAD_22_IMAGE_LBA 166423u
+#define ICON_SKETCHPAD_22_IMAGE_SECTORS 3u
+#define ICON_SKETCHPAD_22_IMAGE_BYTES 1412
+#define ICON_GAME_SNAKE_16_IMAGE_LBA 166426u
+#define ICON_GAME_SNAKE_16_IMAGE_SECTORS 1u
+#define ICON_GAME_SNAKE_16_IMAGE_BYTES 176
+#define ICON_GAME_BOARD_16_IMAGE_LBA 166427u
+#define ICON_GAME_BOARD_16_IMAGE_SECTORS 2u
+#define ICON_GAME_BOARD_16_IMAGE_BYTES 823
+#define ICON_GAME_MINES_16_IMAGE_LBA 166429u
+#define ICON_GAME_MINES_16_IMAGE_SECTORS 1u
+#define ICON_GAME_MINES_16_IMAGE_BYTES 193
+#define ICON_GAME_ARCADE_16_IMAGE_LBA 166430u
+#define ICON_GAME_ARCADE_16_IMAGE_SECTORS 1u
+#define ICON_GAME_ARCADE_16_IMAGE_BYTES 380
+#define ICON_GAME_INVADERS_16_IMAGE_LBA 166431u
+#define ICON_GAME_INVADERS_16_IMAGE_SECTORS 1u
+#define ICON_GAME_INVADERS_16_IMAGE_BYTES 149
+#define ICON_CRAFT_24_IMAGE_LBA 166432u
+#define ICON_CRAFT_24_IMAGE_SECTORS 81u
+#define ICON_CRAFT_24_IMAGE_BYTES 41281
+#define ICON_CRAFT_48_IMAGE_LBA 166513u
+#define ICON_CRAFT_48_IMAGE_SECTORS 81u
+#define ICON_CRAFT_48_IMAGE_BYTES 41281
+#define ICON_ACTION_OPEN_16_IMAGE_LBA 166594u
+#define ICON_ACTION_OPEN_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_OPEN_16_IMAGE_BYTES 368
+#define ICON_ACTION_RENAME_16_IMAGE_LBA 166595u
+#define ICON_ACTION_RENAME_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_RENAME_16_IMAGE_BYTES 189
+#define ICON_ACTION_SAVE_16_IMAGE_LBA 166596u
+#define ICON_ACTION_SAVE_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_SAVE_16_IMAGE_BYTES 385
+#define ICON_ACTION_SAVE_AS_16_IMAGE_LBA 166597u
+#define ICON_ACTION_SAVE_AS_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_SAVE_AS_16_IMAGE_BYTES 385
+#define ICON_ACTION_EXPORT_16_IMAGE_LBA 166598u
+#define ICON_ACTION_EXPORT_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_EXPORT_16_IMAGE_BYTES 360
+#define ICON_ACTION_CANCEL_16_IMAGE_LBA 166599u
+#define ICON_ACTION_CANCEL_16_IMAGE_SECTORS 2u
+#define ICON_ACTION_CANCEL_16_IMAGE_BYTES 691
+#define ICON_ACTION_APPLY_16_IMAGE_LBA 166601u
+#define ICON_ACTION_APPLY_16_IMAGE_SECTORS 2u
+#define ICON_ACTION_APPLY_16_IMAGE_BYTES 926
+#define ICON_ACTION_WINDOW_CLOSE_16_IMAGE_LBA 166603u
+#define ICON_ACTION_WINDOW_CLOSE_16_IMAGE_SECTORS 2u
+#define ICON_ACTION_WINDOW_CLOSE_16_IMAGE_BYTES 678
+#define ICON_ACTION_WINDOW_NEW_16_IMAGE_LBA 166605u
+#define ICON_ACTION_WINDOW_NEW_16_IMAGE_SECTORS 2u
+#define ICON_ACTION_WINDOW_NEW_16_IMAGE_BYTES 567
+#define ICON_ACTION_GO_DOWN_16_IMAGE_LBA 166607u
+#define ICON_ACTION_GO_DOWN_16_IMAGE_SECTORS 1u
+#define ICON_ACTION_GO_DOWN_16_IMAGE_BYTES 357
+#define ICON_AUDIO_ZERO_16_IMAGE_LBA 166355u
+#define ICON_AUDIO_ZERO_16_IMAGE_SECTORS 1u
+#define ICON_AUDIO_ZERO_16_IMAGE_BYTES 340
+#define ICON_AUDIO_LOW_16_IMAGE_LBA 166356u
+#define ICON_AUDIO_LOW_16_IMAGE_SECTORS 2u
+#define ICON_AUDIO_LOW_16_IMAGE_BYTES 1015
+#define ICON_AUDIO_MEDIUM_16_IMAGE_LBA 166358u
+#define ICON_AUDIO_MEDIUM_16_IMAGE_SECTORS 2u
+#define ICON_AUDIO_MEDIUM_16_IMAGE_BYTES 1015
+#define ICON_AUDIO_HIGH_16_IMAGE_LBA 166360u
+#define ICON_AUDIO_HIGH_16_IMAGE_SECTORS 1u
+#define ICON_AUDIO_HIGH_16_IMAGE_BYTES 293
+#define ICON_WIFI_NONE_16_IMAGE_LBA 166361u
+#define ICON_WIFI_NONE_16_IMAGE_SECTORS 1u
+#define ICON_WIFI_NONE_16_IMAGE_BYTES 104
+#define ICON_WIFI_MEDIUM_16_IMAGE_LBA 166362u
+#define ICON_WIFI_MEDIUM_16_IMAGE_SECTORS 1u
+#define ICON_WIFI_MEDIUM_16_IMAGE_BYTES 118
+#define ICON_WIFI_FULL_16_IMAGE_LBA 166363u
+#define ICON_WIFI_FULL_16_IMAGE_SECTORS 1u
+#define ICON_WIFI_FULL_16_IMAGE_BYTES 112
+#define ICON_ETHERNET_CONNECTED_24_IMAGE_LBA 166364u
+#define ICON_ETHERNET_CONNECTED_24_IMAGE_SECTORS 1u
+#define ICON_ETHERNET_CONNECTED_24_IMAGE_BYTES 434
+#define ICON_ETHERNET_DISCONNECTED_24_IMAGE_LBA 166365u
+#define ICON_ETHERNET_DISCONNECTED_24_IMAGE_SECTORS 1u
+#define ICON_ETHERNET_DISCONNECTED_24_IMAGE_BYTES 401
 static void fs_reset_node(int idx) {
     int i;
 
@@ -568,6 +739,15 @@ static void fs_register_known_asset(const char *path,
                                     int size) {
     if (fs_register_image_file(path, lba, sector_count, size) == 0) {
         fs_debug_asset_path("fs: asset file ", path);
+    }
+}
+
+static void fs_ensure_dir_registered(const char *path) {
+    if (path == 0 || path[0] == '\0') {
+        return;
+    }
+    if (fs_resolve(path) < 0) {
+        (void)fs_create(path, 1);
     }
 }
 
@@ -1475,6 +1655,23 @@ static void fs_ensure_assets_registered(void) {
     if (fs_resolve("/assets") < 0) {
         (void)fs_create("/assets", 1);
     }
+    fs_ensure_dir_registered("/assets/icons");
+    fs_ensure_dir_registered("/assets/icons/apps");
+    fs_ensure_dir_registered("/assets/icons/apps/16");
+    fs_ensure_dir_registered("/assets/icons/apps/22");
+    fs_ensure_dir_registered("/assets/icons/apps/24");
+    fs_ensure_dir_registered("/assets/icons/apps/48");
+    fs_ensure_dir_registered("/assets/icons/places");
+    fs_ensure_dir_registered("/assets/icons/places/16");
+    fs_ensure_dir_registered("/assets/icons/places/32");
+    fs_ensure_dir_registered("/assets/icons/places/48");
+    fs_ensure_dir_registered("/assets/icons/actions");
+    fs_ensure_dir_registered("/assets/icons/actions/16");
+    fs_ensure_dir_registered("/assets/icons/panel");
+    fs_ensure_dir_registered("/assets/icons/panel/16");
+    fs_ensure_dir_registered("/assets/icons/notifications");
+    fs_ensure_dir_registered("/assets/icons/notifications/16");
+    fs_ensure_dir_registered("/assets/icons/notifications/24");
 
     fs_register_known_asset("/assets/wallpaper.png",
                             WALLPAPER_IMAGE_LBA,
@@ -1496,6 +1693,234 @@ static void fs_ensure_assets_registered(void) {
                             BOOTLOADER_BG_IMAGE_LBA,
                             BOOTLOADER_BG_IMAGE_SECTORS,
                             BOOTLOADER_BG_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/48/application-default-icon.png",
+                            ICON_APP_DEFAULT_48_IMAGE_LBA,
+                            ICON_APP_DEFAULT_48_IMAGE_SECTORS,
+                            ICON_APP_DEFAULT_48_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/application-default-icon.png",
+                            ICON_APP_DEFAULT_16_IMAGE_LBA,
+                            ICON_APP_DEFAULT_16_IMAGE_SECTORS,
+                            ICON_APP_DEFAULT_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/utilities-terminal.png",
+                            ICON_TERMINAL_16_IMAGE_LBA,
+                            ICON_TERMINAL_16_IMAGE_SECTORS,
+                            ICON_TERMINAL_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/clock.png",
+                            ICON_CLOCK_16_IMAGE_LBA,
+                            ICON_CLOCK_16_IMAGE_SECTORS,
+                            ICON_CLOCK_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/accessories-calculator.png",
+                            ICON_CALCULATOR_16_IMAGE_LBA,
+                            ICON_CALCULATOR_16_IMAGE_SECTORS,
+                            ICON_CALCULATOR_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/24/accessories-text-editor.png",
+                            ICON_EDITOR_24_IMAGE_LBA,
+                            ICON_EDITOR_24_IMAGE_SECTORS,
+                            ICON_EDITOR_24_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/utilities-system-monitor.png",
+                            ICON_TASKS_16_IMAGE_LBA,
+                            ICON_TASKS_16_IMAGE_SECTORS,
+                            ICON_TASKS_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/camera-photo.png",
+                            ICON_IMAGEVIEWER_16_IMAGE_LBA,
+                            ICON_IMAGEVIEWER_16_IMAGE_SECTORS,
+                            ICON_IMAGEVIEWER_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/preferences-desktop-wallpaper.png",
+                            ICON_WALLPAPER_16_IMAGE_LBA,
+                            ICON_WALLPAPER_16_IMAGE_SECTORS,
+                            ICON_WALLPAPER_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/preferences-desktop.png",
+                            ICON_PREFERENCES_16_IMAGE_LBA,
+                            ICON_PREFERENCES_16_IMAGE_SECTORS,
+                            ICON_PREFERENCES_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/package_applications.png",
+                            ICON_APP_MENU_16_IMAGE_LBA,
+                            ICON_APP_MENU_16_IMAGE_SECTORS,
+                            ICON_APP_MENU_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/preferences-system-network.png",
+                            ICON_NETWORK_16_IMAGE_LBA,
+                            ICON_NETWORK_16_IMAGE_SECTORS,
+                            ICON_NETWORK_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/text.png",
+                            ICON_TEXT_16_IMAGE_LBA,
+                            ICON_TEXT_16_IMAGE_SECTORS,
+                            ICON_TEXT_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/multimedia-audio-player.png",
+                            ICON_AUDIO_PLAYER_16_IMAGE_LBA,
+                            ICON_AUDIO_PLAYER_16_IMAGE_SECTORS,
+                            ICON_AUDIO_PLAYER_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/24/audio-player.png",
+                            ICON_AUDIO_PLAYER_24_IMAGE_LBA,
+                            ICON_AUDIO_PLAYER_24_IMAGE_SECTORS,
+                            ICON_AUDIO_PLAYER_24_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/22/preferences-desktop-theme.png",
+                            ICON_SKETCHPAD_22_IMAGE_LBA,
+                            ICON_SKETCHPAD_22_IMAGE_SECTORS,
+                            ICON_SKETCHPAD_22_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/ksnake.png",
+                            ICON_GAME_SNAKE_16_IMAGE_LBA,
+                            ICON_GAME_SNAKE_16_IMAGE_SECTORS,
+                            ICON_GAME_SNAKE_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/package_games_board.png",
+                            ICON_GAME_BOARD_16_IMAGE_LBA,
+                            ICON_GAME_BOARD_16_IMAGE_SECTORS,
+                            ICON_GAME_BOARD_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/kmines.png",
+                            ICON_GAME_MINES_16_IMAGE_LBA,
+                            ICON_GAME_MINES_16_IMAGE_SECTORS,
+                            ICON_GAME_MINES_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/package_games_arcade.png",
+                            ICON_GAME_ARCADE_16_IMAGE_LBA,
+                            ICON_GAME_ARCADE_16_IMAGE_SECTORS,
+                            ICON_GAME_ARCADE_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/16/kspaceduel.png",
+                            ICON_GAME_INVADERS_16_IMAGE_LBA,
+                            ICON_GAME_INVADERS_16_IMAGE_SECTORS,
+                            ICON_GAME_INVADERS_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/24/craft.png",
+                            ICON_CRAFT_24_IMAGE_LBA,
+                            ICON_CRAFT_24_IMAGE_SECTORS,
+                            ICON_CRAFT_24_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/apps/48/craft.png",
+                            ICON_CRAFT_48_IMAGE_LBA,
+                            ICON_CRAFT_48_IMAGE_SECTORS,
+                            ICON_CRAFT_48_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/places/16/folder.png",
+                            ICON_FOLDER_16_IMAGE_LBA,
+                            ICON_FOLDER_16_IMAGE_SECTORS,
+                            ICON_FOLDER_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/places/16/user-trash.png",
+                            ICON_TRASH_16_IMAGE_LBA,
+                            ICON_TRASH_16_IMAGE_SECTORS,
+                            ICON_TRASH_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/places/32/folder_open.png",
+                            ICON_FOLDER_OPEN_32_IMAGE_LBA,
+                            ICON_FOLDER_OPEN_32_IMAGE_SECTORS,
+                            ICON_FOLDER_OPEN_32_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/places/32/folder-documents.png",
+                            ICON_FOLDER_DOCS_32_IMAGE_LBA,
+                            ICON_FOLDER_DOCS_32_IMAGE_SECTORS,
+                            ICON_FOLDER_DOCS_32_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/places/32/folder-music.png",
+                            ICON_FOLDER_MUSIC_32_IMAGE_LBA,
+                            ICON_FOLDER_MUSIC_32_IMAGE_SECTORS,
+                            ICON_FOLDER_MUSIC_32_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/places/32/folder-pictures.png",
+                            ICON_FOLDER_PICTURES_32_IMAGE_LBA,
+                            ICON_FOLDER_PICTURES_32_IMAGE_SECTORS,
+                            ICON_FOLDER_PICTURES_32_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/places/32/folder-video.png",
+                            ICON_FOLDER_VIDEO_32_IMAGE_LBA,
+                            ICON_FOLDER_VIDEO_32_IMAGE_SECTORS,
+                            ICON_FOLDER_VIDEO_32_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/document-new.png",
+                            ICON_ACTION_NEW_16_IMAGE_LBA,
+                            ICON_ACTION_NEW_16_IMAGE_SECTORS,
+                            ICON_ACTION_NEW_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/go-up.png",
+                            ICON_ACTION_GO_UP_16_IMAGE_LBA,
+                            ICON_ACTION_GO_UP_16_IMAGE_SECTORS,
+                            ICON_ACTION_GO_UP_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/document-open.png",
+                            ICON_ACTION_OPEN_16_IMAGE_LBA,
+                            ICON_ACTION_OPEN_16_IMAGE_SECTORS,
+                            ICON_ACTION_OPEN_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/edit-copy.png",
+                            ICON_ACTION_COPY_16_IMAGE_LBA,
+                            ICON_ACTION_COPY_16_IMAGE_SECTORS,
+                            ICON_ACTION_COPY_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/edit-paste.png",
+                            ICON_ACTION_PASTE_16_IMAGE_LBA,
+                            ICON_ACTION_PASTE_16_IMAGE_SECTORS,
+                            ICON_ACTION_PASTE_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/item_rename.png",
+                            ICON_ACTION_RENAME_16_IMAGE_LBA,
+                            ICON_ACTION_RENAME_16_IMAGE_SECTORS,
+                            ICON_ACTION_RENAME_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/filesave.png",
+                            ICON_ACTION_SAVE_16_IMAGE_LBA,
+                            ICON_ACTION_SAVE_16_IMAGE_SECTORS,
+                            ICON_ACTION_SAVE_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/filesaveas.png",
+                            ICON_ACTION_SAVE_AS_16_IMAGE_LBA,
+                            ICON_ACTION_SAVE_AS_16_IMAGE_SECTORS,
+                            ICON_ACTION_SAVE_AS_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/document-export.png",
+                            ICON_ACTION_EXPORT_16_IMAGE_LBA,
+                            ICON_ACTION_EXPORT_16_IMAGE_SECTORS,
+                            ICON_ACTION_EXPORT_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/cancel.png",
+                            ICON_ACTION_CANCEL_16_IMAGE_LBA,
+                            ICON_ACTION_CANCEL_16_IMAGE_SECTORS,
+                            ICON_ACTION_CANCEL_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/gtk-apply.png",
+                            ICON_ACTION_APPLY_16_IMAGE_LBA,
+                            ICON_ACTION_APPLY_16_IMAGE_SECTORS,
+                            ICON_ACTION_APPLY_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/window-close.png",
+                            ICON_ACTION_WINDOW_CLOSE_16_IMAGE_LBA,
+                            ICON_ACTION_WINDOW_CLOSE_16_IMAGE_SECTORS,
+                            ICON_ACTION_WINDOW_CLOSE_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/window-new.png",
+                            ICON_ACTION_WINDOW_NEW_16_IMAGE_LBA,
+                            ICON_ACTION_WINDOW_NEW_16_IMAGE_SECTORS,
+                            ICON_ACTION_WINDOW_NEW_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/go-down.png",
+                            ICON_ACTION_GO_DOWN_16_IMAGE_LBA,
+                            ICON_ACTION_GO_DOWN_16_IMAGE_SECTORS,
+                            ICON_ACTION_GO_DOWN_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/actions/16/edittrash.png",
+                            ICON_ACTION_TRASH_16_IMAGE_LBA,
+                            ICON_ACTION_TRASH_16_IMAGE_SECTORS,
+                            ICON_ACTION_TRASH_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/index.theme",
+                            ICON_THEME_INDEX_IMAGE_LBA,
+                            ICON_THEME_INDEX_IMAGE_SECTORS,
+                            ICON_THEME_INDEX_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/places/48/folder.png",
+                            ICON_FOLDER_48_IMAGE_LBA,
+                            ICON_FOLDER_48_IMAGE_SECTORS,
+                            ICON_FOLDER_48_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/places/48/user-trash.png",
+                            ICON_TRASH_48_IMAGE_LBA,
+                            ICON_TRASH_48_IMAGE_SECTORS,
+                            ICON_TRASH_48_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/panel/16/audio-volume-low-zero.png",
+                            ICON_AUDIO_ZERO_16_IMAGE_LBA,
+                            ICON_AUDIO_ZERO_16_IMAGE_SECTORS,
+                            ICON_AUDIO_ZERO_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/panel/16/audio-volume-low.png",
+                            ICON_AUDIO_LOW_16_IMAGE_LBA,
+                            ICON_AUDIO_LOW_16_IMAGE_SECTORS,
+                            ICON_AUDIO_LOW_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/panel/16/audio-volume-medium.png",
+                            ICON_AUDIO_MEDIUM_16_IMAGE_LBA,
+                            ICON_AUDIO_MEDIUM_16_IMAGE_SECTORS,
+                            ICON_AUDIO_MEDIUM_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/panel/16/audio-volume-high.png",
+                            ICON_AUDIO_HIGH_16_IMAGE_LBA,
+                            ICON_AUDIO_HIGH_16_IMAGE_SECTORS,
+                            ICON_AUDIO_HIGH_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/notifications/16/notification-network-wireless-none.png",
+                            ICON_WIFI_NONE_16_IMAGE_LBA,
+                            ICON_WIFI_NONE_16_IMAGE_SECTORS,
+                            ICON_WIFI_NONE_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/notifications/16/notification-network-wireless-medium.png",
+                            ICON_WIFI_MEDIUM_16_IMAGE_LBA,
+                            ICON_WIFI_MEDIUM_16_IMAGE_SECTORS,
+                            ICON_WIFI_MEDIUM_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/notifications/16/notification-network-wireless-full.png",
+                            ICON_WIFI_FULL_16_IMAGE_LBA,
+                            ICON_WIFI_FULL_16_IMAGE_SECTORS,
+                            ICON_WIFI_FULL_16_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/notifications/24/notification-network-ethernet-connected.png",
+                            ICON_ETHERNET_CONNECTED_24_IMAGE_LBA,
+                            ICON_ETHERNET_CONNECTED_24_IMAGE_SECTORS,
+                            ICON_ETHERNET_CONNECTED_24_IMAGE_BYTES);
+    fs_register_known_asset("/assets/icons/notifications/24/notification-network-ethernet-disconnected.png",
+                            ICON_ETHERNET_DISCONNECTED_24_IMAGE_LBA,
+                            ICON_ETHERNET_DISCONNECTED_24_IMAGE_SECTORS,
+                            ICON_ETHERNET_DISCONNECTED_24_IMAGE_BYTES);
     g_fs_assets_registering = 0;
     g_fs_assets_registered = 1;
 }

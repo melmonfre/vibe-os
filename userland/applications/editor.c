@@ -223,7 +223,7 @@ void editor_newline(struct editor_state *ed) {
 }
 
 struct rect editor_save_button_rect(const struct editor_state *ed) {
-    struct rect r = {ed->window.x + ed->window.w - 56, ed->window.y + 24, 46, 14};
+    struct rect r = {ed->window.x + ed->window.w - 72, ed->window.y + 24, 62, 14};
     return r;
 }
 
@@ -235,9 +235,15 @@ void editor_draw_window(struct editor_state *ed, int active,
     struct rect meta = {ed->window.x + 10, ed->window.y + 58, ed->window.w - 20, 18};
     struct rect area = {ed->window.x + 10, ed->window.y + 82, ed->window.w - 20, ed->window.h - 118};
     struct rect body = {ed->window.x + 4, ed->window.y + 18, ed->window.w - 8, ed->window.h - 22};
-    struct rect path_bar = {toolbar.x + 6, toolbar.y + 7, toolbar.w - 70, 14};
+    struct rect path_bar = {toolbar.x + 28, toolbar.y + 7, toolbar.w - 92, 14};
+    struct rect path_text = {path_bar.x + 4, path_bar.y, path_bar.w - 8, path_bar.h};
+    struct rect meta_left_bounds = {meta.x + 6, meta.y, meta.w - 132, meta.h};
+    struct rect meta_right_bounds = {meta.x + meta.w - 118, meta.y, 112, meta.h};
     struct rect status_bar = {ed->window.x + 10, ed->window.y + ed->window.h - 28, ed->window.w - 20, 14};
     char path[80];
+    char path_fit[80];
+    char meta_left_fit[48];
+    char meta_right_fit[48];
     int x = area.x + 4;
     int y = area.y + 4;
     const char *title = ed->nano_mode ? "NANO" : "EDITOR";
@@ -251,11 +257,29 @@ void editor_draw_window(struct editor_state *ed, int active,
     ui_draw_surface(&meta, ui_color_panel());
 
     editor_compact_path(ed, path, sizeof(path));
+    (void)icon_theme_draw(ed->nano_mode ? "text" : "accessories-text-editor",
+                          ICON_THEME_CONTEXT_APPS,
+                          ed->nano_mode ? 16 : 24,
+                          toolbar.x + 8,
+                          toolbar.y + 6,
+                          16,
+                          16);
     ui_draw_inset(&path_bar, ui_color_window_bg());
-    sys_text(path_bar.x + 4, path_bar.y + 4, theme->text, path);
-    ui_draw_button(&save, save_label, UI_BUTTON_PRIMARY, 0);
-    sys_text(meta.x + 6, meta.y + 5, ui_color_muted(), meta_left);
-    sys_text(meta.x + meta.w - 120, meta.y + 5, ui_color_muted(), meta_right);
+    ui_text_copy_fit(path_fit, (int)sizeof(path_fit), path, path_bar.w - 8);
+    ui_draw_text_clipped(&path_bar, path_text.x, path_bar.y + 4, theme->text, path_fit);
+    ui_draw_button_with_icon(&save,
+                             save_label,
+                             UI_BUTTON_PRIMARY,
+                             0,
+                             ed->nano_mode ? "filesaveas" : "filesave",
+                             ICON_THEME_CONTEXT_ACTIONS,
+                             16,
+                             8,
+                             8);
+    ui_text_copy_fit(meta_left_fit, (int)sizeof(meta_left_fit), meta_left, meta_left_bounds.w);
+    ui_text_copy_fit(meta_right_fit, (int)sizeof(meta_right_fit), meta_right, meta_right_bounds.w);
+    ui_draw_text_clipped(&meta_left_bounds, meta_left_bounds.x, meta.y + 5, ui_color_muted(), meta_left_fit);
+    ui_draw_text_clipped(&meta_right_bounds, meta_right_bounds.x, meta.y + 5, ui_color_muted(), meta_right_fit);
 
     ui_draw_inset(&area, ui_color_window_bg());
     for (int i = 0; i < ed->length; ++i) {

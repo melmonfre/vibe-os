@@ -87,6 +87,7 @@ typedef struct process {
     uint32_t abi_version;
     uint32_t abi_osabi;
     uint32_t abi_machine;
+    uint32_t launch_context_pid;
     uintptr_t image_base;
     uint32_t image_size;
     uintptr_t entry_point;
@@ -105,6 +106,10 @@ process_t *process_create_with_stack(void (*entry)(void),
                                      uint32_t task_class,
                                      uint32_t stack_size);
 void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top);
+void process_setup_initial_context_arg(process_t *proc,
+                                       uintptr_t entry,
+                                       uintptr_t stack_top,
+                                       uintptr_t arg);
 void process_terminate(process_t *proc);
 void process_destroy(process_t *proc);
 void process_set_abi_metadata(process_t *proc,

@@ -2,6 +2,7 @@
 
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/fs.h>
+#include <userland/modules/include/icon_theme.h>
 #include <userland/modules/include/image.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/modules/include/terminal.h>
@@ -36,6 +37,8 @@ static int g_ui_pending_wallpaper_save_settings = 0;
 static char g_ui_pending_wallpaper_path[80];
 static int g_ui_startup_persist_hold_depth = 0;
 static int g_ui_pending_settings_save = 0;
+static uint8_t *g_wallpaper_region_pixels = 0;
+static size_t g_wallpaper_region_capacity = 0u;
 
 #define TASKBAR_HEIGHT 22
 #define START_MENU_WIDTH 336
@@ -49,12 +52,44 @@ static int g_ui_pending_settings_save = 0;
 #define TASKBAR_APPLET_H 16
 #define TASKBAR_APPLET_GAP 4
 #define TASKBAR_TRAY_PADDING 6
+#define DESKTOP_SHORTCUT_X 16
+#define DESKTOP_SHORTCUT_Y 18
+#define DESKTOP_SHORTCUT_W 86
+#define DESKTOP_SHORTCUT_H 82
+#define DESKTOP_SHORTCUT_STEP 92
 #define UI_SETTINGS_PATH "/config/ui.cfg"
 
 static void ui_save_settings(void);
 static void ui_wallpaper_reset(int explicit_none);
 static int ui_wallpaper_set_from_node_internal(int node, int persist);
 static int ui_try_set_default_wallpaper(void);
+static int ui_icon_spec_for_app(enum app_type type,
+                                const char **name_out,
+                                enum icon_theme_context *context_out,
+                                int *size_out);
+static int ui_icon_spec_for_window_title(const char *title,
+                                         const char **name_out,
+                                         enum icon_theme_context *context_out,
+                                         int *size_out);
+void ui_draw_button_with_icon(const struct rect *r,
+                              const char *label,
+                              enum ui_button_style style,
+                              int highlighted,
+                              const char *icon_name,
+                              enum icon_theme_context icon_context,
+                              int icon_size,
+                              int icon_w,
+                              int icon_h);
+static void ui_draw_desktop_shortcut(const struct rect *r,
+                                     const char *label,
+                                     int hover,
+                                     const char *icon_name,
+                                     enum icon_theme_context icon_context,
+                                     int icon_size);
+static int ui_rect_intersects(const struct rect *a, const struct rect *b);
+static int ui_sanitize_screen_rect(struct rect *r);
+static int ui_ensure_wallpaper_region_capacity(size_t pixels);
+static void ui_draw_wallpaper_region(const struct rect *region);
 
 static int ui_startup_persist_blocked(void) {
     return g_ui_startup_persist_hold_depth > 0;
@@ -116,6 +151,110 @@ static void ui_apply_pending_wallpaper(void) {
     }
 }
 
+static int ui_rect_intersects(const struct rect *a, const struct rect *b) {
+    int ax1;
+    int ay1;
+    int bx1;
+    int by1;
+
+    if (a == 0 || b == 0 || a->w <= 0 || a->h <= 0 || b->w <= 0 || b->h <= 0) {
+        return 0;
+    }
+
+    ax1 = a->x + a->w;
+    ay1 = a->y + a->h;
+    bx1 = b->x + b->w;
+    by1 = b->y + b->h;
+    return !(ax1 <= b->x || bx1 <= a->x || ay1 <= b->y || by1 <= a->y);
+}
+
+static int ui_sanitize_screen_rect(struct rect *r) {
+    int x1;
+    int y1;
+
+    if (r == 0 || r->w <= 0 || r->h <= 0) {
+        return 0;
+    }
+
+    if (r->x < 0) {
+        r->w += r->x;
+        r->x = 0;
+    }
+    if (r->y < 0) {
+        r->h += r->y;
+        r->y = 0;
+    }
+
+    x1 = r->x + r->w;
+    y1 = r->y + r->h;
+    if (x1 > (int)SCREEN_WIDTH) {
+        r->w = (int)SCREEN_WIDTH - r->x;
+    }
+    if (y1 > (int)SCREEN_HEIGHT) {
+        r->h = (int)SCREEN_HEIGHT - r->y;
+    }
+    return r->w > 0 && r->h > 0;
+}
+
+static int ui_ensure_wallpaper_region_capacity(size_t pixels) {
+    uint8_t *buffer;
+
+    if (pixels <= g_wallpaper_region_capacity) {
+        return 0;
+    }
+
+    buffer = (uint8_t *)realloc(g_wallpaper_region_pixels, pixels);
+    if (buffer == 0) {
+        return -1;
+    }
+
+    g_wallpaper_region_pixels = buffer;
+    g_wallpaper_region_capacity = pixels;
+    return 0;
+}
+
+static void ui_draw_wallpaper_region(const struct rect *region) {
+    struct rect clipped;
+
+    if (region == 0) {
+        return;
+    }
+
+    clipped = *region;
+    if (!ui_sanitize_screen_rect(&clipped)) {
+        return;
+    }
+
+    if (!g_wallpaper.active || g_wallpaper.pixels == 0) {
+        sys_rect(clipped.x, clipped.y, clipped.w, clipped.h, g_theme.background);
+        return;
+    }
+
+    {
+        size_t pixels = (size_t)clipped.w * (size_t)clipped.h;
+
+        if (ui_ensure_wallpaper_region_capacity(pixels) != 0) {
+            sys_rect(clipped.x, clipped.y, clipped.w, clipped.h, g_theme.background);
+            return;
+        }
+
+        for (int row = 0; row < clipped.h; ++row) {
+            const uint8_t *src = g_wallpaper.pixels +
+                                 (((size_t)(clipped.y + row) * (size_t)SCREEN_WIDTH) + (size_t)clipped.x);
+            uint8_t *dst = g_wallpaper_region_pixels + ((size_t)row * (size_t)clipped.w);
+
+            memcpy(dst, src, (size_t)clipped.w);
+        }
+
+        sys_gfx_blit8(g_wallpaper_region_pixels,
+                      clipped.w,
+                      clipped.h,
+                      clipped.x,
+                      clipped.y,
+                      1);
+    }
+}
+
 static void ui_wallpaper_release_pixels(void) {
     if (g_wallpaper.pixels) {
         free(g_wallpaper.pixels);
@@ -169,13 +308,71 @@ static void ui_apply_desktop_palette(void) {
     ui_build_desktop_palette(palette);
     (void)sys_gfx_set_palette(palette);
 }
-static int ui_text_width(const char *text) {
+int ui_text_width(const char *text) {
     int len = str_len(text);
 
     if (len <= 0) {
         return 0;
     }
     return (len * 6) - 1;
+}
+
+void ui_text_copy_fit(char *dst, int dst_size, const char *src, int pixel_width) {
+    int cap;
+    int len;
+    int copy_len;
+
+    if (dst == 0 || dst_size <= 0) {
+        return;
+    }
+
+    dst[0] = '\0';
+    if (src == 0 || src[0] == '\0' || pixel_width <= 0) {
+        return;
+    }
+
+    cap = pixel_width / 6;
+    if (cap <= 0) {
+        return;
+    }
+    if (cap >= dst_size) {
+        cap = dst_size - 1;
+    }
+    len = str_len(src);
+    if (len <= cap) {
+        str_copy_limited(dst, src, dst_size);
+        return;
+    }
+    if (cap <= 3) {
+        for (copy_len = 0; copy_len < cap; ++copy_len) {
+            dst[copy_len] = '.';
+        }
+        dst[cap] = '\0';
+        return;
+    }
+
+    copy_len = cap - 3;
+    for (int i = 0; i < copy_len && src[i] != '\0'; ++i) {
+        dst[i] = src[i];
+    }
+    dst[copy_len + 0] = '.';
+    dst[copy_len + 1] = '.';
+    dst[copy_len + 2] = '.';
+    dst[copy_len + 3] = '\0';
+}
+
+void ui_draw_text_clipped(const struct rect *bounds, int x, int y, uint8_t color, const char *text) {
+    if (text == 0 || text[0] == '\0') {
+        return;
+    }
+
+    if (bounds != 0) {
+        clip_push(bounds->x, bounds->y, bounds->w, bounds->h);
+    }
+    sys_text(x, y, color, text);
+    if (bounds != 0) {
+        clip_pop();
+    }
 }
 
 static int ui_starts_with(const char *text, const char *prefix) {
@@ -359,6 +556,7 @@ static void ui_reload_wallpaper_for_current_mode(void) {
 static void ui_save_settings(void) {
     char text[256];
     char wallpaper[80];
+    const char *icon_theme_name = icon_theme_current();
 
     if (ui_startup_persist_blocked()) {
         g_ui_pending_settings_save = 1;
@@ -388,6 +586,9 @@ static void ui_save_settings(void) {
     ui_append_kv_u32(text, "width=", SCREEN_WIDTH, (int)sizeof(text));
     ui_append_kv_u32(text, "height=", SCREEN_HEIGHT, (int)sizeof(text));
     ui_append_kv_u32(text, "wallpaper_explicit_none=", g_wallpaper.explicit_none ? 1u : 0u, (int)sizeof(text));
+    str_append(text, "icon_theme=", (int)sizeof(text));
+    str_append(text, icon_theme_name != 0 ? icon_theme_name : "BeOS-r5-Icons", (int)sizeof(text));
+    str_append(text, "\n", (int)sizeof(text));
     str_append(text, "wallpaper=", (int)sizeof(text));
     str_append(text, wallpaper, (int)sizeof(text));
     str_append(text, "\n", (int)sizeof(text));
@@ -399,6 +600,7 @@ static void ui_load_settings(void) {
     int idx = fs_resolve(UI_SETTINGS_PATH);
     char text[256];
     char wallpaper[80];
+    char icon_theme_name[32];
     struct desktop_theme loaded = g_theme;
     uint32_t width = SCREEN_WIDTH;
     uint32_t height = SCREEN_HEIGHT;
@@ -412,6 +614,7 @@ static void ui_load_settings(void) {
 
     str_copy_limited(text, g_fs_nodes[idx].data, (int)sizeof(text));
     wallpaper[0] = '\0';
+    str_copy_limited(icon_theme_name, "BeOS-r5-Icons", (int)sizeof(icon_theme_name));
 
     for (char *line = text; *line != '\0'; ) {
         char *next = line;
@@ -447,6 +650,8 @@ static void ui_load_settings(void) {
             height = value;
         } else if (ui_starts_with(line, "wallpaper_explicit_none=") && ui_parse_uint(line + 24, &value)) {
             wallpaper_explicit_none = value != 0u;
+        } else if (ui_starts_with(line, "icon_theme=")) {
+            str_copy_limited(icon_theme_name, line + 11, (int)sizeof(icon_theme_name));
         } else if (ui_starts_with(line, "wallpaper=")) {
             str_copy_limited(wallpaper, line + 10, (int)sizeof(wallpaper));
             clear_wallpaper = wallpaper[0] == '\0';
@@ -460,6 +665,7 @@ static void ui_load_settings(void) {
     }
 
     g_theme = loaded;
+    icon_theme_set_current(icon_theme_name);
     if (clear_wallpaper) {
         ui_wallpaper_reset(0);
         if (g_ui_defer_wallpaper_load) {
@@ -530,6 +736,7 @@ void ui_init(void) {
     ui_refresh_metrics();
     ui_reset_theme_defaults();
     ui_pending_wallpaper_clear();
+    icon_theme_init();
     g_ui_defer_wallpaper_load = 1;
     g_ui_loading_settings = 1;
     ui_load_settings();
@@ -851,17 +1058,22 @@ struct rect ui_start_menu_item_rect(int index) {
 }
 
 struct rect ui_desktop_files_icon_rect(void) {
-    struct rect r = {(int)SCREEN_WIDTH - 110, 20, 84, 86};
+    struct rect r = {DESKTOP_SHORTCUT_X, DESKTOP_SHORTCUT_Y, DESKTOP_SHORTCUT_W, DESKTOP_SHORTCUT_H};
+    return r;
+}
+
+struct rect ui_desktop_browser_icon_rect(void) {
+    struct rect r = {DESKTOP_SHORTCUT_X, DESKTOP_SHORTCUT_Y + DESKTOP_SHORTCUT_STEP, DESKTOP_SHORTCUT_W, DESKTOP_SHORTCUT_H};
     return r;
 }
 
 struct rect ui_desktop_craft_icon_rect(void) {
-    struct rect r = {(int)SCREEN_WIDTH - 110, 116, 84, 86};
+    struct rect r = {DESKTOP_SHORTCUT_X, DESKTOP_SHORTCUT_Y + DESKTOP_SHORTCUT_STEP, DESKTOP_SHORTCUT_W, DESKTOP_SHORTCUT_H};
     return r;
 }
 
 struct rect ui_desktop_trash_icon_rect(void) {
-    struct rect r = {(int)SCREEN_WIDTH - 110, 212, 84, 86};
+    struct rect r = {DESKTOP_SHORTCUT_X, DESKTOP_SHORTCUT_Y + (DESKTOP_SHORTCUT_STEP * 2), DESKTOP_SHORTCUT_W, DESKTOP_SHORTCUT_H};
     return r;
 }
 
@@ -915,6 +1127,7 @@ void ui_draw_button(const struct rect *r, const char *label,
     uint8_t border = highlighted ? 15 : 0;
     int text_x;
     int text_y;
+    char fit[96];
 
     if (r == 0 || label == 0) {
         return;
@@ -945,21 +1158,28 @@ void ui_draw_button(const struct rect *r, const char *label,
     if (r->w > 4 && r->h > 4) {
         sys_rect(r->x + 2, r->y + 2, r->w - 4, r->h - 4, fill);
     }
-    text_x = r->x + ((r->w - ui_text_width(label)) / 2);
+    ui_text_copy_fit(fit, (int)sizeof(fit), label, r->w - 8);
+    if (fit[0] == '\0') {
+        return;
+    }
+    text_x = r->x + ((r->w - ui_text_width(fit)) / 2);
     if (text_x < r->x + 4) {
         text_x = r->x + 4;
     }
     text_y = r->y + ((r->h - 7) / 2);
-    sys_text(text_x, text_y, g_theme.text, label);
+    ui_draw_text_clipped(r, text_x, text_y, g_theme.text, fit);
 }
 
 void ui_draw_status(const struct rect *r, const char *text) {
+    char fit[128];
+
     if (r == 0 || text == 0) {
         return;
     }
 
     ui_draw_surface(r, ui_color_panel());
-    sys_text(r->x + 5, r->y + 3, g_theme.text, text);
+    ui_text_copy_fit(fit, (int)sizeof(fit), text, r->w - 10);
+    ui_draw_text_clipped(r, r->x + 5, r->y + 3, g_theme.text, fit);
 }
 
 static void draw_wallpaper(int desktop_h) {
@@ -998,6 +1218,223 @@ static const char *app_caption(enum app_type type) {
     }
 }
 
+static int ui_icon_spec_for_app(enum app_type type,
+                                const char **name_out,
+                                enum icon_theme_context *context_out,
+                                int *size_out) {
+    const char *name = "application-default-icon";
+    enum icon_theme_context context = ICON_THEME_CONTEXT_APPS;
+    int size = 16;
+
+    switch (type) {
+    case APP_TERMINAL:
+        name = "utilities-terminal";
+        break;
+    case APP_CLOCK:
+        name = "clock";
+        break;
+    case APP_FILEMANAGER:
+        name = "folder";
+        context = ICON_THEME_CONTEXT_PLACES;
+        break;
+    case APP_EDITOR:
+        name = "accessories-text-editor";
+        size = 24;
+        break;
+    case APP_TASKMANAGER:
+        name = "utilities-system-monitor";
+        break;
+    case APP_CALCULATOR:
+        name = "accessories-calculator";
+        break;
+    case APP_IMAGEVIEWER:
+        name = "camera-photo";
+        break;
+    case APP_AUDIO_PLAYER:
+        name = "multimedia-audio-player";
+        size = 16;
+        break;
+    case APP_SKETCHPAD:
+        name = "preferences-desktop-theme";
+        size = 22;
+        break;
+    case APP_SNAKE:
+        name = "ksnake";
+        break;
+    case APP_TETRIS:
+        name = "package_games_board";
+        break;
+    case APP_2048:
+        name = "package_games_board";
+        break;
+    case APP_MINESWEEPER:
+        name = "kmines";
+        break;
+    case APP_PACMAN:
+        name = "package_games_arcade";
+        break;
+    case APP_SPACE_INVADERS:
+        name = "kspaceduel";
+        break;
+    case APP_PONG:
+        name = "package_games_arcade";
+        break;
+    case APP_DONKEY_KONG:
+        name = "package_games_arcade";
+        break;
+    case APP_BRICK_RACE:
+        name = "package_games_arcade";
+        break;
+    case APP_FLAP_BIRB:
+        name = "package_games_arcade";
+        break;
+    case APP_DOOM:
+        name = "package_games_arcade";
+        break;
+    case APP_CRAFT:
+        name = "craft";
+        size = 24;
+        break;
+    case APP_PERSONALIZE:
+        name = "preferences-desktop-wallpaper";
+        break;
+    case APP_TRASH:
+        name = "user-trash";
+        context = ICON_THEME_CONTEXT_PLACES;
+        break;
+    default:
+        break;
+    }
+
+    if (name_out != 0) {
+        *name_out = name;
+    }
+    if (context_out != 0) {
+        *context_out = context;
+    }
+    if (size_out != 0) {
+        *size_out = size;
+    }
+    return 0;
+}
+
+static int ui_icon_spec_for_window_title(const char *title,
+                                         const char **name_out,
+                                         enum icon_theme_context *context_out,
+                                         int *size_out) {
+    enum app_type type = APP_NONE;
+
+    if (title == 0 || *title == '\0') {
+        return -1;
+    }
+
+    if (str_eq(title, "TERMINAL")) type = APP_TERMINAL;
+    else if (str_eq(title, "RELOGIO")) type = APP_CLOCK;
+    else if (str_eq(title, "FILEMANAGER")) type = APP_FILEMANAGER;
+    else if (str_eq(title, "EDITOR") || str_eq(title, "NANO")) type = APP_EDITOR;
+    else if (str_eq(title, "GERENCIADOR DE TAREFAS")) type = APP_TASKMANAGER;
+    else if (str_eq(title, "CALCULADORA")) type = APP_CALCULATOR;
+    else if (str_eq(title, "SKETCHPAD")) type = APP_SKETCHPAD;
+    else if (str_eq(title, "SNAKE")) type = APP_SNAKE;
+    else if (str_eq(title, "TETRAX")) type = APP_TETRIS;
+    else if (str_eq(title, "2048")) type = APP_2048;
+    else if (str_eq(title, "Campo Minado")) type = APP_MINESWEEPER;
+    else if (str_eq(title, "PACPAC")) type = APP_PACMAN;
+    else if (str_eq(title, "ALIENS")) type = APP_SPACE_INVADERS;
+    else if (str_eq(title, "PONG")) type = APP_PONG;
+    else if (str_eq(title, "MONKEY DONG")) type = APP_DONKEY_KONG;
+    else if (str_eq(title, "BRICK RACE")) type = APP_BRICK_RACE;
+    else if (str_eq(title, "FLAP BIRB")) type = APP_FLAP_BIRB;
+    else if (str_eq(title, "DOOM")) type = APP_DOOM;
+    else if (str_eq(title, "CRAFT")) type = APP_CRAFT;
+    else if (str_eq(title, "IMAGEM")) type = APP_IMAGEVIEWER;
+    else if (str_eq(title, "AUDIO PLAYER")) type = APP_AUDIO_PLAYER;
+    else if (str_eq(title, "Personalizar")) type = APP_PERSONALIZE;
+    else if (str_eq(title, "Lixeira")) type = APP_TRASH;
+    else return -1;
+
+    return ui_icon_spec_for_app(type, name_out, context_out, size_out);
+}
+
+void ui_draw_button_with_icon(const struct rect *r,
+                              const char *label,
+                              enum ui_button_style style,
+                              int highlighted,
+                              const char *icon_name,
+                              enum icon_theme_context icon_context,
+                              int icon_size,
+                              int icon_w,
+                              int icon_h) {
+    int icon_drawn = -1;
+    int text_x = r->x + 4;
+    int text_y = r->y + ((r->h - 7) / 2);
+    int text_w = r->w - 8;
+    char fit[96];
+
+    ui_draw_button(r, "", style, highlighted);
+    if (icon_name != 0 && icon_name[0] != '\0') {
+        icon_drawn = icon_theme_draw(icon_name,
+                                     icon_context,
+                                     icon_size,
+                                     r->x + 4,
+                                     r->y + ((r->h - icon_h) / 2),
+                                     icon_w,
+                                     icon_h);
+    }
+    if (label != 0 && label[0] != '\0') {
+        if (icon_drawn == 0) {
+            text_x = r->x + 4 + icon_w + 4;
+            text_w = r->w - (text_x - r->x) - 4;
+        } else {
+            text_w = r->w - 8;
+        }
+        ui_text_copy_fit(fit, (int)sizeof(fit), label, text_w);
+        if (fit[0] == '\0') {
+            return;
+        }
+        if (icon_drawn != 0) {
+            text_x = r->x + ((r->w - ui_text_width(fit)) / 2);
+            if (text_x < r->x + 4) {
+                text_x = r->x + 4;
+            }
+        }
+        ui_draw_text_clipped(r, text_x, text_y, g_theme.text, fit);
+    }
+}
+
+static void ui_draw_desktop_shortcut(const struct rect *r,
+                                     const char *label,
+                                     int hover,
+                                     const char *icon_name,
+                                     enum icon_theme_context icon_context,
+                                     int icon_size) {
+    int label_x;
+    char fit[48];
+
+    if (r == 0 || label == 0) {
+        return;
+    }
+
+    ui_draw_button(r, "", hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, hover);
+    if (icon_theme_draw(icon_name,
+                        icon_context,
+                        icon_size,
+                        r->x + ((r->w - 48) / 2),
+                        r->y + 8,
+                        48,
+                        48) != 0) {
+        struct rect fallback_plate = {r->x + 18, r->y + 12, 48, 40};
+        ui_draw_surface(&fallback_plate, hover ? g_theme.window : g_theme.window_bg);
+    }
+
+    ui_text_copy_fit(fit, (int)sizeof(fit), label, r->w - 8);
+    label_x = r->x + ((r->w - ui_text_width(fit)) / 2);
+    if (label_x < r->x + 4) {
+        label_x = r->x + 4;
+    }
+    ui_draw_text_clipped(r, label_x, r->y + 62, g_theme.text, fit);
+}
+
 void draw_window_frame(const struct rect *w, const char *title,
                        int active,
                        int min_hover,
@@ -1008,15 +1445,54 @@ void draw_window_frame(const struct rect *w, const char *title,
     const struct rect close = window_close_button(w);
     const struct rect outer = {w->x, w->y, w->w, w->h};
     const struct rect title_bar = {w->x + 2, w->y + 2, w->w - 4, 12};
+    struct rect title_bounds;
+    const char *icon_name = 0;
+    enum icon_theme_context icon_context = ICON_THEME_CONTEXT_APPS;
+    int icon_size = 0;
+    int title_x = w->x + 8;
+    char title_fit[80];
 
     ui_draw_surface(&outer, ui_color_panel());
     sys_rect(title_bar.x, title_bar.y, title_bar.w, title_bar.h, active ? g_theme.window : g_theme.taskbar);
     sys_rect(title_bar.x, title_bar.y + title_bar.h - 1, title_bar.w, 1, 0);
-    sys_text(w->x + 8, w->y + 4, g_theme.text, title);
+    if (ui_icon_spec_for_window_title(title, &icon_name, &icon_context, &icon_size) == 0 &&
+        icon_theme_draw(icon_name, icon_context, icon_size, w->x + 6, w->y + 3, 10, 10) == 0) {
+        title_x = w->x + 20;
+    }
+    title_bounds.x = title_x;
+    title_bounds.y = title_bar.y;
+    title_bounds.w = min.x - title_x - 4;
+    title_bounds.h = title_bar.h;
+    ui_text_copy_fit(title_fit, (int)sizeof(title_fit), title, title_bounds.w);
+    ui_draw_text_clipped(&title_bounds, title_x, w->y + 4, g_theme.text, title_fit);
 
-    ui_draw_button(&min, "-", UI_BUTTON_NORMAL, min_hover);
-    ui_draw_button(&max, "+", UI_BUTTON_NORMAL, max_hover);
-    ui_draw_button(&close, "X", UI_BUTTON_DANGER, close_hover);
+    ui_draw_button_with_icon(&min,
+                             "-",
+                             UI_BUTTON_NORMAL,
+                             min_hover,
+                             "go-down",
+                             ICON_THEME_CONTEXT_ACTIONS,
+                             16,
+                             8,
+                             8);
+    ui_draw_button_with_icon(&max,
+                             "+",
+                             UI_BUTTON_NORMAL,
+                             max_hover,
+                             "window-new",
+                             ICON_THEME_CONTEXT_ACTIONS,
+                             16,
+                             8,
+                             8);
+    ui_draw_button_with_icon(&close,
+                             "X",
+                             UI_BUTTON_DANGER,
+                             close_hover,
+                             "window-close",
+                             ICON_THEME_CONTEXT_ACTIONS,
+                             16,
+                             8,
+                             8);
 }
 
 static void draw_taskbar(const struct window *wins, int win_count, int focused, int start_hover) {
@@ -1028,10 +1504,25 @@ static void draw_taskbar(const struct window *wins, int win_count, int focused, 
     sys_rect(0, taskbar_y, (int)SCREEN_WIDTH, 22, g_theme.taskbar);
     sys_rect(0, taskbar_y, (int)SCREEN_WIDTH, 1, g_theme.window);
     sys_rect(0, taskbar_y + 21, (int)SCREEN_WIDTH, 1, 0);
-    ui_draw_button(&start_button, "Iniciar", UI_BUTTON_PRIMARY, start_hover);
+    ui_draw_button_with_icon(&start_button,
+                             "Iniciar",
+                             UI_BUTTON_PRIMARY,
+                             start_hover,
+                             "package_applications",
+                             ICON_THEME_CONTEXT_APPS,
+                             16,
+                             12,
+                             12);
 
     for (int i = 0; i < win_count; ++i) {
         struct rect button;
+        const char *icon_name = 0;
+        enum icon_theme_context icon_context = ICON_THEME_CONTEXT_APPS;
+        int icon_size = 0;
+        int text_x;
+        int text_y;
+        int icon_drawn = -1;
+        char caption_fit[48];
 
         if (!wins[i].active) {
             continue;
@@ -1048,9 +1539,21 @@ static void draw_taskbar(const struct window *wins, int win_count, int focused, 
             break;
         }
         ui_draw_button(&button,
-                       app_caption(wins[i].type),
+                       "",
                        i == focused && !wins[i].minimized ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                        i == focused && !wins[i].minimized);
+        ui_icon_spec_for_app(wins[i].type, &icon_name, &icon_context, &icon_size);
+        if (icon_name != 0) {
+            icon_drawn = icon_theme_draw(icon_name, icon_context, icon_size,
+                                         button.x + 4, button.y + 2, 12, 12);
+        }
+        text_x = icon_drawn == 0 ? button.x + 18 : button.x + 4;
+        text_y = button.y + ((button.h - 7) / 2);
+        ui_text_copy_fit(caption_fit,
+                         (int)sizeof(caption_fit),
+                         app_caption(wins[i].type),
+                         button.w - (text_x - button.x) - 4);
+        ui_draw_text_clipped(&button, text_x, text_y, g_theme.text, caption_fit);
         x += button.w + 4;
     }
 }
@@ -1067,38 +1570,93 @@ void draw_desktop(const struct mouse_state *mouse,
     sys_clear(g_theme.background);
     draw_wallpaper(desktop_h);
     {
-        struct rect banner = {18, 18, 154, 20};
         struct rect files_icon = ui_desktop_files_icon_rect();
         struct rect craft_icon = ui_desktop_craft_icon_rect();
         struct rect trash_icon = ui_desktop_trash_icon_rect();
-        struct rect files_plate = {files_icon.x + 16, files_icon.y + 10, 52, 40};
-        struct rect craft_plate = {craft_icon.x + 16, craft_icon.y + 10, 52, 40};
-        struct rect trash_plate = {trash_icon.x + 16, trash_icon.y + 10, 52, 40};
-        struct rect trash_lid = {trash_plate.x + 12, trash_plate.y + 6, trash_plate.w - 24, 4};
-        struct rect trash_body = {trash_plate.x + 10, trash_plate.y + 12, trash_plate.w - 20, trash_plate.h - 18};
         int files_hover = point_in_rect(&files_icon, mouse->x, mouse->y);
         int craft_hover = point_in_rect(&craft_icon, mouse->x, mouse->y);
         int trash_hover = point_in_rect(&trash_icon, mouse->x, mouse->y);
 
-        ui_draw_button(&banner, "VIBE DESKTOP", UI_BUTTON_ACTIVE, 0);
-        ui_draw_button(&files_icon, "", files_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, files_hover);
-        ui_draw_button(&craft_icon, "", craft_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, craft_hover);
-        ui_draw_button(&trash_icon, "", trash_hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, trash_hover);
-        ui_draw_surface(&files_plate, g_theme.window);
-        ui_draw_surface(&craft_plate, g_theme.menu_button_inactive);
-        ui_draw_surface(&trash_plate, g_theme.window_bg);
-        sys_rect(trash_lid.x, trash_lid.y, trash_lid.w, trash_lid.h, g_theme.window);
-        sys_rect(trash_body.x, trash_body.y, trash_body.w, trash_body.h, g_theme.window);
-        sys_rect(trash_body.x + 5, trash_body.y + 4, 2, trash_body.h - 8, g_theme.window_bg);
-        sys_rect(trash_body.x + 11, trash_body.y + 4, 2, trash_body.h - 8, g_theme.window_bg);
-        sys_rect(trash_body.x + 17, trash_body.y + 4, 2, trash_body.h - 8, g_theme.window_bg);
-        sys_text(files_icon.x + 24, files_icon.y + 60, g_theme.text, "Arquivos");
-        sys_text(craft_icon.x + 30, craft_icon.y + 60, g_theme.text, "Craft");
-        sys_text(trash_icon.x + 26, trash_icon.y + 60, g_theme.text, "Lixeira");
+        ui_draw_desktop_shortcut(&files_icon,
+                                 "Arquivos",
+                                 files_hover,
+                                 "folder",
+                                 ICON_THEME_CONTEXT_PLACES,
+                                 48);
+        ui_draw_desktop_shortcut(&craft_icon,
+                                 "Craft",
+                                 craft_hover,
+                                 "craft",
+                                 ICON_THEME_CONTEXT_APPS,
+                                 48);
+        ui_draw_desktop_shortcut(&trash_icon,
+                                 "Lixeira",
+                                 trash_hover,
+                                 "user-trash",
+                                 ICON_THEME_CONTEXT_PLACES,
+                                 48);
     }
 
     draw_taskbar(wins, win_count, focused, start_hover);
 
     (void)menu_open;
     (void)menu_item_hover;
+}
+
+void ui_draw_desktop_region(const struct mouse_state *mouse,
+                            const struct window *wins,
+                            int win_count,
+                            int focused,
+                            int start_hover,
+                            const struct rect *region) {
+    struct rect clipped;
+    struct rect files_icon = ui_desktop_files_icon_rect();
+    struct rect craft_icon = ui_desktop_craft_icon_rect();
+    struct rect trash_icon = ui_desktop_trash_icon_rect();
+    struct rect taskbar = {0, (int)SCREEN_HEIGHT - TASKBAR_HEIGHT, (int)SCREEN_WIDTH, TASKBAR_HEIGHT};
+    int files_hover;
+    int craft_hover;
+    int trash_hover;
+
+    if (mouse == 0 || wins == 0 || region == 0) {
+        return;
+    }
+
+    clipped = *region;
+    if (!ui_sanitize_screen_rect(&clipped)) {
+        return;
+    }
+
+    ui_draw_wallpaper_region(&clipped);
+    files_hover = point_in_rect(&files_icon, mouse->x, mouse->y);
+    craft_hover = point_in_rect(&craft_icon, mouse->x, mouse->y);
+    trash_hover = point_in_rect(&trash_icon, mouse->x, mouse->y);
+
+    if (ui_rect_intersects(&files_icon, &clipped)) {
+        ui_draw_desktop_shortcut(&files_icon,
+                                 "Arquivos",
+                                 files_hover,
+                                 "folder",
+                                 ICON_THEME_CONTEXT_PLACES,
+                                 48);
+    }
+    if (ui_rect_intersects(&craft_icon, &clipped)) {
+        ui_draw_desktop_shortcut(&craft_icon,
+                                 "Craft",
+                                 craft_hover,
+                                 "craft",
+                                 ICON_THEME_CONTEXT_APPS,
+                                 48);
+    }
+    if (ui_rect_intersects(&trash_icon, &clipped)) {
+        ui_draw_desktop_shortcut(&trash_icon,
+                                 "Lixeira",
+                                 trash_hover,
+                                 "user-trash",
+                                 ICON_THEME_CONTEXT_PLACES,
+                                 48);
+    }
+    if (ui_rect_intersects(&taskbar, &clipped)) {
+        draw_taskbar(wins, win_count, focused, start_hover);
+    }
 }

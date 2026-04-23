@@ -176,6 +176,7 @@ int mk_launch_bootstrap(const struct mk_launch_descriptor *descriptor) {
 
     record->pid = process->pid;
     record->process = process;
+    process->launch_context_pid = (uint32_t)process->pid;
     mk_launch_fill_context(&record->context, descriptor, process);
     scheduler_add_task(process);
     return process->pid;
@@ -214,10 +215,14 @@ const struct mk_launch_context *mk_launch_context_for_pid(int pid) {
 
 const struct mk_launch_context *mk_launch_context_current(void) {
     process_t *current = scheduler_current();
+    uint32_t launch_pid;
 
     if (current == 0) {
         return 0;
     }
 
-    return mk_launch_context_for_pid(current->pid);
+    launch_pid = current->launch_context_pid != 0u
+                     ? current->launch_context_pid
+                     : (uint32_t)current->pid;
+    return mk_launch_context_for_pid((int)launch_pid);
 }

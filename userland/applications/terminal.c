@@ -397,10 +397,14 @@ void terminal_draw_window(struct terminal_state *t, int active,
     struct rect hero = {t->window.x + 10, t->window.y + 24, t->window.w - 20, 30};
     struct rect log = {t->window.x + 10, t->window.y + 62, t->window.w - 20, t->window.h - 106};
     struct rect input = {t->window.x + 10, t->window.y + t->window.h - 36, t->window.w - 20, 20};
+    struct rect hero_main = {hero.x + 6, hero.y, hero.w - 166, hero.h};
+    struct rect hero_hint = {hero.x + hero.w - 154, hero.y, 148, hero.h};
     int max_display_lines = (log.h - 8) / 8;
     int max_display_cols = (log.w - 10) / 8;
     char cwd[96];
+    char cwd_fit[96];
     char input_line[INPUT_MAX + 16];
+    char hint_fit[64];
     const char *prompt = "$ ";
     int prompt_len = 2;
     int input_capacity;
@@ -422,9 +426,14 @@ void terminal_draw_window(struct terminal_state *t, int active,
     ui_draw_inset(&log, theme->window_bg);
     ui_draw_inset(&input, theme->window_bg);
 
-    sys_text(hero.x + 6, hero.y + 5, theme->text, "Vibe Shell");
-    sys_text(hero.x + 6, hero.y + 17, ui_color_muted(), cwd);
-    sys_text(hero.x + hero.w - 154, hero.y + 11, ui_color_muted(), "builtin + apps sem sair do desktop");
+    ui_text_copy_fit(cwd_fit, (int)sizeof(cwd_fit), cwd, hero_main.w);
+    ui_text_copy_fit(hint_fit,
+                     (int)sizeof(hint_fit),
+                     "builtin + apps sem sair do desktop",
+                     hero_hint.w);
+    ui_draw_text_clipped(&hero_main, hero.x + 6, hero.y + 5, theme->text, "Vibe Shell");
+    ui_draw_text_clipped(&hero_main, hero.x + 6, hero.y + 17, ui_color_muted(), cwd_fit);
+    ui_draw_text_clipped(&hero_hint, hero_hint.x, hero.y + 11, ui_color_muted(), hint_fit);
 
     terminal_draw_recent_lines(t, &log, max_display_lines, max_display_cols, theme->text);
 
@@ -451,7 +460,7 @@ void terminal_draw_window(struct terminal_state *t, int active,
         input_line[prompt_len + i] = t->input[input_start + i];
         input_line[prompt_len + i + 1] = '\0';
     }
-    sys_text(input.x + 4, input.y + 6, theme->text, input_line);
+    ui_draw_text_clipped(&input, input.x + 4, input.y + 6, theme->text, input_line);
 
     cursor_in_view = t->input_cursor - input_start;
     if (cursor_in_view < 0) {
