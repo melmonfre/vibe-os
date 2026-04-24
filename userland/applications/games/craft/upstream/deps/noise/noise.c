@@ -25,7 +25,13 @@ SOFTWARE.
 */
 
 #include <math.h>
+#pragma push_macro("rand")
+#pragma push_macro("srand")
+#undef rand
+#undef srand
 #include <stdlib.h>
+#pragma pop_macro("srand")
+#pragma pop_macro("rand")
 #include <string.h>
 
 #define F2 0.3660254037844386f

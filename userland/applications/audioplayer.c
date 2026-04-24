@@ -248,6 +248,13 @@ void audioplayer_draw_window(struct audioplayer_state *player, int active,
     struct rect desktop = audioplayer_button_rect(player, AUDIOPLAYER_BUTTON_DESKTOP);
     struct rect capture = audioplayer_button_rect(player, AUDIOPLAYER_BUTTON_CAPTURE);
     struct rect play = audioplayer_button_rect(player, AUDIOPLAYER_BUTTON_PLAY);
+    struct rect title_bounds = {toolbar.x + 30, toolbar.y, boot.x - (toolbar.x + 30) - 8, toolbar.h};
+    struct rect path_text = {path.x + 6, path.y, path.w - (player->input_focus ? 64 : 10), path.h};
+    struct rect edit_bounds = {path.x + path.w - 56, path.y, 52, path.h};
+    char title_fit[48];
+    char path_fit[AUDIOPLAYER_PATH_MAX];
+    char hint_fit_1[80];
+    char hint_fit_2[80];
 
     draw_window_frame(&player->window, "AUDIO PLAYER", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, theme->window_bg);
@@ -255,17 +262,69 @@ void audioplayer_draw_window(struct audioplayer_state *player, int active,
     ui_draw_inset(&path, ui_color_window_bg());
     ui_draw_surface(&hint, ui_color_panel());
 
-    ui_draw_button(&boot, "BOOT", UI_BUTTON_NORMAL, 0);
-    ui_draw_button(&desktop, "DESKTOP", UI_BUTTON_NORMAL, 0);
-    ui_draw_button(&capture, "CAPTURE", UI_BUTTON_NORMAL, 0);
-    ui_draw_button(&play, "PLAY", UI_BUTTON_ACTIVE, 0);
+    (void)icon_theme_draw("multimedia-audio-player",
+                          ICON_THEME_CONTEXT_APPS,
+                          16,
+                          toolbar.x + 8,
+                          toolbar.y + 6,
+                          16,
+                          16);
+    ui_draw_button_with_icon(&boot,
+                             "BOOT",
+                             UI_BUTTON_NORMAL,
+                             0,
+                             "document-open",
+                             ICON_THEME_CONTEXT_ACTIONS,
+                             16,
+                             8,
+                             8);
+    ui_draw_button_with_icon(&desktop,
+                             "DESKTOP",
+                             UI_BUTTON_NORMAL,
+                             0,
+                             "audio-player",
+                             ICON_THEME_CONTEXT_APPS,
+                             24,
+                             10,
+                             10);
+    ui_draw_button_with_icon(&capture,
+                             "CAPTURE",
+                             UI_BUTTON_NORMAL,
+                             0,
+                             "document-open",
+                             ICON_THEME_CONTEXT_ACTIONS,
+                             16,
+                             8,
+                             8);
+    ui_draw_button_with_icon(&play,
+                             "PLAY",
+                             UI_BUTTON_ACTIVE,
+                             0,
+                             "gtk-apply",
+                             ICON_THEME_CONTEXT_ACTIONS,
+                             16,
+                             8,
+                             8);
 
-    sys_text(toolbar.x + 8, toolbar.y + 10, theme->text, "Teste WAV rapido no desktop");
-    sys_text(path.x + 6, path.y + 5, theme->text, player->path[0] != '\0' ? player->path : "(vazio)");
-    sys_text(hint.x + 8, hint.y + 8, ui_color_muted(), "Edite o caminho, pressione Enter ou clique em PLAY.");
-    sys_text(hint.x + 8, hint.y + 20, ui_color_muted(), "Presets uteis: boot, desktop e /capture.wav.");
+    ui_text_copy_fit(title_fit, (int)sizeof(title_fit), "Teste WAV rapido no desktop", title_bounds.w);
+    ui_draw_text_clipped(&title_bounds, title_bounds.x, toolbar.y + 10, theme->text, title_fit);
+    ui_text_copy_fit(path_fit,
+                     (int)sizeof(path_fit),
+                     player->path[0] != '\0' ? player->path : "(vazio)",
+                     path_text.w);
+    ui_draw_text_clipped(&path, path_text.x, path.y + 5, theme->text, path_fit);
+    ui_text_copy_fit(hint_fit_1,
+                     (int)sizeof(hint_fit_1),
+                     "Edite o caminho, pressione Enter ou clique em PLAY.",
+                     hint.w - 16);
+    ui_text_copy_fit(hint_fit_2,
+                     (int)sizeof(hint_fit_2),
+                     "Presets uteis: boot, desktop e /capture.wav.",
+                     hint.w - 16);
+    ui_draw_text_clipped(&hint, hint.x + 8, hint.y + 8, ui_color_muted(), hint_fit_1);
+    ui_draw_text_clipped(&hint, hint.x + 8, hint.y + 20, ui_color_muted(), hint_fit_2);
     if (player->input_focus) {
-        sys_text(path.x + path.w - 56, path.y + 5, ui_color_muted(), "[edit]");
+        ui_draw_text_clipped(&edit_bounds, edit_bounds.x, path.y + 5, ui_color_muted(), "[edit]");
     }
 
     ui_draw_status(&status, player->status);

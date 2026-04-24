@@ -2,7 +2,9 @@
 #define VIBE_SYS_AUDIOIO_H
 
 #include <stdint.h>
+#ifndef __VIBE_KERNEL__
 #include <string.h>
+#endif
 
 #define AUMODE_PLAY   0x01
 #define AUMODE_RECORD 0x02

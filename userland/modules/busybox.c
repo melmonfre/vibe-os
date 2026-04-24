@@ -323,6 +323,8 @@ static enum app_type shell_app_type_from_name(const char *name) {
     if (strcmp(name, "sketchpad") == 0) return APP_SKETCHPAD;
     if (strcmp(name, "snake") == 0) return APP_SNAKE;
     if (strcmp(name, "tetris") == 0) return APP_TETRIS;
+    if (strcmp(name, "2048") == 0) return APP_2048;
+    if (strcmp(name, "minesweeper") == 0) return APP_MINESWEEPER;
     if (strcmp(name, "pacman") == 0) return APP_PACMAN;
     if (strcmp(name, "space_invaders") == 0) return APP_SPACE_INVADERS;
     if (strcmp(name, "pong") == 0) return APP_PONG;
@@ -730,7 +732,7 @@ static int try_open_desktop_shell_app(int argc, char **argv) {
     }
 
     type = shell_app_type_from_name(argv[0]);
-    if (type != APP_DOOM && type != APP_CRAFT) {
+    if (type == APP_NONE) {
         return -1;
     }
 

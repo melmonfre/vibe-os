@@ -25,7 +25,7 @@
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 111
+#define MAX_SYSCALLS 112
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
 static uint8_t g_audio_boot_trace_launch_info = 0u;
@@ -1193,6 +1193,59 @@ static uint32_t sys_task_terminate(uint32_t pid, uint32_t b, uint32_t c,
     return 0u;
 }
 
+static uint32_t sys_task_create(uint32_t entry_ptr, uint32_t arg_ptr, uint32_t stack_size,
+                                uint32_t task_class, uint32_t e) {
+    process_t *current;
+    process_t *child;
+    const struct mk_launch_context *context;
+    uint32_t effective_task_class;
+    uint32_t launch_flags;
+
+    (void)e;
+    if (entry_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    current = scheduler_current();
+    if (current == 0) {
+        return (uint32_t)-1;
+    }
+    if (task_class != 0u && task_class > MK_TASK_CLASS_VIDEO_CONTROL) {
+        return (uint32_t)-1;
+    }
+
+    context = mk_launch_context_current();
+    launch_flags = context != 0 ? context->flags : 0u;
+    effective_task_class = task_class != 0u ? task_class : current->task_class;
+    child = process_create_with_stack((void (*)(void))(uintptr_t)entry_ptr,
+                                      current->kind,
+                                      current->service_type,
+                                      launch_flags,
+                                      effective_task_class,
+                                      stack_size);
+    if (child == 0) {
+        return (uint32_t)-1;
+    }
+
+    process_setup_initial_context_arg(child,
+                                      (uintptr_t)entry_ptr,
+                                      (uintptr_t)child->stack + child->stack_size,
+                                      (uintptr_t)arg_ptr);
+    process_set_abi_metadata(child,
+                             current->abi_kind,
+                             current->abi_version,
+                             current->abi_osabi,
+                             current->abi_machine,
+                             current->image_base,
+                             current->image_size,
+                             (uintptr_t)entry_ptr);
+    child->launch_context_pid = current->launch_context_pid != 0u
+                                    ? current->launch_context_pid
+                                    : (uint32_t)current->pid;
+    scheduler_add_task(child);
+    return (uint32_t)child->pid;
+}
+
 static int sys_launch_app_copy_name(const char *name, struct mk_launch_descriptor *descriptor) {
     const char *label;
     uint32_t len = 0u;
@@ -1571,6 +1624,7 @@ void syscall_init(void) {
     syscall_table[SYSCALL_LAUNCH_APP] = sys_launch_app;
     syscall_table[SYSCALL_TASK_EVENT_SUBSCRIBE] = sys_task_event_subscribe;
     syscall_table[SYSCALL_TASK_EVENT_RECV] = sys_task_event_receive;
+    syscall_table[SYSCALL_TASK_CREATE] = sys_task_create;
 }
 
 /* dispatch routine called by ISR */

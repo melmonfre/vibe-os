@@ -9,7 +9,6 @@ static const int TASKMGR_ROW_HEIGHT = 18;
 static const int TASKMGR_SCROLLBAR_W = 10;
 static const int TASKMGR_SCROLLBAR_GAP = 4;
 static const int TASKMGR_COLUMN_GAP = 4;
-static const int TASKMGR_TEXT_CHAR_W = 6;
 static const int TASKMGR_PERFORMANCE_CARD_H = 62;
 static const int TASKMGR_PERFORMANCE_GAP = 6;
 static const int TASKMGR_PERFORMANCE_SECTION_GAP = 8;
@@ -486,54 +485,8 @@ static const char *taskmgr_priority_compact_label(uint32_t tier) {
     }
 }
 
-static int taskmgr_text_capacity(int pixel_width) {
-    if (pixel_width <= 0) {
-        return 0;
-    }
-    return pixel_width / TASKMGR_TEXT_CHAR_W;
-}
-
 static void taskmgr_copy_fit(char *dst, int dst_size, const char *src, int pixel_width) {
-    int cap;
-    int len;
-    int copy_len;
-
-    if (dst == 0 || dst_size <= 0) {
-        return;
-    }
-    dst[0] = '\0';
-    if (src == 0 || src[0] == '\0') {
-        return;
-    }
-
-    cap = taskmgr_text_capacity(pixel_width);
-    if (cap <= 0) {
-        return;
-    }
-    if (cap >= dst_size) {
-        cap = dst_size - 1;
-    }
-    len = str_len(src);
-    if (len <= cap) {
-        str_copy_limited(dst, src, dst_size);
-        return;
-    }
-    if (cap <= 3) {
-        for (copy_len = 0; copy_len < cap; ++copy_len) {
-            dst[copy_len] = '.';
-        }
-        dst[cap] = '\0';
-        return;
-    }
-
-    copy_len = cap - 3;
-    for (int i = 0; i < copy_len && src[i] != '\0'; ++i) {
-        dst[i] = src[i];
-    }
-    dst[copy_len + 0] = '.';
-    dst[copy_len + 1] = '.';
-    dst[copy_len + 2] = '.';
-    dst[copy_len + 3] = '\0';
+    ui_text_copy_fit(dst, dst_size, src, pixel_width);
 }
 
 static unsigned taskmgr_percent_u32(uint32_t used, uint32_t total) {
@@ -1326,6 +1279,77 @@ static struct rect taskmgr_details_terminate_rect(const struct taskmgr_state *tm
     return r;
 }
 
+static const char *taskmgr_tab_icon_name(int index) {
+    if (index == TASKMGR_TAB_PROCESSES) {
+        return "package_applications";
+    }
+    if (index == TASKMGR_TAB_PERFORMANCE) {
+        return "utilities-system-monitor";
+    }
+    return "text";
+}
+
+static void taskmgr_icon_spec_for_window(enum app_type type,
+                                         const char **name_out,
+                                         enum icon_theme_context *context_out,
+                                         int *size_out) {
+    const char *name = "application-default-icon";
+    enum icon_theme_context context = ICON_THEME_CONTEXT_APPS;
+    int size = 16;
+
+    switch (type) {
+    case APP_TERMINAL:
+        name = "utilities-terminal";
+        break;
+    case APP_CLOCK:
+        name = "clock";
+        break;
+    case APP_FILEMANAGER:
+        name = "folder";
+        context = ICON_THEME_CONTEXT_PLACES;
+        break;
+    case APP_EDITOR:
+        name = "accessories-text-editor";
+        size = 24;
+        break;
+    case APP_TASKMANAGER:
+        name = "utilities-system-monitor";
+        break;
+    case APP_CALCULATOR:
+        name = "accessories-calculator";
+        break;
+    case APP_IMAGEVIEWER:
+        name = "camera-photo";
+        break;
+    case APP_AUDIO_PLAYER:
+        name = "multimedia-audio-player";
+        break;
+    case APP_SKETCHPAD:
+        name = "preferences-desktop-theme";
+        size = 22;
+        break;
+    case APP_PERSONALIZE:
+        name = "preferences-desktop-wallpaper";
+        break;
+    case APP_TRASH:
+        name = "user-trash";
+        context = ICON_THEME_CONTEXT_PLACES;
+        break;
+    default:
+        break;
+    }
+
+    if (name_out != 0) {
+        *name_out = name;
+    }
+    if (context_out != 0) {
+        *context_out = context;
+    }
+    if (size_out != 0) {
+        *size_out = size;
+    }
+}
+
 static void taskmgr_draw_sidebar(const struct taskmgr_state *tm) {
     static const char *labels[3] = {"Processos", "Desempenho", "Detalhes"};
     struct rect side = taskmgr_sidebar_rect(tm);
@@ -1335,7 +1359,15 @@ static void taskmgr_draw_sidebar(const struct taskmgr_state *tm) {
         struct rect button = taskmgr_sidebar_button_rect(tm, i);
         enum ui_button_style style = (tm->selected_tab == i) ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL;
 
-        ui_draw_button(&button, labels[i], style, 0);
+        ui_draw_button_with_icon(&button,
+                                 labels[i],
+                                 style,
+                                 0,
+                                 taskmgr_tab_icon_name(i),
+                                 ICON_THEME_CONTEXT_APPS,
+                                 16,
+                                 10,
+                                 10);
     }
 }
 
@@ -1344,10 +1376,23 @@ static void taskmgr_draw_header(const struct rect *content,
                                 const char *title,
                                 const char *subtitle) {
     struct rect hero = {content->x, content->y, content->w, 34};
+    struct rect title_bounds = {hero.x + 28, hero.y, hero.w - 36, 14};
+    struct rect subtitle_bounds = {hero.x + 28, hero.y + 12, hero.w - 36, 14};
+    char title_fit[48];
+    char subtitle_fit[96];
 
     ui_draw_surface(&hero, ui_color_panel());
-    sys_text(hero.x + 8, hero.y + 7, theme->text, title);
-    sys_text(hero.x + 8, hero.y + 19, ui_color_muted(), subtitle);
+    (void)icon_theme_draw("utilities-system-monitor",
+                          ICON_THEME_CONTEXT_APPS,
+                          16,
+                          hero.x + 8,
+                          hero.y + 8,
+                          14,
+                          14);
+    taskmgr_copy_fit(title_fit, (int)sizeof(title_fit), title, title_bounds.w);
+    taskmgr_copy_fit(subtitle_fit, (int)sizeof(subtitle_fit), subtitle, subtitle_bounds.w);
+    ui_draw_text_clipped(&title_bounds, title_bounds.x, hero.y + 7, theme->text, title_fit);
+    ui_draw_text_clipped(&subtitle_bounds, subtitle_bounds.x, hero.y + 19, ui_color_muted(), subtitle_fit);
 }
 
 static void taskmgr_draw_processes_tab(struct taskmgr_state *tm,
@@ -1398,6 +1443,9 @@ static void taskmgr_draw_processes_tab(struct taskmgr_state *tm,
         char info_text[32];
         char uptime_text[24];
         unsigned uptime;
+        const char *icon_name = 0;
+        enum icon_theme_context icon_context = ICON_THEME_CONTEXT_APPS;
+        int icon_size = 16;
 
         if (!wins[i].active) {
             continue;
@@ -1421,12 +1469,21 @@ static void taskmgr_draw_processes_tab(struct taskmgr_state *tm,
         } else {
             ui_draw_inset(&row, ui_color_window_bg());
         }
-        ui_draw_button(&close_button, "Encerrar", UI_BUTTON_DANGER, 0);
+        ui_draw_button_with_icon(&close_button,
+                                 "Encerrar",
+                                 UI_BUTTON_DANGER,
+                                 0,
+                                 "window-close",
+                                 ICON_THEME_CONTEXT_ACTIONS,
+                                 16,
+                                 8,
+                                 8);
 
+        taskmgr_icon_spec_for_window(wins[i].type, &icon_name, &icon_context, &icon_size);
         taskmgr_copy_fit(app_text,
                          (int)sizeof(app_text),
                          taskmgr_window_label(wins[i].type),
-                         app_w);
+                         app_w - 18);
         info_text[0] = '\0';
         str_copy_limited(info_text, "Janela ", (int)sizeof(info_text));
         append_uint(info_text, (unsigned)i, (int)sizeof(info_text));
@@ -1434,7 +1491,14 @@ static void taskmgr_draw_processes_tab(struct taskmgr_state *tm,
         uptime = (ticks - wins[i].start_ticks) / 100u;
         append_uint(uptime_text, uptime, (int)sizeof(uptime_text));
         str_append(uptime_text, "s", (int)sizeof(uptime_text));
-        sys_text(row.x + 6, row.y + 4, theme->text, app_text);
+        (void)icon_theme_draw(icon_name,
+                              icon_context,
+                              icon_size,
+                              row.x + 6,
+                              row.y + 3,
+                              12,
+                              12);
+        sys_text(row.x + 22, row.y + 4, theme->text, app_text);
         sys_text(row.x + 6 + app_w + gap, row.y + 4, ui_color_muted(), info_text);
         sys_text(row.x + 6 + app_w + gap + info_w + gap, row.y + 4, ui_color_muted(), uptime_text);
         visible_index += 1;

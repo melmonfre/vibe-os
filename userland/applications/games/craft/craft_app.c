@@ -3,10 +3,10 @@
 #include <userland/modules/include/ui.h>
 #include <userland/modules/include/utils.h>
 
-#define CRAFT_EMBED_MAX_WIDTH 800
-#define CRAFT_EMBED_MAX_HEIGHT 600
-#define CRAFT_FULLSCREEN_MAX_WIDTH 960
-#define CRAFT_FULLSCREEN_MAX_HEIGHT 720
+#define CRAFT_EMBED_MAX_WIDTH 480
+#define CRAFT_EMBED_MAX_HEIGHT 360
+#define CRAFT_FULLSCREEN_MAX_WIDTH 640
+#define CRAFT_FULLSCREEN_MAX_HEIGHT 480
 #define CRAFT_DEFAULT_WIDTH 800
 #define CRAFT_DEFAULT_HEIGHT 600
 #define CRAFT_WINDOW_CHROME_W 8
@@ -266,6 +266,7 @@ void craft_shutdown_state(struct craft_state *state) {
 int craft_step(struct craft_state *state, uint32_t ticks) {
     struct rect client = craft_client_rect(state);
     struct rect render = craft_render_rect(state);
+    int surface_changed = 0;
     int local_x = 0;
     int local_y = 0;
     int inside = point_in_rect(&render, state->mouse_x, state->mouse_y);
@@ -298,11 +299,16 @@ int craft_step(struct craft_state *state, uint32_t ticks) {
             return 1;
         }
         str_copy_limited(state->status, "Craft em execucao", (int)sizeof(state->status));
+        state->surface_w = render.w;
+        state->surface_h = render.h;
     }
 
-    craft_upstream_resize(render.w, render.h);
-    state->surface_w = render.w;
-    state->surface_h = render.h;
+    surface_changed = (state->surface_w != render.w) || (state->surface_h != render.h);
+    if (surface_changed) {
+        craft_upstream_resize(render.w, render.h);
+        state->surface_w = render.w;
+        state->surface_h = render.h;
+    }
     craft_upstream_set_mouse(local_x, local_y,
                              state->mouse_dx, state->mouse_dy, state->mouse_wheel,
                              state->mouse_buttons, state->focused, inside);

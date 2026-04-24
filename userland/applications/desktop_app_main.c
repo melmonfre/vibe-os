@@ -42,6 +42,12 @@ static enum app_type desktop_app_type(const char *app_name) {
     if (str_eq(app_name, "tetris")) {
         return APP_TETRIS;
     }
+    if (str_eq(app_name, "2048")) {
+        return APP_2048;
+    }
+    if (str_eq(app_name, "minesweeper")) {
+        return APP_MINESWEEPER;
+    }
     if (str_eq(app_name, "pacman")) {
         return APP_PACMAN;
     }

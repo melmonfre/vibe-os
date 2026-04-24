@@ -1,4 +1,5 @@
 #include <userland/modules/include/ui.h>
+#include <userland/modules/include/ui_clip.h>
 #include <userland/modules/include/syscalls.h>
 #include <userland/applications/include/apps.h>
 #include <userland/modules/include/terminal.h>
@@ -13,6 +14,8 @@
 #include <userland/applications/include/sketchpad.h>
 #include <userland/applications/include/games/snake.h>
 #include <userland/applications/include/games/tetris.h>
+#include <userland/applications/include/games/game_2048.h>
+#include <userland/applications/include/games/minesweeper.h>
 #include <userland/applications/include/games/pacman.h>
 #include <userland/applications/include/games/space_invaders.h>
 #include <userland/applications/include/games/pong.h>
@@ -21,6 +24,7 @@
 #include <userland/applications/include/games/flap_birb.h>
 #include <userland/applications/include/games/doom.h>
 #include <userland/applications/include/games/craft.h>
+#include <userland/modules/include/icon_theme.h>
 #include <userland/modules/include/image.h>
 #include <userland/modules/include/utils.h>
 #include <userland/modules/include/fs.h>
@@ -73,6 +77,10 @@ static struct snake_state g_snakes[MAX_SNAKES];
 static int g_snake_used[MAX_SNAKES];
 static struct tetris_state g_tetris[MAX_TETRIS];
 static int g_tetris_used[MAX_TETRIS];
+static struct game_2048_state g_2048_games[MAX_2048_GAMES];
+static int g_2048_used[MAX_2048_GAMES];
+static struct minesweeper_state g_minesweepers[MAX_MINESWEEPERS];
+static int g_minesweeper_used[MAX_MINESWEEPERS];
 static struct pacman_state g_pacman[MAX_PACMAN];
 static int g_pacman_used[MAX_PACMAN];
 static struct space_invaders_state g_space_invaders[MAX_SPACE_INVADERS];
@@ -271,6 +279,7 @@ enum desktop_app_action_type {
     DESKTOP_APP_ACTION_SKETCHPAD_EXPORT,
     DESKTOP_APP_ACTION_SKETCHPAD_SELECT_COLOR,
     DESKTOP_APP_ACTION_SKETCHPAD_PAINT,
+    DESKTOP_APP_ACTION_MINESWEEPER_CLICK,
     DESKTOP_APP_ACTION_FLAP_BIRB_CLICK,
     DESKTOP_APP_ACTION_DOOM_CLICK,
     DESKTOP_APP_ACTION_CRAFT_CLICK,
@@ -663,7 +672,6 @@ enum {
     FMENU_COUNT
 };
 enum {
-    START_MENU_ENTRY_COUNT = 68,
     START_MENU_SEARCH_MAX = 24,
     START_MENU_SCROLLBAR_W = 10
 };
@@ -868,77 +876,86 @@ struct start_menu_entry {
     enum app_type type;
     enum start_menu_tab tab;
     const char *command;
+    const char *icon_name;
+    enum icon_theme_context icon_context;
+    int icon_size;
 };
 
-static const struct start_menu_entry g_start_menu_entries[START_MENU_ENTRY_COUNT] = {
-    {"Terminal", "Sistema", APP_TERMINAL, START_MENU_TAB_APPS, 0},
-    {"Relogio", "Acessorios", APP_CLOCK, START_MENU_TAB_APPS, 0},
-    {"Arquivos", "Sistema", APP_FILEMANAGER, START_MENU_TAB_APPS, 0},
-    {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS, 0},
-    {"Tasks", "Sistema", APP_TASKMANAGER, START_MENU_TAB_APPS, 0},
-    {"Input restart", "kill input", APP_TERMINAL, START_MENU_TAB_APPS, "kill input"},
-    {"Audio restart", "kill audio", APP_TERMINAL, START_MENU_TAB_APPS, "kill audio"},
-    {"Video restart", "kill video", APP_TERMINAL, START_MENU_TAB_APPS, "kill video"},
-    {"Network restart", "kill network", APP_TERMINAL, START_MENU_TAB_APPS, "kill network"},
-    {"Spawn clock", "spawn clock", APP_TERMINAL, START_MENU_TAB_APPS, "spawn clock"},
-    {"Rede", "netmgrd status", APP_TERMINAL, START_MENU_TAB_APPS, "netmgrd status"},
-    {"Audio Player", "Midia Som", APP_AUDIO_PLAYER, START_MENU_TAB_APPS, 0},
-    {"Calculadora", "Acessorios", APP_CALCULATOR, START_MENU_TAB_APPS, 0},
-    {"Imagens", "Midia", APP_IMAGEVIEWER, START_MENU_TAB_APPS, 0},
-    {"Som CLI", "soundctl status", APP_TERMINAL, START_MENU_TAB_APPS, "soundctl status"},
-    {"Sketchpad", "Criacao", APP_SKETCHPAD, START_MENU_TAB_APPS, 0},
-    {"Personalizar", "Desktop", APP_PERSONALIZE, START_MENU_TAB_APPS, 0},
-    {"Snake", "Classicos", APP_SNAKE, START_MENU_TAB_GAMES, 0},
-    {"Tetris", "Classicos", APP_TETRIS, START_MENU_TAB_GAMES, 0},
-    {"Adventure", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "adventure"},
-    {"Arithmetic", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "arithmetic"},
-    {"ATC", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "atc"},
-    {"Backgammon", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "backgammon"},
-    {"Banner", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "banner"},
-    {"BCD", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "bcd"},
-    {"Battlestar", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "battlestar"},
-    {"Boggle", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "boggle"},
-    {"Battleship", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "bs"},
-    {"Caesar", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "caesar"},
-    {"Canfield", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "canfield"},
-    {"Cribbage", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "cribbage"},
-    {"Factor", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "factor"},
-    {"Fish", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "fish"},
-    {"Fortune", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "fortune"},
-    {"Gomoku", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "gomoku"},
-    {"GRDC", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "grdc"},
-    {"Hack", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "hack"},
-    {"Hangman", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "hangman"},
-    {"Mille", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "mille"},
-    {"Monop", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "monop"},
-    {"Morse", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "morse"},
-    {"Number", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "number"},
-    {"Phantasia", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "phantasia"},
-    {"Pig", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "pig"},
-    {"Pom", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "pom"},
-    {"PPT", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "ppt"},
-    {"Primes", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "primes"},
-    {"Quiz", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "quiz"},
-    {"Rain", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "rain"},
-    {"Random", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "random"},
-    {"Robots", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "robots"},
-    {"Sail", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "sail"},
-    {"Snake BSD", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "snake-bsd"},
-    {"Teachgammon", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "teachgammon"},
-    {"Tetris BSD", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "tetris-bsd"},
-    {"Trek", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "trek"},
-    {"Wargames", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "wargames"},
-    {"Worm", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "worm"},
-    {"Worms", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "worms"},
-    {"Wump", "BSD Port", APP_TERMINAL, START_MENU_TAB_GAMES, "wump"},
-    {"Pacman", "Arcade", APP_PACMAN, START_MENU_TAB_GAMES, 0},
-    {"Invaders", "Arcade", APP_SPACE_INVADERS, START_MENU_TAB_GAMES, 0},
-    {"Pong", "Arcade", APP_PONG, START_MENU_TAB_GAMES, 0},
-    {"Donkey Kong", "Arcade", APP_DONKEY_KONG, START_MENU_TAB_GAMES, 0},
-    {"Brick Race", "Arcade", APP_BRICK_RACE, START_MENU_TAB_GAMES, 0},
-    {"Flap Birb", "Arcade", APP_FLAP_BIRB, START_MENU_TAB_GAMES, 0},
-    {"DOOM", "Port", APP_DOOM, START_MENU_TAB_GAMES, 0},
-    {"Craft", "Port", APP_CRAFT, START_MENU_TAB_GAMES, 0}
+static const struct start_menu_entry g_start_menu_entries[] = {
+    {"Terminal", "Sistema", APP_TERMINAL, START_MENU_TAB_APPS, 0, "utilities-terminal", ICON_THEME_CONTEXT_APPS, 16},
+    {"Relogio", "Acessorios", APP_CLOCK, START_MENU_TAB_APPS, 0, "clock", ICON_THEME_CONTEXT_APPS, 16},
+    {"Arquivos", "Sistema", APP_FILEMANAGER, START_MENU_TAB_APPS, 0, "folder", ICON_THEME_CONTEXT_PLACES, 16},
+    {"Editor", "Produtividade", APP_EDITOR, START_MENU_TAB_APPS, 0, "accessories-text-editor", ICON_THEME_CONTEXT_APPS, 24},
+    {"Tasks", "Sistema", APP_TASKMANAGER, START_MENU_TAB_APPS, 0, "utilities-system-monitor", ICON_THEME_CONTEXT_APPS, 16},
+    {"Spawn clock", "spawn clock", APP_TERMINAL, START_MENU_TAB_APPS, "spawn clock", "clock", ICON_THEME_CONTEXT_APPS, 16},
+    {"Rede", "netmgrd status", APP_TERMINAL, START_MENU_TAB_APPS, "netmgrd status", "preferences-system-network", ICON_THEME_CONTEXT_APPS, 16},
+    {"Audio Player", "Midia Som", APP_AUDIO_PLAYER, START_MENU_TAB_APPS, 0, "multimedia-audio-player", ICON_THEME_CONTEXT_APPS, 16},
+    {"Calculadora", "Acessorios", APP_CALCULATOR, START_MENU_TAB_APPS, 0, "accessories-calculator", ICON_THEME_CONTEXT_APPS, 16},
+    {"Imagens", "Midia", APP_IMAGEVIEWER, START_MENU_TAB_APPS, 0, "camera-photo", ICON_THEME_CONTEXT_APPS, 16},
+    {"Som CLI", "soundctl status", APP_TERMINAL, START_MENU_TAB_APPS, "soundctl status", "audio-player", ICON_THEME_CONTEXT_APPS, 24},
+    {"Sketchpad", "Criacao", APP_SKETCHPAD, START_MENU_TAB_APPS, 0, "preferences-desktop-theme", ICON_THEME_CONTEXT_APPS, 22},
+    {"Personalizar", "Desktop", APP_PERSONALIZE, START_MENU_TAB_APPS, 0, "preferences-desktop-wallpaper", ICON_THEME_CONTEXT_APPS, 16},
+    {"Snake", "Classicos", APP_SNAKE, START_MENU_TAB_GAMES, 0, "ksnake", ICON_THEME_CONTEXT_APPS, 16},
+    {"Tetris", "Classicos", APP_TETRIS, START_MENU_TAB_GAMES, 0, "package_games_board", ICON_THEME_CONTEXT_APPS, 16},
+    {"2048", "Puzzle", APP_2048, START_MENU_TAB_GAMES, 0, "package_games_board", ICON_THEME_CONTEXT_APPS, 16},
+    {"Campo Minado", "Puzzle", APP_MINESWEEPER, START_MENU_TAB_GAMES, 0, "kmines", ICON_THEME_CONTEXT_APPS, 16},
+    {"Pacman", "Arcade", APP_PACMAN, START_MENU_TAB_GAMES, 0, "package_games_arcade", ICON_THEME_CONTEXT_APPS, 16},
+    {"Invaders", "Arcade", APP_SPACE_INVADERS, START_MENU_TAB_GAMES, 0, "kspaceduel", ICON_THEME_CONTEXT_APPS, 16},
+    {"Pong", "Arcade", APP_PONG, START_MENU_TAB_GAMES, 0, "package_games_arcade", ICON_THEME_CONTEXT_APPS, 16},
+    {"Donkey Kong", "Arcade", APP_DONKEY_KONG, START_MENU_TAB_GAMES, 0, "package_games_arcade", ICON_THEME_CONTEXT_APPS, 16},
+    {"Brick Race", "Arcade", APP_BRICK_RACE, START_MENU_TAB_GAMES, 0, "package_games_arcade", ICON_THEME_CONTEXT_APPS, 16},
+    {"Flap Birb", "Arcade", APP_FLAP_BIRB, START_MENU_TAB_GAMES, 0, "package_games_arcade", ICON_THEME_CONTEXT_APPS, 16},
+    {"DOOM", "Port", APP_DOOM, START_MENU_TAB_GAMES, 0, "package_games_arcade", ICON_THEME_CONTEXT_APPS, 16},
+    {"Craft", "Port", APP_CRAFT, START_MENU_TAB_GAMES, 0, "craft", ICON_THEME_CONTEXT_APPS, 24}
+};
+
+#define START_MENU_ENTRY_COUNT ((int)(sizeof(g_start_menu_entries) / sizeof(g_start_menu_entries[0])))
+
+struct desktop_hover_state {
+    int start_hover;
+    int menu_hover[START_MENU_ENTRY_COUNT];
+    int hovered_result;
+    int apps_tab_hover;
+    int games_tab_hover;
+    int menu_search_hover;
+    int menu_search_clear_hover;
+    int menu_sidebar_hover;
+    int menu_sidebar_files_hover;
+    int menu_sidebar_terminal_hover;
+    int menu_sidebar_personalize_hover;
+    int menu_logout_hover;
+    int menu_scroll_thumb_hover;
+    int context_personalize_hover;
+    int fm_open_hover;
+    int fm_copy_hover;
+    int fm_paste_hover;
+    int fm_new_dir_hover;
+    int fm_new_file_hover;
+    int fm_rename_hover;
+    int fm_trash_hover;
+    int fm_set_wallpaper_hover;
+    int app_primary_hover;
+    int app_save_as_hover;
+};
+
+struct desktop_render_state {
+    int focused;
+    uint32_t ticks;
+    int menu_open;
+    enum start_menu_tab start_menu_tab;
+    const int *filtered_indices;
+    int filtered_count;
+    int start_menu_scroll_current;
+    const char *start_menu_search;
+    struct rect menu_rect;
+    int context_open;
+    struct rect context_menu;
+    int fm_context_open;
+    struct rect fm_context_menu;
+    const struct app_context_state *app_context;
+    const struct file_dialog_state *file_dialog;
+    const struct desktop_hover_state *hover;
+    int show_cursor;
 };
 
 static void sync_window_instance_rect(int widx);
@@ -972,6 +989,33 @@ static void desktop_queue_startup_background_tasks(void);
 static int desktop_process_startup_background_tasks(uint32_t ticks,
                                                     uint32_t *sound_armed_ticks,
                                                     uint32_t *release_tick);
+static int desktop_icon_spec_for_app(enum app_type type,
+                                     const char **name_out,
+                                     enum icon_theme_context *context_out,
+                                     int *size_out);
+static int desktop_icon_spec_for_start_menu_entry(const struct start_menu_entry *entry,
+                                                  const char **name_out,
+                                                  enum icon_theme_context *context_out,
+                                                  int *size_out);
+static int desktop_icon_spec_for_filemanager_action(int action,
+                                                    const char **name_out,
+                                                    enum icon_theme_context *context_out,
+                                                    int *size_out);
+static int desktop_icon_spec_for_app_context(enum app_type type,
+                                             int action,
+                                             const char **name_out,
+                                             enum icon_theme_context *context_out,
+                                             int *size_out);
+static void desktop_draw_button_with_icon(const struct rect *r,
+                                          const char *label,
+                                          enum ui_button_style style,
+                                          int hover,
+                                          const char *icon_name,
+                                          enum icon_theme_context icon_context,
+                                          int icon_size);
+static void desktop_draw_start_menu_item(const struct rect *r,
+                                         const struct start_menu_entry *entry,
+                                         int hover);
 static void free_window(int widx);
 static void clamp_window_rect(struct rect *r);
 static void append_uint_limited(char *buf, unsigned value, int max_len);
@@ -1146,6 +1190,7 @@ static int desktop_dispatch_file_dialog_click(struct file_dialog_state *file_dia
                                               int click_x,
                                               int click_y);
 static int desktop_dispatch_right_click(struct desktop_session_action_queue *session_queue,
+                                        struct desktop_app_action_queue *app_queue,
                                         struct file_dialog_state *file_dialog,
                                         int click_x,
                                         int click_y,
@@ -1228,6 +1273,35 @@ static int desktop_dispatch_shell_window_click(struct desktop_window_action_queu
                                                int click_x,
                                                int click_y,
                                                int *dirty);
+static void desktop_draw_window_at_index(int index,
+                                         int focused,
+                                         const struct mouse_state *mouse,
+                                         uint32_t ticks);
+static void desktop_draw_intersecting_windows(const struct rect *regions,
+                                              int region_count,
+                                              int focused,
+                                              const struct mouse_state *mouse,
+                                              uint32_t ticks);
+static int desktop_rect_intersects(const struct rect *a, const struct rect *b);
+static int desktop_rect_intersects_any(const struct rect *target,
+                                       const struct rect *regions,
+                                       int region_count);
+static void desktop_collect_transition_regions(const struct rect *previous_rect,
+                                               const struct rect *current_rect,
+                                               struct rect *regions,
+                                               int *region_count);
+static void desktop_collect_pointer_regions(const struct mouse_state *previous_mouse,
+                                            const struct mouse_state *mouse,
+                                            struct rect *regions,
+                                            int *region_count);
+static void desktop_draw_region_overlays(const struct rect *region,
+                                         const struct mouse_state *mouse,
+                                         const struct desktop_render_state *render);
+static void desktop_redraw_regions(const struct rect *regions,
+                                   int region_count,
+                                   const struct mouse_state *mouse,
+                                   const struct desktop_render_state *render);
+static int desktop_cursor_hidden(int focused);
 static int desktop_dispatch_taskbar_window_click(struct desktop_session_action_queue *session_queue,
                                                  struct desktop_window_action_queue *window_queue,
                                                  int click_x,
@@ -1298,6 +1372,8 @@ static int window_instance_valid(enum app_type type, int instance) {
     case APP_SKETCHPAD: return instance >= 0 && instance < MAX_SKETCHPADS;
     case APP_SNAKE: return instance >= 0 && instance < MAX_SNAKES;
     case APP_TETRIS: return instance >= 0 && instance < MAX_TETRIS;
+    case APP_2048: return instance >= 0 && instance < MAX_2048_GAMES;
+    case APP_MINESWEEPER: return instance >= 0 && instance < MAX_MINESWEEPERS;
     case APP_PACMAN: return instance >= 0 && instance < MAX_PACMAN;
     case APP_SPACE_INVADERS: return instance >= 0 && instance < MAX_SPACE_INVADERS;
     case APP_PONG: return instance >= 0 && instance < MAX_PONG;
@@ -1324,6 +1400,8 @@ static int sanitize_windows(int *focused) {
     int sketch_used[MAX_SKETCHPADS] = {0};
     int snake_used[MAX_SNAKES] = {0};
     int tetris_used[MAX_TETRIS] = {0};
+    int game_2048_used[MAX_2048_GAMES] = {0};
+    int minesweeper_used[MAX_MINESWEEPERS] = {0};
     int pacman_used[MAX_PACMAN] = {0};
     int space_invaders_used[MAX_SPACE_INVADERS] = {0};
     int pong_used[MAX_PONG] = {0};
@@ -1398,6 +1476,14 @@ static int sanitize_windows(int *focused) {
             duplicate = tetris_used[g_windows[i].instance];
             tetris_used[g_windows[i].instance] = 1;
             break;
+        case APP_2048:
+            duplicate = game_2048_used[g_windows[i].instance];
+            game_2048_used[g_windows[i].instance] = 1;
+            break;
+        case APP_MINESWEEPER:
+            duplicate = minesweeper_used[g_windows[i].instance];
+            minesweeper_used[g_windows[i].instance] = 1;
+            break;
         case APP_PACMAN:
             duplicate = pacman_used[g_windows[i].instance];
             pacman_used[g_windows[i].instance] = 1;
@@ -1464,6 +1550,8 @@ static int sanitize_windows(int *focused) {
     for (int i = 0; i < MAX_SKETCHPADS; ++i) g_sketch_used[i] = sketch_used[i];
     for (int i = 0; i < MAX_SNAKES; ++i) g_snake_used[i] = snake_used[i];
     for (int i = 0; i < MAX_TETRIS; ++i) g_tetris_used[i] = tetris_used[i];
+    for (int i = 0; i < MAX_2048_GAMES; ++i) g_2048_used[i] = game_2048_used[i];
+    for (int i = 0; i < MAX_MINESWEEPERS; ++i) g_minesweeper_used[i] = minesweeper_used[i];
     for (int i = 0; i < MAX_PACMAN; ++i) g_pacman_used[i] = pacman_used[i];
     for (int i = 0; i < MAX_SPACE_INVADERS; ++i) g_space_invaders_used[i] = space_invaders_used[i];
     for (int i = 0; i < MAX_PONG; ++i) g_pong_used[i] = pong_used[i];
@@ -1910,6 +1998,8 @@ static int desktop_simple_app_action_for_type(enum app_type app_type) {
         return DESKTOP_APP_ACTION_CALCULATOR_CLICK;
     case APP_SKETCHPAD:
         return DESKTOP_APP_ACTION_SKETCHPAD_CLICK;
+    case APP_MINESWEEPER:
+        return DESKTOP_APP_ACTION_MINESWEEPER_CLICK;
     case APP_FLAP_BIRB:
         return DESKTOP_APP_ACTION_FLAP_BIRB_CLICK;
     case APP_DOOM:
@@ -2342,6 +2432,7 @@ static int desktop_dispatch_file_dialog_click(struct file_dialog_state *file_dia
 }
 
 static int desktop_dispatch_right_click(struct desktop_session_action_queue *session_queue,
+                                        struct desktop_app_action_queue *app_queue,
                                         struct file_dialog_state *file_dialog,
                                         int click_x,
                                         int click_y,
@@ -2352,7 +2443,7 @@ static int desktop_dispatch_right_click(struct desktop_session_action_queue *ses
                                         int *dirty) {
     int hit_window;
 
-    if (session_queue == 0 || file_dialog == 0 || focused == 0 || dirty == 0) {
+    if (session_queue == 0 || app_queue == 0 || file_dialog == 0 || focused == 0 || dirty == 0) {
         return 0;
     }
 
@@ -2362,6 +2453,21 @@ static int desktop_dispatch_right_click(struct desktop_session_action_queue *ses
         desktop_queue_close_contexts(session_queue, click_x, click_y);
         *dirty = 1;
         return 1;
+    }
+
+    if (hit_window >= 0 && g_windows[hit_window].type == APP_MINESWEEPER) {
+        int new_index = raise_window_to_front(hit_window, focused);
+
+        *focused = new_index;
+        hit_window = new_index;
+        if (minesweeper_handle_click(&g_minesweepers[g_windows[hit_window].instance],
+                                     click_x,
+                                     click_y,
+                                     MINESWEEPER_CLICK_FLAG)) {
+            desktop_queue_close_contexts(session_queue, click_x, click_y);
+            *dirty = 1;
+            return 1;
+        }
     }
 
     if (hit_window >= 0 && g_windows[hit_window].type == APP_FILEMANAGER) {
@@ -3006,6 +3112,17 @@ static int desktop_process_app_action_queue(struct desktop_app_action_queue *que
                 sketchpad_paint_at(&g_sketches[g_windows[action->window].instance],
                                    action->x,
                                    action->y)) {
+                dirty = 1;
+            }
+            break;
+        case DESKTOP_APP_ACTION_MINESWEEPER_CLICK:
+            if (action->window >= 0 && action->window < MAX_WINDOWS &&
+                g_windows[action->window].active &&
+                g_windows[action->window].type == APP_MINESWEEPER &&
+                minesweeper_handle_click(&g_minesweepers[g_windows[action->window].instance],
+                                         action->x,
+                                         action->y,
+                                         action->target)) {
                 dirty = 1;
             }
             break;
@@ -4212,6 +4329,331 @@ static const char *app_context_menu_label(enum app_type type, int action) {
     return "";
 }
 
+static int desktop_icon_spec_for_app(enum app_type type,
+                                     const char **name_out,
+                                     enum icon_theme_context *context_out,
+                                     int *size_out) {
+    const char *name = "application-default-icon";
+    enum icon_theme_context context = ICON_THEME_CONTEXT_APPS;
+    int size = 16;
+
+    switch (type) {
+    case APP_TERMINAL:
+        name = "utilities-terminal";
+        break;
+    case APP_CLOCK:
+        name = "clock";
+        break;
+    case APP_FILEMANAGER:
+        name = "folder";
+        context = ICON_THEME_CONTEXT_PLACES;
+        break;
+    case APP_EDITOR:
+        name = "accessories-text-editor";
+        size = 24;
+        break;
+    case APP_TASKMANAGER:
+        name = "utilities-system-monitor";
+        break;
+    case APP_CALCULATOR:
+        name = "accessories-calculator";
+        break;
+    case APP_IMAGEVIEWER:
+        name = "camera-photo";
+        break;
+    case APP_AUDIO_PLAYER:
+        name = "multimedia-audio-player";
+        size = 16;
+        break;
+    case APP_SKETCHPAD:
+        name = "preferences-desktop-theme";
+        size = 22;
+        break;
+    case APP_SNAKE:
+        name = "ksnake";
+        break;
+    case APP_TETRIS:
+        name = "package_games_board";
+        break;
+    case APP_2048:
+        name = "package_games_board";
+        break;
+    case APP_MINESWEEPER:
+        name = "kmines";
+        break;
+    case APP_PACMAN:
+        name = "package_games_arcade";
+        break;
+    case APP_SPACE_INVADERS:
+        name = "kspaceduel";
+        break;
+    case APP_PONG:
+        name = "package_games_arcade";
+        break;
+    case APP_DONKEY_KONG:
+        name = "package_games_arcade";
+        break;
+    case APP_BRICK_RACE:
+        name = "package_games_arcade";
+        break;
+    case APP_FLAP_BIRB:
+        name = "package_games_arcade";
+        break;
+    case APP_DOOM:
+        name = "package_games_arcade";
+        break;
+    case APP_CRAFT:
+        name = "craft";
+        size = 24;
+        break;
+    case APP_PERSONALIZE:
+        name = "preferences-desktop-wallpaper";
+        break;
+    case APP_TRASH:
+        name = "user-trash";
+        context = ICON_THEME_CONTEXT_PLACES;
+        break;
+    default:
+        break;
+    }
+
+    if (name_out != 0) {
+        *name_out = name;
+    }
+    if (context_out != 0) {
+        *context_out = context;
+    }
+    if (size_out != 0) {
+        *size_out = size;
+    }
+    return 0;
+}
+
+static int desktop_icon_spec_for_start_menu_entry(const struct start_menu_entry *entry,
+                                                  const char **name_out,
+                                                  enum icon_theme_context *context_out,
+                                                  int *size_out) {
+    if (entry == 0) {
+        return -1;
+    }
+    if (entry->icon_name != 0 && entry->icon_name[0] != '\0') {
+        if (name_out != 0) {
+            *name_out = entry->icon_name;
+        }
+        if (context_out != 0) {
+            *context_out = entry->icon_context;
+        }
+        if (size_out != 0) {
+            *size_out = entry->icon_size;
+        }
+        return 0;
+    }
+    return desktop_icon_spec_for_app(entry->type, name_out, context_out, size_out);
+}
+
+static int desktop_icon_spec_for_filemanager_action(int action,
+                                                    const char **name_out,
+                                                    enum icon_theme_context *context_out,
+                                                    int *size_out) {
+    const char *name = "application-default-icon";
+    enum icon_theme_context context = ICON_THEME_CONTEXT_APPS;
+    int size = 16;
+
+    switch (action) {
+    case FMENU_OPEN:
+        name = "document-open";
+        context = ICON_THEME_CONTEXT_ACTIONS;
+        break;
+    case FMENU_COPY:
+        name = "edit-copy";
+        context = ICON_THEME_CONTEXT_ACTIONS;
+        break;
+    case FMENU_PASTE:
+        name = "edit-paste";
+        context = ICON_THEME_CONTEXT_ACTIONS;
+        break;
+    case FMENU_NEW_DIR:
+        name = "folder";
+        context = ICON_THEME_CONTEXT_PLACES;
+        break;
+    case FMENU_NEW_FILE:
+        name = "document-new";
+        context = ICON_THEME_CONTEXT_ACTIONS;
+        break;
+    case FMENU_RENAME:
+        name = "item_rename";
+        context = ICON_THEME_CONTEXT_ACTIONS;
+        break;
+    case FMENU_MOVE_TO_TRASH:
+        name = "edittrash";
+        context = ICON_THEME_CONTEXT_ACTIONS;
+        break;
+    case FMENU_SET_WALLPAPER:
+        name = "preferences-desktop-wallpaper";
+        break;
+    default:
+        break;
+    }
+
+    if (name_out != 0) {
+        *name_out = name;
+    }
+    if (context_out != 0) {
+        *context_out = context;
+    }
+    if (size_out != 0) {
+        *size_out = size;
+    }
+    return 0;
+}
+
+static int desktop_icon_spec_for_app_context(enum app_type type,
+                                             int action,
+                                             const char **name_out,
+                                             enum icon_theme_context *context_out,
+                                             int *size_out) {
+    if (type == APP_EDITOR) {
+        if (action == APPCTX_PRIMARY) {
+            if (name_out != 0) *name_out = "filesave";
+            if (context_out != 0) *context_out = ICON_THEME_CONTEXT_ACTIONS;
+            if (size_out != 0) *size_out = 16;
+            return 0;
+        }
+        if (name_out != 0) *name_out = "filesaveas";
+        if (context_out != 0) *context_out = ICON_THEME_CONTEXT_ACTIONS;
+        if (size_out != 0) *size_out = 16;
+        return 0;
+    }
+    if (type == APP_SKETCHPAD) {
+        if (action == APPCTX_PRIMARY) {
+            if (name_out != 0) *name_out = "document-export";
+            if (context_out != 0) *context_out = ICON_THEME_CONTEXT_ACTIONS;
+            if (size_out != 0) *size_out = 16;
+            return 0;
+        }
+        if (name_out != 0) *name_out = "filesaveas";
+        if (context_out != 0) *context_out = ICON_THEME_CONTEXT_ACTIONS;
+        if (size_out != 0) *size_out = 16;
+        return 0;
+    }
+    return -1;
+}
+
+static void desktop_draw_button_with_icon(const struct rect *r,
+                                          const char *label,
+                                          enum ui_button_style style,
+                                          int hover,
+                                          const char *icon_name,
+                                          enum icon_theme_context icon_context,
+                                          int icon_size) {
+    const struct desktop_theme *theme = ui_theme_get();
+    int icon_drawn = -1;
+    int text_x = r->x + 4;
+    int text_y;
+
+    ui_draw_button(r, "", style, hover);
+    if (icon_name != 0 && icon_name[0] != '\0') {
+        icon_drawn = icon_theme_draw(icon_name, icon_context, icon_size,
+                                     r->x + 4, r->y + ((r->h - 10) / 2), 10, 10);
+    }
+    if (icon_drawn == 0) {
+        text_x = r->x + 18;
+    }
+    text_y = r->y + ((r->h - 7) / 2);
+    sys_text(text_x, text_y, theme->text, label);
+}
+
+static void desktop_draw_icon_button(const struct rect *r,
+                                     enum ui_button_style style,
+                                     int hover,
+                                     const char *fallback_label,
+                                     const char *icon_name,
+                                     enum icon_theme_context icon_context,
+                                     int icon_size,
+                                     int icon_w,
+                                     int icon_h) {
+    const struct desktop_theme *theme = ui_theme_get();
+    int icon_drawn = -1;
+    int text_x = r->x + ((r->w - ((fallback_label != 0) ? ((int)str_len(fallback_label) * 6) - 1 : 0)) / 2);
+
+    ui_draw_button(r, "", style, hover);
+    if (icon_name != 0 && icon_name[0] != '\0') {
+        icon_drawn = icon_theme_draw(icon_name,
+                                     icon_context,
+                                     icon_size,
+                                     r->x + ((r->w - icon_w) / 2),
+                                     r->y + ((r->h - icon_h) / 2),
+                                     icon_w,
+                                     icon_h);
+    }
+    if (icon_drawn != 0 && fallback_label != 0 && fallback_label[0] != '\0') {
+        sys_text(text_x, r->y + ((r->h - 7) / 2), theme->text, fallback_label);
+    }
+}
+
+static int desktop_icon_spec_for_file_dialog(enum file_dialog_mode mode,
+                                             const char **title_icon_name,
+                                             enum icon_theme_context *title_context,
+                                             int *title_size,
+                                             const char **confirm_icon_name,
+                                             enum icon_theme_context *confirm_context,
+                                             int *confirm_size) {
+    const char *title_name = "window-new";
+    enum icon_theme_context title_ctx = ICON_THEME_CONTEXT_ACTIONS;
+    int title_pref = 16;
+    const char *confirm_name = "gtk-apply";
+    enum icon_theme_context confirm_ctx = ICON_THEME_CONTEXT_ACTIONS;
+    int confirm_pref = 16;
+
+    switch (mode) {
+    case FILE_DIALOG_EDITOR_SAVE:
+        title_name = "filesave";
+        confirm_name = "filesave";
+        break;
+    case FILE_DIALOG_SKETCH_EXPORT:
+        title_name = "document-export";
+        confirm_name = "document-export";
+        break;
+    case FILE_DIALOG_WALLPAPER_PATH:
+        title_name = "preferences-desktop-wallpaper";
+        title_ctx = ICON_THEME_CONTEXT_APPS;
+        confirm_name = "gtk-apply";
+        break;
+    case FILE_DIALOG_FILE_RENAME:
+        title_name = "item_rename";
+        confirm_name = "item_rename";
+        break;
+    default:
+        break;
+    }
+
+    if (title_icon_name != 0) *title_icon_name = title_name;
+    if (title_context != 0) *title_context = title_ctx;
+    if (title_size != 0) *title_size = title_pref;
+    if (confirm_icon_name != 0) *confirm_icon_name = confirm_name;
+    if (confirm_context != 0) *confirm_context = confirm_ctx;
+    if (confirm_size != 0) *confirm_size = confirm_pref;
+    return 0;
+}
+
+static void desktop_draw_start_menu_item(const struct rect *r,
+                                         const struct start_menu_entry *entry,
+                                         int hover) {
+    const struct desktop_theme *theme = ui_theme_get();
+    const char *icon_name = 0;
+    enum icon_theme_context icon_context = ICON_THEME_CONTEXT_APPS;
+    int icon_size = 16;
+    int label_x = r->x + 8;
+
+    ui_draw_button(r, "", hover ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL, hover);
+    if (desktop_icon_spec_for_start_menu_entry(entry, &icon_name, &icon_context, &icon_size) == 0 &&
+        icon_theme_draw(icon_name, icon_context, icon_size, r->x + 8, r->y + 8, 16, 16) == 0) {
+        label_x = r->x + 30;
+    }
+    sys_text(label_x, r->y + 7, theme->text, entry->label);
+    sys_text(label_x, r->y + 20, theme->text, entry->meta);
+}
+
 static void set_dialog_status(struct file_dialog_state *dialog, const char *msg) {
     str_copy_limited(dialog->status, msg, (int)sizeof(dialog->status));
 }
@@ -4557,12 +4999,45 @@ static void draw_file_dialog(const struct file_dialog_state *dialog, const struc
     int ext_active = dialog->active_field == 1;
     int name_len = str_len(dialog->name);
     int ext_len = str_len(dialog->ext);
+    const char *title_icon_name = 0;
+    enum icon_theme_context title_icon_context = ICON_THEME_CONTEXT_ACTIONS;
+    int title_icon_size = 16;
+    const char *confirm_icon_name = 0;
+    enum icon_theme_context confirm_icon_context = ICON_THEME_CONTEXT_ACTIONS;
+    int confirm_icon_size = 16;
+    int title_x = dialog->window.x + 8;
+
+    desktop_icon_spec_for_file_dialog(dialog->mode,
+                                      &title_icon_name,
+                                      &title_icon_context,
+                                      &title_icon_size,
+                                      &confirm_icon_name,
+                                      &confirm_icon_context,
+                                      &confirm_icon_size);
 
     ui_draw_surface(&dialog->window, ui_color_panel());
     sys_rect(title.x, title.y, title.w, title.h, theme->window);
     sys_rect(title.x, title.y + title.h - 1, title.w, 1, 0);
-    sys_text(dialog->window.x + 8, dialog->window.y + 4, theme->text, dialog->title);
-    ui_draw_button(&close, "X", UI_BUTTON_DANGER, close_hover);
+    if (title_icon_name != 0 &&
+        icon_theme_draw(title_icon_name,
+                        title_icon_context,
+                        title_icon_size,
+                        dialog->window.x + 6,
+                        dialog->window.y + 3,
+                        10,
+                        10) == 0) {
+        title_x = dialog->window.x + 20;
+    }
+    sys_text(title_x, dialog->window.y + 4, theme->text, dialog->title);
+    desktop_draw_icon_button(&close,
+                             UI_BUTTON_DANGER,
+                             close_hover,
+                             "X",
+                             "window-close",
+                             ICON_THEME_CONTEXT_ACTIONS,
+                             16,
+                             8,
+                             8);
     ui_draw_surface(&body, ui_color_window_bg());
 
     if (dialog->mode == FILE_DIALOG_WALLPAPER_PATH) {
@@ -4609,8 +5084,20 @@ static void draw_file_dialog(const struct file_dialog_state *dialog, const struc
         }
     }
     ui_draw_status(&(struct rect){body.x + 8, body.y + 86, body.w - 16, 12}, dialog->status);
-    ui_draw_button(&ok, dialog->confirm, UI_BUTTON_PRIMARY, ok_hover);
-    ui_draw_button(&cancel, "Cancelar", UI_BUTTON_NORMAL, cancel_hover);
+    desktop_draw_button_with_icon(&ok,
+                                  dialog->confirm,
+                                  UI_BUTTON_PRIMARY,
+                                  ok_hover,
+                                  confirm_icon_name,
+                                  confirm_icon_context,
+                                  confirm_icon_size);
+    desktop_draw_button_with_icon(&cancel,
+                                  "Cancelar",
+                                  UI_BUTTON_NORMAL,
+                                  cancel_hover,
+                                  "cancel",
+                                  ICON_THEME_CONTEXT_ACTIONS,
+                                  16);
 }
 
 static int open_editor_window_for_node(int node, int *focused) {
@@ -4743,6 +5230,28 @@ static int alloc_tetris(void) {
         if (!g_tetris_used[i]) {
             g_tetris_used[i] = 1;
             tetris_init_state(&g_tetris[i]);
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int alloc_2048_game(void) {
+    for (int i = 0; i < MAX_2048_GAMES; ++i) {
+        if (!g_2048_used[i]) {
+            g_2048_used[i] = 1;
+            game_2048_init_state(&g_2048_games[i]);
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int alloc_minesweeper(void) {
+    for (int i = 0; i < MAX_MINESWEEPERS; ++i) {
+        if (!g_minesweeper_used[i]) {
+            g_minesweeper_used[i] = 1;
+            minesweeper_init_state(&g_minesweepers[i]);
             return i;
         }
     }
@@ -5160,6 +5669,12 @@ static void sync_window_instance_rect(int widx) {
     case APP_TETRIS:
         g_tetris[g_windows[widx].instance].window = g_windows[widx].rect;
         break;
+    case APP_2048:
+        g_2048_games[g_windows[widx].instance].window = g_windows[widx].rect;
+        break;
+    case APP_MINESWEEPER:
+        g_minesweepers[g_windows[widx].instance].window = g_windows[widx].rect;
+        break;
     case APP_PACMAN:
         g_pacman[g_windows[widx].instance].window = g_windows[widx].rect;
         break;
@@ -5301,6 +5816,18 @@ static int alloc_window(enum app_type type) {
                 if (idx < 0) return -1;
                 instance = idx;
                 rect = g_tetris[idx].window;
+            } break;
+            case APP_2048: {
+                int idx = alloc_2048_game();
+                if (idx < 0) return -1;
+                instance = idx;
+                rect = g_2048_games[idx].window;
+            } break;
+            case APP_MINESWEEPER: {
+                int idx = alloc_minesweeper();
+                if (idx < 0) return -1;
+                instance = idx;
+                rect = g_minesweepers[idx].window;
             } break;
             case APP_PACMAN: {
                 int idx = alloc_pacman();
@@ -5490,6 +6017,8 @@ static void free_window(int widx) {
     case APP_SKETCHPAD: g_sketch_used[w->instance] = 0; break;
     case APP_SNAKE: g_snake_used[w->instance] = 0; break;
     case APP_TETRIS: g_tetris_used[w->instance] = 0; break;
+    case APP_2048: g_2048_used[w->instance] = 0; break;
+    case APP_MINESWEEPER: g_minesweeper_used[w->instance] = 0; break;
     case APP_PACMAN: g_pacman_used[w->instance] = 0; break;
     case APP_SPACE_INVADERS: g_space_invaders_used[w->instance] = 0; break;
     case APP_PONG: g_pong_used[w->instance] = 0; break;
@@ -6726,6 +7255,26 @@ static int desktop_submit_present_full(uint32_t ticks) {
     return 0;
 }
 
+static int desktop_submit_present_dirty(uint32_t ticks) {
+    uint32_t sequence = 0u;
+
+    if (!desktop_present_submit_ready()) {
+        desktop_note_present_backpressure(ticks);
+        return -1;
+    }
+
+    if (sys_video_present_submit(VIDEO_PRESENT_DIRTY, &sequence) == 0) {
+        desktop_note_present_success();
+        return 0;
+    }
+
+    sys_write_debug("desktop: dirty present submit failed, falling back to direct present\n");
+    desktop_reset_video_async_path();
+    sys_present_dirty();
+    desktop_note_present_success();
+    return 0;
+}
+
 static uint32_t desktop_pump_async_service_events(void) {
     uint32_t flags = 0u;
     struct mk_service_event event;
@@ -6925,7 +7474,7 @@ static const char *network_applet_status_text(void) {
     }
 }
 
-static void draw_sound_applet_icon(const struct rect *button, uint8_t color) {
+static void draw_sound_applet_icon_fallback(const struct rect *button, uint8_t color) {
     int base_x;
     int base_y;
 
@@ -6957,7 +7506,7 @@ static void draw_sound_applet_icon(const struct rect *button, uint8_t color) {
     }
 }
 
-static void draw_network_applet_icon(const struct rect *button, uint8_t color) {
+static void draw_network_applet_icon_fallback(const struct rect *button, uint8_t color) {
     int base_x;
     int base_y;
 
@@ -6990,6 +7539,71 @@ static void draw_network_applet_icon(const struct rect *button, uint8_t color) {
     sys_rect(base_x + 9, base_y + 6, 2, 2, color);
     sys_rect(base_x + 1, base_y + 3, 8, 1, color);
     sys_rect(base_x + 5, base_y + 2, 1, 4, color);
+}
+
+static int draw_sound_applet_themed_icon(const struct rect *button) {
+    const char *icon_name = "audio-volume-medium";
+
+    if (button == 0) {
+        return -1;
+    }
+
+    if (g_sound_applet.output_muted || g_sound_applet.output_volume <= 0) {
+        icon_name = "audio-volume-low-zero";
+    } else if (g_sound_applet.output_volume >= 70) {
+        icon_name = "audio-volume-high";
+    } else if (g_sound_applet.output_volume >= 35) {
+        icon_name = "audio-volume-medium";
+    } else {
+        icon_name = "audio-volume-low";
+    }
+
+    return icon_theme_draw(icon_name,
+                           ICON_THEME_CONTEXT_PANEL,
+                           16,
+                           button->x + 1,
+                           button->y,
+                           16,
+                           16);
+}
+
+static int draw_network_applet_themed_icon(const struct rect *button) {
+    const char *icon_name;
+    int preferred_size = 16;
+
+    if (button == 0) {
+        return -1;
+    }
+
+    switch (g_network_applet_cache.status.link_state) {
+    case MK_NETWORK_LINK_CONNECTED:
+        if (g_network_applet_cache.status.active_kind == MK_NETWORK_IF_ETHERNET) {
+            icon_name = "notification-network-ethernet-connected";
+            preferred_size = 24;
+        } else {
+            icon_name = "notification-network-wireless-full";
+        }
+        break;
+    case MK_NETWORK_LINK_CONNECTING:
+        icon_name = "notification-network-wireless-medium";
+        break;
+    default:
+        if (g_network_applet_cache.status.active_kind == MK_NETWORK_IF_ETHERNET) {
+            icon_name = "notification-network-ethernet-disconnected";
+            preferred_size = 24;
+        } else {
+            icon_name = "notification-network-wireless-none";
+        }
+        break;
+    }
+
+    return icon_theme_draw(icon_name,
+                           ICON_THEME_CONTEXT_NOTIFICATIONS,
+                           preferred_size,
+                           button->x + 1,
+                           button->y,
+                           16,
+                           16);
 }
 
 static void desktop_draw_applet_popup(const struct rect *popup,
@@ -7062,7 +7676,9 @@ static void draw_sound_applet(const struct mouse_state *mouse) {
                    "",
                    g_sound_applet.popup_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                    hover);
-    draw_sound_applet_icon(&button, theme->text);
+    if (draw_sound_applet_themed_icon(&button) != 0) {
+        draw_sound_applet_icon_fallback(&button, theme->text);
+    }
 
     if (g_sound_applet.popup_open) {
         struct rect popup = sound_applet_popup_rect();
@@ -7424,7 +8040,9 @@ static void draw_network_applet(const struct mouse_state *mouse) {
                    "",
                    g_network_applet.popup_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
                    hover);
-    draw_network_applet_icon(&button, theme->text);
+    if (draw_network_applet_themed_icon(&button) != 0) {
+        draw_network_applet_icon_fallback(&button, theme->text);
+    }
 
     if (g_network_applet.popup_open) {
         struct rect popup = network_applet_popup_rect();
@@ -8240,10 +8858,34 @@ static void draw_start_menu_with_tab(enum start_menu_tab active_tab,
              start_menu_search_active(query) ? "Busca global" :
              (active_tab == START_MENU_TAB_APPS ? "Apps do sistema" : "Biblioteca de jogos"));
     sys_rect(sidebar.x + 8, sidebar.y + 44, sidebar.w - 16, 1, ui_color_muted());
-    ui_draw_button(&sidebar_files, "Arquivos", UI_BUTTON_NORMAL, sidebar_files_hover);
-    ui_draw_button(&sidebar_terminal, "Terminal", UI_BUTTON_NORMAL, sidebar_terminal_hover);
-    ui_draw_button(&sidebar_personalize, "Personalizar", UI_BUTTON_NORMAL, sidebar_personalize_hover);
-    ui_draw_button(&logout, "Encerrar", UI_BUTTON_DANGER, logout_hover);
+    desktop_draw_button_with_icon(&sidebar_files,
+                                  "Arquivos",
+                                  UI_BUTTON_NORMAL,
+                                  sidebar_files_hover,
+                                  "folder",
+                                  ICON_THEME_CONTEXT_PLACES,
+                                  16);
+    desktop_draw_button_with_icon(&sidebar_terminal,
+                                  "Terminal",
+                                  UI_BUTTON_NORMAL,
+                                  sidebar_terminal_hover,
+                                  "utilities-terminal",
+                                  ICON_THEME_CONTEXT_APPS,
+                                  16);
+    desktop_draw_button_with_icon(&sidebar_personalize,
+                                  "Personalizar",
+                                  UI_BUTTON_NORMAL,
+                                  sidebar_personalize_hover,
+                                  "preferences-desktop-wallpaper",
+                                  ICON_THEME_CONTEXT_APPS,
+                                  16);
+    desktop_draw_button_with_icon(&logout,
+                                  "Encerrar",
+                                  UI_BUTTON_DANGER,
+                                  logout_hover,
+                                  "user-trash",
+                                  ICON_THEME_CONTEXT_PLACES,
+                                  16);
 
     sys_text(search.x + 8, search.y + 6, theme->text, "Pesquisar");
     sys_text(search.x + 8, search.y + 15, theme->text, query[0] != '\0' ? query : "digite para filtrar apps e jogos");
@@ -8266,11 +8908,9 @@ static void draw_start_menu_with_tab(enum start_menu_tab active_tab,
             }
             entry_index = filtered_indices[result_index];
             item = start_menu_item_rect_visible(slot);
-            ui_draw_button(&item,
-                           g_start_menu_entries[entry_index].label,
-                           hovered_result == result_index ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
-                           hovered_result == result_index);
-            sys_text(item.x + 8, item.y + 20, theme->text, g_start_menu_entries[entry_index].meta);
+            desktop_draw_start_menu_item(&item,
+                                         &g_start_menu_entries[entry_index],
+                                         hovered_result == result_index);
         }
     }
 
@@ -8314,11 +8954,21 @@ static void draw_personalize_window(struct personalize_state *state,
     ui_draw_surface(&palette_panel, ui_color_window_bg());
     ui_draw_surface(&resolution_panel, ui_color_window_bg());
 
-    sys_text(theme_panel.x + 8, theme_panel.y + 8, theme->text, "Area do tema");
-    sys_text(preview_panel.x + 8, preview_panel.y + 8, theme->text, "Preview");
-    sys_text(wallpaper_panel.x + 8, wallpaper_panel.y + 8, theme->text, "Wallpaper");
-    sys_text(palette_panel.x + 8, palette_panel.y + 8, theme->text, "Paleta");
-    sys_text(resolution_panel.x + 8, resolution_panel.y + 8, theme->text, "Resolucao");
+    (void)icon_theme_draw("preferences-desktop-theme", ICON_THEME_CONTEXT_APPS, 16,
+                          theme_panel.x + 8, theme_panel.y + 6, 14, 14);
+    (void)icon_theme_draw("preferences-desktop", ICON_THEME_CONTEXT_APPS, 16,
+                          preview_panel.x + 8, preview_panel.y + 6, 14, 14);
+    (void)icon_theme_draw("preferences-desktop-wallpaper", ICON_THEME_CONTEXT_APPS, 16,
+                          wallpaper_panel.x + 8, wallpaper_panel.y + 6, 14, 14);
+    (void)icon_theme_draw("preferences-desktop-theme", ICON_THEME_CONTEXT_APPS, 16,
+                          palette_panel.x + 8, palette_panel.y + 6, 14, 14);
+    (void)icon_theme_draw("window-new", ICON_THEME_CONTEXT_ACTIONS, 16,
+                          resolution_panel.x + 8, resolution_panel.y + 6, 14, 14);
+    sys_text(theme_panel.x + 28, theme_panel.y + 8, theme->text, "Area do tema");
+    sys_text(preview_panel.x + 28, preview_panel.y + 8, theme->text, "Preview");
+    sys_text(wallpaper_panel.x + 28, wallpaper_panel.y + 8, theme->text, "Wallpaper");
+    sys_text(palette_panel.x + 28, palette_panel.y + 8, theme->text, "Paleta");
+    sys_text(resolution_panel.x + 28, resolution_panel.y + 8, theme->text, "Resolucao");
 
     if (state->selected_slot == THEME_SLOT_MENU) selected_color = theme->menu;
     else if (state->selected_slot == THEME_SLOT_MENU_BUTTON) selected_color = theme->menu_button;
@@ -8365,9 +9015,12 @@ static void draw_personalize_window(struct personalize_state *state,
         struct rect mais_cores_btn = {palette_panel.x + 8, palette_panel.y + 30, palette_panel.w - 16, 14};
         int mais_cores_hover = point_in_rect(&mais_cores_btn, mouse->x, mouse->y);
 
-        ui_draw_button(&mais_cores_btn, "Seletor de cores",
-                       state->color_picker_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
-                       mais_cores_hover);
+        desktop_draw_button_with_icon(&mais_cores_btn, "Seletor de cores",
+                                      state->color_picker_open ? UI_BUTTON_ACTIVE : UI_BUTTON_NORMAL,
+                                      mais_cores_hover,
+                                      "preferences-desktop-theme",
+                                      ICON_THEME_CONTEXT_APPS,
+                                      16);
     }
 
     for (int i = -1; i < wallpaper_count; ++i) {
@@ -8389,10 +9042,13 @@ static void draw_personalize_window(struct personalize_state *state,
         struct rect choose_button = personalize_window_wallpaper_choose_rect(&state->window);
         int choose_hover = point_in_rect(&choose_button, mouse->x, mouse->y);
 
-        ui_draw_button(&choose_button,
-                       "Escolher arquivo...",
-                       (!current_in_quick_list && current_wallpaper >= 0) ? UI_BUTTON_ACTIVE : UI_BUTTON_PRIMARY,
-                       choose_hover);
+        desktop_draw_button_with_icon(&choose_button,
+                                      "Escolher arquivo...",
+                                      (!current_in_quick_list && current_wallpaper >= 0) ? UI_BUTTON_ACTIVE : UI_BUTTON_PRIMARY,
+                                      choose_hover,
+                                      "document-open",
+                                      ICON_THEME_CONTEXT_ACTIONS,
+                                      16);
     }
     if (wallpaper_count == 0) {
         sys_text(wallpaper_panel.x + 8, wallpaper_panel.y + wallpaper_panel.h - 16, theme->text, "sem atalhos .bmp/.png");
@@ -8555,6 +9211,417 @@ static void maximize_window(int widx) {
     sync_window_instance_rect(widx);
 }
 
+static int desktop_rect_intersects(const struct rect *a, const struct rect *b) {
+    int ax1;
+    int ay1;
+    int bx1;
+    int by1;
+
+    if (a == 0 || b == 0 || a->w <= 0 || a->h <= 0 || b->w <= 0 || b->h <= 0) {
+        return 0;
+    }
+
+    ax1 = a->x + a->w;
+    ay1 = a->y + a->h;
+    bx1 = b->x + b->w;
+    by1 = b->y + b->h;
+    return !(ax1 <= b->x || bx1 <= a->x || ay1 <= b->y || by1 <= a->y);
+}
+
+static int desktop_rect_intersects_any(const struct rect *target,
+                                       const struct rect *regions,
+                                       int region_count) {
+    if (target == 0 || regions == 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < region_count; ++i) {
+        if (desktop_rect_intersects(target, &regions[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void desktop_collect_transition_regions(const struct rect *previous_rect,
+                                               const struct rect *current_rect,
+                                               struct rect *regions,
+                                               int *region_count) {
+    if (previous_rect == 0 || current_rect == 0 || regions == 0 || region_count == 0) {
+        return;
+    }
+
+    *region_count = 0;
+    regions[(*region_count)++] = *previous_rect;
+
+    if (desktop_rect_intersects(previous_rect, current_rect)) {
+        int x0 = previous_rect->x < current_rect->x ? previous_rect->x : current_rect->x;
+        int y0 = previous_rect->y < current_rect->y ? previous_rect->y : current_rect->y;
+        int x1 = (previous_rect->x + previous_rect->w) > (current_rect->x + current_rect->w) ?
+                 (previous_rect->x + previous_rect->w) :
+                 (current_rect->x + current_rect->w);
+        int y1 = (previous_rect->y + previous_rect->h) > (current_rect->y + current_rect->h) ?
+                 (previous_rect->y + previous_rect->h) :
+                 (current_rect->y + current_rect->h);
+
+        regions[0].x = x0;
+        regions[0].y = y0;
+        regions[0].w = x1 - x0;
+        regions[0].h = y1 - y0;
+        return;
+    }
+
+    if (current_rect->x != previous_rect->x ||
+        current_rect->y != previous_rect->y ||
+        current_rect->w != previous_rect->w ||
+        current_rect->h != previous_rect->h) {
+        regions[(*region_count)++] = *current_rect;
+    }
+}
+
+static void desktop_collect_pointer_regions(const struct mouse_state *previous_mouse,
+                                            const struct mouse_state *mouse,
+                                            struct rect *regions,
+                                            int *region_count) {
+    struct rect previous_rect;
+    struct rect current_rect;
+
+    if (previous_mouse == 0 || mouse == 0 || regions == 0 || region_count == 0) {
+        return;
+    }
+
+    cursor_get_bounds(previous_mouse->x, previous_mouse->y, &previous_rect);
+    cursor_get_bounds(mouse->x, mouse->y, &current_rect);
+    desktop_collect_transition_regions(&previous_rect, &current_rect, regions, region_count);
+}
+
+static void desktop_draw_region_overlays(const struct rect *region,
+                                         const struct mouse_state *mouse,
+                                         const struct desktop_render_state *render) {
+    struct rect sound_button;
+    struct rect sound_popup;
+    struct rect network_button;
+    struct rect network_popup;
+
+    if (region == 0 || mouse == 0 || render == 0 || render->hover == 0) {
+        return;
+    }
+
+    sound_button = ui_taskbar_sound_applet_rect();
+    sound_popup = sound_applet_popup_rect();
+    network_button = ui_taskbar_network_applet_rect();
+    network_popup = network_applet_popup_rect();
+
+    if (desktop_rect_intersects(&network_button, region) ||
+        (g_network_applet.popup_open && desktop_rect_intersects(&network_popup, region))) {
+        draw_network_applet(mouse);
+    }
+    if (desktop_rect_intersects(&sound_button, region) ||
+        (g_sound_applet.popup_open && desktop_rect_intersects(&sound_popup, region))) {
+        draw_sound_applet(mouse);
+    }
+
+    if (render->menu_open && desktop_rect_intersects(&render->menu_rect, region)) {
+        draw_start_menu_with_tab(render->start_menu_tab,
+                                 render->filtered_indices,
+                                 render->filtered_count,
+                                 render->hover->hovered_result,
+                                 render->hover->apps_tab_hover,
+                                 render->hover->games_tab_hover,
+                                 render->start_menu_scroll_current,
+                                 render->start_menu_search,
+                                 render->hover->menu_search_hover,
+                                 render->hover->menu_search_clear_hover,
+                                 render->hover->menu_sidebar_hover,
+                                 render->hover->menu_sidebar_files_hover,
+                                 render->hover->menu_sidebar_terminal_hover,
+                                 render->hover->menu_sidebar_personalize_hover,
+                                 render->hover->menu_logout_hover,
+                                 render->hover->menu_scroll_thumb_hover);
+    }
+
+    if (g_wifi.open) {
+        struct rect wifi_panel = wifi_panel_rect();
+
+        if (desktop_rect_intersects(&wifi_panel, region)) {
+            draw_wifi_panel(mouse);
+        }
+    }
+
+    if (render->context_open && desktop_rect_intersects(&render->context_menu, region)) {
+        ui_draw_surface(&render->context_menu, ui_color_panel());
+        desktop_draw_button_with_icon(&(struct rect){render->context_menu.x + 2,
+                                                     render->context_menu.y + 2,
+                                                     render->context_menu.w - 4,
+                                                     render->context_menu.h - 4},
+                                      "Personalizar...",
+                                      UI_BUTTON_NORMAL,
+                                      render->hover->context_personalize_hover,
+                                      "preferences-desktop",
+                                      ICON_THEME_CONTEXT_APPS,
+                                      16);
+    }
+
+    if (render->fm_context_open && desktop_rect_intersects(&render->fm_context_menu, region)) {
+        ui_draw_surface(&render->fm_context_menu, ui_color_panel());
+        for (int action = 0; action < FMENU_COUNT; ++action) {
+            struct rect item = filemanager_context_item_rect(&render->fm_context_menu, action);
+            int item_hover = 0;
+            const char *icon_name = 0;
+            enum icon_theme_context icon_context = ICON_THEME_CONTEXT_APPS;
+            int icon_size = 16;
+
+            if (action == FMENU_SET_WALLPAPER && !g_fm_context_has_wallpaper_action) {
+                continue;
+            }
+
+            if (action == FMENU_OPEN) item_hover = render->hover->fm_open_hover;
+            else if (action == FMENU_COPY) item_hover = render->hover->fm_copy_hover;
+            else if (action == FMENU_PASTE) item_hover = render->hover->fm_paste_hover;
+            else if (action == FMENU_NEW_DIR) item_hover = render->hover->fm_new_dir_hover;
+            else if (action == FMENU_NEW_FILE) item_hover = render->hover->fm_new_file_hover;
+            else if (action == FMENU_RENAME) item_hover = render->hover->fm_rename_hover;
+            else if (action == FMENU_MOVE_TO_TRASH) item_hover = render->hover->fm_trash_hover;
+            else if (action == FMENU_SET_WALLPAPER) item_hover = render->hover->fm_set_wallpaper_hover;
+
+            desktop_icon_spec_for_filemanager_action(action, &icon_name, &icon_context, &icon_size);
+            desktop_draw_button_with_icon(&item,
+                                          filemanager_menu_label(action),
+                                          UI_BUTTON_NORMAL,
+                                          item_hover,
+                                          icon_name,
+                                          icon_context,
+                                          icon_size);
+        }
+    }
+
+    if (render->app_context != 0 &&
+        render->app_context->open &&
+        desktop_rect_intersects(&render->app_context->menu, region)) {
+        ui_draw_surface(&render->app_context->menu, ui_color_panel());
+        for (int action = 0; action < APPCTX_COUNT; ++action) {
+            struct rect item = app_context_item_rect(&render->app_context->menu, action);
+            int item_hover = action == APPCTX_PRIMARY ?
+                             render->hover->app_primary_hover :
+                             render->hover->app_save_as_hover;
+            const char *icon_name = 0;
+            enum icon_theme_context icon_context = ICON_THEME_CONTEXT_APPS;
+            int icon_size = 16;
+
+            desktop_icon_spec_for_app_context(render->app_context->type,
+                                              action,
+                                              &icon_name,
+                                              &icon_context,
+                                              &icon_size);
+            desktop_draw_button_with_icon(&item,
+                                          app_context_menu_label(render->app_context->type, action),
+                                          action == APPCTX_PRIMARY ? UI_BUTTON_PRIMARY : UI_BUTTON_NORMAL,
+                                          item_hover,
+                                          icon_name,
+                                          icon_context,
+                                          icon_size);
+        }
+    }
+
+    if (render->file_dialog != 0 &&
+        render->file_dialog->active &&
+        desktop_rect_intersects(&render->file_dialog->window, region)) {
+        draw_file_dialog((struct file_dialog_state *)render->file_dialog, mouse);
+    }
+
+    if (render->show_cursor) {
+        struct rect cursor_rect;
+
+        cursor_get_bounds(mouse->x, mouse->y, &cursor_rect);
+        if (desktop_rect_intersects(&cursor_rect, region)) {
+            cursor_draw(mouse->x, mouse->y);
+        }
+    }
+}
+
+static void desktop_redraw_regions(const struct rect *regions,
+                                   int region_count,
+                                   const struct mouse_state *mouse,
+                                   const struct desktop_render_state *render) {
+    if (regions == 0 || region_count <= 0 || mouse == 0 || render == 0) {
+        return;
+    }
+
+    for (int region_index = 0; region_index < region_count; ++region_index) {
+        const struct rect *region = &regions[region_index];
+
+        if (region->w <= 0 || region->h <= 0) {
+            continue;
+        }
+
+        clip_push(region->x, region->y, region->w, region->h);
+        ui_draw_desktop_region(mouse,
+                               g_windows,
+                               MAX_WINDOWS,
+                               render->focused,
+                               render->hover != 0 ? render->hover->start_hover : 0,
+                               region);
+        desktop_draw_intersecting_windows(region,
+                                          1,
+                                          render->focused,
+                                          mouse,
+                                          render->ticks);
+        desktop_draw_region_overlays(region, mouse, render);
+        clip_pop();
+    }
+}
+
+static int desktop_cursor_hidden(int focused) {
+    return focused >= 0 &&
+           g_windows[focused].active &&
+           !g_windows[focused].minimized &&
+           g_windows[focused].type == APP_CRAFT &&
+           g_craft[g_windows[focused].instance].started;
+}
+
+static void desktop_draw_window_at_index(int index,
+                                         int focused,
+                                         const struct mouse_state *mouse,
+                                         uint32_t ticks) {
+    int close_hover;
+    int min_hover;
+    int max_hover;
+    int active;
+    struct rect close;
+    struct rect min;
+    struct rect max;
+
+    if (mouse == 0 || index < 0 || index >= MAX_WINDOWS) {
+        return;
+    }
+    if (!g_windows[index].active || g_windows[index].minimized) {
+        return;
+    }
+
+    close = window_close_button(&g_windows[index].rect);
+    min = window_min_button(&g_windows[index].rect);
+    max = window_max_button(&g_windows[index].rect);
+    close_hover = point_in_rect(&close, mouse->x, mouse->y);
+    min_hover = point_in_rect(&min, mouse->x, mouse->y);
+    max_hover = point_in_rect(&max, mouse->x, mouse->y);
+    active = (index == focused);
+
+    switch (g_windows[index].type) {
+    case APP_TERMINAL:
+        terminal_draw_window(&g_terms[g_windows[index].instance], active,
+                             min_hover, max_hover, close_hover);
+        break;
+    case APP_CLOCK:
+        clock_draw_window(&g_clocks[g_windows[index].instance], active,
+                          min_hover, max_hover, close_hover);
+        break;
+    case APP_FILEMANAGER:
+        filemanager_draw_window(&g_fms[g_windows[index].instance], active,
+                                min_hover, max_hover, close_hover);
+        break;
+    case APP_EDITOR:
+        editor_draw_window(&g_editors[g_windows[index].instance], active,
+                           min_hover, max_hover, close_hover);
+        break;
+    case APP_TASKMANAGER:
+        taskmgr_draw_window(&g_tms[g_windows[index].instance], g_windows, MAX_WINDOWS, ticks,
+                            active, min_hover, max_hover, close_hover);
+        break;
+    case APP_CALCULATOR:
+        calculator_draw_window(&g_calcs[g_windows[index].instance], active,
+                               min_hover, max_hover, close_hover);
+        break;
+    case APP_IMAGEVIEWER:
+        imageviewer_draw_window(&g_imageviewers[g_windows[index].instance], active,
+                                min_hover, max_hover, close_hover);
+        break;
+    case APP_AUDIO_PLAYER:
+        audioplayer_draw_window(&g_audioplayers[g_windows[index].instance], active,
+                                min_hover, max_hover, close_hover);
+        break;
+    case APP_SKETCHPAD:
+        sketchpad_draw_window(&g_sketches[g_windows[index].instance], active,
+                              min_hover, max_hover, close_hover);
+        break;
+    case APP_SNAKE:
+        snake_draw_window(&g_snakes[g_windows[index].instance], active,
+                          min_hover, max_hover, close_hover);
+        break;
+    case APP_TETRIS:
+        tetris_draw_window(&g_tetris[g_windows[index].instance], active,
+                           min_hover, max_hover, close_hover);
+        break;
+    case APP_2048:
+        game_2048_draw_window(&g_2048_games[g_windows[index].instance], active,
+                              min_hover, max_hover, close_hover);
+        break;
+    case APP_MINESWEEPER:
+        minesweeper_draw_window(&g_minesweepers[g_windows[index].instance], active,
+                                min_hover, max_hover, close_hover);
+        break;
+    case APP_PACMAN:
+        pacman_draw_window(&g_pacman[g_windows[index].instance], active,
+                           min_hover, max_hover, close_hover);
+        break;
+    case APP_SPACE_INVADERS:
+        space_invaders_draw_window(&g_space_invaders[g_windows[index].instance], active,
+                                   min_hover, max_hover, close_hover);
+        break;
+    case APP_PONG:
+        pong_draw_window(&g_pong[g_windows[index].instance], active,
+                         min_hover, max_hover, close_hover);
+        break;
+    case APP_DONKEY_KONG:
+        donkey_kong_draw_window(&g_donkey_kong[g_windows[index].instance], active,
+                                min_hover, max_hover, close_hover);
+        break;
+    case APP_BRICK_RACE:
+        brick_race_draw_window(&g_brick_race[g_windows[index].instance], active,
+                               min_hover, max_hover, close_hover);
+        break;
+    case APP_FLAP_BIRB:
+        flap_birb_draw_window(&g_flap_birb[g_windows[index].instance], active,
+                              min_hover, max_hover, close_hover);
+        break;
+    case APP_DOOM:
+        doom_draw_window(&g_doom[g_windows[index].instance], active,
+                         min_hover, max_hover, close_hover);
+        break;
+    case APP_CRAFT:
+        craft_draw_window(&g_craft[g_windows[index].instance], active,
+                          min_hover, max_hover, close_hover);
+        break;
+    case APP_PERSONALIZE:
+        draw_personalize_window(&g_pers, active, min_hover, max_hover, close_hover, mouse);
+        break;
+    case APP_TRASH:
+        draw_trash_window(&g_trash, active, min_hover, max_hover, close_hover, mouse);
+        break;
+    default:
+        break;
+    }
+}
+
+static void desktop_draw_intersecting_windows(const struct rect *regions,
+                                              int region_count,
+                                              int focused,
+                                              const struct mouse_state *mouse,
+                                              uint32_t ticks) {
+    if (regions == 0 || mouse == 0) {
+        return;
+    }
+
+    for (int i = 0; i < MAX_WINDOWS; ++i) {
+        if (!g_windows[i].active || g_windows[i].minimized) {
+            continue;
+        }
+        if (!desktop_rect_intersects_any(&g_windows[i].rect, regions, region_count)) {
+            continue;
+        }
+        desktop_draw_window_at_index(i, focused, mouse, ticks);
+    }
+}
+
 void desktop_main(void) {
     struct rect start_button;
     struct rect menu_rect;
@@ -8649,6 +9716,8 @@ void desktop_main(void) {
     for (int i = 0; i < MAX_SKETCHPADS; ++i) g_sketch_used[i] = 0;
     for (int i = 0; i < MAX_SNAKES; ++i) g_snake_used[i] = 0;
     for (int i = 0; i < MAX_TETRIS; ++i) g_tetris_used[i] = 0;
+    for (int i = 0; i < MAX_2048_GAMES; ++i) g_2048_used[i] = 0;
+    for (int i = 0; i < MAX_MINESWEEPERS; ++i) g_minesweeper_used[i] = 0;
     for (int i = 0; i < MAX_PACMAN; ++i) g_pacman_used[i] = 0;
     for (int i = 0; i < MAX_SPACE_INVADERS; ++i) g_space_invaders_used[i] = 0;
     for (int i = 0; i < MAX_PONG; ++i) g_pong_used[i] = 0;
@@ -8670,6 +9739,10 @@ void desktop_main(void) {
         struct desktop_window_action_queue window_action_queue;
         struct desktop_session_action_queue session_action_queue;
         struct desktop_app_action_queue app_action_queue;
+        struct rect geometry_regions[2];
+        int geometry_region_count = 0;
+        int geometry_dirty = 0;
+        struct mouse_state previous_mouse = mouse;
         memset(&window_action_queue, 0, sizeof(window_action_queue));
         memset(&session_action_queue, 0, sizeof(session_action_queue));
         memset(&app_action_queue, 0, sizeof(app_action_queue));
@@ -8714,6 +9787,7 @@ void desktop_main(void) {
         int start_hover;
         int left_pressed;
         int mouse_event;
+        int pointer_moved;
         int wheel_delta;
 
         if (desktop_collect_input_batch(&input_batch, &mouse, &focused)) {
@@ -8846,7 +9920,9 @@ void desktop_main(void) {
             }
         }
 
-        if (mouse_event) {
+        pointer_moved = mouse_event &&
+                        (mouse.x != previous_mouse.x || mouse.y != previous_mouse.y);
+        if (mouse_event && desktop_cursor_hidden(focused)) {
             dirty = 1;
         }
 
@@ -8926,6 +10002,20 @@ void desktop_main(void) {
                 dirty = 1;
             }
         }
+        for (int i = 0; i < MAX_2048_GAMES; ++i) {
+            if (g_2048_used[i] && !has_active_window_instance(APP_2048, i)) {
+                g_2048_used[i] = 0;
+            } else if (g_2048_used[i] && game_2048_step(&g_2048_games[i], ticks)) {
+                dirty = 1;
+            }
+        }
+        for (int i = 0; i < MAX_MINESWEEPERS; ++i) {
+            if (g_minesweeper_used[i] && !has_active_window_instance(APP_MINESWEEPER, i)) {
+                g_minesweeper_used[i] = 0;
+            } else if (g_minesweeper_used[i] && minesweeper_step(&g_minesweepers[i], ticks)) {
+                dirty = 1;
+            }
+        }
         for (int i = 0; i < MAX_PACMAN; ++i) {
             if (g_pacman_used[i] && !has_active_window_instance(APP_PACMAN, i)) {
                 g_pacman_used[i] = 0;
@@ -9000,20 +10090,45 @@ void desktop_main(void) {
             }
 
             if (dragging >= 0 && left_pressed && !g_windows[dragging].maximized) {
-                g_windows[dragging].rect.x = mouse.x - drag_offset_x;
-                g_windows[dragging].rect.y = mouse.y - drag_offset_y;
-                clamp_window_rect(&g_windows[dragging].rect);
-                sync_window_instance_rect(dragging);
-                dirty = 1;
+                struct rect previous_rect = g_windows[dragging].rect;
+                struct rect current_rect = previous_rect;
+
+                current_rect.x = mouse.x - drag_offset_x;
+                current_rect.y = mouse.y - drag_offset_y;
+                clamp_window_rect(&current_rect);
+                if (current_rect.x != previous_rect.x ||
+                    current_rect.y != previous_rect.y ||
+                    current_rect.w != previous_rect.w ||
+                    current_rect.h != previous_rect.h) {
+                    g_windows[dragging].rect = current_rect;
+                    sync_window_instance_rect(dragging);
+                    desktop_collect_transition_regions(&previous_rect,
+                                                       &current_rect,
+                                                       geometry_regions,
+                                                       &geometry_region_count);
+                    geometry_dirty = 1;
+                }
             }
 
             if (resizing >= 0 && left_pressed && !g_windows[resizing].maximized) {
-                g_windows[resizing].rect = resize_origin;
-                g_windows[resizing].rect.w += mouse.x - resize_anchor_x;
-                g_windows[resizing].rect.h += mouse.y - resize_anchor_y;
-                clamp_window_rect(&g_windows[resizing].rect);
-                sync_window_instance_rect(resizing);
-                dirty = 1;
+                struct rect previous_rect = g_windows[resizing].rect;
+                struct rect current_rect = resize_origin;
+
+                current_rect.w += mouse.x - resize_anchor_x;
+                current_rect.h += mouse.y - resize_anchor_y;
+                clamp_window_rect(&current_rect);
+                if (current_rect.x != previous_rect.x ||
+                    current_rect.y != previous_rect.y ||
+                    current_rect.w != previous_rect.w ||
+                    current_rect.h != previous_rect.h) {
+                    g_windows[resizing].rect = current_rect;
+                    sync_window_instance_rect(resizing);
+                    desktop_collect_transition_regions(&previous_rect,
+                                                       &current_rect,
+                                                       geometry_regions,
+                                                       &geometry_region_count);
+                    geometry_dirty = 1;
+                }
             }
 
             if (menu_open && menu_scroll_dragging && left_pressed) {
@@ -9053,6 +10168,7 @@ void desktop_main(void) {
                 continue;
             }
             desktop_dispatch_right_click(&session_action_queue,
+                                         &app_action_queue,
                                          &file_dialog,
                                          ui_event->x,
                                          ui_event->y,
@@ -9528,8 +10644,33 @@ void desktop_main(void) {
 
             if (g_windows[focused].type == APP_TERMINAL) {
                 struct terminal_state *term = &g_terms[g_windows[focused].instance];
-                if (key == '\b') {
+                if (key == '\b' || key == 127) {
                     terminal_backspace(term);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_DELETE) {
+                    terminal_delete_char(term);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_LEFT) {
+                    terminal_move_cursor_left(term);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_RIGHT) {
+                    terminal_move_cursor_right(term);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_UP) {
+                    terminal_history_prev(term);
+                    dirty = 1;
+                    continue;
+                }
+                if (key == KEY_ARROW_DOWN) {
+                    terminal_history_next(term);
                     dirty = 1;
                     continue;
                 }
@@ -9605,6 +10746,14 @@ void desktop_main(void) {
                 if (tetris_handle_key(&g_tetris[g_windows[focused].instance], key)) {
                     dirty = 1;
                 }
+            } else if (g_windows[focused].type == APP_2048) {
+                if (game_2048_handle_key(&g_2048_games[g_windows[focused].instance], key)) {
+                    dirty = 1;
+                }
+            } else if (g_windows[focused].type == APP_MINESWEEPER) {
+                if (minesweeper_handle_key(&g_minesweepers[g_windows[focused].instance], key)) {
+                    dirty = 1;
+                }
             } else if (g_windows[focused].type == APP_PACMAN) {
                 if (pacman_handle_key(&g_pacman[g_windows[focused].instance], key)) {
                     dirty = 1;
@@ -9658,206 +10807,200 @@ void desktop_main(void) {
                                               &resize_anchor_y);
         dirty |= desktop_process_pending_launches(&focused);
 
-        if (dirty &&
-            desktop_present_retry_ready(ticks) &&
-            desktop_present_submit_ready()) {
-            draw_desktop(&mouse, menu_open, start_hover,
-                         menu_hover, g_windows, MAX_WINDOWS, focused);
+        {
+            int start_menu_scroll_current = start_menu_search_active(start_menu_search) ?
+                                            start_menu_search_scroll :
+                                            start_menu_scroll[(int)start_menu_tab];
+            struct desktop_hover_state hover;
+            struct desktop_render_state render;
 
-            for (int i = 0; i < MAX_WINDOWS; ++i) {
-                int close_hover;
-                int min_hover;
-                int max_hover;
-                int active;
-                struct rect close;
-                struct rect min;
-                struct rect max;
+            memset(&hover, 0, sizeof(hover));
+            hover.start_hover = start_hover;
+            memcpy(hover.menu_hover, menu_hover, sizeof(menu_hover));
+            hover.hovered_result = hovered_result;
+            hover.apps_tab_hover = apps_tab_hover;
+            hover.games_tab_hover = games_tab_hover;
+            hover.menu_search_hover = menu_search_hover;
+            hover.menu_search_clear_hover = menu_search_clear_hover;
+            hover.menu_sidebar_hover = menu_sidebar_hover;
+            hover.menu_sidebar_files_hover = menu_sidebar_files_hover;
+            hover.menu_sidebar_terminal_hover = menu_sidebar_terminal_hover;
+            hover.menu_sidebar_personalize_hover = menu_sidebar_personalize_hover;
+            hover.menu_logout_hover = menu_logout_hover;
+            hover.menu_scroll_thumb_hover = menu_scroll_thumb_hover;
+            hover.context_personalize_hover = context_personalize_hover;
+            hover.fm_open_hover = fm_open_hover;
+            hover.fm_copy_hover = fm_copy_hover;
+            hover.fm_paste_hover = fm_paste_hover;
+            hover.fm_new_dir_hover = fm_new_dir_hover;
+            hover.fm_new_file_hover = fm_new_file_hover;
+            hover.fm_rename_hover = fm_rename_hover;
+            hover.fm_trash_hover = fm_trash_hover;
+            hover.fm_set_wallpaper_hover = fm_set_wallpaper_hover;
+            hover.app_primary_hover = app_primary_hover;
+            hover.app_save_as_hover = app_save_as_hover;
 
-                if (!g_windows[i].active || g_windows[i].minimized) {
-                    continue;
+            memset(&render, 0, sizeof(render));
+            render.focused = focused;
+            render.ticks = ticks;
+            render.menu_open = menu_open;
+            render.start_menu_tab = start_menu_tab;
+            render.filtered_indices = filtered_indices;
+            render.filtered_count = filtered_count;
+            render.start_menu_scroll_current = start_menu_scroll_current;
+            render.start_menu_search = start_menu_search;
+            render.menu_rect = menu_rect;
+            render.context_open = context_open;
+            render.context_menu = context_menu;
+            render.fm_context_open = fm_context_open;
+            render.fm_context_menu = fm_context_menu;
+            render.app_context = &app_context;
+            render.file_dialog = &file_dialog;
+            render.hover = &hover;
+            render.show_cursor = !desktop_cursor_hidden(focused);
+
+            if (dirty &&
+                desktop_present_retry_ready(ticks) &&
+                desktop_present_submit_ready()) {
+                draw_desktop(&mouse, menu_open, start_hover,
+                             menu_hover, g_windows, MAX_WINDOWS, focused);
+
+                for (int i = 0; i < MAX_WINDOWS; ++i) {
+                    desktop_draw_window_at_index(i, focused, &mouse, ticks);
                 }
 
-                close = window_close_button(&g_windows[i].rect);
-                min = window_min_button(&g_windows[i].rect);
-                max = window_max_button(&g_windows[i].rect);
-                close_hover = point_in_rect(&close, mouse.x, mouse.y);
-                min_hover = point_in_rect(&min, mouse.x, mouse.y);
-                max_hover = point_in_rect(&max, mouse.x, mouse.y);
-                active = (i == focused);
+                draw_network_applet(&mouse);
+                draw_sound_applet(&mouse);
 
-                switch (g_windows[i].type) {
-                case APP_TERMINAL:
-                    terminal_draw_window(&g_terms[g_windows[i].instance], active,
-                                         min_hover, max_hover, close_hover);
-                    break;
-                case APP_CLOCK:
-                    clock_draw_window(&g_clocks[g_windows[i].instance], active,
-                                      min_hover, max_hover, close_hover);
-                    break;
-                case APP_FILEMANAGER:
-                    filemanager_draw_window(&g_fms[g_windows[i].instance], active,
-                                            min_hover, max_hover, close_hover);
-                    break;
-                case APP_EDITOR:
-                    editor_draw_window(&g_editors[g_windows[i].instance], active,
-                                       min_hover, max_hover, close_hover);
-                    break;
-                case APP_TASKMANAGER:
-                    taskmgr_draw_window(&g_tms[g_windows[i].instance], g_windows, MAX_WINDOWS, ticks,
-                                        active, min_hover, max_hover, close_hover);
-                    break;
-                case APP_CALCULATOR:
-                    calculator_draw_window(&g_calcs[g_windows[i].instance], active,
-                                           min_hover, max_hover, close_hover);
-                    break;
-                case APP_IMAGEVIEWER:
-                    imageviewer_draw_window(&g_imageviewers[g_windows[i].instance], active,
-                                            min_hover, max_hover, close_hover);
-                    break;
-                case APP_AUDIO_PLAYER:
-                    audioplayer_draw_window(&g_audioplayers[g_windows[i].instance], active,
-                                            min_hover, max_hover, close_hover);
-                    break;
-                case APP_SKETCHPAD:
-                    sketchpad_draw_window(&g_sketches[g_windows[i].instance], active,
-                                          min_hover, max_hover, close_hover);
-                    break;
-                case APP_SNAKE:
-                    snake_draw_window(&g_snakes[g_windows[i].instance], active,
-                                      min_hover, max_hover, close_hover);
-                    break;
-                case APP_TETRIS:
-                    tetris_draw_window(&g_tetris[g_windows[i].instance], active,
-                                       min_hover, max_hover, close_hover);
-                    break;
-                case APP_PACMAN:
-                    pacman_draw_window(&g_pacman[g_windows[i].instance], active,
-                                       min_hover, max_hover, close_hover);
-                    break;
-                case APP_SPACE_INVADERS:
-                    space_invaders_draw_window(&g_space_invaders[g_windows[i].instance], active,
-                                               min_hover, max_hover, close_hover);
-                    break;
-                case APP_PONG:
-                    pong_draw_window(&g_pong[g_windows[i].instance], active,
-                                     min_hover, max_hover, close_hover);
-                    break;
-                case APP_DONKEY_KONG:
-                    donkey_kong_draw_window(&g_donkey_kong[g_windows[i].instance], active,
-                                            min_hover, max_hover, close_hover);
-                    break;
-                case APP_BRICK_RACE:
-                    brick_race_draw_window(&g_brick_race[g_windows[i].instance], active,
-                                           min_hover, max_hover, close_hover);
-                    break;
-                case APP_FLAP_BIRB:
-                    flap_birb_draw_window(&g_flap_birb[g_windows[i].instance], active,
-                                          min_hover, max_hover, close_hover);
-                    break;
-                case APP_DOOM:
-                    doom_draw_window(&g_doom[g_windows[i].instance], active,
-                                     min_hover, max_hover, close_hover);
-                    break;
-                case APP_CRAFT:
-                    craft_draw_window(&g_craft[g_windows[i].instance], active,
-                                      min_hover, max_hover, close_hover);
-                    break;
-                case APP_PERSONALIZE:
-                    draw_personalize_window(&g_pers, active, min_hover, max_hover, close_hover, &mouse);
-                    break;
-                case APP_TRASH:
-                    draw_trash_window(&g_trash, active, min_hover, max_hover, close_hover, &mouse);
-                    break;
-                default:
-                    break;
+                if (menu_open) {
+                    draw_start_menu_with_tab(start_menu_tab,
+                                             filtered_indices,
+                                             filtered_count,
+                                             hovered_result,
+                                             apps_tab_hover,
+                                             games_tab_hover,
+                                             start_menu_scroll_current,
+                                             start_menu_search,
+                                             menu_search_hover,
+                                             menu_search_clear_hover,
+                                             menu_sidebar_hover,
+                                             menu_sidebar_files_hover,
+                                             menu_sidebar_terminal_hover,
+                                             menu_sidebar_personalize_hover,
+                                             menu_logout_hover,
+                                             menu_scroll_thumb_hover);
                 }
-            }
 
-            draw_network_applet(&mouse);
-            draw_sound_applet(&mouse);
+                if (g_wifi.open) {
+                    draw_wifi_panel(&mouse);
+                }
 
-            if (menu_open) {
-                draw_start_menu_with_tab(start_menu_tab,
-                                         filtered_indices,
-                                         filtered_count,
-                                         hovered_result,
-                                         apps_tab_hover,
-                                         games_tab_hover,
-                                         start_menu_search_active(start_menu_search) ?
-                                         start_menu_search_scroll :
-                                         start_menu_scroll[(int)start_menu_tab],
-                                         start_menu_search,
-                                         menu_search_hover,
-                                         menu_search_clear_hover,
-                                         menu_sidebar_hover,
-                                         menu_sidebar_files_hover,
-                                         menu_sidebar_terminal_hover,
-                                         menu_sidebar_personalize_hover,
-                                         menu_logout_hover,
-                                         menu_scroll_thumb_hover);
-            }
+                if (context_open) {
+                    ui_draw_surface(&context_menu, ui_color_panel());
+                    desktop_draw_button_with_icon(&(struct rect){context_menu.x + 2, context_menu.y + 2, context_menu.w - 4, context_menu.h - 4},
+                                                  "Personalizar...",
+                                                  UI_BUTTON_NORMAL,
+                                                  context_personalize_hover,
+                                                  "preferences-desktop",
+                                                  ICON_THEME_CONTEXT_APPS,
+                                                  16);
+                }
 
-            if (g_wifi.open) {
-                draw_wifi_panel(&mouse);
-            }
+                if (fm_context_open) {
+                    ui_draw_surface(&fm_context_menu, ui_color_panel());
+                    for (int action = 0; action < FMENU_COUNT; ++action) {
+                        struct rect item = filemanager_context_item_rect(&fm_context_menu, action);
+                        int hover_state = 0;
+                        const char *icon_name = 0;
+                        enum icon_theme_context icon_context = ICON_THEME_CONTEXT_APPS;
+                        int icon_size = 16;
 
-            if (context_open) {
-                ui_draw_surface(&context_menu, ui_color_panel());
-                ui_draw_button(&(struct rect){context_menu.x + 2, context_menu.y + 2, context_menu.w - 4, context_menu.h - 4},
-                               "Personalizar...",
-                               UI_BUTTON_NORMAL,
-                               context_personalize_hover);
-            }
+                        if (action == FMENU_SET_WALLPAPER && !g_fm_context_has_wallpaper_action) {
+                            continue;
+                        }
 
-            if (fm_context_open) {
-                ui_draw_surface(&fm_context_menu, ui_color_panel());
-                for (int action = 0; action < FMENU_COUNT; ++action) {
-                    struct rect item = filemanager_context_item_rect(&fm_context_menu, action);
-                    int hover = 0;
+                        if (action == FMENU_OPEN) hover_state = fm_open_hover;
+                        else if (action == FMENU_COPY) hover_state = fm_copy_hover;
+                        else if (action == FMENU_PASTE) hover_state = fm_paste_hover;
+                        else if (action == FMENU_NEW_DIR) hover_state = fm_new_dir_hover;
+                        else if (action == FMENU_NEW_FILE) hover_state = fm_new_file_hover;
+                        else if (action == FMENU_RENAME) hover_state = fm_rename_hover;
+                        else if (action == FMENU_MOVE_TO_TRASH) hover_state = fm_trash_hover;
+                        else if (action == FMENU_SET_WALLPAPER) hover_state = fm_set_wallpaper_hover;
 
-                    if (action == FMENU_SET_WALLPAPER && !g_fm_context_has_wallpaper_action) {
-                        continue;
+                        desktop_icon_spec_for_filemanager_action(action, &icon_name, &icon_context, &icon_size);
+                        desktop_draw_button_with_icon(&item,
+                                                      filemanager_menu_label(action),
+                                                      UI_BUTTON_NORMAL,
+                                                      hover_state,
+                                                      icon_name,
+                                                      icon_context,
+                                                      icon_size);
                     }
-
-                    if (action == FMENU_OPEN) hover = fm_open_hover;
-                    else if (action == FMENU_COPY) hover = fm_copy_hover;
-                    else if (action == FMENU_PASTE) hover = fm_paste_hover;
-                    else if (action == FMENU_NEW_DIR) hover = fm_new_dir_hover;
-                    else if (action == FMENU_NEW_FILE) hover = fm_new_file_hover;
-                    else if (action == FMENU_RENAME) hover = fm_rename_hover;
-                    else if (action == FMENU_MOVE_TO_TRASH) hover = fm_trash_hover;
-                    else if (action == FMENU_SET_WALLPAPER) hover = fm_set_wallpaper_hover;
-
-                    ui_draw_button(&item, filemanager_menu_label(action), UI_BUTTON_NORMAL, hover);
                 }
-            }
 
-            if (app_context.open) {
-                ui_draw_surface(&app_context.menu, ui_color_panel());
-                for (int action = 0; action < APPCTX_COUNT; ++action) {
-                    struct rect item = app_context_item_rect(&app_context.menu, action);
-                    int hover = action == APPCTX_PRIMARY ? app_primary_hover : app_save_as_hover;
+                if (app_context.open) {
+                    ui_draw_surface(&app_context.menu, ui_color_panel());
+                    for (int action = 0; action < APPCTX_COUNT; ++action) {
+                        struct rect item = app_context_item_rect(&app_context.menu, action);
+                        int hover_state = action == APPCTX_PRIMARY ? app_primary_hover : app_save_as_hover;
+                        const char *icon_name = 0;
+                        enum icon_theme_context icon_context = ICON_THEME_CONTEXT_APPS;
+                        int icon_size = 16;
 
-                    ui_draw_button(&item,
-                                   app_context_menu_label(app_context.type, action),
-                                   action == APPCTX_PRIMARY ? UI_BUTTON_PRIMARY : UI_BUTTON_NORMAL,
-                                   hover);
+                        desktop_icon_spec_for_app_context(app_context.type,
+                                                          action,
+                                                          &icon_name,
+                                                          &icon_context,
+                                                          &icon_size);
+                        desktop_draw_button_with_icon(&item,
+                                                      app_context_menu_label(app_context.type, action),
+                                                      action == APPCTX_PRIMARY ? UI_BUTTON_PRIMARY : UI_BUTTON_NORMAL,
+                                                      hover_state,
+                                                      icon_name,
+                                                      icon_context,
+                                                      icon_size);
+                    }
                 }
-            }
 
-            if (file_dialog.active) {
-                draw_file_dialog(&file_dialog, &mouse);
-            }
+                if (file_dialog.active) {
+                    draw_file_dialog(&file_dialog, &mouse);
+                }
 
-            if (!(focused >= 0 &&
-                  g_windows[focused].active &&
-                  !g_windows[focused].minimized &&
-                  g_windows[focused].type == APP_CRAFT &&
-                  g_craft[g_windows[focused].instance].started)) {
-                cursor_draw(mouse.x, mouse.y);
-            }
-            if (desktop_submit_present_full(ticks) == 0) {
-                dirty = 0;
+                if (render.show_cursor) {
+                    cursor_draw(mouse.x, mouse.y);
+                }
+                if (desktop_submit_present_full(ticks) == 0) {
+                    dirty = 0;
+                }
+            } else if (geometry_dirty &&
+                       desktop_present_retry_ready(ticks) &&
+                       desktop_present_submit_ready()) {
+                desktop_redraw_regions(geometry_regions,
+                                       geometry_region_count,
+                                       &mouse,
+                                       &render);
+                if (desktop_submit_present_dirty(ticks) == 0) {
+                    geometry_dirty = 0;
+                }
+            } else if (pointer_moved &&
+                       desktop_present_retry_ready(ticks) &&
+                       desktop_present_submit_ready() &&
+                       render.show_cursor) {
+                struct rect pointer_regions[2];
+                int pointer_region_count = 0;
+
+                desktop_collect_pointer_regions(&previous_mouse,
+                                                &mouse,
+                                                pointer_regions,
+                                                &pointer_region_count);
+                desktop_redraw_regions(pointer_regions,
+                                       pointer_region_count,
+                                       &mouse,
+                                       &render);
+                if (desktop_submit_present_dirty(ticks) == 0) {
+                    mouse_event = 0;
+                }
             }
         }
 

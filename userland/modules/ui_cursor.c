@@ -30,6 +30,13 @@ static int cursor_x = 0;
 static int cursor_y = 0;
 static int cursor_dirty = 0;
 
+static int cursor_scale(void) {
+    if (SCREEN_WIDTH >= 1920u || SCREEN_HEIGHT >= 1080u) {
+        return 2;
+    }
+    return 1;
+}
+
 void cursor_init(void) {
     cursor_x = 0;
     cursor_y = 0;
@@ -37,13 +44,7 @@ void cursor_init(void) {
 }
 
 static void cursor_glyph(int x, int y, uint8_t color) {
-    int scale = 1;
-
-    /* Keep the pointer visually stable on larger displays instead of
-       letting it balloon with the framebuffer resolution. */
-    if (SCREEN_WIDTH >= 1920u || SCREEN_HEIGHT >= 1080u) {
-        scale = 2;
-    }
+    int scale = cursor_scale();
 
     for (int row = 0; row < CURSOR_HEIGHT; ++row) {
         for (int col = 0; col < CURSOR_WIDTH; ++col) {
@@ -72,4 +73,17 @@ void cursor_move(int x, int y) {
     }
     cursor_draw(x, y);
     cursor_dirty = 1;
+}
+
+void cursor_get_bounds(int x, int y, struct rect *out) {
+    int scale = cursor_scale();
+
+    if (out == 0) {
+        return;
+    }
+
+    out->x = x;
+    out->y = y;
+    out->w = CURSOR_WIDTH * scale;
+    out->h = CURSOR_HEIGHT * scale;
 }

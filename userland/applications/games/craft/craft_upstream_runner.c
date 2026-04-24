@@ -21,6 +21,9 @@ void craft_glfw_set_window_size(int width, int height);
 void craft_glfw_request_close(void);
 void craft_glfw_reset_embedded(void);
 void craft_gl_blit_to(int x, int y, int width, int height);
+void craft_gl_reset_objects(void);
+void craft_gl_debug_frame_reset(void);
+void craft_gl_debug_frame_report(void);
 void craft_thread_pump(int max_jobs);
 void craft_thread_reset(void);
 
@@ -35,6 +38,19 @@ static void craft_debug_stage(const char *message) {
     g_craft_debug_budget -= 1;
     sys_write_debug(message);
     sys_write_debug("\n");
+}
+
+static void craft_debug_metrics(const char *label,
+                                int a, int b, int c, int d) {
+    static int g_craft_metrics_budget = 24;
+    char line[128];
+
+    if (!label || g_craft_metrics_budget <= 0) {
+        return;
+    }
+    g_craft_metrics_budget -= 1;
+    doom_snprintf(line, sizeof(line), "%s %d %d %d %d\n", label, a, b, c, d);
+    sys_write_debug(line);
 }
 
 static void *craft_runner_calloc(size_t count, size_t size) {
@@ -127,6 +143,13 @@ struct craft_runtime_state {
     int bootstrapped;
     int session_active;
     int fullscreen;
+    int compat_visual_tier;
+    int enable_signs;
+    int enable_players;
+    int enable_item;
+    int enable_observe2;
+    int hud_interval;
+    int player_buffer_valid;
     int target_create_radius;
     int target_render_radius;
     int target_delete_radius;
@@ -134,9 +157,15 @@ struct craft_runtime_state {
     int warmup_frames;
     GLuint sky_buffer;
     FPS fps;
+    float player_buffer_x;
+    float player_buffer_y;
+    float player_buffer_z;
+    float player_buffer_rx;
+    float player_buffer_ry;
     double previous;
     double last_commit;
     double last_update;
+    double smoothed_frame_ms;
 };
 
 static struct craft_runtime_state g_runtime;
@@ -150,6 +179,120 @@ static Attrib g_sky_attrib;
 // static Attrib sky_attrib;
 
 void craft_upstream_resize(int width, int height);
+static void craft_sync_quality_profile(void);
+
+static float craft_runner_absf(float value) {
+    return value < 0.0f ? -value : value;
+}
+
+static int craft_runner_local_player_visible(void) {
+    return g->observe1 != 0 || g->observe2 != 0;
+}
+
+static void craft_runner_drop_local_player_buffer(Player *player) {
+    if (player && player->buffer) {
+        del_buffer(player->buffer);
+        player->buffer = 0;
+    }
+    g_runtime.player_buffer_valid = 0;
+}
+
+static void craft_runner_refresh_local_player_buffer(Player *player) {
+    State *s;
+
+    if (!player) {
+        return;
+    }
+    if (!craft_runner_local_player_visible()) {
+        craft_runner_drop_local_player_buffer(player);
+        return;
+    }
+
+    s = &player->state;
+    if (!g_runtime.player_buffer_valid ||
+        craft_runner_absf(s->x - g_runtime.player_buffer_x) > 0.05f ||
+        craft_runner_absf(s->y - g_runtime.player_buffer_y) > 0.05f ||
+        craft_runner_absf(s->z - g_runtime.player_buffer_z) > 0.05f ||
+        craft_runner_absf(s->rx - g_runtime.player_buffer_rx) > 0.01f ||
+        craft_runner_absf(s->ry - g_runtime.player_buffer_ry) > 0.01f)
+    {
+        del_buffer(player->buffer);
+        player->buffer = gen_player_buffer(s->x, s->y, s->z, s->rx, s->ry);
+        g_runtime.player_buffer_x = s->x;
+        g_runtime.player_buffer_y = s->y;
+        g_runtime.player_buffer_z = s->z;
+        g_runtime.player_buffer_rx = s->rx;
+        g_runtime.player_buffer_ry = s->ry;
+        g_runtime.player_buffer_valid = 1;
+    }
+}
+
+static void craft_apply_runtime_visual_profile(int width, int height) {
+    int area = width * height;
+    int tier = 2;
+
+    if (g_runtime.smoothed_frame_ms > 45.0) {
+        tier = 0;
+    } else if (g_runtime.smoothed_frame_ms > 30.0 || area > 480 * 360) {
+        tier = 1;
+    }
+
+    g_runtime.compat_visual_tier = tier;
+    g_runtime.enable_signs = 0;
+    g_runtime.enable_item = 0;
+    g_runtime.enable_observe2 = 0;
+    g_runtime.enable_players = (tier >= 2);
+    g_runtime.hud_interval = (tier <= 0) ? 8 : ((tier == 1) ? 4 : 2);
+
+    if (tier <= 0) {
+        g_runtime.target_create_radius = 1;
+        g_runtime.target_render_radius = 1;
+        g_runtime.target_delete_radius = 3;
+        g_runtime.target_sign_radius = 0;
+    } else {
+        g_runtime.target_create_radius = 1;
+        g_runtime.target_render_radius = 1;
+        g_runtime.target_delete_radius = 3;
+        g_runtime.target_sign_radius = 0;
+    }
+    craft_sync_quality_profile();
+}
+
+static void craft_render_debug_cube(Player *player) {
+    State *s;
+    float vx;
+    float vy;
+    float vz;
+    float matrix[16];
+    GLuint buffer;
+
+    if (!player) {
+        return;
+    }
+    s = &player->state;
+    get_sight_vector(s->rx, s->ry, &vx, &vy, &vz);
+    set_matrix_3d(
+        matrix, g->width, g->height,
+        s->x, s->y, s->z, s->rx, s->ry, g->fov, g->ortho, g->render_radius);
+    glUseProgram(g_block_attrib.program);
+    glUniformMatrix4fv(g_block_attrib.matrix, 1, GL_FALSE, matrix);
+    glUniform3f(g_block_attrib.camera, s->x, s->y, s->z);
+    glUniform1i(g_block_attrib.sampler, 0);
+    glUniform1i(g_block_attrib.extra1, 2);
+    glUniform1f(g_block_attrib.extra2, get_daylight());
+    glUniform1f(g_block_attrib.extra3, g->render_radius * CHUNK_SIZE);
+    glUniform1i(g_block_attrib.extra4, g->ortho);
+    glUniform1f(g_block_attrib.timer, time_of_day());
+
+    buffer = gen_cube_buffer(
+        s->x + vx * 3.0f,
+        s->y + vy * 3.0f,
+        s->z + vz * 3.0f,
+        0.75f,
+        GRASS);
+    draw_item(&g_block_attrib, buffer, 36);
+    del_buffer(buffer);
+}
 
 static void craft_sync_quality_profile(void) {
     int create_radius = g_runtime.target_create_radius;
@@ -159,22 +302,23 @@ static void craft_sync_quality_profile(void) {
 
     if (g_runtime.session_active) {
         if (g_runtime.warmup_frames <= 0) {
-            create_radius = 0;
-            render_radius = 0;
             sign_radius = 0;
         } else if (g_runtime.warmup_frames < 6) {
-            create_radius = 0;
+            if (create_radius > 1) {
+                create_radius = 1;
+            }
             if (render_radius > 1) {
                 render_radius = 1;
             }
-            if (sign_radius > 1) {
-                sign_radius = 1;
-            }
+            sign_radius = 0;
         } else if (g_runtime.warmup_frames < 12 && create_radius > 1) {
             create_radius = 1;
         }
     }
 
+    if (render_radius < 1) {
+        render_radius = 1;
+    }
     if (delete_radius <= render_radius) {
         delete_radius = render_radius + 2;
     }
@@ -193,9 +337,12 @@ static void craft_apply_quality_profile(int width, int height, int fullscreen) {
     int create_radius = 1;
     int render_radius = 1;
     int delete_radius = 3;
-    int sign_radius = 1;
+    int sign_radius = 0;
 
-    if (area <= 640 * 480) {
+    if (area <= 400 * 300) {
+        create_radius = 0;
+        render_radius = 1;
+    } else if (area <= 640 * 480) {
         delete_radius = 2;
     }
     if (fullscreen && area >= 1280 * 720) {
@@ -209,7 +356,10 @@ static void craft_apply_quality_profile(int width, int height, int fullscreen) {
     g_runtime.target_render_radius = render_radius;
     g_runtime.target_delete_radius = delete_radius;
     g_runtime.target_sign_radius = sign_radius;
+    g_runtime.smoothed_frame_ms = 33.0;
+    g_runtime.player_buffer_valid = 0;
     craft_sync_quality_profile();
+    craft_apply_runtime_visual_profile(width, height);
 }
 
 static int craft_upstream_bootstrap(void) {
@@ -240,7 +390,7 @@ static int craft_upstream_bootstrap(void) {
     craft_debug_stage("craft: after create_window");
 
     glfwMakeContextCurrent(g->window);
-    glfwSwapInterval(VSYNC);
+    glfwSwapInterval(0);
     glfwSetInputMode(g->window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetKeyCallback(g->window, on_key);
     glfwSetCharCallback(g->window, on_char);
@@ -341,7 +491,6 @@ static int craft_upstream_bootstrap(void) {
         worker->state = WORKER_IDLE;
         mtx_init(&worker->mtx, mtx_plain);
         cnd_init(&worker->cnd);
-        worker->cnd.owner = worker;
         thrd_create(&worker->thrd, worker_run, worker);
     }
     craft_debug_stage("craft: after workers");
@@ -411,8 +560,20 @@ static int craft_upstream_begin_session(void) {
             s->ry = 0.0f;
         }
     }
-    force_chunks(me);
+    force_chunks_radius(me, 2);
     spawn_y = highest_block(s->x, s->z) + 3;
+    if (spawn_y < 3) {
+        force_chunks_radius(me, 3);
+        spawn_y = highest_block(s->x, s->z) + 3;
+    }
+    if (count_drawable_chunks(chunked(s->x), chunked(s->z), 2) == 0) {
+        force_chunks_radius(me, 3);
+    }
+    craft_debug_metrics("craft: bootstrap",
+                        g->chunk_count,
+                        count_drawable_chunks(chunked(s->x), chunked(s->z), 2),
+                        spawn_y,
+                        craft_thread_parallel_workers());
     if (!loaded) {
         s->x = 0.0f;
         s->z = 0.0f;
@@ -429,6 +590,7 @@ static int craft_upstream_begin_session(void) {
 
     g_runtime.previous = glfwGetTime();
     g_runtime.warmup_frames = 0;
+    g_runtime.player_buffer_valid = 0;
     g_runtime.session_active = 1;
     craft_sync_quality_profile();
     craft_debug_stage("craft: session ready");
@@ -442,6 +604,7 @@ static void craft_upstream_end_session(void) {
         return;
     }
 
+    craft_thread_reset();
     s = &g->players->state;
     db_save_state(s->x, s->y, s->z, s->rx, s->ry);
     db_close();
@@ -452,11 +615,11 @@ static void craft_upstream_end_session(void) {
     g_runtime.sky_buffer = 0;
     delete_all_chunks();
     delete_all_players();
-    craft_thread_reset();
     g_runtime.session_active = 0;
 }
 
 int craft_upstream_start(int width, int height) {
+    craft_gl_reset_objects();
     if (craft_upstream_bootstrap() != 0) {
         return -1;
     }
@@ -474,10 +637,14 @@ int craft_upstream_frame(void) {
     Player *player;
     State *s;
     char text_buffer[1024];
+    int show_hud;
     float ts;
     float tx;
     float ty;
     int face_count;
+    double frame_begin;
+    double frame_end;
+    double frame_ms;
 
     if (!g_runtime.bootstrapped) {
         return -1;
@@ -485,6 +652,7 @@ int craft_upstream_frame(void) {
     if (!g_runtime.session_active && craft_upstream_begin_session() != 0) {
         return -1;
     }
+    frame_begin = glfwGetTime();
     craft_debug_stage("craft: frame begin");
     craft_thread_pump(g_runtime.warmup_frames < 6 ? 2 : 1);
 
@@ -536,12 +704,12 @@ int craft_upstream_frame(void) {
     g->observe1 = g->observe1 % g->player_count;
     g->observe2 = g->observe2 % g->player_count;
     delete_chunks();
-    del_buffer(me->buffer);
-    me->buffer = gen_player_buffer(s->x, s->y, s->z, s->rx, s->ry);
+    craft_runner_refresh_local_player_buffer(me);
     for (int i = 1; i < g->player_count; ++i) {
         interpolate_player(g->players + i);
     }
     player = g->players + g->observe1;
+    show_hud = (g_runtime.hud_interval <= 1) || ((g_runtime.warmup_frames % g_runtime.hud_interval) == 0);
     craft_debug_stage("craft: frame buffers");
 
     glClear(GL_COLOR_BUFFER_BIT);
@@ -549,11 +717,27 @@ int craft_upstream_frame(void) {
     render_sky(&g_sky_attrib, player, g_runtime.sky_buffer);
     glClear(GL_DEPTH_BUFFER_BIT);
     craft_debug_stage("craft: frame sky");
+    craft_gl_debug_frame_reset();
     face_count = render_chunks(&g_block_attrib, player);
+    if (g_runtime.warmup_frames < 8) {
+        craft_debug_metrics("craft: frame chunks",
+                            g->chunk_count,
+                            face_count,
+                            count_drawable_chunks(chunked(s->x), chunked(s->z), 1),
+                            craft_thread_parallel_workers());
+        craft_gl_debug_frame_report();
+    }
+    if (face_count <= 0) {
+        craft_render_debug_cube(player);
+    }
     craft_debug_stage("craft: frame chunks");
-    render_signs(&g_text_attrib, player);
+    if (g_runtime.enable_signs) {
+        render_signs(&g_text_attrib, player);
+    }
     render_sign(&g_text_attrib, player);
-    render_players(&g_block_attrib, player);
+    if (g_runtime.enable_players) {
+        render_players(&g_block_attrib, player);
+    }
     if (SHOW_WIREFRAME) {
         render_wireframe(&g_line_attrib, player);
     }
@@ -562,7 +746,7 @@ int craft_upstream_frame(void) {
     if (SHOW_CROSSHAIRS) {
         render_crosshairs(&g_line_attrib);
     }
-    if (SHOW_ITEM) {
+    if (SHOW_ITEM && g_runtime.enable_item) {
         render_item(&g_block_attrib);
     }
     craft_debug_stage("craft: frame world done");
@@ -570,7 +754,7 @@ int craft_upstream_frame(void) {
     ts = 12 * g->scale;
     tx = ts / 2;
     ty = g->height - ts;
-    if (SHOW_INFO_TEXT) {
+    if (show_hud && SHOW_INFO_TEXT) {
         int hour = time_of_day() * 24;
         char am_pm = hour < 12 ? 'a' : 'p';
         hour = hour % 12;
@@ -584,7 +768,7 @@ int craft_upstream_frame(void) {
         render_text(&g_text_attrib, ALIGN_LEFT, tx, ty, ts, text_buffer);
         ty -= ts * 2;
     }
-    if (SHOW_CHAT_TEXT) {
+    if (show_hud && SHOW_CHAT_TEXT) {
         for (int i = 0; i < MAX_MESSAGES; ++i) {
             int index = (g->message_index + i) % MAX_MESSAGES;
             if (strlen(g->messages[index])) {
@@ -599,7 +783,7 @@ int craft_upstream_frame(void) {
         render_text(&g_text_attrib, ALIGN_LEFT, tx, ty, ts, text_buffer);
         ty -= ts * 2;
     }
-    if (SHOW_PLAYER_NAMES) {
+    if (show_hud && SHOW_PLAYER_NAMES) {
         if (player != me) {
             render_text(&g_text_attrib, ALIGN_CENTER,
                 g->width / 2, ts, ts, player->name);
@@ -614,7 +798,7 @@ int craft_upstream_frame(void) {
         }
     }
 
-    if (g->observe2) {
+    if (g_runtime.enable_observe2 && g->observe2) {
         int pw = 256 * g->scale;
         int ph = 256 * g->scale;
         int offset = 32 * g->scale;
@@ -639,10 +823,14 @@ int craft_upstream_frame(void) {
         render_sky(&g_sky_attrib, player, g_runtime.sky_buffer);
         glClear(GL_DEPTH_BUFFER_BIT);
         render_chunks(&g_block_attrib, player);
-        render_signs(&g_text_attrib, player);
-        render_players(&g_block_attrib, player);
+        if (g_runtime.enable_signs) {
+            render_signs(&g_text_attrib, player);
+        }
+        if (g_runtime.enable_players) {
+            render_players(&g_block_attrib, player);
+        }
         glClear(GL_DEPTH_BUFFER_BIT);
-        if (SHOW_PLAYER_NAMES) {
+        if (show_hud && SHOW_PLAYER_NAMES) {
             render_text(&g_text_attrib, ALIGN_CENTER,
                 pw / 2, ts, ts, player->name);
         }
@@ -667,11 +855,23 @@ int craft_upstream_frame(void) {
         g_runtime.warmup_frames += 1;
         craft_sync_quality_profile();
     }
+    frame_end = glfwGetTime();
+    frame_ms = (frame_end - frame_begin) * 1000.0;
+    if (frame_ms > 0.0) {
+        if (g_runtime.smoothed_frame_ms <= 0.0) {
+            g_runtime.smoothed_frame_ms = frame_ms;
+        } else {
+            g_runtime.smoothed_frame_ms =
+                g_runtime.smoothed_frame_ms * 0.85 + frame_ms * 0.15;
+        }
+        craft_apply_runtime_visual_profile(g->width, g->height);
+    }
     return 1;
 }
 
 void craft_upstream_stop(void) {
     craft_upstream_end_session();
+    craft_gl_reset_objects();
     if (g_runtime.bootstrapped) {
         craft_glfw_request_close();
         glfwTerminate();

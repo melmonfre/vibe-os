@@ -150,18 +150,24 @@ static uint32_t process_priority_for(enum process_kind kind,
     return PROCESS_PRIORITY_BACKGROUND;
 }
 
-void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top) {
+void process_setup_initial_context_arg(process_t *proc,
+                                       uintptr_t entry,
+                                       uintptr_t stack_top,
+                                       uintptr_t arg) {
     kernel_trap_frame_t *frame;
     uintptr_t entry_stack_top;
     uint32_t *return_slot;
+    uint32_t *arg_slot;
 
-    if (proc == NULL || stack_top < (sizeof(kernel_trap_frame_t) + sizeof(uint32_t))) {
+    if (proc == NULL || stack_top < (sizeof(kernel_trap_frame_t) + (sizeof(uint32_t) * 2u))) {
         return;
     }
 
-    entry_stack_top = stack_top - sizeof(uint32_t);
+    entry_stack_top = stack_top - (sizeof(uint32_t) * 2u);
     return_slot = (uint32_t *)entry_stack_top;
+    arg_slot = return_slot + 1;
     *return_slot = (uint32_t)(uintptr_t)process_entry_return_trampoline;
+    *arg_slot = (uint32_t)arg;
 
     frame = (kernel_trap_frame_t *)(entry_stack_top - sizeof(kernel_trap_frame_t));
     memset(frame, 0, sizeof(*frame));
@@ -170,6 +176,10 @@ void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t s
     frame->cs = 0x08u;
     frame->eflags = 0x00000202u;
     proc->context = frame;
+}
+
+void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top) {
+    process_setup_initial_context_arg(proc, entry, stack_top, 0u);
 }
 
 process_t *process_create(void (*entry)(void)) {
@@ -240,6 +250,7 @@ process_t *process_create_with_stack(void (*entry)(void),
     p->abi_version = 0u;
     p->abi_osabi = 0u;
     p->abi_machine = 0u;
+    p->launch_context_pid = 0u;
     p->image_base = 0u;
     p->image_size = 0u;
     p->entry_point = (uintptr_t)entry;
