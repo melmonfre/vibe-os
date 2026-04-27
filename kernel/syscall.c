@@ -16,6 +16,7 @@
 #include <kernel/memory/heap.h>
 #include <kernel/memory/physmem.h>
 #include <kernel/cpu/cpu.h>
+#include <lang/include/vibe_app.h>
 #include <stdint.h>
 #include <include/userland_api.h> /* syscall IDs */
 #include <string.h>
@@ -25,7 +26,7 @@
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 112
+#define MAX_SYSCALLS 116
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
 static uint8_t g_audio_boot_trace_launch_info = 0u;
@@ -48,6 +49,119 @@ static int sys_launch_app_copy_argv(const char *const *argv,
                                     uint32_t argc,
                                     struct mk_launch_descriptor *descriptor);
 static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor);
+static process_t *sys_async_message_target(const struct mk_async_message *message);
+
+static uint32_t sys_memory_pressure_level(uint32_t total_bytes, uint32_t free_bytes) {
+    uint32_t free_percent;
+    uint32_t divisor;
+
+    if (total_bytes == 0u) {
+        return MK_MEMORY_PRESSURE_NORMAL;
+    }
+    divisor = total_bytes / 100u;
+    if (divisor == 0u) {
+        divisor = 1u;
+    }
+    free_percent = free_bytes / divisor;
+    if (free_percent > 100u) {
+        free_percent = 100u;
+    }
+    if (free_percent >= 55u) {
+        return MK_MEMORY_PRESSURE_IDLE;
+    }
+    if (free_percent <= 8u) {
+        return MK_MEMORY_PRESSURE_CRITICAL;
+    }
+    if (free_percent <= 16u) {
+        return MK_MEMORY_PRESSURE_HIGH;
+    }
+    if (free_percent <= 28u) {
+        return MK_MEMORY_PRESSURE_ELEVATED;
+    }
+    return MK_MEMORY_PRESSURE_NORMAL;
+}
+
+static uint32_t sys_memory_current_arena_bytes(const process_t *current,
+                                               const struct mk_launch_context *context) {
+    if (context != 0) {
+        if ((context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) != 0u) {
+            return VIBE_APP_DESKTOP_ARENA_SIZE;
+        }
+        if ((context->flags & MK_LAUNCH_FLAG_USER_APP) != 0u) {
+            return VIBE_APP_ARENA_SIZE;
+        }
+        if ((context->flags & MK_LAUNCH_FLAG_BOOTSTRAP) != 0u) {
+            return VIBE_APP_BOOT_ARENA_SIZE;
+        }
+    }
+    if (current != 0 && current->task_class == MK_TASK_CLASS_APP_RUNTIME) {
+        return VIBE_APP_ARENA_SIZE;
+    }
+    return 0u;
+}
+
+static uint32_t sys_memory_current_stack_reserve_bytes(const process_t *current,
+                                                       const struct mk_launch_context *context) {
+    if (context != 0) {
+        if ((context->flags & MK_LAUNCH_FLAG_USER_DESKTOP) != 0u) {
+            return VIBE_APP_DESKTOP_STACK_SIZE;
+        }
+        if ((context->flags & MK_LAUNCH_FLAG_USER_APP) != 0u) {
+            return VIBE_APP_STACK_SIZE;
+        }
+        if ((context->flags & MK_LAUNCH_FLAG_BOOTSTRAP) != 0u) {
+            return VIBE_APP_BOOT_STACK_SIZE;
+        }
+    }
+    if (current != 0 && current->task_class == MK_TASK_CLASS_APP_RUNTIME) {
+        return VIBE_APP_STACK_SIZE;
+    }
+    return current != 0 ? current->stack_size : 0u;
+}
+
+static uint32_t sys_memory_heap_ceiling_bytes(uint32_t arena_bytes, uint32_t stack_reserve_bytes) {
+    return arena_bytes > stack_reserve_bytes ? (arena_bytes - stack_reserve_bytes) : 0u;
+}
+
+static uint32_t sys_memory_min(uint32_t a, uint32_t b) {
+    return a < b ? a : b;
+}
+
+static uint32_t sys_memory_percent(uint32_t bytes, uint32_t percent) {
+    uint32_t whole = bytes / 100u;
+    uint32_t remainder = bytes % 100u;
+
+    return (whole * percent) + ((remainder * percent) / 100u);
+}
+
+static uint32_t sys_memory_headroom_budget(uint32_t total_bytes,
+                                           uint32_t ceiling_bytes,
+                                           uint32_t percent) {
+    return sys_memory_min(ceiling_bytes, sys_memory_percent(total_bytes, percent));
+}
+
+static uint32_t sys_memory_latency_flags(uint32_t task_class) {
+    switch (task_class) {
+    case MK_TASK_CLASS_DESKTOP:
+    case MK_TASK_CLASS_APP_RUNTIME:
+    case MK_TASK_CLASS_INPUT:
+    case MK_TASK_CLASS_VIDEO_PRESENT:
+    case MK_TASK_CLASS_AUDIO_IO:
+        return MK_MEMORY_BUDGET_PREFER_LOW_LATENCY;
+    default:
+        return 0u;
+    }
+}
+
+static uint32_t sys_memory_cache_flags(uint32_t task_class) {
+    switch (task_class) {
+    case MK_TASK_CLASS_DESKTOP:
+    case MK_TASK_CLASS_APP_RUNTIME:
+        return MK_MEMORY_BUDGET_PREFER_RESIDENT_CACHE;
+    default:
+        return 0u;
+    }
+}
 
 static int sys_boot_trace_is_audio_service_current(void) {
     process_t *current = scheduler_current();
@@ -99,6 +213,31 @@ static const char *sys_launch_descriptor_arg(const struct mk_launch_descriptor *
     }
 
     return 0;
+}
+
+static process_t *sys_async_message_target(const struct mk_async_message *message) {
+    process_t *destination = 0;
+
+    if (message == 0) {
+        return 0;
+    }
+    if ((message->flags & MK_ASYNC_MESSAGE_TO_PID) != 0u &&
+        message->target_pid != 0u) {
+        destination = scheduler_find_task_by_pid((int)message->target_pid);
+        if (destination != 0) {
+            return destination;
+        }
+    }
+    if ((message->flags & MK_ASYNC_MESSAGE_TO_SERVICE) != 0u &&
+        message->target_service != MK_SERVICE_NONE) {
+        const struct mk_service_record *record =
+            mk_service_find_by_type(message->target_service);
+
+        if (record != 0 && record->pid > 0) {
+            destination = scheduler_find_task_by_pid(record->pid);
+        }
+    }
+    return destination;
 }
 
 static uint32_t sys_gfx_clear(uint32_t color, uint32_t b, uint32_t c,
@@ -969,6 +1108,60 @@ static uint32_t sys_service_send(uint32_t message_ptr, uint32_t b, uint32_t c,
     return (uint32_t)rc;
 }
 
+static uint32_t sys_message_post(uint32_t message_ptr, uint32_t b, uint32_t c,
+                                 uint32_t d, uint32_t e) {
+    const struct mk_async_message *message;
+    struct mk_async_message queued;
+    process_t *current;
+    process_t *destination;
+    int rc;
+
+    (void)b; (void)c; (void)d; (void)e;
+    if (message_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    message = (const struct mk_async_message *)(uintptr_t)message_ptr;
+    if (mk_async_message_validate(message) != 0) {
+        return (uint32_t)-1;
+    }
+
+    destination = sys_async_message_target(message);
+    if (destination == 0) {
+        return (uint32_t)-1;
+    }
+
+    current = scheduler_current();
+    queued = *message;
+    queued.source_pid = current != 0 ? (uint32_t)current->pid : 0u;
+    if ((queued.flags & MK_ASYNC_MESSAGE_TO_PID) == 0u) {
+        queued.target_pid = (uint32_t)destination->pid;
+    }
+
+    rc = ipc_send(destination, &queued, sizeof(queued));
+    return (uint32_t)rc;
+}
+
+static uint32_t sys_message_receive(uint32_t message_ptr, uint32_t timeout_ticks, uint32_t c,
+                                    uint32_t d, uint32_t e) {
+    process_t *current;
+
+    (void)c; (void)d; (void)e;
+    if (message_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    current = scheduler_current();
+    if (current == 0) {
+        return (uint32_t)-1;
+    }
+
+    return (uint32_t)ipc_receive_wait_timeout(current,
+                                              (void *)(uintptr_t)message_ptr,
+                                              sizeof(struct mk_async_message),
+                                              timeout_ticks);
+}
+
 static uint32_t sys_service_subscribe(uint32_t service_type, uint32_t b, uint32_t c,
                                       uint32_t d, uint32_t e) {
     process_t *current;
@@ -1096,6 +1289,173 @@ static uint32_t sys_task_snapshot(uint32_t summary_ptr, uint32_t entries_ptr, ui
     }
 
     return count;
+}
+
+static uint32_t sys_memory_status(uint32_t status_ptr, uint32_t b, uint32_t c,
+                                  uint32_t d, uint32_t e) {
+    struct mk_memory_status *status;
+    process_t *current;
+    const struct mk_launch_context *context;
+    uint32_t total_bytes;
+    uint32_t free_bytes;
+    uint32_t arena_bytes;
+    uint32_t stack_reserve_bytes;
+    uint32_t reserved_bytes;
+
+    (void)b;
+    (void)c;
+    (void)d;
+    (void)e;
+    if (status_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    current = scheduler_current();
+    context = mk_launch_context_current();
+    total_bytes = (uint32_t)physmem_usable_size();
+    free_bytes = (uint32_t)(physmem_free_pages() * PHYSMEM_PAGE_SIZE);
+    arena_bytes = sys_memory_current_arena_bytes(current, context);
+    stack_reserve_bytes = sys_memory_current_stack_reserve_bytes(current, context);
+    reserved_bytes = VIBE_APP_ARENA_SIZE + VIBE_APP_DESKTOP_ARENA_SIZE + VIBE_APP_BOOT_ARENA_SIZE;
+    status = (struct mk_memory_status *)(uintptr_t)status_ptr;
+    memset(status, 0, sizeof(*status));
+    status->abi_version = MK_MEMORY_STATUS_ABI_VERSION;
+    status->current_pid = current != 0 ? (uint32_t)current->pid : 0u;
+    status->current_task_class = current != 0 ? current->task_class : 0u;
+    status->pressure_level = sys_memory_pressure_level(total_bytes, free_bytes);
+    status->physmem_total_bytes = total_bytes;
+    status->physmem_free_bytes = free_bytes;
+    status->kernel_heap_used_bytes = (uint32_t)kernel_heap_used();
+    status->kernel_heap_free_bytes = (uint32_t)kernel_heap_free();
+    status->app_arena_reserved_bytes = reserved_bytes;
+    status->current_arena_bytes = arena_bytes;
+    status->current_stack_reserve_bytes = stack_reserve_bytes;
+    status->current_heap_ceiling_bytes =
+        sys_memory_heap_ceiling_bytes(arena_bytes, stack_reserve_bytes);
+    return 0u;
+}
+
+static uint32_t sys_memory_budget(uint32_t budget_ptr, uint32_t b, uint32_t c,
+                                  uint32_t d, uint32_t e) {
+    struct mk_memory_budget *budget;
+    process_t *current;
+    const struct mk_launch_context *context;
+    uint32_t total_bytes;
+    uint32_t free_bytes;
+    uint32_t pressure_level;
+    uint32_t arena_bytes;
+    uint32_t stack_reserve_bytes;
+    uint32_t ceiling_bytes;
+    uint32_t floor_bytes = 0u;
+    uint32_t working_bytes = 0u;
+    uint32_t opportunistic_bytes = 0u;
+    uint32_t concurrency_hint = 1u;
+    uint32_t reclaim_batch_bytes = 0x00100000u;
+    uint32_t flags = 0u;
+    uint32_t task_class = 0u;
+
+    (void)b;
+    (void)c;
+    (void)d;
+    (void)e;
+    if (budget_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+
+    current = scheduler_current();
+    context = mk_launch_context_current();
+    total_bytes = (uint32_t)physmem_usable_size();
+    free_bytes = (uint32_t)(physmem_free_pages() * PHYSMEM_PAGE_SIZE);
+    pressure_level = sys_memory_pressure_level(total_bytes, free_bytes);
+    task_class = current != 0 ? current->task_class : 0u;
+    arena_bytes = sys_memory_current_arena_bytes(current, context);
+    stack_reserve_bytes = sys_memory_current_stack_reserve_bytes(current, context);
+    ceiling_bytes = sys_memory_heap_ceiling_bytes(arena_bytes, stack_reserve_bytes);
+    flags |= sys_memory_latency_flags(task_class);
+    flags |= sys_memory_cache_flags(task_class);
+    if (pressure_level <= MK_MEMORY_PRESSURE_HIGH) {
+        flags |= MK_MEMORY_BUDGET_ALLOW_OPPORTUNISTIC;
+    }
+
+    switch (task_class) {
+    case MK_TASK_CLASS_DESKTOP:
+        floor_bytes = sys_memory_min(ceiling_bytes, 0x04000000u);
+        if (pressure_level >= MK_MEMORY_PRESSURE_CRITICAL) {
+            working_bytes = sys_memory_headroom_budget(total_bytes, ceiling_bytes, 40u);
+            opportunistic_bytes = working_bytes;
+        } else if (pressure_level >= MK_MEMORY_PRESSURE_HIGH) {
+            working_bytes = sys_memory_headroom_budget(total_bytes, ceiling_bytes, 60u);
+            opportunistic_bytes = working_bytes;
+        } else {
+            working_bytes = sys_memory_headroom_budget(total_bytes, ceiling_bytes, 80u);
+            opportunistic_bytes = working_bytes;
+        }
+        concurrency_hint = pressure_level >= MK_MEMORY_PRESSURE_HIGH ? 2u : 3u;
+        reclaim_batch_bytes = 0x00800000u;
+        break;
+    case MK_TASK_CLASS_APP_RUNTIME:
+        floor_bytes = sys_memory_min(ceiling_bytes, 0x01000000u);
+        if (pressure_level >= MK_MEMORY_PRESSURE_CRITICAL) {
+            working_bytes = sys_memory_headroom_budget(total_bytes, ceiling_bytes, 40u);
+            opportunistic_bytes = working_bytes;
+        } else if (pressure_level >= MK_MEMORY_PRESSURE_HIGH) {
+            working_bytes = sys_memory_headroom_budget(total_bytes, ceiling_bytes, 60u);
+            opportunistic_bytes = working_bytes;
+        } else {
+            working_bytes = sys_memory_headroom_budget(total_bytes, ceiling_bytes, 80u);
+            opportunistic_bytes = working_bytes;
+        }
+        concurrency_hint = pressure_level >= MK_MEMORY_PRESSURE_HIGH ? 2u : 4u;
+        reclaim_batch_bytes = 0x00400000u;
+        break;
+    case MK_TASK_CLASS_AUDIO_IO:
+    case MK_TASK_CLASS_NETWORK_IO:
+    case MK_TASK_CLASS_STORAGE_IO:
+    case MK_TASK_CLASS_FILESYSTEM_IO:
+    case MK_TASK_CLASS_CONSOLE_IO:
+        floor_bytes = sys_memory_min(ceiling_bytes, 0x00400000u);
+        working_bytes = sys_memory_min(ceiling_bytes, 0x00800000u);
+        opportunistic_bytes = sys_memory_min(ceiling_bytes, 0x01000000u);
+        concurrency_hint = 1u;
+        reclaim_batch_bytes = 0x00100000u;
+        break;
+    default:
+        floor_bytes = sys_memory_min(ceiling_bytes, 0x00800000u);
+        working_bytes = sys_memory_min(ceiling_bytes,
+                                       pressure_level >= MK_MEMORY_PRESSURE_HIGH
+                                           ? 0x01000000u
+                                           : 0x01800000u);
+        opportunistic_bytes = pressure_level >= MK_MEMORY_PRESSURE_HIGH
+                                   ? working_bytes
+                                   : sys_memory_min(ceiling_bytes, 0x02000000u);
+        concurrency_hint = pressure_level >= MK_MEMORY_PRESSURE_HIGH ? 1u : 2u;
+        reclaim_batch_bytes = 0x00200000u;
+        break;
+    }
+
+    if (working_bytes < floor_bytes) {
+        working_bytes = floor_bytes;
+    }
+    if (opportunistic_bytes < working_bytes) {
+        opportunistic_bytes = working_bytes;
+    }
+
+    budget = (struct mk_memory_budget *)(uintptr_t)budget_ptr;
+    memset(budget, 0, sizeof(*budget));
+    budget->abi_version = MK_MEMORY_BUDGET_ABI_VERSION;
+    budget->current_pid = current != 0 ? (uint32_t)current->pid : 0u;
+    budget->current_task_class = task_class;
+    budget->pressure_level = pressure_level;
+    budget->flags = flags;
+    budget->current_arena_bytes = arena_bytes;
+    budget->stack_reserve_bytes = stack_reserve_bytes;
+    budget->commit_floor_bytes = floor_bytes;
+    budget->working_set_target_bytes = working_bytes;
+    budget->opportunistic_target_bytes = opportunistic_bytes;
+    budget->absolute_ceiling_bytes = ceiling_bytes;
+    budget->concurrency_hint = concurrency_hint;
+    budget->reclaim_batch_bytes = reclaim_batch_bytes;
+    return 0u;
 }
 
 static uint32_t sys_launch_builtin_user(uint32_t target, uint32_t b, uint32_t c,
@@ -1360,8 +1720,23 @@ static void sys_launch_app_apply_role(struct mk_launch_descriptor *descriptor) {
     subcommand = sys_launch_descriptor_arg(descriptor, 1u);
 
     if (strcmp(descriptor->name, "audiosvc") == 0) {
-        if (subcommand != 0 && strcmp(subcommand, "play-asset") == 0) {
+        if (subcommand != 0 &&
+            (strcmp(subcommand, "play-asset") == 0 ||
+             strcmp(subcommand, "apply-settings") == 0 ||
+             strcmp(subcommand, "export-state") == 0)) {
             descriptor->task_class = MK_TASK_CLASS_AUDIO_IO;
+        }
+        return;
+    }
+
+    if (strcmp(descriptor->name, "netmgrd") == 0 ||
+        strcmp(descriptor->name, "netctl") == 0) {
+        if (subcommand != 0 &&
+            (strcmp(subcommand, "reconcile") == 0 ||
+             strcmp(subcommand, "export-state") == 0 ||
+             strcmp(subcommand, "status") == 0 ||
+             strcmp(subcommand, "autoconnect") == 0)) {
+            descriptor->task_class = MK_TASK_CLASS_NETWORK_IO;
         }
         return;
     }
@@ -1590,6 +1965,8 @@ void syscall_init(void) {
     syscall_table[SYSCALL_SHUTDOWN] = sys_shutdown;
     syscall_table[SYSCALL_SERVICE_RECV] = sys_service_receive;
     syscall_table[SYSCALL_SERVICE_SEND] = sys_service_send;
+    syscall_table[SYSCALL_MESSAGE_POST] = sys_message_post;
+    syscall_table[SYSCALL_MESSAGE_RECV] = sys_message_receive;
     syscall_table[SYSCALL_SERVICE_SUBSCRIBE] = sys_service_subscribe;
     syscall_table[SYSCALL_SERVICE_PID] = sys_service_pid;
     syscall_table[SYSCALL_SERVICE_RESTART] = sys_service_restart;
@@ -1625,6 +2002,8 @@ void syscall_init(void) {
     syscall_table[SYSCALL_TASK_EVENT_SUBSCRIBE] = sys_task_event_subscribe;
     syscall_table[SYSCALL_TASK_EVENT_RECV] = sys_task_event_receive;
     syscall_table[SYSCALL_TASK_CREATE] = sys_task_create;
+    syscall_table[SYSCALL_MEMORY_STATUS] = sys_memory_status;
+    syscall_table[SYSCALL_MEMORY_BUDGET] = sys_memory_budget;
 }
 
 /* dispatch routine called by ISR */

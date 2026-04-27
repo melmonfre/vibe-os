@@ -8,7 +8,14 @@
 
 int rand_int(int n) {
     int result;
-    while (n <= (result = rand() / (RAND_MAX / n)));
+    if (n <= 0) {
+        return 0;
+    }
+    int scale = RAND_MAX / n;
+    if (scale <= 0) {
+        return rand() % n;
+    }
+    while (n <= (result = rand() / scale));
     return result;
 }
 
@@ -177,7 +184,7 @@ int char_width(char input) {
         4, 7, 6, 6, 6, 6, 5, 6, 6, 2, 5, 5, 2, 9, 6, 6,
         6, 6, 6, 6, 5, 6, 6, 6, 6, 6, 6, 4, 2, 5, 7, 0
     };
-    return lookup[input];
+    return lookup[(unsigned char)input];
 }
 
 int string_width(const char *input) {

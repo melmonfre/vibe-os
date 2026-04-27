@@ -1304,7 +1304,6 @@ static int netmgrd_command_export_state(const char *path) {
         printf("netmgrd: failed to write %s\n", target);
         return 1;
     }
-    printf("state exported to %s\n", target);
     return 0;
 }
 

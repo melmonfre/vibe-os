@@ -12,6 +12,7 @@ soundctl	SOUNDCTL_APP_BIN	1	0	/bin/soundctl
 audiosvc	AUDIOSVC_APP_BIN	1	0	/bin/audiosvc
 netmgrd	NETMGRD_APP_BIN	1	0	/bin/netmgrd
 netctl	NETCTL_APP_BIN	1	0	/bin/netctl
+foxxod	FOXXOD_APP_BIN	1	0	/bin/foxxod
 startx	STARTX_APP_BIN	1	1	/bin/startx
 edit	EDIT_APP_BIN	1	1	/bin/edit
 nano	NANO_APP_BIN	1	1	/bin/nano

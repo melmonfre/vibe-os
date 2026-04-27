@@ -165,14 +165,8 @@ stage2_entry:
     xor ax, ax
     mov ds, ax
     mov es, ax
-    call a20_is_enabled
+    call a20_is_enabled_any
     cmp ax, 1
-    je .a20_ready
-    call a20_is_enabled_alt
-    cmp ax, 1
-    je .a20_ready
-    call a20_capture_bios_state
-    cmp byte [a20_bios_state_char], '1'
     jne a20_error
 
 .a20_ready:
@@ -1276,6 +1270,34 @@ debug_log_char:
     pop ax
     ret
 
+a20_probe_settle:
+    push cx
+    mov cx, 0x1000
+.loop:
+    loop .loop
+    pop cx
+    ret
+
+a20_is_enabled_any:
+    push bx
+
+    call a20_is_enabled
+    mov bx, ax
+    call a20_is_enabled_alt
+    or ax, bx
+    cmp ax, 1
+    je .done
+
+    call a20_capture_bios_state
+    xor ax, ax
+    cmp byte [a20_bios_state_char], '1'
+    jne .done
+    mov ax, 1
+
+.done:
+    pop bx
+    ret
+
 bootdebug_store_key16:
     push ax
     push bx
@@ -1373,6 +1395,7 @@ enable_a20:
 .bios_cf_done:
     mov si, a20_status_bios
     mov di, a20_alt_status_bios
+    call a20_probe_settle
     call a20_record_check
     cmp ax, 1
     je .done
@@ -1386,6 +1409,7 @@ enable_a20:
     out 0x92, al
     mov si, a20_status_fast
     mov di, a20_alt_status_fast
+    call a20_probe_settle
     call a20_record_check
     cmp ax, 1
     je .done
@@ -1394,6 +1418,7 @@ enable_a20:
     call a20_enable_kbc
     mov si, a20_status_kbc
     mov di, a20_alt_status_kbc
+    call a20_probe_settle
     call a20_record_check
     cmp ax, 1
     je .done
@@ -3939,14 +3964,8 @@ realmode_boot_selected_kernel:
     xor ax, ax
     mov ds, ax
     mov es, ax
-    call a20_is_enabled
+    call a20_is_enabled_any
     cmp ax, 1
-    je .a20_ready
-    call a20_is_enabled_alt
-    cmp ax, 1
-    je .a20_ready
-    call a20_capture_bios_state
-    cmp byte [a20_bios_state_char], '1'
     jne a20_error
 
 .a20_ready:

@@ -306,7 +306,10 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     enum {
         USERLAND_STACK_RESERVE = 512 * 1024,
         HEAP_GUARD_BYTES = 64 * 1024,
-        APP_ARENA_TOTAL_BYTES = VIBE_APP_ARENA_SIZE * 3u,
+        APP_USER_ARENA_BYTES = VIBE_APP_ARENA_SIZE,
+        APP_DESKTOP_ARENA_BYTES = VIBE_APP_DESKTOP_ARENA_SIZE,
+        APP_BOOT_ARENA_BYTES = VIBE_APP_BOOT_ARENA_SIZE,
+        APP_ARENA_TOTAL_BYTES = APP_USER_ARENA_BYTES + APP_DESKTOP_ARENA_BYTES + APP_BOOT_ARENA_BYTES,
         APP_BACKING_ALIGN = 0x00400000u
     };
     extern uint8_t __bss_end[];
@@ -456,16 +459,18 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
                                          APP_ARENA_TOTAL_BYTES,
                                          app_pde_snapshot,
                                          sizeof(app_pde_snapshot) / sizeof(app_pde_snapshot[0])) == 0 &&
-            paging_map_large_region(VIBE_APP_LOAD_ADDR, app_phys, VIBE_APP_ARENA_SIZE) == 0 &&
-            paging_map_large_region(VIBE_APP_DESKTOP_LOAD_ADDR, app_phys + VIBE_APP_ARENA_SIZE, VIBE_APP_ARENA_SIZE) == 0 &&
-            paging_map_large_region(VIBE_APP_BOOT_LOAD_ADDR, app_phys + (VIBE_APP_ARENA_SIZE * 2u), VIBE_APP_ARENA_SIZE) == 0) {
+            paging_map_large_region(VIBE_APP_LOAD_ADDR, app_phys, APP_USER_ARENA_BYTES) == 0 &&
+            paging_map_large_region(VIBE_APP_DESKTOP_LOAD_ADDR, app_phys + APP_USER_ARENA_BYTES, APP_DESKTOP_ARENA_BYTES) == 0 &&
+            paging_map_large_region(VIBE_APP_BOOT_LOAD_ADDR,
+                                    app_phys + APP_USER_ARENA_BYTES + APP_DESKTOP_ARENA_BYTES,
+                                    APP_BOOT_ARENA_BYTES) == 0) {
             kernel_debug_printf("memory: app arenas mapped v=%x/%x/%x p=%x/%x/%x\n",
                                 (uint32_t)VIBE_APP_LOAD_ADDR,
                                 (uint32_t)VIBE_APP_DESKTOP_LOAD_ADDR,
                                 (uint32_t)VIBE_APP_BOOT_LOAD_ADDR,
                                 (uint32_t)app_phys,
-                                (uint32_t)(app_phys + VIBE_APP_ARENA_SIZE),
-                                (uint32_t)(app_phys + (VIBE_APP_ARENA_SIZE * 2u)));
+                                (uint32_t)(app_phys + APP_USER_ARENA_BYTES),
+                                (uint32_t)(app_phys + APP_USER_ARENA_BYTES + APP_DESKTOP_ARENA_BYTES));
             reserved_count = 3u;
             mapped = 1;
         } else {

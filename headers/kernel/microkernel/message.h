@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <include/userland_api.h>
 
 #define MK_MESSAGE_ABI_VERSION 1u
 #define MK_MESSAGE_PAYLOAD_MAX 256u
@@ -96,5 +97,7 @@ struct mk_message {
 void mk_message_init(struct mk_message *message, uint32_t type);
 int mk_message_validate(const struct mk_message *message);
 int mk_message_set_payload(struct mk_message *message, const void *payload, size_t payload_size);
+void mk_async_message_init(struct mk_async_message *message, uint32_t type);
+int mk_async_message_validate(const struct mk_async_message *message);
 
 #endif

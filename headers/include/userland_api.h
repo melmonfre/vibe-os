@@ -121,7 +121,11 @@ enum syscall_id {
     SYSCALL_FS_BACKEND_STAT = 108,
     SYSCALL_FS_BACKEND_FSTAT = 109,
     SYSCALL_AUDIO_PLAY_ASSET = 110,
-    SYSCALL_TASK_CREATE = 111
+    SYSCALL_TASK_CREATE = 111,
+    SYSCALL_MESSAGE_POST = 112,
+    SYSCALL_MESSAGE_RECV = 113,
+    SYSCALL_MEMORY_STATUS = 114,
+    SYSCALL_MEMORY_BUDGET = 115
 };
 
 enum userland_builtin_target {
@@ -432,6 +436,101 @@ enum mk_task_class {
 
 #define MK_TASK_CLASS_MASK(task_class) (1u << (task_class))
 #define MK_TASK_CLASS_MASK_ALL 0xffffffffu
+
+#define MK_MEMORY_STATUS_ABI_VERSION 1u
+#define MK_MEMORY_BUDGET_ABI_VERSION 1u
+
+enum mk_memory_pressure_level {
+    MK_MEMORY_PRESSURE_IDLE = 0,
+    MK_MEMORY_PRESSURE_NORMAL = 1,
+    MK_MEMORY_PRESSURE_ELEVATED = 2,
+    MK_MEMORY_PRESSURE_HIGH = 3,
+    MK_MEMORY_PRESSURE_CRITICAL = 4
+};
+
+enum mk_memory_budget_flags {
+    MK_MEMORY_BUDGET_ALLOW_OPPORTUNISTIC = 1u << 0,
+    MK_MEMORY_BUDGET_PREFER_LOW_LATENCY = 1u << 1,
+    MK_MEMORY_BUDGET_PREFER_RESIDENT_CACHE = 1u << 2
+};
+
+struct mk_memory_status {
+    uint32_t abi_version;
+    uint32_t current_pid;
+    uint32_t current_task_class;
+    uint32_t pressure_level;
+    uint32_t physmem_total_bytes;
+    uint32_t physmem_free_bytes;
+    uint32_t kernel_heap_used_bytes;
+    uint32_t kernel_heap_free_bytes;
+    uint32_t app_arena_reserved_bytes;
+    uint32_t current_arena_bytes;
+    uint32_t current_stack_reserve_bytes;
+    uint32_t current_heap_ceiling_bytes;
+};
+
+struct mk_memory_budget {
+    uint32_t abi_version;
+    uint32_t current_pid;
+    uint32_t current_task_class;
+    uint32_t pressure_level;
+    uint32_t flags;
+    uint32_t current_arena_bytes;
+    uint32_t stack_reserve_bytes;
+    uint32_t commit_floor_bytes;
+    uint32_t working_set_target_bytes;
+    uint32_t opportunistic_target_bytes;
+    uint32_t absolute_ceiling_bytes;
+    uint32_t concurrency_hint;
+    uint32_t reclaim_batch_bytes;
+};
+
+#define MK_ASYNC_MESSAGE_ABI_VERSION 1u
+#define MK_ASYNC_MESSAGE_PAYLOAD_MAX 256u
+#define MK_FOXXO_MESSAGE_REQUEST 0x46580001u
+#define MK_FOXXO_MESSAGE_REPLY 0x46580002u
+#define MK_FOXXO_MESSAGE_EVENT 0x46580003u
+#define MK_FOXXO_MESSAGE_ERROR 0x46580004u
+#define MK_FOXXO_PACKET_ABI_VERSION 1u
+#define MK_FOXXO_PACKET_BODY_MAX 224u
+
+enum mk_async_message_flags {
+    MK_ASYNC_MESSAGE_TO_PID = 1u << 0,
+    MK_ASYNC_MESSAGE_TO_SERVICE = 1u << 1,
+    MK_ASYNC_MESSAGE_DEFERRED = 1u << 2,
+    MK_ASYNC_MESSAGE_REQUIRE_TARGET = 1u << 3
+};
+
+struct mk_async_message {
+    uint32_t abi_version;
+    uint32_t flags;
+    uint32_t type;
+    uint32_t source_pid;
+    uint32_t target_pid;
+    uint32_t target_service;
+    uint32_t payload_size;
+    uint8_t payload[MK_ASYNC_MESSAGE_PAYLOAD_MAX];
+};
+
+enum mk_foxxo_opcode {
+    MK_FOXXO_OP_NONE = 0,
+    MK_FOXXO_OP_PING = 1,
+    MK_FOXXO_OP_ACK = 2,
+    MK_FOXXO_OP_SERVICE_REQUEST = 3,
+    MK_FOXXO_OP_SERVICE_REPLY = 4,
+    MK_FOXXO_OP_EVENT = 5,
+    MK_FOXXO_OP_ERROR = 6
+};
+
+struct mk_foxxo_packet {
+    uint32_t abi_version;
+    uint32_t opcode;
+    uint32_t correlation_id;
+    uint32_t route_service;
+    uint32_t status;
+    uint32_t body_size;
+    uint8_t body[MK_FOXXO_PACKET_BODY_MAX];
+};
 
 enum mk_task_event_type {
     MK_TASK_EVENT_NONE = 0,

@@ -2582,7 +2582,11 @@ static int mk_audio_azalia_config_is_fatal(const char *config) {
     if (config == 0) {
         return 0;
     }
-    if (strcmp(config, "hda-no-audio-fg") == 0 ||
+    if (strcmp(config, "hda-bar-unavailable") == 0 ||
+        strcmp(config, "hda-reset-failed") == 0 ||
+        strcmp(config, "hda-ring-init-failed") == 0 ||
+        strcmp(config, "hda-no-output-stream") == 0 ||
+        strcmp(config, "hda-no-audio-fg") == 0 ||
         strcmp(config, "hda-no-usable-output") == 0 ||
         strcmp(config, "hda-stream-reset-failed") == 0 ||
         strcmp(config, "hda-codec-connect-failed") == 0 ||
@@ -4905,6 +4909,10 @@ static int mk_audio_try_azalia_backend_cb(const struct kernel_pci_device_info *i
         ctx->selected = 1;
         return 1;
     }
+    if (!g_audio_state.azalia_ready ||
+        mk_audio_azalia_config_is_fatal(g_audio_state.info.device.config)) {
+        return 0;
+    }
     /*
      * Keep the real HDA backend selected even when the first probe does not
      * produce a usable playback path yet. Runtime reprobe/output-path
@@ -4936,8 +4944,7 @@ static int mk_audio_try_compat_backend_cb(const struct kernel_pci_device_info *i
         ctx->selected = 1;
         return 1;
     }
-    ctx->selected = 1;
-    return 1;
+    return 0;
 }
 
 static int mk_audio_try_azalia_backends(void) {
@@ -9778,8 +9785,7 @@ void mk_audio_service_init(void) {
                                  userland_audio_service_entry,
                                  8192u,
                                  MK_LAUNCH_FLAG_BOOTSTRAP |
-                                 MK_LAUNCH_FLAG_BUILTIN |
-                                 MK_LAUNCH_FLAG_CRITICAL);
+                                 MK_LAUNCH_FLAG_BUILTIN);
     g_audio_bootstrap_defer_probe = 0u;
     kernel_text_puts("    audio: done\n");
 }

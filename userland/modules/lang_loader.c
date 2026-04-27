@@ -71,6 +71,32 @@ static uintptr_t align_down_uintptr(uintptr_t value, uintptr_t align) {
     return value & ~(align - 1u);
 }
 
+static uint32_t lang_app_stack_size(uint32_t load_address) {
+    switch (load_address) {
+    case VIBE_APP_DESKTOP_LOAD_ADDR:
+    case VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325:
+        return VIBE_APP_DESKTOP_STACK_SIZE;
+    case VIBE_APP_BOOT_LOAD_ADDR:
+    case VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325:
+        return VIBE_APP_BOOT_STACK_SIZE;
+    default:
+        return VIBE_APP_STACK_SIZE;
+    }
+}
+
+static uint32_t lang_app_arena_size(uint32_t load_address) {
+    switch (load_address) {
+    case VIBE_APP_DESKTOP_LOAD_ADDR:
+    case VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325:
+        return VIBE_APP_DESKTOP_ARENA_SIZE;
+    case VIBE_APP_BOOT_LOAD_ADDR:
+    case VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325:
+        return VIBE_APP_BOOT_ARENA_SIZE;
+    default:
+        return VIBE_APP_ARENA_SIZE;
+    }
+}
+
 static int lang_arena_slot_for_load_address(uint32_t load_address) {
     switch (load_address) {
     case VIBE_APP_LOAD_ADDR:
@@ -987,7 +1013,7 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
         sys_write_debug("lang: entry exceeds app area\n");
         return -1;
     }
-    if (entry->sector_count > (VIBE_APP_ARENA_SIZE / LANG_SECTOR_SIZE)) {
+    if (entry->sector_count > (lang_app_arena_size(header_copy_in->load_address) / LANG_SECTOR_SIZE)) {
         sys_write_debug("lang: entry exceeds arena\n");
         return -1;
     }
@@ -1024,7 +1050,7 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
     if (header->image_size == 0u ||
         header->image_size > entry->image_size ||
         header->memory_size < header->image_size ||
-        header->memory_size > VIBE_APP_ARENA_SIZE ||
+        header->memory_size > lang_app_arena_size((uint32_t)load_address) ||
         header->entry_offset >= header->memory_size ||
         header->entry_offset >= header->image_size) {
         sys_write_debug("lang: header sizing invalid\n");
@@ -1039,7 +1065,7 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
     lang_memset(load_base + header->image_size, 0, header->memory_size - header->image_size);
 
     heap_base = align_up_uintptr(load_address + header->memory_size, 16u);
-    heap_limit = load_address + VIBE_APP_ARENA_SIZE - VIBE_APP_STACK_SIZE;
+    heap_limit = load_address + lang_app_arena_size((uint32_t)load_address) - lang_app_stack_size((uint32_t)load_address);
     if (heap_base >= heap_limit) {
         sys_write_debug("lang: heap base beyond limit\n");
         return -1;
@@ -1078,7 +1104,7 @@ static void lang_write_missing_runtime(const char *name) {
 }
 
 static uintptr_t lang_app_stack_top(uint32_t load_address) {
-    return align_down_uintptr((uintptr_t)load_address + VIBE_APP_ARENA_SIZE, 16u);
+    return align_down_uintptr((uintptr_t)load_address + lang_app_arena_size(load_address), 16u);
 }
 
 __attribute__((noinline, optimize("O0")))

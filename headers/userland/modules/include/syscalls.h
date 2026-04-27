@@ -67,6 +67,8 @@ int sys_launch_builtin_user(uint32_t target);
 int sys_task_snapshot(struct task_snapshot_summary *summary,
                       struct task_snapshot_entry *entries,
                       uint32_t max_entries);
+int sys_memory_status(struct mk_memory_status *status);
+int sys_memory_budget(struct mk_memory_budget *budget);
 int sys_task_terminate(uint32_t pid);
 int sys_task_create(uintptr_t entry, void *arg, uint32_t stack_size, uint32_t task_class);
 int sys_launch_app(const char *name);
@@ -122,6 +124,8 @@ int sys_keyboard_get_layout(char *buffer, int size);
 int sys_keyboard_get_available_layouts(char *buffer, int size);
 int sys_service_receive(struct mk_message *message);
 int sys_service_send(const struct mk_message *message);
+int sys_message_post(struct mk_async_message *message);
+int sys_message_receive(struct mk_async_message *message, uint32_t timeout_ticks);
 int sys_service_subscribe(uint32_t service_type);
 int sys_service_pid(uint32_t service_type);
 int sys_service_restart(uint32_t service_type);

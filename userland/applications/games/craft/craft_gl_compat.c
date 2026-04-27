@@ -786,7 +786,7 @@ static void craft_draw_triangle_rasterized(struct craft_program *program,
      * The software viewport flips Y when converting NDC to screen space, so
      * the visible face winding is inverted relative to raw screen-space area.
      * Cull negative-area triangles here to match OpenGL's default CCW front
-     * face and keep voxel block faces visible.
+     * face. Block geometry should still honor GL_CULL_FACE.
      */
     if (g_enable_cull &&
         mode_kind != CRAFT_PROGRAM_TEXT &&

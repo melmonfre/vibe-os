@@ -892,6 +892,15 @@ NETCTL_APP_OBJS := \
 NETCTL_APP_ELF := $(BUILD_DIR)/lang/netctl.elf
 NETCTL_APP_BIN := $(BUILD_DIR)/lang/netctl.app
 
+FOXXOD_APP_BUILD_DIR := $(BUILD_DIR)/lang/foxxod
+FOXXOD_APP_OBJS := \
+	$(FOXXOD_APP_BUILD_DIR)/app_entry.o \
+	$(FOXXOD_APP_BUILD_DIR)/app_runtime.o \
+	$(FOXXOD_APP_BUILD_DIR)/foxxod_main.o \
+	$(BUILD_DIR)/userland/modules/syscalls.o
+FOXXOD_APP_ELF := $(BUILD_DIR)/lang/foxxod.elf
+FOXXOD_APP_BIN := $(BUILD_DIR)/lang/foxxod.app
+
 JS_APP_BUILD_DIR := $(BUILD_DIR)/lang/js
 JS_APP_OBJS := \
 	$(JS_APP_BUILD_DIR)/app_entry.o \
@@ -1218,7 +1227,8 @@ BOOT_SMOKE_APP_BINS := \
 	$(SOUNDCTL_APP_BIN) \
 	$(AUDIOSVC_APP_BIN) \
 	$(NETMGRD_APP_BIN) \
-	$(NETCTL_APP_BIN)
+	$(NETCTL_APP_BIN) \
+	$(FOXXOD_APP_BIN)
 
 # Include compatibility layer build rules
 include Build.compat.mk
@@ -1404,6 +1414,18 @@ $(NETCTL_APP_BUILD_DIR)/netctl_main.o: lang/apps/netctl/netctl_main.c | $(BUILD_
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(FOXXOD_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"foxxod\" -DVIBE_APP_BUILD_HEAP_SIZE=65536u -c $< -o $@
+
+$(FOXXOD_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(FOXXOD_APP_BUILD_DIR)/foxxod_main.o: lang/apps/foxxod/foxxod_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(JS_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"js\" -DVIBE_APP_BUILD_HEAP_SIZE=65536u -c $< -o $@
@@ -1548,6 +1570,15 @@ $(NETCTL_APP_ELF): $(NETCTL_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(NETCTL_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(NETCTL_APP_BIN): $(NETCTL_APP_ELF)
+	cp $< $<.keep
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
+
+$(FOXXOD_APP_ELF): $(FOXXOD_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(FOXXOD_APP_OBJS) -o $@ $(LIBGCC_A)
+
+$(FOXXOD_APP_BIN): $(FOXXOD_APP_ELF)
 	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
