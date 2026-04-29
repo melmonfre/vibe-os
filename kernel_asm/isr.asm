@@ -156,7 +156,12 @@ syscall_stub:
 divide_error_stub:
     pusha
     cld
+    mov eax, [esp + 32]    ; saved EIP
+    mov edx, [esp + 36]    ; saved CS
+    push edx
+    push eax
     call divide_error_handler
+    add esp, 8
     popa
     iretd
 
@@ -164,9 +169,11 @@ invalid_opcode_stub:
     pusha
     cld
     mov eax, [esp + 32]    ; saved EIP (after pusha)
+    mov edx, [esp + 36]    ; saved CS
+    push edx
     push eax
     call invalid_opcode_handler
-    add esp, 4
+    add esp, 8
     popa
     iretd
 
@@ -176,10 +183,12 @@ invalid_opcode_stub:
     cld
     mov eax, [esp + 32]    ; CPU-pushed error code
     mov edx, [esp + 36]    ; saved EIP
+    mov ecx, [esp + 40]    ; saved CS
+    push ecx
     push edx
     push eax
     call %2
-    add esp, 8
+    add esp, 12
     popa
     add esp, 4             ; discard error code before returning
     iretd

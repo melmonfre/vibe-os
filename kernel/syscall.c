@@ -1529,12 +1529,19 @@ static uint32_t sys_task_terminate(uint32_t pid, uint32_t b, uint32_t c,
     process_t *task;
     const struct mk_launch_context *context;
 
+    current = scheduler_current();
     (void)b; (void)c; (void)d; (void)e;
     if (pid == 0u) {
-        return (uint32_t)-1;
+        if (current == 0) {
+            return (uint32_t)-1;
+        }
+        scheduler_terminate_task(current);
+        yield();
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
     }
 
-    current = scheduler_current();
     if (current != 0 && (uint32_t)current->pid == pid) {
         return (uint32_t)-1;
     }
@@ -1560,6 +1567,7 @@ static uint32_t sys_task_create(uint32_t entry_ptr, uint32_t arg_ptr, uint32_t s
     const struct mk_launch_context *context;
     uint32_t effective_task_class;
     uint32_t launch_flags;
+    uintptr_t user_stack_top;
 
     (void)e;
     if (entry_ptr == 0u) {
@@ -1587,10 +1595,18 @@ static uint32_t sys_task_create(uint32_t entry_ptr, uint32_t arg_ptr, uint32_t s
         return (uint32_t)-1;
     }
 
-    process_setup_initial_context_arg(child,
-                                      (uintptr_t)entry_ptr,
-                                      (uintptr_t)child->stack + child->stack_size,
-                                      (uintptr_t)arg_ptr);
+    user_stack_top = process_user_stack_top_for_entry((uintptr_t)entry_ptr);
+    if (user_stack_top != 0u && process_entry_supports_user_mode((uintptr_t)entry_ptr)) {
+        process_setup_initial_user_context_arg(child,
+                                               (uintptr_t)entry_ptr,
+                                               user_stack_top,
+                                               (uintptr_t)arg_ptr);
+    } else {
+        process_setup_initial_context_arg(child,
+                                          (uintptr_t)entry_ptr,
+                                          (uintptr_t)child->stack + child->stack_size,
+                                          (uintptr_t)arg_ptr);
+    }
     process_set_abi_metadata(child,
                              current->abi_kind,
                              current->abi_version,

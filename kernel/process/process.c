@@ -6,6 +6,8 @@
 #include <kernel/microkernel/service.h>
 #include <kernel/kernel.h>    /* for panic if allocation fails */
 #include <kernel/memory/heap.h>   /* kernel_malloc, kernel_free */
+#include <kernel/cpu/cpu.h>
+#include <lang/include/vibe_app.h>
 
 #define PROCESS_DEFAULT_STACK_SIZE 4096u
 #define PROCESS_MIN_STACK_SIZE 1024u
@@ -34,6 +36,41 @@ static uint32_t process_normalize_stack_size(uint32_t stack_size) {
 }
 
 static int g_next_pid = 1;
+
+static int process_entry_in_range(uintptr_t entry, uintptr_t base, uint32_t size) {
+    return entry >= base && entry < (base + (uintptr_t)size);
+}
+
+int process_entry_supports_user_mode(uintptr_t entry) {
+    return process_entry_in_range(entry, VIBE_APP_LOAD_ADDR, VIBE_APP_ARENA_SIZE) ||
+           process_entry_in_range(entry, VIBE_APP_COMPAT_LOAD_ADDR_20260325, VIBE_APP_ARENA_SIZE) ||
+           process_entry_in_range(entry, VIBE_APP_DESKTOP_LOAD_ADDR, VIBE_APP_DESKTOP_ARENA_SIZE) ||
+           process_entry_in_range(entry, VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325, VIBE_APP_DESKTOP_ARENA_SIZE) ||
+           process_entry_in_range(entry, VIBE_APP_BOOT_LOAD_ADDR, VIBE_APP_BOOT_ARENA_SIZE) ||
+           process_entry_in_range(entry, VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325, VIBE_APP_BOOT_ARENA_SIZE);
+}
+
+uintptr_t process_user_stack_top_for_entry(uintptr_t entry) {
+    if (process_entry_in_range(entry, VIBE_APP_LOAD_ADDR, VIBE_APP_ARENA_SIZE)) {
+        return VIBE_APP_STACK_TOP;
+    }
+    if (process_entry_in_range(entry, VIBE_APP_COMPAT_LOAD_ADDR_20260325, VIBE_APP_ARENA_SIZE)) {
+        return VIBE_APP_COMPAT_LOAD_ADDR_20260325 + VIBE_APP_ARENA_SIZE;
+    }
+    if (process_entry_in_range(entry, VIBE_APP_DESKTOP_LOAD_ADDR, VIBE_APP_DESKTOP_ARENA_SIZE)) {
+        return VIBE_APP_DESKTOP_STACK_TOP;
+    }
+    if (process_entry_in_range(entry, VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325, VIBE_APP_DESKTOP_ARENA_SIZE)) {
+        return VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 + VIBE_APP_DESKTOP_ARENA_SIZE;
+    }
+    if (process_entry_in_range(entry, VIBE_APP_BOOT_LOAD_ADDR, VIBE_APP_BOOT_ARENA_SIZE)) {
+        return VIBE_APP_BOOT_STACK_TOP;
+    }
+    if (process_entry_in_range(entry, VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325, VIBE_APP_BOOT_ARENA_SIZE)) {
+        return VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325 + VIBE_APP_BOOT_ARENA_SIZE;
+    }
+    return 0u;
+}
 
 static uint32_t process_default_task_class_for(enum process_kind kind,
                                                uint32_t service_type,
@@ -173,9 +210,47 @@ void process_setup_initial_context_arg(process_t *proc,
     memset(frame, 0, sizeof(*frame));
     frame->esp_dummy = (uint32_t)entry_stack_top;
     frame->eip = (uint32_t)entry;
-    frame->cs = 0x08u;
+    frame->cs = KERNEL_CS_SELECTOR;
     frame->eflags = 0x00000202u;
     proc->context = frame;
+    proc->runs_in_user_mode = 0u;
+    proc->user_stack_top = 0u;
+}
+
+void process_setup_initial_user_context_arg(process_t *proc,
+                                            uintptr_t entry,
+                                            uintptr_t user_stack_top,
+                                            uintptr_t arg) {
+    kernel_user_trap_frame_t *frame;
+    uintptr_t kernel_stack_top;
+    uintptr_t entry_stack_top;
+    uint32_t *return_slot;
+    uint32_t *arg_slot;
+
+    if (proc == NULL || proc->stack == NULL || proc->stack_size < sizeof(*frame)) {
+        return;
+    }
+    if (user_stack_top < (sizeof(uint32_t) * 2u)) {
+        return;
+    }
+
+    entry_stack_top = user_stack_top - (sizeof(uint32_t) * 2u);
+    return_slot = (uint32_t *)entry_stack_top;
+    arg_slot = return_slot + 1;
+    *return_slot = 0u;
+    *arg_slot = (uint32_t)arg;
+
+    kernel_stack_top = (uintptr_t)proc->stack + proc->stack_size;
+    frame = (kernel_user_trap_frame_t *)(kernel_stack_top - sizeof(*frame));
+    memset(frame, 0, sizeof(*frame));
+    frame->base.eip = (uint32_t)entry;
+    frame->base.cs = USER_CS_SELECTOR;
+    frame->base.eflags = 0x00000202u;
+    frame->user_esp = (uint32_t)entry_stack_top;
+    frame->user_ss = USER_DS_SELECTOR;
+    proc->context = &frame->base;
+    proc->runs_in_user_mode = 1u;
+    proc->user_stack_top = user_stack_top;
 }
 
 void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top) {
@@ -256,6 +331,8 @@ process_t *process_create_with_stack(void (*entry)(void),
     p->entry_point = (uintptr_t)entry;
     p->wait_next = 0;
     p->next = NULL;
+    p->user_stack_top = 0u;
+    p->runs_in_user_mode = 0u;
 
     /* allocate stack memory and set initial register state */
     p->stack = kernel_malloc(normalized_stack_size);

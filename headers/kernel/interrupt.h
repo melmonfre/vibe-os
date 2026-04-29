@@ -20,13 +20,13 @@ void kernel_pic_send_eoi(uint8_t irq_line);
 void kernel_irq_complete(uint8_t irq_line);
 
 /* Exception handlers called by stubs */
-void divide_error_handler(void);
-void invalid_opcode_handler(uint32_t eip);
-void invalid_tss_handler(uint32_t error_code, uint32_t eip);
-void segment_not_present_handler(uint32_t error_code, uint32_t eip);
-void stack_fault_handler(uint32_t error_code, uint32_t eip);
-void general_protection_handler(uint32_t error_code, uint32_t eip);
-void page_fault_handler(uint32_t error_code, uint32_t eip);
-void double_fault_handler(uint32_t error_code, uint32_t eip);
+void divide_error_handler(uint32_t eip, uint32_t cs);
+void invalid_opcode_handler(uint32_t eip, uint32_t cs);
+void invalid_tss_handler(uint32_t error_code, uint32_t eip, uint32_t cs);
+void segment_not_present_handler(uint32_t error_code, uint32_t eip, uint32_t cs);
+void stack_fault_handler(uint32_t error_code, uint32_t eip, uint32_t cs);
+void general_protection_handler(uint32_t error_code, uint32_t eip, uint32_t cs);
+void page_fault_handler(uint32_t error_code, uint32_t eip, uint32_t cs);
+void double_fault_handler(uint32_t error_code, uint32_t eip, uint32_t cs);
 
 #endif /* KERNEL_INTERRUPT_H */

@@ -110,6 +110,8 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
                                                             kernel_trap_frame_t *frame) {
     uint32_t original_cs;
     uint32_t original_eflags;
+    uint32_t expected_cs;
+    int expect_user_mode;
 
     if (frame == NULL) {
         return NULL;
@@ -117,8 +119,19 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
 
     original_cs = frame->cs;
     original_eflags = frame->eflags;
-    if (original_cs != 0x08u ||
-        (original_eflags & (0x4000u | 0x3000u)) != 0u) {
+    expect_user_mode = next_task != NULL && next_task->runs_in_user_mode != 0u;
+    expected_cs = expect_user_mode ? USER_CS_SELECTOR : KERNEL_CS_SELECTOR;
+
+    if (next_task != NULL && next_task->stack != NULL) {
+        kernel_tss_set_kernel_stack((uintptr_t)next_task->stack + next_task->stack_size);
+    } else {
+        kernel_tss_set_kernel_stack(0u);
+    }
+
+    if (!expect_user_mode &&
+        (process_frame_is_user_mode(frame) ||
+         original_cs != KERNEL_CS_SELECTOR ||
+         (original_eflags & (0x4000u | 0x3000u)) != 0u)) {
         kernel_debug_printf("scheduler: sanitize cpu=%d old=%d next=%d frame=%x eip=%x cs=%x eflags=%x stack=%x size=%u\n",
                             (int)cpu_index,
                             old_task != NULL ? old_task->pid : -1,
@@ -129,8 +142,25 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
                             (unsigned int)original_eflags,
                             next_task != NULL ? (unsigned int)(uintptr_t)next_task->stack : 0u,
                             next_task != NULL ? (unsigned int)next_task->stack_size : 0u);
-        frame->cs = 0x08u;
+        frame->cs = KERNEL_CS_SELECTOR;
         frame->eflags = (original_eflags | 0x00000202u) & ~(0x4000u | 0x3000u);
+    } else if (expect_user_mode) {
+        if (!process_frame_is_user_mode(frame) || original_cs != expected_cs) {
+            kernel_debug_printf("scheduler: user-frame mismatch cpu=%d old=%d next=%d frame=%x eip=%x cs=%x expected=%x\n",
+                                (int)cpu_index,
+                                old_task != NULL ? old_task->pid : -1,
+                                next_task != NULL ? next_task->pid : -1,
+                                (unsigned int)(uintptr_t)frame,
+                                (unsigned int)frame->eip,
+                                (unsigned int)original_cs,
+                                (unsigned int)expected_cs);
+        } else {
+            kernel_user_trap_frame_t *user_frame =
+                (kernel_user_trap_frame_t *)(void *)frame;
+
+            user_frame->user_ss = USER_DS_SELECTOR;
+            frame->eflags = (original_eflags | 0x00000202u) & ~(0x4000u | 0x3000u);
+        }
     }
     return frame;
 }

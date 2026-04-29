@@ -1604,7 +1604,7 @@ static void taskmgr_draw_performance_tab(struct taskmgr_state *tm) {
     taskmgr_refresh_video_bench(tm, tm->last_refresh_ticks);
     taskmgr_refresh_audio_info(tm, tm->last_refresh_ticks);
     taskmgr_refresh_network_info(tm, tm->last_refresh_ticks);
-    taskmgr_draw_header(&content, theme, "Desempenho", "Visao geral do kernel e do escalonador");
+    taskmgr_draw_header(&content, theme, "Desempenho", "Visao geral do nucleo hibrido, servicos e escalonador");
     memset(cards, 0, sizeof(cards));
 
     phys_total_mib = tm->summary.physmem_total_kb / 1024u;

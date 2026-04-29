@@ -463,7 +463,10 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
             paging_map_large_region(VIBE_APP_DESKTOP_LOAD_ADDR, app_phys + APP_USER_ARENA_BYTES, APP_DESKTOP_ARENA_BYTES) == 0 &&
             paging_map_large_region(VIBE_APP_BOOT_LOAD_ADDR,
                                     app_phys + APP_USER_ARENA_BYTES + APP_DESKTOP_ARENA_BYTES,
-                                    APP_BOOT_ARENA_BYTES) == 0) {
+                                    APP_BOOT_ARENA_BYTES) == 0 &&
+            paging_set_large_region_user_access(VIBE_APP_LOAD_ADDR,
+                                                APP_ARENA_TOTAL_BYTES,
+                                                1) == 0) {
             kernel_debug_printf("memory: app arenas mapped v=%x/%x/%x p=%x/%x/%x\n",
                                 (uint32_t)VIBE_APP_LOAD_ADDR,
                                 (uint32_t)VIBE_APP_DESKTOP_LOAD_ADDR,

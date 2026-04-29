@@ -3,6 +3,7 @@
 #include <kernel/interrupt.h>
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/video/video.h>
+#include <kernel/scheduler.h>
 
 #define IDT_ENTRIES 256
 #define IRQ0_VECTOR 0x20
@@ -101,7 +102,7 @@ void kernel_idt_init(void) {
     idt_set_gate(IRQ0_VECTOR + 13, (uint32_t)irq13_stub, 0x8E);
     idt_set_gate(IRQ0_VECTOR + 14, (uint32_t)irq14_stub, 0x8E);
     idt_set_gate(IRQ15_VECTOR,     (uint32_t)irq15_stub, 0x8E);
-    idt_set_gate(SYSCALL_VECTOR,   (uint32_t)syscall_stub, 0x8F);
+    idt_set_gate(SYSCALL_VECTOR,   (uint32_t)syscall_stub, 0xEF);
     idt_set_gate(YIELD_VECTOR,     (uint32_t)yield_stub, 0x8E);
     idt_set_gate(SMP_WAKE_VECTOR,  (uint32_t)smp_wakeup_stub, 0x8E);
 
@@ -110,11 +111,50 @@ void kernel_idt_init(void) {
     __asm__ volatile("lidt %0" : : "m"(g_idt_ptr));
 }
 
+static int exception_is_user_mode(uint32_t cs) {
+    return (cs & 0x3u) == 0x3u;
+}
+
+static void exception_kill_user_task(const char *name,
+                                     uint32_t error_code,
+                                     uint32_t eip,
+                                     uint32_t cs,
+                                     uint32_t extra) {
+    process_t *current = scheduler_current();
+
+    kernel_debug_printf("exception: %s user pid=%d err=%x eip=%x cs=%x extra=%x\n",
+                        name,
+                        current != NULL ? current->pid : -1,
+                        (unsigned int)error_code,
+                        (unsigned int)eip,
+                        (unsigned int)cs,
+                        (unsigned int)extra);
+    if (current == NULL) {
+        kernel_panic(name);
+    }
+
+    scheduler_terminate_task(current);
+    yield();
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
 /* simple handlers that just panic */
-void divide_error_handler(void) { kernel_panic("Divide Error"); }
-void invalid_opcode_handler(uint32_t eip) {
+void divide_error_handler(uint32_t eip, uint32_t cs) {
+    if (exception_is_user_mode(cs)) {
+        exception_kill_user_task("Divide Error", 0u, eip, cs, 0u);
+    }
+    kernel_panic("Divide Error");
+}
+
+void invalid_opcode_handler(uint32_t eip, uint32_t cs) {
     static const char hex[] = "0123456789ABCDEF";
     char buf[4][11]; /* eip, cs, bytes[0], bytes[1] */
+
+    if (exception_is_user_mode(cs)) {
+        exception_kill_user_task("Invalid Opcode", 0u, eip, cs, 0u);
+    }
 
     /* helper to format 32-bit hex */
     #define FMT32(val, dst) do { \
@@ -124,14 +164,11 @@ void invalid_opcode_handler(uint32_t eip) {
         (dst)[10]='\0'; \
     } while (0)
 
-    uint16_t cs;
-    __asm__ volatile("mov %%cs,%0":"=r"(cs));
-
     uint8_t b0=*((volatile uint8_t*)eip);
     uint8_t b1=*((volatile uint8_t*)(eip+1));
 
     FMT32(eip, buf[0]);
-    FMT32((uint32_t)cs, buf[1]);
+    FMT32(cs, buf[1]);
     FMT32((uint32_t)b0, buf[2]);
     FMT32((uint32_t)b1, buf[3]);
 
@@ -145,43 +182,63 @@ void invalid_opcode_handler(uint32_t eip) {
     #undef FMT32
 }
 
-static void exception_log(const char *name, uint32_t error_code, uint32_t eip, uint32_t extra) {
-    kernel_debug_printf("exception: %s err=%x eip=%x extra=%x\n",
+static void exception_log(const char *name,
+                          uint32_t error_code,
+                          uint32_t eip,
+                          uint32_t cs,
+                          uint32_t extra) {
+    kernel_debug_printf("exception: %s err=%x eip=%x cs=%x extra=%x\n",
                         name,
                         (unsigned int)error_code,
                         (unsigned int)eip,
+                        (unsigned int)cs,
                         (unsigned int)extra);
 }
 
-void invalid_tss_handler(uint32_t error_code, uint32_t eip) {
-    exception_log("Invalid TSS", error_code, eip, 0u);
+void invalid_tss_handler(uint32_t error_code, uint32_t eip, uint32_t cs) {
+    if (exception_is_user_mode(cs)) {
+        exception_kill_user_task("Invalid TSS", error_code, eip, cs, 0u);
+    }
+    exception_log("Invalid TSS", error_code, eip, cs, 0u);
     kernel_panic("Invalid TSS");
 }
 
-void segment_not_present_handler(uint32_t error_code, uint32_t eip) {
-    exception_log("Segment Not Present", error_code, eip, 0u);
+void segment_not_present_handler(uint32_t error_code, uint32_t eip, uint32_t cs) {
+    if (exception_is_user_mode(cs)) {
+        exception_kill_user_task("Segment Not Present", error_code, eip, cs, 0u);
+    }
+    exception_log("Segment Not Present", error_code, eip, cs, 0u);
     kernel_panic("Segment Not Present");
 }
 
-void stack_fault_handler(uint32_t error_code, uint32_t eip) {
-    exception_log("Stack Fault", error_code, eip, 0u);
+void stack_fault_handler(uint32_t error_code, uint32_t eip, uint32_t cs) {
+    if (exception_is_user_mode(cs)) {
+        exception_kill_user_task("Stack Fault", error_code, eip, cs, 0u);
+    }
+    exception_log("Stack Fault", error_code, eip, cs, 0u);
     kernel_panic("Stack Fault");
 }
 
-void general_protection_handler(uint32_t error_code, uint32_t eip) {
-    exception_log("General Protection", error_code, eip, 0u);
+void general_protection_handler(uint32_t error_code, uint32_t eip, uint32_t cs) {
+    if (exception_is_user_mode(cs)) {
+        exception_kill_user_task("General Protection", error_code, eip, cs, 0u);
+    }
+    exception_log("General Protection", error_code, eip, cs, 0u);
     kernel_panic("General Protection");
 }
 
-void page_fault_handler(uint32_t error_code, uint32_t eip) {
+void page_fault_handler(uint32_t error_code, uint32_t eip, uint32_t cs) {
     uint32_t cr2 = 0u;
 
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-    exception_log("Page Fault", error_code, eip, cr2);
+    if (exception_is_user_mode(cs)) {
+        exception_kill_user_task("Page Fault", error_code, eip, cs, cr2);
+    }
+    exception_log("Page Fault", error_code, eip, cs, cr2);
     kernel_panic("Page Fault");
 }
 
-void double_fault_handler(uint32_t error_code, uint32_t eip) {
-    exception_log("Double Fault", error_code, eip, 0u);
+void double_fault_handler(uint32_t error_code, uint32_t eip, uint32_t cs) {
+    exception_log("Double Fault", error_code, eip, cs, 0u);
     kernel_panic("Double Fault");
 }

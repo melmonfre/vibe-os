@@ -37,7 +37,7 @@ enum process_abi_kind {
 };
 
 /*
- * Saved trap frame layout used by timer/yield preemption.
+ * Saved trap frame layout used by timer/yield preemption for ring0 tasks.
  * It matches the stack produced by:
  *   CPU interrupt gate push: EIP, CS, EFLAGS
  *   followed by the stub's pusha: EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI
@@ -57,11 +57,23 @@ typedef struct kernel_trap_frame {
     uint32_t eflags;
 } kernel_trap_frame_t;
 
+/*
+ * Saved trap frame layout when returning to ring3.
+ * The CPU appends the user ESP/SS pair after EFLAGS on privilege-change
+ * traps, so the common prefix above still lines up for scheduler/IRQ use.
+ */
+typedef struct kernel_user_trap_frame {
+    kernel_trap_frame_t base;
+    uint32_t user_esp;
+    uint32_t user_ss;
+} kernel_user_trap_frame_t;
+
 typedef struct process {
     int pid;                /* process identifier */
     void *stack;            /* base pointer of allocated stack memory */
     uint32_t stack_size;    /* allocated stack size in bytes */
     kernel_trap_frame_t *context; /* saved trap frame on this process stack */
+    uintptr_t user_stack_top;
     int current_cpu;        /* CPU que esta executando este processo, -1 se nenhuma */
     int preferred_cpu;      /* CPU alvo para balanceamento inicial */
     int last_cpu;           /* ultimo CPU que executou a tarefa */
@@ -91,6 +103,7 @@ typedef struct process {
     uintptr_t image_base;
     uint32_t image_size;
     uintptr_t entry_point;
+    uint32_t runs_in_user_mode;
     struct process *wait_next;
     struct process *next;   /* linked‑list pointer for scheduler */
 } process_t;
@@ -110,6 +123,10 @@ void process_setup_initial_context_arg(process_t *proc,
                                        uintptr_t entry,
                                        uintptr_t stack_top,
                                        uintptr_t arg);
+void process_setup_initial_user_context_arg(process_t *proc,
+                                            uintptr_t entry,
+                                            uintptr_t user_stack_top,
+                                            uintptr_t arg);
 void process_terminate(process_t *proc);
 void process_destroy(process_t *proc);
 void process_set_abi_metadata(process_t *proc,
@@ -120,15 +137,28 @@ void process_set_abi_metadata(process_t *proc,
                               uintptr_t image_base,
                               uint32_t image_size,
                               uintptr_t entry_point);
+int process_entry_supports_user_mode(uintptr_t entry);
+uintptr_t process_user_stack_top_for_entry(uintptr_t entry);
+
+static inline int process_frame_is_user_mode(const kernel_trap_frame_t *frame) {
+    return frame != NULL && (frame->cs & 0x3u) == 0x3u;
+}
 
 static inline uint32_t process_saved_eip(const process_t *proc) {
     return (proc != NULL && proc->context != NULL) ? proc->context->eip : 0u;
 }
 
 static inline uint32_t process_saved_esp(const process_t *proc) {
-    return (proc != NULL && proc->context != NULL)
-               ? (uint32_t)((uintptr_t)proc->context + sizeof(kernel_trap_frame_t))
-               : 0u;
+    if (proc == NULL || proc->context == NULL) {
+        return 0u;
+    }
+    if (process_frame_is_user_mode(proc->context)) {
+        const kernel_user_trap_frame_t *user_frame =
+            (const kernel_user_trap_frame_t *)(const void *)proc->context;
+
+        return user_frame->user_esp;
+    }
+    return (uint32_t)((uintptr_t)proc->context + sizeof(kernel_trap_frame_t));
 }
 
 #endif /* KERNEL_PROCESS_H */

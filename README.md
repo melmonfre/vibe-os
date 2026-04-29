@@ -1,6 +1,6 @@
 # VibeOS
 
-VibeOS e um sistema operacional x86 BIOS em 32-bit com bootloader proprio, kernel hibrido orientado a servicos, AppFS modular para apps e uma arvore grande de ports reaproveitados de `compat/`.
+VibeOS e um sistema operacional x86 BIOS em 32-bit com bootloader proprio, AppFS modular para apps e uma arquitetura hibrida em estilo microkernel: o kernel ainda concentra mediacao privilegiada e alguns backends de hardware, enquanto `init`, service-hosts e apps sobem por interfaces explicitas de servico.
 
 O repositorio ja nao e mais a demo minima original. Hoje o fluxo real e:
 
@@ -23,6 +23,7 @@ Ja esta materialmente funcionando:
 - boot BIOS funcional com imagem particionada
 - pipeline `MBR -> FAT32 boot -> stage2 -> kernel`
 - kernel com scheduler, memoria paginada, ELF loader, VFS, IPC e servicos bootstrap
+- apps externos carregados do AppFS com caminho real de `ring3`/CPL3 nas arenas de usuario
 - shell externa via `userland.app` carregada do AppFS no boot normal
 - desktop grafico, terminal, file manager, editor, task manager, jogos e apps modulares
 - scroll wheel do mouse de ponta a ponta no kernel e no desktop
@@ -63,6 +64,14 @@ Planos, migracoes e guidelines historicas agora ficam em [docs/guidelines/](docs
 - [docs/guidelines/smp.md](docs/guidelines/smp.md)
 
 ## Arquitetura
+
+### Modelo atual
+
+- os limites de servico para `storage`, `filesystem`, `video`, `input`, `console`, `network` e `audio` existem e fazem parte do caminho normal
+- o kernel ainda executa partes privilegiadas de drivers e backends, especialmente na mediacao de hardware
+- apps externos carregados nas arenas AppFS agora sobem com `ring3` real, stack de usuario propria e fault containment por task
+- o sistema ainda nao tem isolamento completo por espaco de enderecamento por processo nem extracao total de todos os hosts/servicos para user mode
+- na pratica, a arquitetura atual continua hibrida: ha fronteiras de servico reais e apps modulares ja isolados em CPL3, mas varios hosts embutidos e backends privilegiados ainda compartilham estado kernel-side
 
 ### Boot
 
@@ -211,13 +220,13 @@ Se voce mudou `kernel.bin`, assets ou o conteudo FAT32/AppFS, gere `build/boot.i
 ## Limitacoes honestas
 
 - BIOS legado apenas, sem UEFI
-- o kernel ainda e um hibrido: existem limites de servico reais, mas parte do backend ainda vive em bridges kernel-side
+- o kernel atual nao e um microkernel estrito: existem limites de servico reais, mas parte importante do backend ainda vive em bridges kernel-side
 - SMP ainda esta em estabilizacao para hardware real
 - rede real completa ainda nao esta fechada
 - audio em notebook real ainda exige endurecimento por chipset/backend
 - video real fora do QEMU ainda esta em consolidacao
 - o VFS do kernel ainda e minimo em varias frentes
-- isolamento de processos e modelo "ring3 completo" nao devem ser assumidos
+- `ring3` real agora existe para apps externos carregados em arenas de usuario, mas nao para todo componente fora do microkernel; hosts e alguns servicos ainda estao em migracao
 
 ## Licenca
 
