@@ -1,5 +1,48 @@
 #include <userland/modules/include/syscalls.h>
 
+#include <stdlib.h>
+#include <string.h>
+
+static uint8_t *g_sys_blit_clip_buffer = 0;
+static size_t g_sys_blit_clip_buffer_capacity = 0u;
+
+static const uint8_t *sys_pack_clipped_blit_region(const uint8_t *src,
+                                                   int src_pitch,
+                                                   int src_off_x,
+                                                   int src_off_y,
+                                                   int width,
+                                                   int height) {
+    size_t row_bytes;
+    size_t total_bytes;
+    uint8_t *dst;
+
+    if (src == 0 || src_pitch <= 0 || width <= 0 || height <= 0 ||
+        src_off_x < 0 || src_off_y < 0) {
+        return 0;
+    }
+
+    row_bytes = (size_t)width;
+    total_bytes = row_bytes * (size_t)height;
+    if (total_bytes == 0u) {
+        return 0;
+    }
+    if (total_bytes > g_sys_blit_clip_buffer_capacity) {
+        dst = (uint8_t *)realloc(g_sys_blit_clip_buffer, total_bytes);
+        if (dst == 0) {
+            return 0;
+        }
+        g_sys_blit_clip_buffer = dst;
+        g_sys_blit_clip_buffer_capacity = total_bytes;
+    }
+
+    dst = g_sys_blit_clip_buffer;
+    for (int row = 0; row < height; ++row) {
+        const uint8_t *src_row = src + ((size_t)(src_off_y + row) * (size_t)src_pitch) + (size_t)src_off_x;
+        memcpy(dst + ((size_t)row * row_bytes), src_row, row_bytes);
+    }
+    return dst;
+}
+
 extern int clip_rect(int *out_x, int *out_y, int *out_w, int *out_h,
                      int x, int y, int w, int h) __attribute__((weak));
 extern int clip_intersects(int x, int y, int w, int h) __attribute__((weak));
@@ -310,7 +353,18 @@ void sys_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_
         }
         src_off_x = clipped_x - dst_x;
         src_off_y = clipped_y - dst_y;
-        src = src + ((src_off_y * src_w) + src_off_x);
+        if (src_off_x != 0 || src_off_y != 0 ||
+            clipped_w != src_w || clipped_h != src_h) {
+            src = sys_pack_clipped_blit_region(src,
+                                               src_w,
+                                               src_off_x,
+                                               src_off_y,
+                                               clipped_w,
+                                               clipped_h);
+            if (src == 0) {
+                return;
+            }
+        }
         src_w = clipped_w;
         src_h = clipped_h;
         dst_x = clipped_x;
@@ -346,7 +400,18 @@ void sys_gfx_blit8_present(const uint8_t *src, int src_w, int src_h, int dst_x, 
         }
         src_off_x = clipped_x - dst_x;
         src_off_y = clipped_y - dst_y;
-        src = src + ((src_off_y * src_w) + src_off_x);
+        if (src_off_x != 0 || src_off_y != 0 ||
+            clipped_w != src_w || clipped_h != src_h) {
+            src = sys_pack_clipped_blit_region(src,
+                                               src_w,
+                                               src_off_x,
+                                               src_off_y,
+                                               clipped_w,
+                                               clipped_h);
+            if (src == 0) {
+                return;
+            }
+        }
         src_w = clipped_w;
         src_h = clipped_h;
         dst_x = clipped_x;

@@ -211,16 +211,25 @@ static int mk_fs_local_handler(const struct mk_message *request,
     }
 }
 
+static int mk_filesystem_service_launch_deferred(void) {
+    return mk_service_launch_task(MK_SERVICE_FILESYSTEM,
+                                  "filesystem",
+                                  mk_fs_local_handler,
+                                  0,
+                                  userland_filesystem_service_entry,
+                                  8192u,
+                                  MK_LAUNCH_FLAG_BOOTSTRAP |
+                                  MK_LAUNCH_FLAG_BUILTIN |
+                                  MK_LAUNCH_FLAG_CRITICAL);
+}
+
 void mk_filesystem_service_init(void) {
-    (void)mk_service_launch_task(MK_SERVICE_FILESYSTEM,
-                                 "filesystem",
-                                 mk_fs_local_handler,
-                                 0,
-                                 userland_filesystem_service_entry,
-                                 8192u,
-                                 MK_LAUNCH_FLAG_BOOTSTRAP |
-                                 MK_LAUNCH_FLAG_BUILTIN |
-                                 MK_LAUNCH_FLAG_CRITICAL);
+    (void)mk_service_register_local_handler(MK_SERVICE_FILESYSTEM,
+                                            "filesystem",
+                                            mk_fs_local_handler,
+                                            0);
+    (void)mk_service_register_deferred_launcher(MK_SERVICE_FILESYSTEM,
+                                                mk_filesystem_service_launch_deferred);
 }
 
 int mk_filesystem_service_open(const char *path, int flags) {

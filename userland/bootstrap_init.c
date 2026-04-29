@@ -234,7 +234,17 @@ static void bootstrap_print_banner(void) {
     }
 }
 
-static int bootstrap_run_startup_apps(void) {
+static int bootstrap_run_startup_apps(uint32_t boot_flags) {
+    if ((boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u &&
+        (boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) == 0u) {
+        if (sys_launch_builtin_user(USERLAND_BUILTIN_DESKTOP) > 0) {
+            sys_write_debug("init: desktop host launched\n");
+            return 0;
+        }
+        sys_write_debug("init: desktop host launch failed\n");
+        return -1;
+    }
+
     if (sys_launch_app("userland") > 0) {
         sys_write_debug("init: userland.app launched\n");
         return 0;
@@ -335,6 +345,18 @@ static void bootstrap_launch_runtime_service_apps(uint32_t boot_flags) {
 }
 
 static void bootstrap_start_deferred_kernel_services(void) {
+    if (sys_service_restart(MK_SERVICE_FILESYSTEM) == 0) {
+        sys_write_debug("init: deferred filesystemsvc launch ok\n");
+    } else {
+        sys_write_debug("init: deferred filesystemsvc launch failed\n");
+    }
+
+    if (sys_service_restart(MK_SERVICE_AUDIO) == 0) {
+        sys_write_debug("init: deferred audiosvc launch ok\n");
+    } else {
+        sys_write_debug("init: deferred audiosvc launch failed\n");
+    }
+
     if (sys_service_restart(MK_SERVICE_INPUT) == 0) {
         sys_write_debug("init: deferred inputsvc launch ok\n");
     } else {
@@ -379,6 +401,7 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     kernel_debug_puts("init: fs_init returned\n");
     bootstrap_storage_smoke_test();
     bootstrap_prime_kernel_service_stack();
+    bootstrap_start_deferred_kernel_services();
     bootstrap_try_play_boot_sound(info.boot_flags);
 
     sys_write_debug("init: appfs launcher ready\n");
@@ -386,10 +409,9 @@ __attribute__((section(".entry"))) void userland_entry(void) {
 
     bootstrap_print_banner();
     kernel_debug_puts("init: banner returned\n");
-    bootstrap_start_deferred_kernel_services();
     bootstrap_launch_runtime_service_apps(info.boot_flags);
 
-    rc = bootstrap_run_startup_apps();
+    rc = bootstrap_run_startup_apps(info.boot_flags);
     if (rc != 0) {
         int shell_pid = sys_launch_builtin_user(USERLAND_BUILTIN_SHELL);
 

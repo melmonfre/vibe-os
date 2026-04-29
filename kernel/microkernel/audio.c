@@ -5362,10 +5362,16 @@ static void mk_audio_select_compat_backend(const struct kernel_pci_device_info *
             mk_audio_compat_apply_params();
             mk_audio_compat_apply_mixer_state();
         }
-        if (pci->irq_line < 16u && pci->irq_line != 12u) {
+        if (pci->irq_line >= 16u) {
             (void)kernel_irq_register_handler(pci->irq_line, mk_audio_compat_irq_handler);
             kernel_irq_unmask(pci->irq_line);
             g_audio_state.compat_irq_registered = 1u;
+        } else {
+            /*
+             * The current PIC layer only supports one handler per IRQ line.
+             * On laptops like the T61 the audio INTx line may be shared with
+             * SATA/USB, so do not claim or mask it here.
+             */
         }
     } else {
         mk_audio_copy_limited(g_audio_state.info.device.config, "bar-unavailable", MAX_AUDIO_DEV_LEN);
@@ -8423,15 +8429,15 @@ static void mk_audio_select_azalia_backend(const struct kernel_pci_device_info *
                                     HDA_GCTL,
                                     mk_audio_azalia_read32(g_audio_state.azalia_base, HDA_GCTL) | HDA_GCTL_UNSOL);
         }
-        if (pci->irq_line < 16u) {
-            /*
-             * The current PIC layer only supports one handler per IRQ line.
-             * On laptops like the T61 the HDA INTx line is often shared with
-             * SATA/USB, so claiming it here can break storage during boot.
-             * Keep Azalia in polling mode until shared PCI INTx dispatch exists.
-             */
-            g_audio_state.azalia_irq_registered = 0u;
-        }
+        /*
+         * The current PIC layer only supports one handler per IRQ line.
+         * On laptops like the T61 the HDA INTx line is often shared with
+         * SATA/USB, so claiming it here can break storage during boot.
+         * Keep Azalia in polling mode until shared PCI INTx dispatch exists.
+         *
+         * Do not register or mask a PIC IRQ line for HDA on this platform.
+         */
+        g_audio_state.azalia_irq_registered = 0u;
         if (g_audio_state.info.device.config[0] == '\0' ||
             (strcmp(g_audio_state.info.device.config, "hda-no-audio-fg") != 0 &&
              strcmp(g_audio_state.info.device.config, "hda-no-usable-output") != 0)) {
@@ -9711,8 +9717,8 @@ static int mk_audio_local_handler(const struct mk_message *request,
     return 0;
 }
 
-void mk_audio_service_init(void) {
-    // struct kernel_pci_device_info detected_pci; // Removido porque não está sendo usado
+static void mk_audio_service_init_state(void) {
+    static uint8_t g_audio_tick_hook_registered = 0u;
 
     memset(&g_last_audio_request, 0, sizeof(g_last_audio_request));
     memset(&g_last_audio_reply, 0, sizeof(g_last_audio_reply));
@@ -9745,12 +9751,18 @@ void mk_audio_service_init(void) {
     mk_audio_state_reset_async_write();
     mk_audio_state_reset_capture();
     mk_audio_event_init_subscribers();
-    (void)kernel_timer_register_tick_hook(mk_audio_service_tick);
+    if (!g_audio_tick_hook_registered) {
+        (void)kernel_timer_register_tick_hook(mk_audio_service_tick);
+        g_audio_tick_hook_registered = 1u;
+    }
     kernel_text_puts("    audio: soft\n");
     mk_audio_select_soft_backend();
     kernel_text_puts("    audio: usb-snap\n");
     mk_audio_refresh_usb_attach_snapshot();
-    kernel_debug_puts("audio: service init enter\n");
+}
+
+static int mk_audio_service_launch_deferred(void) {
+    kernel_debug_puts("audio: deferred launch enter\n");
 
     kernel_text_puts("    audio: azalia?\n");
     if (mk_audio_try_azalia_backends() == 0) {
@@ -9775,19 +9787,33 @@ void mk_audio_service_init(void) {
     }
 
     mk_audio_refresh_topology_snapshot();
-    mk_audio_debug_backend_state("audio: service init exit backend=");
+    mk_audio_debug_backend_state("audio: deferred launch backend=");
 
     kernel_text_puts("    audio: launch\n");
-    (void)mk_service_launch_task(MK_SERVICE_AUDIO,
-                                 "audio",
-                                 mk_audio_local_handler,
-                                 0,
-                                 userland_audio_service_entry,
-                                 8192u,
-                                 MK_LAUNCH_FLAG_BOOTSTRAP |
-                                 MK_LAUNCH_FLAG_BUILTIN);
+    if (mk_service_launch_task(MK_SERVICE_AUDIO,
+                               "audio",
+                               mk_audio_local_handler,
+                               0,
+                               userland_audio_service_entry,
+                               8192u,
+                               MK_LAUNCH_FLAG_BOOTSTRAP |
+                               MK_LAUNCH_FLAG_BUILTIN) != 0) {
+        kernel_text_puts("    audio: launch failed\n");
+        return -1;
+    }
     g_audio_bootstrap_defer_probe = 0u;
     kernel_text_puts("    audio: done\n");
+    return 0;
+}
+
+void mk_audio_service_init(void) {
+    mk_audio_service_init_state();
+    (void)mk_service_register_local_handler(MK_SERVICE_AUDIO,
+                                            "audio",
+                                            mk_audio_local_handler,
+                                            0);
+    (void)mk_service_register_deferred_launcher(MK_SERVICE_AUDIO,
+                                                mk_audio_service_launch_deferred);
 }
 
 int mk_audio_service_ready(void) {
