@@ -6,6 +6,7 @@
 #include <kernel/microkernel/service.h>
 #include <kernel/kernel.h>    /* for panic if allocation fails */
 #include <kernel/memory/heap.h>   /* kernel_malloc, kernel_free */
+#include <kernel/drivers/debug/debug.h>
 #include <kernel/cpu/cpu.h>
 #include <lang/include/vibe_app.h>
 
@@ -243,6 +244,7 @@ void process_setup_initial_user_context_arg(process_t *proc,
     kernel_stack_top = (uintptr_t)proc->stack + proc->stack_size;
     frame = (kernel_user_trap_frame_t *)(kernel_stack_top - sizeof(*frame));
     memset(frame, 0, sizeof(*frame));
+    frame->base.esp_dummy = (uint32_t)(uintptr_t)&frame->base.eip;
     frame->base.eip = (uint32_t)entry;
     frame->base.cs = USER_CS_SELECTOR;
     frame->base.eflags = 0x00000202u;
@@ -251,6 +253,21 @@ void process_setup_initial_user_context_arg(process_t *proc,
     proc->context = &frame->base;
     proc->runs_in_user_mode = 1u;
     proc->user_stack_top = user_stack_top;
+    if (proc->pid == 12) {
+        kernel_debug_printf("process: user context init proc=%d proc_ptr=%x context=%x stack=%x stack_size=%u user_stack_top=%x frame=%x esp_dummy=%x eip=%x cs=%x user_esp=%x user_ss=%x\n",
+                            proc->pid,
+                            (unsigned int)(uintptr_t)proc,
+                            (unsigned int)(uintptr_t)proc->context,
+                            (unsigned int)(uintptr_t)proc->stack,
+                            proc->stack_size,
+                            (unsigned int)proc->user_stack_top,
+                            (unsigned int)(uintptr_t)frame,
+                            (unsigned int)frame->base.esp_dummy,
+                            (unsigned int)frame->base.eip,
+                            (unsigned int)frame->base.cs,
+                            (unsigned int)frame->user_esp,
+                            (unsigned int)frame->user_ss);
+    }
 }
 
 void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top) {
