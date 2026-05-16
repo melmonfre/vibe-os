@@ -111,7 +111,7 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
     uint32_t original_cs;
     uint32_t original_eflags;
     uint32_t expected_cs;
-    int expect_user_mode;
+    int frame_is_user_mode;
 
     if (frame == NULL) {
         return NULL;
@@ -119,7 +119,7 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
 
     original_cs = frame->cs;
     original_eflags = frame->eflags;
-    int frame_is_user_mode = process_frame_is_user_mode(frame);
+    frame_is_user_mode = process_frame_is_user_mode(frame);
     expected_cs = frame_is_user_mode ? USER_CS_SELECTOR : KERNEL_CS_SELECTOR;
 
     if (next_task != NULL && next_task->stack != NULL) {
@@ -158,10 +158,13 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
                                 (unsigned int)frame->esp_dummy,
                                 (unsigned int)user_frame->user_esp,
                                 (unsigned int)user_frame->user_ss);
-        } else {
-            user_frame->user_ss = USER_DS_SELECTOR;
-            frame->eflags = (original_eflags | 0x00000202u) & ~(0x4000u | 0x3000u);
         }
+        frame->cs = USER_CS_SELECTOR;
+        user_frame->user_ss = USER_DS_SELECTOR;
+        if (user_frame->user_esp == 0u && next_task != NULL && next_task->user_stack_top >= (sizeof(uint32_t) * 2u)) {
+            user_frame->user_esp = (uint32_t)(next_task->user_stack_top - (sizeof(uint32_t) * 2u));
+        }
+        frame->eflags = (original_eflags | 0x00000202u) & ~(0x4000u | 0x3000u);
     }
     return frame;
 }
@@ -828,12 +831,6 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         if (resume_frame == NULL) {
             kernel_debug_printf("scheduler: select missing context pid=%d next_context=NULL\n",
                                 next->pid);
-        } else if (next->runs_in_user_mode &&
-                   !process_frame_is_user_mode(resume_frame)) {
-            kernel_debug_printf("scheduler: select bad user context pid=%d context=%x cs=%x\n",
-                                next->pid,
-                                (unsigned int)(uintptr_t)resume_frame,
-                                (unsigned int)resume_frame->cs);
         }
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         if (!g_audio_first_dispatch_trace_emitted &&

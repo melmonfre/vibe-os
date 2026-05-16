@@ -2,6 +2,9 @@ BITS 32
 
 ; central ISR assembly for kernel only
 
+%define KERNEL_DS_SELECTOR 0x10
+%define USER_DS_SELECTOR   0x23
+
 global irq0_stub
 global irq1_stub
 global irq2_stub
@@ -48,21 +51,48 @@ extern general_protection_handler
 extern page_fault_handler
 extern double_fault_handler
 
+%macro LOAD_KERNEL_DATA_SEGMENTS 0
+    mov ax, KERNEL_DS_SELECTOR
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+%endmacro
+
+%macro LOAD_RETURN_DATA_SEGMENTS 0
+    mov ax, [esp + 36]      ; saved CS in the resumed trap frame
+    test al, 0x3
+    jz %%kernel_segments
+    mov ax, USER_DS_SELECTOR
+    jmp %%install_segments
+%%kernel_segments:
+    mov ax, KERNEL_DS_SELECTOR
+%%install_segments:
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+%endmacro
+
 irq0_stub:
     pusha
     cld
+    LOAD_KERNEL_DATA_SEGMENTS
     mov eax, esp
     push eax
     call kernel_timer_irq_handler
     add esp, 4
     mov esp, eax
+    LOAD_RETURN_DATA_SEGMENTS
     popa
     iretd
 
 irq1_stub:
     pusha
     cld
+    LOAD_KERNEL_DATA_SEGMENTS
     call kernel_keyboard_irq_handler
+    LOAD_RETURN_DATA_SEGMENTS
     popa
     iretd
 
@@ -70,9 +100,11 @@ irq1_stub:
 irq%1_stub:
     pusha
     cld
+    LOAD_KERNEL_DATA_SEGMENTS
     push dword %2
     call kernel_irq_dispatch
     add esp, 4
+    LOAD_RETURN_DATA_SEGMENTS
     popa
     iretd
 %endmacro
@@ -91,7 +123,9 @@ IRQ_STUB 11, 11
 irq12_stub:
     pusha
     cld
+    LOAD_KERNEL_DATA_SEGMENTS
     call kernel_mouse_irq_handler
+    LOAD_RETURN_DATA_SEGMENTS
     popa
     iretd
 
@@ -102,19 +136,23 @@ IRQ_STUB 15, 15
 yield_stub:
     pusha
     cld
+    LOAD_KERNEL_DATA_SEGMENTS
     mov eax, esp
     push dword 0
     push eax
     call scheduler_schedule_frame
     add esp, 8
     mov esp, eax
+    LOAD_RETURN_DATA_SEGMENTS
     popa
     iretd
 
 smp_wakeup_stub:
     pusha
     cld
+    LOAD_KERNEL_DATA_SEGMENTS
     call smp_wakeup_ipi_handler
+    LOAD_RETURN_DATA_SEGMENTS
     popa
     iretd
 
@@ -125,6 +163,7 @@ smp_wakeup_stub:
 syscall_stub:
     pusha
     cld
+    LOAD_KERNEL_DATA_SEGMENTS
     ; Saved registers after pusha:
     ; [esp + 0]  = edi
     ; [esp + 4]  = esi
@@ -149,6 +188,7 @@ syscall_stub:
     call syscall_dispatch_internal
     add esp, 24
     mov [esp + 28], eax
+    LOAD_RETURN_DATA_SEGMENTS
     popa
     iretd
 
@@ -156,6 +196,7 @@ syscall_stub:
 divide_error_stub:
     pusha
     cld
+    LOAD_KERNEL_DATA_SEGMENTS
     mov eax, [esp + 32]    ; saved EIP
     mov edx, [esp + 36]    ; saved CS
     push edx
@@ -168,6 +209,7 @@ divide_error_stub:
 invalid_opcode_stub:
     pusha
     cld
+    LOAD_KERNEL_DATA_SEGMENTS
     mov eax, [esp + 32]    ; saved EIP (after pusha)
     mov edx, [esp + 36]    ; saved CS
     push edx
@@ -181,6 +223,7 @@ invalid_opcode_stub:
 %1:
     pusha
     cld
+    LOAD_KERNEL_DATA_SEGMENTS
     mov eax, [esp + 32]    ; CPU-pushed error code
     mov edx, [esp + 36]    ; saved EIP
     mov ecx, [esp + 40]    ; saved CS
