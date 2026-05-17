@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <include/userland_api.h>
 #include <userland/applications/include/apps.h>
+#include <userland/modules/include/icon_theme.h>
 #include <userland/modules/include/utils.h> // for struct rect
 
 /* Screen resolution globals - initialized at startup */
@@ -98,10 +99,22 @@ uint8_t ui_color_canvas(void);
 uint8_t ui_color_window_bg(void);
 uint8_t ui_color_panel(void);
 uint8_t ui_color_muted(void);
+int ui_text_width(const char *text);
+void ui_text_copy_fit(char *dst, int dst_size, const char *src, int pixel_width);
+void ui_draw_text_clipped(const struct rect *bounds, int x, int y, uint8_t color, const char *text);
 void ui_draw_surface(const struct rect *r, uint8_t fill);
 void ui_draw_inset(const struct rect *r, uint8_t fill);
 void ui_draw_button(const struct rect *r, const char *label,
                     enum ui_button_style style, int highlighted);
+void ui_draw_button_with_icon(const struct rect *r,
+                              const char *label,
+                              enum ui_button_style style,
+                              int highlighted,
+                              const char *icon_name,
+                              enum icon_theme_context icon_context,
+                              int icon_size,
+                              int icon_w,
+                              int icon_h);
 void ui_draw_status(const struct rect *r, const char *text);
 
 void draw_window_frame(const struct rect *w, const char *title,
@@ -121,6 +134,12 @@ void draw_desktop(const struct mouse_state *mouse,
                   const struct window *wins,
                   int win_count,
                   int focused);
+void ui_draw_desktop_region(const struct mouse_state *mouse,
+                            const struct window *wins,
+                            int win_count,
+                            int focused,
+                            int start_hover,
+                            const struct rect *region);
 
 /* entry point for the graphical desktop environment invoked by startx */
 void desktop_request_open_editor(const char *path);

@@ -13,11 +13,21 @@
 #define mtx_recursive 8
 
 typedef int (*thrd_start_t)(void *);
-typedef struct { int active; } thrd_t;
-typedef struct { int locked; } mtx_t;
+typedef struct thrd_state {
+    volatile int active;
+    volatile int finished;
+    int pid;
+    int result;
+    thrd_start_t func;
+    void *arg;
+} thrd_state_t;
+typedef struct { thrd_state_t *state; } thrd_t;
 typedef struct {
-    int signaled;
-    void *owner;
+    volatile int locked;
+    int type;
+} mtx_t;
+typedef struct {
+    volatile unsigned int generation;
 } cnd_t;
 
 int thrd_create(thrd_t *thr, thrd_start_t func, void *arg);

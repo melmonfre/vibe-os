@@ -4,7 +4,7 @@ import wave
 from pathlib import Path
 
 
-def decode_pcm(frames: bytes, channels: int, sampwidth: int) -> list[int]:
+def decode_pcm(frames: bytes, channels: int, sampwidth: int):
     if sampwidth == 1:
         samples = [((value - 128) << 8) for value in frames]
     elif sampwidth == 2:
@@ -30,7 +30,7 @@ def decode_pcm(frames: bytes, channels: int, sampwidth: int) -> list[int]:
     return mono
 
 
-def resample_linear(samples: list[int], input_rate: int, output_rate: int) -> list[int]:
+def resample_linear(samples, input_rate: int, output_rate: int):
     if not samples:
         return []
     if input_rate == output_rate or len(samples) == 1:
@@ -58,7 +58,7 @@ def resample_linear(samples: list[int], input_rate: int, output_rate: int) -> li
     return result
 
 
-def encode_u8(samples: list[int]) -> bytes:
+def encode_u8(samples) -> bytes:
     encoded = bytearray()
     for sample in samples:
         clamped = max(-32768, min(32767, sample))
@@ -66,7 +66,7 @@ def encode_u8(samples: list[int]) -> bytes:
     return bytes(encoded)
 
 
-def build_asset(input_path: Path, output_path: Path, sample_rate: int) -> None:
+def build_asset(input_path: Path, output_path: Path, sample_rate: int):
     with wave.open(str(input_path), "rb") as wav_file:
         channels = wav_file.getnchannels()
         sampwidth = wav_file.getsampwidth()
@@ -78,7 +78,7 @@ def build_asset(input_path: Path, output_path: Path, sample_rate: int) -> None:
     output_path.write_bytes(encode_u8(resampled))
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)

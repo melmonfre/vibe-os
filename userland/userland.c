@@ -33,9 +33,13 @@ int vibe_app_main(int argc, char **argv) {
             userland_app_boot_debug("userland.app: autostart startx\n");
             userland_app_boot_debug("userland.app: desktop handoff complete\n");
             return 0;
-        } else {
-            userland_app_boot_debug("userland.app: autostart startx failed\n");
         }
+        userland_app_boot_debug("userland.app: autostart startx failed, attempting builtin fallback\n");
+        if (sys_launch_builtin_user(USERLAND_BUILTIN_STARTX) > 0) {
+            userland_app_boot_debug("userland.app: autostart startx builtin fallback\n");
+            return 0;
+        }
+        userland_app_boot_debug("userland.app: autostart startx builtin fallback failed\n");
     }
     userland_app_boot_debug("userland.app: shell_start begin\n");
     shell_start();

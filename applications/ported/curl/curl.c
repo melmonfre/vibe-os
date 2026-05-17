@@ -50,6 +50,7 @@ int vibe_app_main(int argc, char **argv) {
             }
         }
         printf("curl: file-ok target=%s bytes=%d\n", target, size);
+        netdiag_debugf("curl: file-ok target=%s bytes=%d\n", target, size);
         return 0;
     }
 
@@ -65,5 +66,9 @@ int vibe_app_main(int argc, char **argv) {
             argv[1],
             status.active_if[0] != '\0' ? status.active_if : "-",
             status.dns_server[0] != '\0' ? status.dns_server : "-");
+    netdiag_debugf("curl: remote transfer pending url=%s active=%s dns=%s\n",
+                   argv[1],
+                   status.active_if[0] != '\0' ? status.active_if : "-",
+                   status.dns_server[0] != '\0' ? status.dns_server : "-");
     return 1;
 }

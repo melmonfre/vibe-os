@@ -16,11 +16,13 @@ struct craft_edit {
 
 struct craft_state {
     struct rect window;
+    struct rect restore_window;
     int running;
     int last_code;
     int started;
     int failed;
     int focused;
+    int fullscreen;
     int surface_w;
     int surface_h;
     int mouse_x;
@@ -46,10 +48,11 @@ int craft_upstream_start(int width, int height);
 int craft_upstream_frame(void);
 void craft_upstream_stop(void);
 void craft_upstream_resize(int width, int height);
+void craft_upstream_set_fullscreen(int fullscreen, int width, int height);
 void craft_upstream_queue_key(int key);
 void craft_upstream_set_mouse(int x, int y, int dx, int dy, int wheel,
                               uint8_t buttons, int focused, int inside);
-void craft_upstream_blit(int x, int y);
+void craft_upstream_blit(int x, int y, int width, int height);
 void craft_upstream_request_close(void);
 
 #endif

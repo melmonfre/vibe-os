@@ -25,7 +25,13 @@ SOFTWARE.
 */
 
 #include <math.h>
+#pragma push_macro("rand")
+#pragma push_macro("srand")
+#undef rand
+#undef srand
 #include <stdlib.h>
+#pragma pop_macro("srand")
+#pragma pop_macro("rand")
 #include <string.h>
 
 #define F2 0.3660254037844386f
@@ -117,7 +123,12 @@ void seed(unsigned int x) {
     for (int i = 255; i > 0; i--) {
         int j;
         int n = i + 1;
-        while (n <= (j = rand() / (RAND_MAX / n)));
+        int scale = RAND_MAX / n;
+        if (scale <= 0) {
+            j = rand() % n;
+        } else {
+            while (n <= (j = rand() / scale));
+        }
         unsigned char a = PERM[i];
         unsigned char b = PERM[j];
         PERM[i] = b;

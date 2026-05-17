@@ -139,7 +139,7 @@ vibe-os/
 │   ├── data-partition.img - Raw legacy data/AppFS volume
 │   ├── kernel.bin    (179 KB) - Lean kernel
 │   ├── kernel.elf    (217 KB) - Kernel ELF
-│   ├── boot-policy.txt - USB boot/loading strategy manifest copied to FAT32 as BOOTPOLICY.TXT
+│   ├── boot-policy.txt - USB boot/loading strategy manifest copied to FAT32 as BOOTPOL.TXT
 │   ├── phase6-validation.md - Generated QEMU compatibility matrix report
 │   ├── lang/userland.app - External boot shell app autostarted by init
 │   └── userland-main.bin (optional legacy monolith)
@@ -209,6 +209,15 @@ brew install qemu
 # macOS with Homebrew:
 brew install i686-elf-gcc nasm
 ```
+
+### Gentoo Without `dosfstools`
+If `mkfs.fat` is unavailable but `mtools` is installed, use the bundled wrapper:
+
+```bash
+make MKFS_FAT_TOOL=./tools/mkfs-fat-mtools.sh
+```
+
+This keeps the Linux host toolchain path and formats the FAT32 boot partition via `mformat`, including the reserved-sector layout expected by the bootloader image.
 
 ## Performance Notes
 

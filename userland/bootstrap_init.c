@@ -5,6 +5,7 @@
 #include <kernel/bootinfo.h>
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/microkernel/audio.h>
+#include <kernel/microkernel/service.h>
 
 #define BOOTSTRAP_STORAGE_SMOKE_SECTOR (KERNEL_PERSIST_START_LBA + KERNEL_PERSIST_SECTOR_COUNT - 1u)
 #define BOOTSTRAP_STORAGE_SMOKE_SIZE 512u
@@ -233,7 +234,17 @@ static void bootstrap_print_banner(void) {
     }
 }
 
-static int bootstrap_run_startup_apps(void) {
+static int bootstrap_run_startup_apps(uint32_t boot_flags) {
+    if ((boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u &&
+        (boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) == 0u) {
+        if (sys_launch_builtin_user(USERLAND_BUILTIN_DESKTOP) > 0) {
+            sys_write_debug("init: desktop host launched\n");
+            return 0;
+        }
+        sys_write_debug("init: desktop host launch failed\n");
+        return -1;
+    }
+
     if (sys_launch_app("userland") > 0) {
         sys_write_debug("init: userland.app launched\n");
         return 0;
@@ -283,7 +294,12 @@ static void bootstrap_prime_kernel_service_stack(void) {
     }
 }
 
-static void bootstrap_try_play_boot_sound(void) {
+static void bootstrap_try_play_boot_sound(uint32_t boot_flags) {
+    if ((boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u) {
+        sys_write_debug("init: boot sound deferred for desktop boot\n");
+        return;
+    }
+
     if (sys_launch_builtin_user(USERLAND_BUILTIN_BOOT_AUDIO) > 0) {
         sys_write_debug("init: boot audio host launched\n");
         sys_write_debug("init: boot sound returned\n");
@@ -298,6 +314,17 @@ static void bootstrap_launch_runtime_service_apps(uint32_t boot_flags) {
         return;
     }
 
+    if ((boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u) {
+        /*
+         * The desktop session already reapplies persisted audio/network state
+         * after its own startup gates open. Deferring those helpers keeps the
+         * autoboot path lighter on slower machines without changing shell boot.
+         */
+        sys_write_debug("init: boot audio state sync deferred to desktop session\n");
+        sys_write_debug("init: boot network reconcile deferred to desktop session\n");
+        return;
+    }
+
     {
         char *audio_apply_argv[4] = {"audiosvc", "apply-settings", "/config/audio.cfg", 0};
         if (sys_launch_app_argv(3, audio_apply_argv) > 0) {
@@ -307,11 +334,6 @@ static void bootstrap_launch_runtime_service_apps(uint32_t boot_flags) {
         }
     }
 
-    if ((boot_flags & BOOTINFO_FLAG_BOOT_TO_DESKTOP) != 0u) {
-        sys_write_debug("init: boot network reconcile deferred to desktop session\n");
-        return;
-    }
-
     {
         char *network_reconcile_argv[3] = {"netmgrd", "reconcile", 0};
         if (sys_launch_app_argv(2, network_reconcile_argv) > 0) {
@@ -319,6 +341,38 @@ static void bootstrap_launch_runtime_service_apps(uint32_t boot_flags) {
         } else {
             sys_write_debug("init: boot network reconcile launch failed\n");
         }
+    }
+}
+
+static void bootstrap_start_deferred_kernel_services(void) {
+    if (sys_service_restart(MK_SERVICE_FILESYSTEM) == 0) {
+        sys_write_debug("init: deferred filesystemsvc launch ok\n");
+    } else {
+        sys_write_debug("init: deferred filesystemsvc launch failed\n");
+    }
+
+    if (sys_service_restart(MK_SERVICE_AUDIO) == 0) {
+        sys_write_debug("init: deferred audiosvc launch ok\n");
+    } else {
+        sys_write_debug("init: deferred audiosvc launch failed\n");
+    }
+
+    if (sys_service_restart(MK_SERVICE_INPUT) == 0) {
+        sys_write_debug("init: deferred inputsvc launch ok\n");
+    } else {
+        sys_write_debug("init: deferred inputsvc launch failed\n");
+    }
+
+    if (sys_service_restart(MK_SERVICE_CONSOLE) == 0) {
+        sys_write_debug("init: deferred consolesvc launch ok\n");
+    } else {
+        sys_write_debug("init: deferred consolesvc launch failed\n");
+    }
+
+    if (sys_service_restart(MK_SERVICE_NETWORK) == 0) {
+        sys_write_debug("init: deferred networksvc launch ok\n");
+    } else {
+        sys_write_debug("init: deferred networksvc launch failed\n");
     }
 }
 
@@ -347,7 +401,8 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     kernel_debug_puts("init: fs_init returned\n");
     bootstrap_storage_smoke_test();
     bootstrap_prime_kernel_service_stack();
-    bootstrap_try_play_boot_sound();
+    bootstrap_start_deferred_kernel_services();
+    bootstrap_try_play_boot_sound(info.boot_flags);
 
     sys_write_debug("init: appfs launcher ready\n");
     kernel_debug_puts("init: appfs launcher ready\n");
@@ -356,7 +411,7 @@ __attribute__((section(".entry"))) void userland_entry(void) {
     kernel_debug_puts("init: banner returned\n");
     bootstrap_launch_runtime_service_apps(info.boot_flags);
 
-    rc = bootstrap_run_startup_apps();
+    rc = bootstrap_run_startup_apps(info.boot_flags);
     if (rc != 0) {
         int shell_pid = sys_launch_builtin_user(USERLAND_BUILTIN_SHELL);
 

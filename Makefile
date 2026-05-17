@@ -103,6 +103,7 @@ QEMU_AUDIO_LIVE_CONTROLLER ?= intel-hda
 QEMU_AUDIO_LIVE_CODEC ?= hda-output
 QEMU_AUDIO_PROBE_BIN := $(shell if command -v $(QEMU) >/dev/null 2>&1; then printf '%s' '$(QEMU)'; elif command -v qemu-system-x86_64 >/dev/null 2>&1; then printf '%s' 'qemu-system-x86_64'; fi)
 QEMU_AUDIO_HAS_COREAUDIO := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'coreaudio'; then printf '1'; fi)
+QEMU_AUDIO_HAS_PIPEWIRE := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'pipewire'; then printf '1'; fi)
 QEMU_AUDIO_HAS_DBUS := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'dbus'; then printf '1'; fi)
 QEMU_AUDIO_HAS_PA := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'pa'; then printf '1'; fi)
 QEMU_AUDIO_HAS_ALSA := $(shell if [ -n "$(QEMU_AUDIO_PROBE_BIN)" ] && $(QEMU_AUDIO_PROBE_BIN) -audiodev help 2>/dev/null | grep -qx 'alsa'; then printf '1'; fi)
@@ -111,12 +112,14 @@ ifeq ($(QEMU_AUDIO_HAS_COREAUDIO),1)
 QEMU_AUDIO_DRIVER ?= coreaudio
 endif
 else ifeq ($(UNAME_S),Linux)
-ifeq ($(QEMU_AUDIO_HAS_DBUS),1)
-QEMU_AUDIO_DRIVER ?= dbus
+ifeq ($(QEMU_AUDIO_HAS_PIPEWIRE),1)
+QEMU_AUDIO_DRIVER ?= pipewire
 else ifeq ($(QEMU_AUDIO_HAS_PA),1)
 QEMU_AUDIO_DRIVER ?= pa
 else ifeq ($(QEMU_AUDIO_HAS_ALSA),1)
 QEMU_AUDIO_DRIVER ?= alsa
+else ifeq ($(QEMU_AUDIO_HAS_DBUS),1)
+QEMU_AUDIO_DRIVER ?= dbus
 endif
 endif
 ifeq ($(strip $(QEMU_AUDIO_DRIVER)),)
@@ -124,11 +127,13 @@ QEMU_AUDIO_MACHINE_OPTS ?= -machine $(QEMU_RUN_MACHINE)
 QEMU_AUDIO_OPTS ?= -device $(QEMU_AUDIO_DEVICE)
 QEMU_AUDIO_LIVE_OPTS ?= -device $(QEMU_AUDIO_DEVICE)
 QEMU_AUDIO_HDA_LIVE_OPTS ?= -device intel-hda -device hda-duplex
+QEMU_AUDIO_HDA_OUTPUT_LIVE_OPTS ?= -device intel-hda -device hda-output
 else
 QEMU_AUDIO_MACHINE_OPTS ?= -machine $(QEMU_RUN_MACHINE),pcspk-audiodev=snd0
 QEMU_AUDIO_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
-QEMU_AUDIO_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_LIVE_CONTROLLER) -device $(QEMU_AUDIO_LIVE_CODEC),audiodev=snd0
+QEMU_AUDIO_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
 QEMU_AUDIO_HDA_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0
+QEMU_AUDIO_HDA_OUTPUT_LIVE_OPTS ?= -audiodev $(QEMU_AUDIO_DRIVER),id=snd0 -device intel-hda -device hda-output,audiodev=snd0
 endif
 QEMU_RUN_COMMON_AUDIO_OPTS ?= $(QEMU_AUDIO_MACHINE_OPTS) -cpu $(QEMU_RUN_CPU) -smp $(QEMU_RUN_SMP) $(QEMU_RUN_VIDEO_OPTS) $(QEMU_RUN_RTC_OPTS) $(QEMU_RUN_USB_OPTS)
 QEMU_AUDIO_CAPTURE_OPTS ?= -audiodev wav,id=snd0,path=$(QEMU_AUDIO_CAPTURE_WAV) -device $(QEMU_AUDIO_DEVICE),audiodev=snd0
@@ -283,6 +288,65 @@ WALLPAPER_RUNTIME_PNG := $(BUILD_DIR)/wallpaper-runtime.png
 WALLPAPER_RUNTIME_W := 1360
 WALLPAPER_RUNTIME_H := 720
 BOOTLOADER_BG_SRC := assets/bootloader_background.png
+ICON_THEME_INDEX_SRC := assets/icons/index.theme
+ICON_APP_DEFAULT_48_SRC := assets/icons/apps/48/application-default-icon.png
+ICON_APP_DEFAULT_16_SRC := assets/icons/apps/16/application-default-icon.png
+ICON_TERMINAL_16_SRC := assets/icons/apps/16/utilities-terminal.png
+ICON_CLOCK_16_SRC := assets/icons/apps/16/clock.png
+ICON_CALCULATOR_16_SRC := assets/icons/apps/16/accessories-calculator.png
+ICON_EDITOR_24_SRC := assets/icons/apps/24/accessories-text-editor.png
+ICON_TASKS_16_SRC := assets/icons/apps/16/utilities-system-monitor.png
+ICON_IMAGEVIEWER_16_SRC := assets/icons/apps/16/camera-photo.png
+ICON_WALLPAPER_16_SRC := assets/icons/apps/16/preferences-desktop-wallpaper.png
+ICON_PREFERENCES_16_SRC := assets/icons/apps/16/preferences-desktop.png
+ICON_APP_MENU_16_SRC := assets/icons/apps/16/package_applications.png
+ICON_NETWORK_16_SRC := assets/icons/apps/16/preferences-system-network.png
+ICON_TEXT_16_SRC := assets/icons/apps/16/text.png
+ICON_AUDIO_PLAYER_16_SRC := assets/icons/apps/16/multimedia-audio-player.png
+ICON_AUDIO_PLAYER_24_SRC := assets/icons/apps/24/audio-player.png
+ICON_SKETCHPAD_22_SRC := assets/icons/apps/22/preferences-desktop-theme.png
+ICON_GAME_SNAKE_16_SRC := assets/icons/apps/16/ksnake.png
+ICON_GAME_BOARD_16_SRC := assets/icons/apps/16/package_games_board.png
+ICON_GAME_MINES_16_SRC := assets/icons/apps/16/kmines.png
+ICON_GAME_ARCADE_16_SRC := assets/icons/apps/16/package_games_arcade.png
+ICON_GAME_INVADERS_16_SRC := assets/icons/apps/16/kspaceduel.png
+ICON_CRAFT_24_SRC := assets/icons/apps/24/craft.png
+ICON_CRAFT_48_SRC := assets/icons/apps/48/craft.png
+ICON_FOLDER_16_SRC := assets/icons/places/16/folder.png
+ICON_TRASH_16_SRC := assets/icons/places/16/user-trash.png
+ICON_FOLDER_OPEN_32_SRC := assets/icons/places/32/folder_open.png
+ICON_FOLDER_DOCS_32_SRC := assets/icons/places/32/folder-documents.png
+ICON_FOLDER_MUSIC_32_SRC := assets/icons/places/32/folder-music.png
+ICON_FOLDER_PICTURES_32_SRC := assets/icons/places/32/folder-pictures.png
+ICON_FOLDER_VIDEO_32_SRC := assets/icons/places/32/folder-video.png
+ICON_ACTION_GO_UP_16_SRC := assets/icons/actions/16/go-up.png
+ICON_ACTION_OPEN_16_SRC := assets/icons/actions/16/document-open.png
+ICON_ACTION_NEW_16_SRC := assets/icons/actions/16/document-new.png
+ICON_ACTION_COPY_16_SRC := assets/icons/actions/16/edit-copy.png
+ICON_ACTION_PASTE_16_SRC := assets/icons/actions/16/edit-paste.png
+ICON_ACTION_RENAME_16_SRC := assets/icons/actions/16/item_rename.png
+ICON_ACTION_SAVE_16_SRC := assets/icons/actions/16/filesave.png
+ICON_ACTION_SAVE_AS_16_SRC := assets/icons/actions/16/filesaveas.png
+ICON_ACTION_EXPORT_16_SRC := assets/icons/actions/16/document-export.png
+ICON_ACTION_CANCEL_16_SRC := assets/icons/actions/16/cancel.png
+ICON_ACTION_APPLY_16_SRC := assets/icons/actions/16/gtk-apply.png
+ICON_ACTION_WINDOW_CLOSE_16_SRC := assets/icons/actions/16/window-close.png
+ICON_ACTION_WINDOW_NEW_16_SRC := assets/icons/actions/16/window-new.png
+ICON_ACTION_GO_DOWN_16_SRC := assets/icons/actions/16/go-down.png
+ICON_ACTION_TRASH_16_SRC := assets/icons/actions/16/edittrash.png
+ICON_FOLDER_48_SRC := assets/icons/places/48/folder.png
+ICON_TRASH_48_SRC := assets/icons/places/48/user-trash.png
+ICON_AUDIO_ZERO_16_SRC := assets/icons/panel/16/audio-volume-low-zero.png
+ICON_AUDIO_LOW_16_SRC := assets/icons/panel/16/audio-volume-low.png
+ICON_AUDIO_MEDIUM_16_SRC := assets/icons/panel/16/audio-volume-medium.png
+ICON_AUDIO_HIGH_16_SRC := assets/icons/panel/16/audio-volume-high.png
+ICON_WIFI_NONE_16_SRC := assets/icons/notifications/16/notification-network-wireless-none.png
+ICON_WIFI_MEDIUM_16_SRC := assets/icons/notifications/16/notification-network-wireless-medium.png
+ICON_WIFI_FULL_16_SRC := assets/icons/notifications/16/notification-network-wireless-full.png
+ICON_ETHERNET_CONNECTED_24_SRC := assets/icons/notifications/24/notification-network-ethernet-connected.png
+ICON_ETHERNET_DISCONNECTED_24_SRC := assets/icons/notifications/24/notification-network-ethernet-disconnected.png
+ICON_THEME_INDEX_BYTES := $(shell wc -c < $(ICON_THEME_INDEX_SRC) | tr -d '[:space:]')
+ICON_THEME_INDEX_SECTORS := $(shell echo $$(( ($(ICON_THEME_INDEX_BYTES) + 511) / 512 )))
 BOOTLOADER_BG_WIDTH := 192
 BOOTLOADER_BG_HEIGHT := 144
 BOOTLOADER_BG_RESAMPLE := box
@@ -297,6 +361,175 @@ WALLPAPER_IMAGE_LBA := $(shell echo $$(( $(CRAFT_SIGN_IMAGE_LBA) + 128 )))
 VIBE_BOOT_WAV_IMAGE_LBA := $(shell echo $$(( $(WALLPAPER_IMAGE_LBA) + $(WALLPAPER_RESERVED_SECTORS) )))
 VIBE_DESKTOP_WAV_IMAGE_LBA := $(shell echo $$(( $(VIBE_BOOT_WAV_IMAGE_LBA) + $(VIBE_BOOT_WAV_RESERVED_SECTORS) )))
 BOOTLOADER_BG_IMAGE_LBA := $(shell echo $$(( $(VIBE_DESKTOP_WAV_IMAGE_LBA) + $(VIBE_DESKTOP_WAV_RESERVED_SECTORS) )))
+ICON_APP_DEFAULT_48_BYTES := $(shell wc -c < $(ICON_APP_DEFAULT_48_SRC) | tr -d '[:space:]')
+ICON_APP_DEFAULT_48_SECTORS := $(shell echo $$(( ($(ICON_APP_DEFAULT_48_BYTES) + 511) / 512 )))
+ICON_APP_DEFAULT_16_BYTES := $(shell wc -c < $(ICON_APP_DEFAULT_16_SRC) | tr -d '[:space:]')
+ICON_APP_DEFAULT_16_SECTORS := $(shell echo $$(( ($(ICON_APP_DEFAULT_16_BYTES) + 511) / 512 )))
+ICON_TERMINAL_16_BYTES := $(shell wc -c < $(ICON_TERMINAL_16_SRC) | tr -d '[:space:]')
+ICON_TERMINAL_16_SECTORS := $(shell echo $$(( ($(ICON_TERMINAL_16_BYTES) + 511) / 512 )))
+ICON_CLOCK_16_BYTES := $(shell wc -c < $(ICON_CLOCK_16_SRC) | tr -d '[:space:]')
+ICON_CLOCK_16_SECTORS := $(shell echo $$(( ($(ICON_CLOCK_16_BYTES) + 511) / 512 )))
+ICON_CALCULATOR_16_BYTES := $(shell wc -c < $(ICON_CALCULATOR_16_SRC) | tr -d '[:space:]')
+ICON_CALCULATOR_16_SECTORS := $(shell echo $$(( ($(ICON_CALCULATOR_16_BYTES) + 511) / 512 )))
+ICON_EDITOR_24_BYTES := $(shell wc -c < $(ICON_EDITOR_24_SRC) | tr -d '[:space:]')
+ICON_EDITOR_24_SECTORS := $(shell echo $$(( ($(ICON_EDITOR_24_BYTES) + 511) / 512 )))
+ICON_TASKS_16_BYTES := $(shell wc -c < $(ICON_TASKS_16_SRC) | tr -d '[:space:]')
+ICON_TASKS_16_SECTORS := $(shell echo $$(( ($(ICON_TASKS_16_BYTES) + 511) / 512 )))
+ICON_IMAGEVIEWER_16_BYTES := $(shell wc -c < $(ICON_IMAGEVIEWER_16_SRC) | tr -d '[:space:]')
+ICON_IMAGEVIEWER_16_SECTORS := $(shell echo $$(( ($(ICON_IMAGEVIEWER_16_BYTES) + 511) / 512 )))
+ICON_WALLPAPER_16_BYTES := $(shell wc -c < $(ICON_WALLPAPER_16_SRC) | tr -d '[:space:]')
+ICON_WALLPAPER_16_SECTORS := $(shell echo $$(( ($(ICON_WALLPAPER_16_BYTES) + 511) / 512 )))
+ICON_PREFERENCES_16_BYTES := $(shell wc -c < $(ICON_PREFERENCES_16_SRC) | tr -d '[:space:]')
+ICON_PREFERENCES_16_SECTORS := $(shell echo $$(( ($(ICON_PREFERENCES_16_BYTES) + 511) / 512 )))
+ICON_APP_MENU_16_BYTES := $(shell wc -c < $(ICON_APP_MENU_16_SRC) | tr -d '[:space:]')
+ICON_APP_MENU_16_SECTORS := $(shell echo $$(( ($(ICON_APP_MENU_16_BYTES) + 511) / 512 )))
+ICON_NETWORK_16_BYTES := $(shell wc -c < $(ICON_NETWORK_16_SRC) | tr -d '[:space:]')
+ICON_NETWORK_16_SECTORS := $(shell echo $$(( ($(ICON_NETWORK_16_BYTES) + 511) / 512 )))
+ICON_TEXT_16_BYTES := $(shell wc -c < $(ICON_TEXT_16_SRC) | tr -d '[:space:]')
+ICON_TEXT_16_SECTORS := $(shell echo $$(( ($(ICON_TEXT_16_BYTES) + 511) / 512 )))
+ICON_AUDIO_PLAYER_16_BYTES := $(shell wc -c < $(ICON_AUDIO_PLAYER_16_SRC) | tr -d '[:space:]')
+ICON_AUDIO_PLAYER_16_SECTORS := $(shell echo $$(( ($(ICON_AUDIO_PLAYER_16_BYTES) + 511) / 512 )))
+ICON_AUDIO_PLAYER_24_BYTES := $(shell wc -c < $(ICON_AUDIO_PLAYER_24_SRC) | tr -d '[:space:]')
+ICON_AUDIO_PLAYER_24_SECTORS := $(shell echo $$(( ($(ICON_AUDIO_PLAYER_24_BYTES) + 511) / 512 )))
+ICON_SKETCHPAD_22_BYTES := $(shell wc -c < $(ICON_SKETCHPAD_22_SRC) | tr -d '[:space:]')
+ICON_SKETCHPAD_22_SECTORS := $(shell echo $$(( ($(ICON_SKETCHPAD_22_BYTES) + 511) / 512 )))
+ICON_GAME_SNAKE_16_BYTES := $(shell wc -c < $(ICON_GAME_SNAKE_16_SRC) | tr -d '[:space:]')
+ICON_GAME_SNAKE_16_SECTORS := $(shell echo $$(( ($(ICON_GAME_SNAKE_16_BYTES) + 511) / 512 )))
+ICON_GAME_BOARD_16_BYTES := $(shell wc -c < $(ICON_GAME_BOARD_16_SRC) | tr -d '[:space:]')
+ICON_GAME_BOARD_16_SECTORS := $(shell echo $$(( ($(ICON_GAME_BOARD_16_BYTES) + 511) / 512 )))
+ICON_GAME_MINES_16_BYTES := $(shell wc -c < $(ICON_GAME_MINES_16_SRC) | tr -d '[:space:]')
+ICON_GAME_MINES_16_SECTORS := $(shell echo $$(( ($(ICON_GAME_MINES_16_BYTES) + 511) / 512 )))
+ICON_GAME_ARCADE_16_BYTES := $(shell wc -c < $(ICON_GAME_ARCADE_16_SRC) | tr -d '[:space:]')
+ICON_GAME_ARCADE_16_SECTORS := $(shell echo $$(( ($(ICON_GAME_ARCADE_16_BYTES) + 511) / 512 )))
+ICON_GAME_INVADERS_16_BYTES := $(shell wc -c < $(ICON_GAME_INVADERS_16_SRC) | tr -d '[:space:]')
+ICON_GAME_INVADERS_16_SECTORS := $(shell echo $$(( ($(ICON_GAME_INVADERS_16_BYTES) + 511) / 512 )))
+ICON_CRAFT_24_BYTES := $(shell wc -c < $(ICON_CRAFT_24_SRC) | tr -d '[:space:]')
+ICON_CRAFT_24_SECTORS := $(shell echo $$(( ($(ICON_CRAFT_24_BYTES) + 511) / 512 )))
+ICON_CRAFT_48_BYTES := $(shell wc -c < $(ICON_CRAFT_48_SRC) | tr -d '[:space:]')
+ICON_CRAFT_48_SECTORS := $(shell echo $$(( ($(ICON_CRAFT_48_BYTES) + 511) / 512 )))
+ICON_FOLDER_16_BYTES := $(shell wc -c < $(ICON_FOLDER_16_SRC) | tr -d '[:space:]')
+ICON_FOLDER_16_SECTORS := $(shell echo $$(( ($(ICON_FOLDER_16_BYTES) + 511) / 512 )))
+ICON_TRASH_16_BYTES := $(shell wc -c < $(ICON_TRASH_16_SRC) | tr -d '[:space:]')
+ICON_TRASH_16_SECTORS := $(shell echo $$(( ($(ICON_TRASH_16_BYTES) + 511) / 512 )))
+ICON_FOLDER_OPEN_32_BYTES := $(shell wc -c < $(ICON_FOLDER_OPEN_32_SRC) | tr -d '[:space:]')
+ICON_FOLDER_OPEN_32_SECTORS := $(shell echo $$(( ($(ICON_FOLDER_OPEN_32_BYTES) + 511) / 512 )))
+ICON_FOLDER_DOCS_32_BYTES := $(shell wc -c < $(ICON_FOLDER_DOCS_32_SRC) | tr -d '[:space:]')
+ICON_FOLDER_DOCS_32_SECTORS := $(shell echo $$(( ($(ICON_FOLDER_DOCS_32_BYTES) + 511) / 512 )))
+ICON_FOLDER_MUSIC_32_BYTES := $(shell wc -c < $(ICON_FOLDER_MUSIC_32_SRC) | tr -d '[:space:]')
+ICON_FOLDER_MUSIC_32_SECTORS := $(shell echo $$(( ($(ICON_FOLDER_MUSIC_32_BYTES) + 511) / 512 )))
+ICON_FOLDER_PICTURES_32_BYTES := $(shell wc -c < $(ICON_FOLDER_PICTURES_32_SRC) | tr -d '[:space:]')
+ICON_FOLDER_PICTURES_32_SECTORS := $(shell echo $$(( ($(ICON_FOLDER_PICTURES_32_BYTES) + 511) / 512 )))
+ICON_FOLDER_VIDEO_32_BYTES := $(shell wc -c < $(ICON_FOLDER_VIDEO_32_SRC) | tr -d '[:space:]')
+ICON_FOLDER_VIDEO_32_SECTORS := $(shell echo $$(( ($(ICON_FOLDER_VIDEO_32_BYTES) + 511) / 512 )))
+ICON_ACTION_GO_UP_16_BYTES := $(shell wc -c < $(ICON_ACTION_GO_UP_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_GO_UP_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_GO_UP_16_BYTES) + 511) / 512 )))
+ICON_ACTION_OPEN_16_BYTES := $(shell wc -c < $(ICON_ACTION_OPEN_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_OPEN_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_OPEN_16_BYTES) + 511) / 512 )))
+ICON_ACTION_NEW_16_BYTES := $(shell wc -c < $(ICON_ACTION_NEW_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_NEW_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_NEW_16_BYTES) + 511) / 512 )))
+ICON_ACTION_COPY_16_BYTES := $(shell wc -c < $(ICON_ACTION_COPY_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_COPY_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_COPY_16_BYTES) + 511) / 512 )))
+ICON_ACTION_PASTE_16_BYTES := $(shell wc -c < $(ICON_ACTION_PASTE_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_PASTE_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_PASTE_16_BYTES) + 511) / 512 )))
+ICON_ACTION_RENAME_16_BYTES := $(shell wc -c < $(ICON_ACTION_RENAME_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_RENAME_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_RENAME_16_BYTES) + 511) / 512 )))
+ICON_ACTION_SAVE_16_BYTES := $(shell wc -c < $(ICON_ACTION_SAVE_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_SAVE_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_SAVE_16_BYTES) + 511) / 512 )))
+ICON_ACTION_SAVE_AS_16_BYTES := $(shell wc -c < $(ICON_ACTION_SAVE_AS_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_SAVE_AS_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_SAVE_AS_16_BYTES) + 511) / 512 )))
+ICON_ACTION_EXPORT_16_BYTES := $(shell wc -c < $(ICON_ACTION_EXPORT_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_EXPORT_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_EXPORT_16_BYTES) + 511) / 512 )))
+ICON_ACTION_CANCEL_16_BYTES := $(shell wc -c < $(ICON_ACTION_CANCEL_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_CANCEL_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_CANCEL_16_BYTES) + 511) / 512 )))
+ICON_ACTION_APPLY_16_BYTES := $(shell wc -c < $(ICON_ACTION_APPLY_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_APPLY_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_APPLY_16_BYTES) + 511) / 512 )))
+ICON_ACTION_WINDOW_CLOSE_16_BYTES := $(shell wc -c < $(ICON_ACTION_WINDOW_CLOSE_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_WINDOW_CLOSE_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_WINDOW_CLOSE_16_BYTES) + 511) / 512 )))
+ICON_ACTION_WINDOW_NEW_16_BYTES := $(shell wc -c < $(ICON_ACTION_WINDOW_NEW_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_WINDOW_NEW_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_WINDOW_NEW_16_BYTES) + 511) / 512 )))
+ICON_ACTION_GO_DOWN_16_BYTES := $(shell wc -c < $(ICON_ACTION_GO_DOWN_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_GO_DOWN_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_GO_DOWN_16_BYTES) + 511) / 512 )))
+ICON_ACTION_TRASH_16_BYTES := $(shell wc -c < $(ICON_ACTION_TRASH_16_SRC) | tr -d '[:space:]')
+ICON_ACTION_TRASH_16_SECTORS := $(shell echo $$(( ($(ICON_ACTION_TRASH_16_BYTES) + 511) / 512 )))
+ICON_FOLDER_48_BYTES := $(shell wc -c < $(ICON_FOLDER_48_SRC) | tr -d '[:space:]')
+ICON_FOLDER_48_SECTORS := $(shell echo $$(( ($(ICON_FOLDER_48_BYTES) + 511) / 512 )))
+ICON_TRASH_48_BYTES := $(shell wc -c < $(ICON_TRASH_48_SRC) | tr -d '[:space:]')
+ICON_TRASH_48_SECTORS := $(shell echo $$(( ($(ICON_TRASH_48_BYTES) + 511) / 512 )))
+ICON_AUDIO_ZERO_16_BYTES := $(shell wc -c < $(ICON_AUDIO_ZERO_16_SRC) | tr -d '[:space:]')
+ICON_AUDIO_ZERO_16_SECTORS := $(shell echo $$(( ($(ICON_AUDIO_ZERO_16_BYTES) + 511) / 512 )))
+ICON_AUDIO_LOW_16_BYTES := $(shell wc -c < $(ICON_AUDIO_LOW_16_SRC) | tr -d '[:space:]')
+ICON_AUDIO_LOW_16_SECTORS := $(shell echo $$(( ($(ICON_AUDIO_LOW_16_BYTES) + 511) / 512 )))
+ICON_AUDIO_MEDIUM_16_BYTES := $(shell wc -c < $(ICON_AUDIO_MEDIUM_16_SRC) | tr -d '[:space:]')
+ICON_AUDIO_MEDIUM_16_SECTORS := $(shell echo $$(( ($(ICON_AUDIO_MEDIUM_16_BYTES) + 511) / 512 )))
+ICON_AUDIO_HIGH_16_BYTES := $(shell wc -c < $(ICON_AUDIO_HIGH_16_SRC) | tr -d '[:space:]')
+ICON_AUDIO_HIGH_16_SECTORS := $(shell echo $$(( ($(ICON_AUDIO_HIGH_16_BYTES) + 511) / 512 )))
+ICON_WIFI_NONE_16_BYTES := $(shell wc -c < $(ICON_WIFI_NONE_16_SRC) | tr -d '[:space:]')
+ICON_WIFI_NONE_16_SECTORS := $(shell echo $$(( ($(ICON_WIFI_NONE_16_BYTES) + 511) / 512 )))
+ICON_WIFI_MEDIUM_16_BYTES := $(shell wc -c < $(ICON_WIFI_MEDIUM_16_SRC) | tr -d '[:space:]')
+ICON_WIFI_MEDIUM_16_SECTORS := $(shell echo $$(( ($(ICON_WIFI_MEDIUM_16_BYTES) + 511) / 512 )))
+ICON_WIFI_FULL_16_BYTES := $(shell wc -c < $(ICON_WIFI_FULL_16_SRC) | tr -d '[:space:]')
+ICON_WIFI_FULL_16_SECTORS := $(shell echo $$(( ($(ICON_WIFI_FULL_16_BYTES) + 511) / 512 )))
+ICON_ETHERNET_CONNECTED_24_BYTES := $(shell wc -c < $(ICON_ETHERNET_CONNECTED_24_SRC) | tr -d '[:space:]')
+ICON_ETHERNET_CONNECTED_24_SECTORS := $(shell echo $$(( ($(ICON_ETHERNET_CONNECTED_24_BYTES) + 511) / 512 )))
+ICON_ETHERNET_DISCONNECTED_24_BYTES := $(shell wc -c < $(ICON_ETHERNET_DISCONNECTED_24_SRC) | tr -d '[:space:]')
+ICON_ETHERNET_DISCONNECTED_24_SECTORS := $(shell echo $$(( ($(ICON_ETHERNET_DISCONNECTED_24_BYTES) + 511) / 512 )))
+ICON_APP_DEFAULT_48_IMAGE_LBA := $(shell echo $$(( $(BOOTLOADER_BG_IMAGE_LBA) + 6312 )))
+ICON_FOLDER_48_IMAGE_LBA := $(shell echo $$(( $(ICON_APP_DEFAULT_48_IMAGE_LBA) + $(ICON_APP_DEFAULT_48_SECTORS) )))
+ICON_TRASH_48_IMAGE_LBA := $(shell echo $$(( $(ICON_FOLDER_48_IMAGE_LBA) + $(ICON_FOLDER_48_SECTORS) )))
+ICON_AUDIO_ZERO_16_IMAGE_LBA := $(shell echo $$(( $(ICON_TRASH_48_IMAGE_LBA) + $(ICON_TRASH_48_SECTORS) )))
+ICON_AUDIO_LOW_16_IMAGE_LBA := $(shell echo $$(( $(ICON_AUDIO_ZERO_16_IMAGE_LBA) + $(ICON_AUDIO_ZERO_16_SECTORS) )))
+ICON_AUDIO_MEDIUM_16_IMAGE_LBA := $(shell echo $$(( $(ICON_AUDIO_LOW_16_IMAGE_LBA) + $(ICON_AUDIO_LOW_16_SECTORS) )))
+ICON_AUDIO_HIGH_16_IMAGE_LBA := $(shell echo $$(( $(ICON_AUDIO_MEDIUM_16_IMAGE_LBA) + $(ICON_AUDIO_MEDIUM_16_SECTORS) )))
+ICON_WIFI_NONE_16_IMAGE_LBA := $(shell echo $$(( $(ICON_AUDIO_HIGH_16_IMAGE_LBA) + $(ICON_AUDIO_HIGH_16_SECTORS) )))
+ICON_WIFI_MEDIUM_16_IMAGE_LBA := $(shell echo $$(( $(ICON_WIFI_NONE_16_IMAGE_LBA) + $(ICON_WIFI_NONE_16_SECTORS) )))
+ICON_WIFI_FULL_16_IMAGE_LBA := $(shell echo $$(( $(ICON_WIFI_MEDIUM_16_IMAGE_LBA) + $(ICON_WIFI_MEDIUM_16_SECTORS) )))
+ICON_ETHERNET_CONNECTED_24_IMAGE_LBA := $(shell echo $$(( $(ICON_WIFI_FULL_16_IMAGE_LBA) + $(ICON_WIFI_FULL_16_SECTORS) )))
+ICON_ETHERNET_DISCONNECTED_24_IMAGE_LBA := $(shell echo $$(( $(ICON_ETHERNET_CONNECTED_24_IMAGE_LBA) + $(ICON_ETHERNET_CONNECTED_24_SECTORS) )))
+ICON_APP_DEFAULT_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ETHERNET_DISCONNECTED_24_IMAGE_LBA) + $(ICON_ETHERNET_DISCONNECTED_24_SECTORS) )))
+ICON_TERMINAL_16_IMAGE_LBA := $(shell echo $$(( $(ICON_APP_DEFAULT_16_IMAGE_LBA) + $(ICON_APP_DEFAULT_16_SECTORS) )))
+ICON_CLOCK_16_IMAGE_LBA := $(shell echo $$(( $(ICON_TERMINAL_16_IMAGE_LBA) + $(ICON_TERMINAL_16_SECTORS) )))
+ICON_CALCULATOR_16_IMAGE_LBA := $(shell echo $$(( $(ICON_CLOCK_16_IMAGE_LBA) + $(ICON_CLOCK_16_SECTORS) )))
+ICON_EDITOR_24_IMAGE_LBA := $(shell echo $$(( $(ICON_CALCULATOR_16_IMAGE_LBA) + $(ICON_CALCULATOR_16_SECTORS) )))
+ICON_TASKS_16_IMAGE_LBA := $(shell echo $$(( $(ICON_EDITOR_24_IMAGE_LBA) + $(ICON_EDITOR_24_SECTORS) )))
+ICON_IMAGEVIEWER_16_IMAGE_LBA := $(shell echo $$(( $(ICON_TASKS_16_IMAGE_LBA) + $(ICON_TASKS_16_SECTORS) )))
+ICON_WALLPAPER_16_IMAGE_LBA := $(shell echo $$(( $(ICON_IMAGEVIEWER_16_IMAGE_LBA) + $(ICON_IMAGEVIEWER_16_SECTORS) )))
+ICON_PREFERENCES_16_IMAGE_LBA := $(shell echo $$(( $(ICON_WALLPAPER_16_IMAGE_LBA) + $(ICON_WALLPAPER_16_SECTORS) )))
+ICON_NETWORK_16_IMAGE_LBA := $(shell echo $$(( $(ICON_PREFERENCES_16_IMAGE_LBA) + $(ICON_PREFERENCES_16_SECTORS) )))
+ICON_FOLDER_16_IMAGE_LBA := $(shell echo $$(( $(ICON_NETWORK_16_IMAGE_LBA) + $(ICON_NETWORK_16_SECTORS) )))
+ICON_TRASH_16_IMAGE_LBA := $(shell echo $$(( $(ICON_FOLDER_16_IMAGE_LBA) + $(ICON_FOLDER_16_SECTORS) )))
+ICON_FOLDER_OPEN_32_IMAGE_LBA := $(shell echo $$(( $(ICON_TRASH_16_IMAGE_LBA) + $(ICON_TRASH_16_SECTORS) )))
+ICON_FOLDER_DOCS_32_IMAGE_LBA := $(shell echo $$(( $(ICON_FOLDER_OPEN_32_IMAGE_LBA) + $(ICON_FOLDER_OPEN_32_SECTORS) )))
+ICON_FOLDER_MUSIC_32_IMAGE_LBA := $(shell echo $$(( $(ICON_FOLDER_DOCS_32_IMAGE_LBA) + $(ICON_FOLDER_DOCS_32_SECTORS) )))
+ICON_FOLDER_PICTURES_32_IMAGE_LBA := $(shell echo $$(( $(ICON_FOLDER_MUSIC_32_IMAGE_LBA) + $(ICON_FOLDER_MUSIC_32_SECTORS) )))
+ICON_FOLDER_VIDEO_32_IMAGE_LBA := $(shell echo $$(( $(ICON_FOLDER_PICTURES_32_IMAGE_LBA) + $(ICON_FOLDER_PICTURES_32_SECTORS) )))
+ICON_ACTION_GO_UP_16_IMAGE_LBA := $(shell echo $$(( $(ICON_FOLDER_VIDEO_32_IMAGE_LBA) + $(ICON_FOLDER_VIDEO_32_SECTORS) )))
+ICON_ACTION_NEW_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_GO_UP_16_IMAGE_LBA) + $(ICON_ACTION_GO_UP_16_SECTORS) )))
+ICON_ACTION_COPY_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_NEW_16_IMAGE_LBA) + $(ICON_ACTION_NEW_16_SECTORS) )))
+ICON_ACTION_PASTE_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_COPY_16_IMAGE_LBA) + $(ICON_ACTION_COPY_16_SECTORS) )))
+ICON_ACTION_TRASH_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_PASTE_16_IMAGE_LBA) + $(ICON_ACTION_PASTE_16_SECTORS) )))
+ICON_AUDIO_PLAYER_24_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_TRASH_16_IMAGE_LBA) + $(ICON_ACTION_TRASH_16_SECTORS) )))
+ICON_THEME_INDEX_IMAGE_LBA := $(shell echo $$(( $(ICON_AUDIO_PLAYER_24_IMAGE_LBA) + $(ICON_AUDIO_PLAYER_24_SECTORS) )))
+ICON_APP_MENU_16_IMAGE_LBA := $(shell echo $$(( $(ICON_THEME_INDEX_IMAGE_LBA) + $(ICON_THEME_INDEX_SECTORS) )))
+ICON_AUDIO_PLAYER_16_IMAGE_LBA := $(shell echo $$(( $(ICON_APP_MENU_16_IMAGE_LBA) + $(ICON_APP_MENU_16_SECTORS) )))
+ICON_TEXT_16_IMAGE_LBA := $(shell echo $$(( $(ICON_AUDIO_PLAYER_16_IMAGE_LBA) + $(ICON_AUDIO_PLAYER_16_SECTORS) )))
+ICON_SKETCHPAD_22_IMAGE_LBA := $(shell echo $$(( $(ICON_TEXT_16_IMAGE_LBA) + $(ICON_TEXT_16_SECTORS) )))
+ICON_GAME_SNAKE_16_IMAGE_LBA := $(shell echo $$(( $(ICON_SKETCHPAD_22_IMAGE_LBA) + $(ICON_SKETCHPAD_22_SECTORS) )))
+ICON_GAME_BOARD_16_IMAGE_LBA := $(shell echo $$(( $(ICON_GAME_SNAKE_16_IMAGE_LBA) + $(ICON_GAME_SNAKE_16_SECTORS) )))
+ICON_GAME_MINES_16_IMAGE_LBA := $(shell echo $$(( $(ICON_GAME_BOARD_16_IMAGE_LBA) + $(ICON_GAME_BOARD_16_SECTORS) )))
+ICON_GAME_ARCADE_16_IMAGE_LBA := $(shell echo $$(( $(ICON_GAME_MINES_16_IMAGE_LBA) + $(ICON_GAME_MINES_16_SECTORS) )))
+ICON_GAME_INVADERS_16_IMAGE_LBA := $(shell echo $$(( $(ICON_GAME_ARCADE_16_IMAGE_LBA) + $(ICON_GAME_ARCADE_16_SECTORS) )))
+ICON_CRAFT_24_IMAGE_LBA := $(shell echo $$(( $(ICON_GAME_INVADERS_16_IMAGE_LBA) + $(ICON_GAME_INVADERS_16_SECTORS) )))
+ICON_CRAFT_48_IMAGE_LBA := $(shell echo $$(( $(ICON_CRAFT_24_IMAGE_LBA) + $(ICON_CRAFT_24_SECTORS) )))
+ICON_ACTION_OPEN_16_IMAGE_LBA := $(shell echo $$(( $(ICON_CRAFT_48_IMAGE_LBA) + $(ICON_CRAFT_48_SECTORS) )))
+ICON_ACTION_RENAME_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_OPEN_16_IMAGE_LBA) + $(ICON_ACTION_OPEN_16_SECTORS) )))
+ICON_ACTION_SAVE_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_RENAME_16_IMAGE_LBA) + $(ICON_ACTION_RENAME_16_SECTORS) )))
+ICON_ACTION_SAVE_AS_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_SAVE_16_IMAGE_LBA) + $(ICON_ACTION_SAVE_16_SECTORS) )))
+ICON_ACTION_EXPORT_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_SAVE_AS_16_IMAGE_LBA) + $(ICON_ACTION_SAVE_AS_16_SECTORS) )))
+ICON_ACTION_CANCEL_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_EXPORT_16_IMAGE_LBA) + $(ICON_ACTION_EXPORT_16_SECTORS) )))
+ICON_ACTION_APPLY_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_CANCEL_16_IMAGE_LBA) + $(ICON_ACTION_CANCEL_16_SECTORS) )))
+ICON_ACTION_WINDOW_CLOSE_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_APPLY_16_IMAGE_LBA) + $(ICON_ACTION_APPLY_16_SECTORS) )))
+ICON_ACTION_WINDOW_NEW_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_WINDOW_CLOSE_16_IMAGE_LBA) + $(ICON_ACTION_WINDOW_CLOSE_16_SECTORS) )))
+ICON_ACTION_GO_DOWN_16_IMAGE_LBA := $(shell echo $$(( $(ICON_ACTION_WINDOW_NEW_16_IMAGE_LBA) + $(ICON_ACTION_WINDOW_NEW_16_SECTORS) )))
 IMAGE_ASSET_MANIFEST := $(BUILD_DIR)/image-assets.manifest
 DATA_IMAGE := $(BUILD_DIR)/data-partition.img
 DATA_IMAGE_MANIFEST := $(BUILD_DIR)/data-partition.manifest
@@ -341,6 +574,7 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/modules/fs.c \
 	$(USERLAND_DIR)/modules/bmp.c \
 	$(USERLAND_DIR)/modules/image.c \
+	$(USERLAND_DIR)/modules/icon_theme.c \
 	$(USERLAND_DIR)/modules/lang_loader.c \
 	$(USERLAND_DIR)/modules/utils.c \
 	$(USERLAND_DIR)/modules/syscalls.c \
@@ -394,6 +628,8 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/applications/sketchpad.c \
 	$(USERLAND_DIR)/applications/games/snake.c \
 	$(USERLAND_DIR)/applications/games/tetris.c \
+	$(USERLAND_DIR)/applications/games/game_2048.c \
+	$(USERLAND_DIR)/applications/games/minesweeper.c \
 	$(USERLAND_DIR)/applications/games/pacman.c \
 	$(USERLAND_DIR)/applications/games/space_invaders.c \
 	$(USERLAND_DIR)/applications/games/pong.c \
@@ -542,9 +778,9 @@ DOOM_SYMBOL_REMAP = \
 	-Dlseek=doom_lseek \
 	-Dfstat=doom_fstat \
 	-Dexit=doom_exit
-DOOM_CFLAGS = -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython -Ilang/glibc/include -DNORMALUNIX -DLINUX -DSEEK_SET=0 -DSEEK_CUR=1 -DSEEK_END=2 -include stdio.h -include stdlib.h -include string.h -include userland/applications/games/doom_port/doom_libc_shim.h -Wno-sequence-point -Wno-unused-const-variable -Wno-unused-but-set-variable $(DOOM_SYMBOL_REMAP)
+DOOM_CFLAGS = -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -I. -Iuserland/lua/include -idirafter headers -Iuserland -Ilang/include -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython -DNORMALUNIX -DLINUX -DSEEK_SET=0 -DSEEK_CUR=1 -DSEEK_END=2 -include stdio.h -include stdlib.h -include string.h -include userland/applications/games/doom_port/doom_libc_shim.h -Wno-sequence-point -Wno-unused-const-variable -Wno-unused-but-set-variable $(DOOM_SYMBOL_REMAP)
 DOOM_PORT_SRC_DIR := $(USERLAND_DIR)/applications/games/doom_port
-DOOM_PORT_CFLAGS = $(CFLAGS) -include userland/applications/games/doom_port/doom_libc_shim.h $(DOOM_SYMBOL_REMAP)
+DOOM_PORT_CFLAGS = $(CFLAGS) -Iuserland/lua/include -include userland/applications/games/doom_port/doom_libc_shim.h $(DOOM_SYMBOL_REMAP)
 
 USERLAND_OBJS += $(DOOM_CORE_OBJS)
 
@@ -597,14 +833,15 @@ USERLAND_MAIN_BIN := $(BUILD_DIR)/userland-main.bin
 BOOTLOADER_BG_BIN := $(BUILD_DIR)/bootloader-bg.bin
 IMAGE := $(BUILD_DIR)/boot.img
 
-CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -Werror -I. -Iheaders -Iuserland -Ilang/include -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
-CFLAGS += -Ilang/glibc/include
+CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -I. -idirafter headers -Iuserland -Ilang/include -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
 CFLAGS += -I$(APP_CATALOG_GENERATED_DIR)
 CFLAGS += -MMD -MP
+LUA_CFLAGS := -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src
 INTEL_I915_EXPERIMENTAL_COMMIT ?= 0
 CFLAGS += -DINTEL_I915_EXPERIMENTAL_COMMIT=$(INTEL_I915_EXPERIMENTAL_COMMIT)
 VIDEO_DRM_TEST_FORCE_HANDOFF_FAIL ?= 0
 CFLAGS += -DVIDEO_DRM_TEST_FORCE_HANDOFF_FAIL=$(VIDEO_DRM_TEST_FORCE_HANDOFF_FAIL)
+KERNEL_CFLAGS := $(CFLAGS) -D__VIBE_KERNEL__
 LDFLAGS_KERNEL := -m elf_i386 -T $(LINKER_DIR)/kernel.ld -nostdlib -N --allow-multiple-definition
 LDFLAGS_USERLAND := -m elf_i386 -T $(LINKER_DIR)/userland.ld -nostdlib -N
 LDFLAGS_APP := -m elf_i386 -T $(LINKER_DIR)/app.ld -nostdlib -N
@@ -654,6 +891,15 @@ NETCTL_APP_OBJS := \
 	$(NETCTL_APP_BUILD_DIR)/netctl_main.o
 NETCTL_APP_ELF := $(BUILD_DIR)/lang/netctl.elf
 NETCTL_APP_BIN := $(BUILD_DIR)/lang/netctl.app
+
+FOXXOD_APP_BUILD_DIR := $(BUILD_DIR)/lang/foxxod
+FOXXOD_APP_OBJS := \
+	$(FOXXOD_APP_BUILD_DIR)/app_entry.o \
+	$(FOXXOD_APP_BUILD_DIR)/app_runtime.o \
+	$(FOXXOD_APP_BUILD_DIR)/foxxod_main.o \
+	$(BUILD_DIR)/userland/modules/syscalls.o
+FOXXOD_APP_ELF := $(BUILD_DIR)/lang/foxxod.elf
+FOXXOD_APP_BIN := $(BUILD_DIR)/lang/foxxod.app
 
 JS_APP_BUILD_DIR := $(BUILD_DIR)/lang/js
 JS_APP_OBJS := \
@@ -743,6 +989,7 @@ DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/modules/fs.c \
 	$(USERLAND_DIR)/modules/bmp.c \
 	$(USERLAND_DIR)/modules/image.c \
+	$(USERLAND_DIR)/modules/icon_theme.c \
 	$(USERLAND_DIR)/modules/lang_loader.c \
 	$(USERLAND_DIR)/modules/utils.c \
 	$(USERLAND_DIR)/modules/syscalls.c \
@@ -763,6 +1010,8 @@ DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/applications/sketchpad.c \
 	$(USERLAND_DIR)/applications/games/snake.c \
 	$(USERLAND_DIR)/applications/games/tetris.c \
+	$(USERLAND_DIR)/applications/games/game_2048.c \
+	$(USERLAND_DIR)/applications/games/minesweeper.c \
 	$(USERLAND_DIR)/applications/games/pacman.c \
 	$(USERLAND_DIR)/applications/games/space_invaders.c \
 	$(USERLAND_DIR)/applications/games/pong.c \
@@ -819,6 +1068,8 @@ DESKTOP_LAUNCHER_APPS := \
 	sketchpad \
 	snake \
 	tetris \
+	2048 \
+	minesweeper \
 	pacman \
 	space_invaders \
 	pong \
@@ -842,6 +1093,8 @@ IMAGEVIEWER_APP_BIN := $(BUILD_DIR)/lang/imageviewer.app
 SKETCHPAD_APP_BIN := $(BUILD_DIR)/lang/sketchpad.app
 SNAKE_APP_BIN := $(BUILD_DIR)/lang/snake.app
 TETRIS_APP_BIN := $(BUILD_DIR)/lang/tetris.app
+GAME2048_APP_BIN := $(BUILD_DIR)/lang/2048.app
+MINESWEEPER_APP_BIN := $(BUILD_DIR)/lang/minesweeper.app
 PACMAN_APP_BIN := $(BUILD_DIR)/lang/pacman.app
 SPACE_INVADERS_APP_BIN := $(BUILD_DIR)/lang/space_invaders.app
 PONG_APP_BIN := $(BUILD_DIR)/lang/pong.app
@@ -974,13 +1227,14 @@ BOOT_SMOKE_APP_BINS := \
 	$(SOUNDCTL_APP_BIN) \
 	$(AUDIOSVC_APP_BIN) \
 	$(NETMGRD_APP_BIN) \
-	$(NETCTL_APP_BIN)
+	$(NETCTL_APP_BIN) \
+	$(FOXXOD_APP_BIN)
 
 # Include compatibility layer build rules
 include Build.compat.mk
 
 REQUIRED_BUILD_TOOLS := $(AS) $(CC) $(LD) $(NM) $(OBJCOPY) $(AR) $(RANLIB) $(PYTHON)
-REQUIRED_IMAGE_TOOLS := $(MKFS_FAT_TOOL) $(MCOPY_TOOL) $(MMD_TOOL)
+REQUIRED_IMAGE_TOOLS := $(MKFS_FAT_TOOL)
 
 all: check-tools $(IMAGE)
 # Optional legacy monolithic payload for experiments outside the default image.
@@ -997,7 +1251,7 @@ check-tools:
 		if ! command -v $$tool >/dev/null 2>&1; then \
 			echo "Erro: '$$tool' nao encontrado no PATH."; \
 			if [ "$(UNAME_S)" = "Darwin" ]; then \
-				echo "macOS: use uma cross-toolchain i686-elf/x86_64-elf e instale nasm/qemu/mtools."; \
+				echo "macOS: use uma cross-toolchain i686-elf/x86_64-elf e instale nasm/qemu."; \
 			else \
 				echo "Linux: instale binutils/gcc 32-bit + nasm + qemu-system-x86"; \
 				echo "Ou use toolchain cruzada i686-elf-*."; \
@@ -1009,10 +1263,9 @@ check-tools:
 		if ! command -v $$tool >/dev/null 2>&1; then \
 			echo "Erro: '$$tool' nao encontrado no PATH."; \
 			if [ "$(UNAME_S)" = "Darwin" ]; then \
-				echo "macOS: newfs_msdos ja pode vir no sistema, mas mtools (mcopy/mmd) ainda sao necessarios."; \
-				echo "Homebrew: brew install mtools"; \
+				echo "macOS: instale um formatador FAT32 compativel como mkfs.fat (dosfstools) ou use newfs_msdos."; \
 			else \
-				echo "Instale os utilitarios de imagem FAT32/mtools (ex.: dosfstools + mtools)."; \
+				echo "Instale um formatador FAT32 compativel (ex.: dosfstools)."; \
 			fi; \
 			exit 1; \
 		fi; \
@@ -1076,11 +1329,11 @@ $(BUILD_DIR)/userland/applications/games/craft:
 	@true
 $(BUILD_DIR)/userland/applications/games/DOOM:
 	@true
-$(BUILD_DIR)/kernel/drivers/video/video.o: CFLAGS += -msse2
+$(BUILD_DIR)/kernel/drivers/video/video.o: KERNEL_CFLAGS += -msse2
 
 $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(if $(filter kernel/%,$<),$(KERNEL_CFLAGS),$(CFLAGS)) -c $< -o $@
 
 $(BUILD_DIR)/userland/applications/games/craft/upstream/deps/lodepng/lodepng.o: userland/applications/games/craft/upstream/deps/lodepng/lodepng.c
 	@mkdir -p $(dir $@)
@@ -1160,6 +1413,18 @@ $(NETCTL_APP_BUILD_DIR)/netctl_main.o: lang/apps/netctl/netctl_main.c | $(BUILD_
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(FOXXOD_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"foxxod\" -DVIBE_APP_BUILD_HEAP_SIZE=65536u -c $< -o $@
+
+$(FOXXOD_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(FOXXOD_APP_BUILD_DIR)/foxxod_main.o: lang/apps/foxxod/foxxod_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(JS_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"js\" -DVIBE_APP_BUILD_HEAP_SIZE=65536u -c $< -o $@
@@ -1227,7 +1492,7 @@ $(LUA_APP_BUILD_DIR):
 
 $(LUA_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR) $(LUA_APP_BUILD_DIR)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -DVIBE_USERLAND_APP -c $< -o $@
+	$(CC) $(CFLAGS) $(LUA_CFLAGS) -DVIBE_USERLAND_APP -c $< -o $@
 
 $(SECTORC_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
@@ -1304,6 +1569,15 @@ $(NETCTL_APP_ELF): $(NETCTL_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(NETCTL_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(NETCTL_APP_BIN): $(NETCTL_APP_ELF)
+	cp $< $<.keep
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
+
+$(FOXXOD_APP_ELF): $(FOXXOD_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(FOXXOD_APP_OBJS) -o $@ $(LIBGCC_A)
+
+$(FOXXOD_APP_BIN): $(FOXXOD_APP_ELF)
 	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
@@ -1464,7 +1738,7 @@ $(VIBE_BOOTLOADER_AUDIO_RAW): $(VIBE_BOOT_WAV_SRC) | $(BUILD_DIR)
 		--output $@ \
 		--sample-rate $(VIBE_BOOTLOADER_AUDIO_RATE)
 
-$(DATA_IMAGE): $(IMAGE_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC) $(WALLPAPER_RUNTIME_PNG) $(VIBE_BOOT_WAV_SRC) $(VIBE_DESKTOP_WAV_SRC) $(BOOTLOADER_BG_SRC)
+$(DATA_IMAGE): $(IMAGE_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FONT_SRC) $(CRAFT_SKY_SRC) $(CRAFT_SIGN_SRC) $(WALLPAPER_RUNTIME_PNG) $(VIBE_BOOT_WAV_SRC) $(VIBE_DESKTOP_WAV_SRC) $(BOOTLOADER_BG_SRC) $(ICON_THEME_INDEX_SRC) $(ICON_APP_DEFAULT_48_SRC) $(ICON_APP_DEFAULT_16_SRC) $(ICON_TERMINAL_16_SRC) $(ICON_CLOCK_16_SRC) $(ICON_CALCULATOR_16_SRC) $(ICON_EDITOR_24_SRC) $(ICON_TASKS_16_SRC) $(ICON_IMAGEVIEWER_16_SRC) $(ICON_WALLPAPER_16_SRC) $(ICON_PREFERENCES_16_SRC) $(ICON_APP_MENU_16_SRC) $(ICON_NETWORK_16_SRC) $(ICON_TEXT_16_SRC) $(ICON_AUDIO_PLAYER_16_SRC) $(ICON_AUDIO_PLAYER_24_SRC) $(ICON_SKETCHPAD_22_SRC) $(ICON_GAME_SNAKE_16_SRC) $(ICON_GAME_BOARD_16_SRC) $(ICON_GAME_MINES_16_SRC) $(ICON_GAME_ARCADE_16_SRC) $(ICON_GAME_INVADERS_16_SRC) $(ICON_CRAFT_24_SRC) $(ICON_CRAFT_48_SRC) $(ICON_FOLDER_16_SRC) $(ICON_TRASH_16_SRC) $(ICON_FOLDER_OPEN_32_SRC) $(ICON_FOLDER_DOCS_32_SRC) $(ICON_FOLDER_MUSIC_32_SRC) $(ICON_FOLDER_PICTURES_32_SRC) $(ICON_FOLDER_VIDEO_32_SRC) $(ICON_ACTION_GO_UP_16_SRC) $(ICON_ACTION_OPEN_16_SRC) $(ICON_ACTION_NEW_16_SRC) $(ICON_ACTION_COPY_16_SRC) $(ICON_ACTION_PASTE_16_SRC) $(ICON_ACTION_RENAME_16_SRC) $(ICON_ACTION_SAVE_16_SRC) $(ICON_ACTION_SAVE_AS_16_SRC) $(ICON_ACTION_EXPORT_16_SRC) $(ICON_ACTION_CANCEL_16_SRC) $(ICON_ACTION_APPLY_16_SRC) $(ICON_ACTION_WINDOW_CLOSE_16_SRC) $(ICON_ACTION_WINDOW_NEW_16_SRC) $(ICON_ACTION_GO_DOWN_16_SRC) $(ICON_ACTION_TRASH_16_SRC) $(ICON_FOLDER_48_SRC) $(ICON_TRASH_48_SRC) $(ICON_AUDIO_ZERO_16_SRC) $(ICON_AUDIO_LOW_16_SRC) $(ICON_AUDIO_MEDIUM_16_SRC) $(ICON_AUDIO_HIGH_16_SRC) $(ICON_WIFI_NONE_16_SRC) $(ICON_WIFI_MEDIUM_16_SRC) $(ICON_WIFI_FULL_16_SRC) $(ICON_ETHERNET_CONNECTED_24_SRC) $(ICON_ETHERNET_DISCONNECTED_24_SRC)
 	$(PYTHON) tools/build_data_partition.py \
 		--image $@ \
 		--image-total-sectors $(DATA_PARTITION_SECTORS) \
@@ -1482,6 +1756,63 @@ $(DATA_IMAGE): $(IMAGE_APP_BINS) $(DOOM_WAD_SRC) $(CRAFT_TEXTURE_SRC) $(CRAFT_FO
 		--asset "$(VIBE_BOOT_WAV_SRC):$(VIBE_BOOT_WAV_IMAGE_LBA):vibe_os_boot.wav" \
 		--asset "$(VIBE_DESKTOP_WAV_SRC):$(VIBE_DESKTOP_WAV_IMAGE_LBA):vibe_os_desktop.wav" \
 		--asset "$(BOOTLOADER_BG_SRC):$(BOOTLOADER_BG_IMAGE_LBA):bootloader_background.png" \
+		--asset "$(ICON_APP_DEFAULT_48_SRC):$(ICON_APP_DEFAULT_48_IMAGE_LBA):icons/apps/48/application-default-icon.png" \
+		--asset "$(ICON_APP_DEFAULT_16_SRC):$(ICON_APP_DEFAULT_16_IMAGE_LBA):icons/apps/16/application-default-icon.png" \
+		--asset "$(ICON_TERMINAL_16_SRC):$(ICON_TERMINAL_16_IMAGE_LBA):icons/apps/16/utilities-terminal.png" \
+		--asset "$(ICON_CLOCK_16_SRC):$(ICON_CLOCK_16_IMAGE_LBA):icons/apps/16/clock.png" \
+		--asset "$(ICON_CALCULATOR_16_SRC):$(ICON_CALCULATOR_16_IMAGE_LBA):icons/apps/16/accessories-calculator.png" \
+		--asset "$(ICON_EDITOR_24_SRC):$(ICON_EDITOR_24_IMAGE_LBA):icons/apps/24/accessories-text-editor.png" \
+		--asset "$(ICON_TASKS_16_SRC):$(ICON_TASKS_16_IMAGE_LBA):icons/apps/16/utilities-system-monitor.png" \
+		--asset "$(ICON_IMAGEVIEWER_16_SRC):$(ICON_IMAGEVIEWER_16_IMAGE_LBA):icons/apps/16/camera-photo.png" \
+		--asset "$(ICON_WALLPAPER_16_SRC):$(ICON_WALLPAPER_16_IMAGE_LBA):icons/apps/16/preferences-desktop-wallpaper.png" \
+		--asset "$(ICON_PREFERENCES_16_SRC):$(ICON_PREFERENCES_16_IMAGE_LBA):icons/apps/16/preferences-desktop.png" \
+		--asset "$(ICON_APP_MENU_16_SRC):$(ICON_APP_MENU_16_IMAGE_LBA):icons/apps/16/package_applications.png" \
+		--asset "$(ICON_NETWORK_16_SRC):$(ICON_NETWORK_16_IMAGE_LBA):icons/apps/16/preferences-system-network.png" \
+		--asset "$(ICON_TEXT_16_SRC):$(ICON_TEXT_16_IMAGE_LBA):icons/apps/16/text.png" \
+		--asset "$(ICON_AUDIO_PLAYER_16_SRC):$(ICON_AUDIO_PLAYER_16_IMAGE_LBA):icons/apps/16/multimedia-audio-player.png" \
+		--asset "$(ICON_AUDIO_PLAYER_24_SRC):$(ICON_AUDIO_PLAYER_24_IMAGE_LBA):icons/apps/24/audio-player.png" \
+		--asset "$(ICON_SKETCHPAD_22_SRC):$(ICON_SKETCHPAD_22_IMAGE_LBA):icons/apps/22/preferences-desktop-theme.png" \
+		--asset "$(ICON_GAME_SNAKE_16_SRC):$(ICON_GAME_SNAKE_16_IMAGE_LBA):icons/apps/16/ksnake.png" \
+		--asset "$(ICON_GAME_BOARD_16_SRC):$(ICON_GAME_BOARD_16_IMAGE_LBA):icons/apps/16/package_games_board.png" \
+		--asset "$(ICON_GAME_MINES_16_SRC):$(ICON_GAME_MINES_16_IMAGE_LBA):icons/apps/16/kmines.png" \
+		--asset "$(ICON_GAME_ARCADE_16_SRC):$(ICON_GAME_ARCADE_16_IMAGE_LBA):icons/apps/16/package_games_arcade.png" \
+		--asset "$(ICON_GAME_INVADERS_16_SRC):$(ICON_GAME_INVADERS_16_IMAGE_LBA):icons/apps/16/kspaceduel.png" \
+		--asset "$(ICON_CRAFT_24_SRC):$(ICON_CRAFT_24_IMAGE_LBA):icons/apps/24/craft.png" \
+		--asset "$(ICON_CRAFT_48_SRC):$(ICON_CRAFT_48_IMAGE_LBA):icons/apps/48/craft.png" \
+		--asset "$(ICON_FOLDER_16_SRC):$(ICON_FOLDER_16_IMAGE_LBA):icons/places/16/folder.png" \
+		--asset "$(ICON_TRASH_16_SRC):$(ICON_TRASH_16_IMAGE_LBA):icons/places/16/user-trash.png" \
+		--asset "$(ICON_FOLDER_OPEN_32_SRC):$(ICON_FOLDER_OPEN_32_IMAGE_LBA):icons/places/32/folder_open.png" \
+		--asset "$(ICON_FOLDER_DOCS_32_SRC):$(ICON_FOLDER_DOCS_32_IMAGE_LBA):icons/places/32/folder-documents.png" \
+		--asset "$(ICON_FOLDER_MUSIC_32_SRC):$(ICON_FOLDER_MUSIC_32_IMAGE_LBA):icons/places/32/folder-music.png" \
+		--asset "$(ICON_FOLDER_PICTURES_32_SRC):$(ICON_FOLDER_PICTURES_32_IMAGE_LBA):icons/places/32/folder-pictures.png" \
+		--asset "$(ICON_FOLDER_VIDEO_32_SRC):$(ICON_FOLDER_VIDEO_32_IMAGE_LBA):icons/places/32/folder-video.png" \
+		--asset "$(ICON_ACTION_GO_UP_16_SRC):$(ICON_ACTION_GO_UP_16_IMAGE_LBA):icons/actions/16/go-up.png" \
+		--asset "$(ICON_ACTION_OPEN_16_SRC):$(ICON_ACTION_OPEN_16_IMAGE_LBA):icons/actions/16/document-open.png" \
+		--asset "$(ICON_ACTION_NEW_16_SRC):$(ICON_ACTION_NEW_16_IMAGE_LBA):icons/actions/16/document-new.png" \
+		--asset "$(ICON_ACTION_COPY_16_SRC):$(ICON_ACTION_COPY_16_IMAGE_LBA):icons/actions/16/edit-copy.png" \
+		--asset "$(ICON_ACTION_PASTE_16_SRC):$(ICON_ACTION_PASTE_16_IMAGE_LBA):icons/actions/16/edit-paste.png" \
+		--asset "$(ICON_ACTION_RENAME_16_SRC):$(ICON_ACTION_RENAME_16_IMAGE_LBA):icons/actions/16/item_rename.png" \
+		--asset "$(ICON_ACTION_SAVE_16_SRC):$(ICON_ACTION_SAVE_16_IMAGE_LBA):icons/actions/16/filesave.png" \
+		--asset "$(ICON_ACTION_SAVE_AS_16_SRC):$(ICON_ACTION_SAVE_AS_16_IMAGE_LBA):icons/actions/16/filesaveas.png" \
+		--asset "$(ICON_ACTION_EXPORT_16_SRC):$(ICON_ACTION_EXPORT_16_IMAGE_LBA):icons/actions/16/document-export.png" \
+		--asset "$(ICON_ACTION_CANCEL_16_SRC):$(ICON_ACTION_CANCEL_16_IMAGE_LBA):icons/actions/16/cancel.png" \
+		--asset "$(ICON_ACTION_APPLY_16_SRC):$(ICON_ACTION_APPLY_16_IMAGE_LBA):icons/actions/16/gtk-apply.png" \
+		--asset "$(ICON_ACTION_WINDOW_CLOSE_16_SRC):$(ICON_ACTION_WINDOW_CLOSE_16_IMAGE_LBA):icons/actions/16/window-close.png" \
+		--asset "$(ICON_ACTION_WINDOW_NEW_16_SRC):$(ICON_ACTION_WINDOW_NEW_16_IMAGE_LBA):icons/actions/16/window-new.png" \
+		--asset "$(ICON_ACTION_GO_DOWN_16_SRC):$(ICON_ACTION_GO_DOWN_16_IMAGE_LBA):icons/actions/16/go-down.png" \
+		--asset "$(ICON_ACTION_TRASH_16_SRC):$(ICON_ACTION_TRASH_16_IMAGE_LBA):icons/actions/16/edittrash.png" \
+		--asset "$(ICON_THEME_INDEX_SRC):$(ICON_THEME_INDEX_IMAGE_LBA):icons/index.theme" \
+		--asset "$(ICON_FOLDER_48_SRC):$(ICON_FOLDER_48_IMAGE_LBA):icons/places/48/folder.png" \
+		--asset "$(ICON_TRASH_48_SRC):$(ICON_TRASH_48_IMAGE_LBA):icons/places/48/user-trash.png" \
+		--asset "$(ICON_AUDIO_ZERO_16_SRC):$(ICON_AUDIO_ZERO_16_IMAGE_LBA):icons/panel/16/audio-volume-low-zero.png" \
+		--asset "$(ICON_AUDIO_LOW_16_SRC):$(ICON_AUDIO_LOW_16_IMAGE_LBA):icons/panel/16/audio-volume-low.png" \
+		--asset "$(ICON_AUDIO_MEDIUM_16_SRC):$(ICON_AUDIO_MEDIUM_16_IMAGE_LBA):icons/panel/16/audio-volume-medium.png" \
+		--asset "$(ICON_AUDIO_HIGH_16_SRC):$(ICON_AUDIO_HIGH_16_IMAGE_LBA):icons/panel/16/audio-volume-high.png" \
+		--asset "$(ICON_WIFI_NONE_16_SRC):$(ICON_WIFI_NONE_16_IMAGE_LBA):icons/notifications/16/notification-network-wireless-none.png" \
+		--asset "$(ICON_WIFI_MEDIUM_16_SRC):$(ICON_WIFI_MEDIUM_16_IMAGE_LBA):icons/notifications/16/notification-network-wireless-medium.png" \
+		--asset "$(ICON_WIFI_FULL_16_SRC):$(ICON_WIFI_FULL_16_IMAGE_LBA):icons/notifications/16/notification-network-wireless-full.png" \
+		--asset "$(ICON_ETHERNET_CONNECTED_24_SRC):$(ICON_ETHERNET_CONNECTED_24_IMAGE_LBA):icons/notifications/24/notification-network-ethernet-connected.png" \
+		--asset "$(ICON_ETHERNET_DISCONNECTED_24_SRC):$(ICON_ETHERNET_DISCONNECTED_24_IMAGE_LBA):icons/notifications/24/notification-network-ethernet-disconnected.png" \
 		$(IMAGE_APP_BINS)
 	@cp $(DATA_IMAGE_MANIFEST) $(IMAGE_ASSET_MANIFEST)
 
@@ -1524,7 +1855,7 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOO
 		--boot-file "$(BOOTLOADER_BG_BIN)::/VIBEBG.BIN" \
 		--boot-file "$(VIBE_BOOTLOADER_AUDIO_RAW)::/VIBEBOOT.RAW" \
 		--boot-file "$(BOOT_VOLUME_MANIFEST)::/LAYOUT.TXT" \
-		--boot-file "$(BOOT_POLICY_MANIFEST)::/BOOTPOLICY.TXT" \
+		--boot-file "$(BOOT_POLICY_MANIFEST)::/BOOTPOL.TXT" \
 		--boot-file "$(DATA_IMAGE_MANIFEST)::/DATAINFO.TXT"
 	@echo "Imagem gerada: $(IMAGE)"
 
@@ -1823,6 +2154,10 @@ validate-phase-c: $(IMAGE)
 validate-network-surface: $(IMAGE)
 	$(PYTHON) tools/validate_network_surface.py --image $(IMAGE) --report build/network-surface-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
+validate-network-terminal-surface: $(IMAGE)
+	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report build/network-terminal-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) \
+		--scenario network-terminal-surface
+
 validate-video:
 	$(MAKE) validate-phase-d
 	$(MAKE) validate-gpu-backends-recovery
@@ -1857,6 +2192,9 @@ validate-audio-stack-long: $(IMAGE)
 validate-audio-stack-roundtrip: $(IMAGE)
 	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-stack-roundtrip-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --record-ms 1500 --verify-capture-playback
 
+validate-audio-hda-output: $(IMAGE)
+	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-hda-output-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --audio-device intel-hda --audio-device hda-output --expect-backend compat-azalia --skip-capture --verify-playback-path /assets/vibe_os_desktop.wav --require-path-programmed --require-hardware-diag --require-desktop-startup-sound
+
 validate-audio-hda-smoke: $(IMAGE)
 	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-hda-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --audio-device intel-hda --audio-device hda-duplex --expect-backend compat-azalia --skip-capture
 
@@ -1865,6 +2203,18 @@ validate-audio-hda-playback: $(IMAGE)
 
 validate-audio-hda-startup: $(IMAGE)
 	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-hda-startup-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --audio-device intel-hda --audio-device hda-duplex --expect-backend compat-azalia --skip-capture --require-boot-startup-sound --require-desktop-startup-sound
+
+validate-audio-pcspkr-startup: $(IMAGE)
+	$(PYTHON) tools/validate_audio_stack.py --image $(IMAGE) --report build/audio-pcspkr-startup-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --machine 'pc,pcspk-audiodev=snd0' --no-default-audio-device --qemu-arg=-audiodev --qemu-arg=wav,id=snd0,path=build/audio-pcspkr-startup.wav --expect-backend pcspkr --skip-capture --require-boot-startup-sound --require-desktop-startup-sound
+
+validate-audio-matrix: $(IMAGE)
+	$(MAKE) validate-audio-stack
+	$(MAKE) validate-audio-stack-roundtrip
+	$(MAKE) validate-audio-hda-output
+	$(MAKE) validate-audio-hda-smoke
+	$(MAKE) validate-audio-hda-playback
+	$(MAKE) validate-audio-hda-startup
+	$(MAKE) validate-audio-pcspkr-startup
 
 validate-gpu-backends: $(IMAGE)
 	$(PYTHON) tools/validate_gpu_backends.py --image $(IMAGE) --report $(GPU_BACKENDS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
@@ -1917,6 +2267,16 @@ validate-startx-1024x768:
 	rm -f $(STAGE2_BIN) $(IMAGE)
 	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=1024 -DBOOT_PREFERRED_VIDEO_HEIGHT=768" $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --scenario startx-autoboot-desktop --scenario vidmodes-shell --scenario input-restart-desktop --scenario audio-restart-desktop --scenario network-restart-desktop --scenario video-restart-desktop --expect-boot-mode 1024x768 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-abi-compat-surface:
+	rm -f $(STAGE2_BIN) $(IMAGE)
+	$(MAKE) BOOT_NASM_DEFINES="-DBOOT_PREFERRED_VIDEO_WIDTH=800 -DBOOT_PREFERRED_VIDEO_HEIGHT=600" $(IMAGE)
+	$(PYTHON) tools/validate_modular_apps.py --scenario bsd-utils-terminal-surface --scenario vi-compat-editor --scenario mg-compat-editor --expect-boot-mode 800x600 --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
+validate-abi-final:
+	$(MAKE) compat-build
+	$(PYTHON) tools/validate_abi_contracts.py
+	$(MAKE) validate-abi-compat-surface
 
 validate-doom-800x600:
 	rm -f $(STAGE2_BIN) $(IMAGE)

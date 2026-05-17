@@ -21,6 +21,7 @@ void yield(void);
 
 /* mark when timer-driven preemption may safely switch tasks */
 void scheduler_set_preemption_ready(int ready);
+void scheduler_set_task_events_ready(int ready);
 
 /* schedule from an interrupt/yield trap and return the frame to resume */
 kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int preemptive);

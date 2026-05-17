@@ -68,6 +68,7 @@ typedef struct FILE {
 
 static const struct vibe_app_context *g_app_ctx = 0;
 static struct heap_block *g_heap_head = 0;
+static volatile int g_heap_lock = 0;
 static void (*g_atexit_handlers[16])(void);
 static int g_atexit_count = 0;
 static FILE g_file_pool[VIBE_APP_MAX_OPEN_FILES];
@@ -147,6 +148,17 @@ static void coalesce_blocks(void) {
     }
 }
 
+static void heap_lock(void) {
+    while (__sync_lock_test_and_set(&g_heap_lock, 1) != 0) {
+        (void)vibe_app_syscall5(VIBE_APP_SYSCALL_YIELD, 0, 0, 0, 0, 0);
+    }
+}
+
+static void heap_unlock(void) {
+    __sync_synchronize();
+    __sync_lock_release(&g_heap_lock);
+}
+
 const struct vibe_app_context *vibe_app_get_context(void) {
     return g_app_ctx;
 }
@@ -159,6 +171,7 @@ void vibe_app_runtime_init(const struct vibe_app_context *ctx) {
     memset(g_file_pool, 0, sizeof(g_file_pool));
     memset(g_thread_pool, 0, sizeof(g_thread_pool));
     g_next_file_fd = 3;
+    g_heap_lock = 0;
     if (ctx) {
         heap_init(ctx->heap_base, ctx->heap_size);
         if (ctx->host && ctx->host->write_debug) {
@@ -469,6 +482,7 @@ void *vibe_app_malloc(size_t size) {
     struct heap_block *block;
     int guard = 0;
     int trace = size >= 65536u;
+    void *result = 0;
 
     if (size == 0u) {
         return 0;
@@ -481,24 +495,29 @@ void *vibe_app_malloc(size_t size) {
         g_app_ctx->host->write_debug("vibe_app_malloc: begin\n");
     }
 
+    heap_lock();
     block = g_heap_head;
     while (block) {
         if (++guard > 16384) {
             if (g_app_ctx && g_app_ctx->host && g_app_ctx->host->write_debug) {
                 g_app_ctx->host->write_debug("vibe_app_malloc: heap loop detected\n");
             }
+            heap_unlock();
             return 0;
         }
         if (block->free && block->size >= size) {
             split_block(block, size);
             block->free = 0;
+            result = block_payload(block);
+            heap_unlock();
             if (trace && g_app_ctx && g_app_ctx->host && g_app_ctx->host->write_debug) {
                 g_app_ctx->host->write_debug("vibe_app_malloc: ok\n");
             }
-            return block_payload(block);
+            return result;
         }
         block = block->next;
     }
+    heap_unlock();
 
     if (g_app_ctx && g_app_ctx->host && g_app_ctx->host->write_debug) {
         g_app_ctx->host->write_debug("vibe_app_malloc: out of memory\n");
@@ -517,13 +536,16 @@ void vibe_app_free(void *ptr) {
     if (!ptr) {
         return;
     }
+    heap_lock();
     payload_block(ptr)->free = 1;
     coalesce_blocks();
+    heap_unlock();
 }
 
 void *vibe_app_realloc(void *ptr, size_t size) {
     void *new_ptr;
     struct heap_block *block;
+    size_t old_size;
 
     if (ptr == 0) {
         return vibe_app_malloc(size);
@@ -533,16 +555,20 @@ void *vibe_app_realloc(void *ptr, size_t size) {
         return 0;
     }
 
+    heap_lock();
     block = payload_block(ptr);
-    if (block->size >= size) {
+    old_size = block->size;
+    if (old_size >= size) {
+        heap_unlock();
         return ptr;
     }
+    heap_unlock();
 
     new_ptr = vibe_app_malloc(size);
     if (!new_ptr) {
         return 0;
     }
-    memcpy(new_ptr, ptr, block->size);
+    memcpy(new_ptr, ptr, old_size);
     vibe_app_free(ptr);
     return new_ptr;
 }

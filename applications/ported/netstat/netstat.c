@@ -1,5 +1,6 @@
 #include "compat/include/compat.h"
 #include <lang/include/vibe_app_runtime.h>
+#include "applications/ported/include/network_diag_common.h"
 
 static const char *netstat_link_state_name(uint32_t state) {
     switch (state) {
@@ -106,5 +107,8 @@ int vibe_app_main(int argc, char **argv) {
            (unsigned)status.backend_rx_frames,
            (unsigned)status.backend_tx_frames);
     printf("note: live socket table export is not implemented; readiness/backlog telemetry reflects the current local/socket MVP\n");
+    netdiag_debugf("netstat: telemetry ok active=%s lease=%s\n",
+                   active_if,
+                   netstat_lease_state_name(&status));
     return 0;
 }

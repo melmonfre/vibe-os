@@ -8,19 +8,38 @@
 #define VIBE_APP_ABI_VERSION 1u
 #define VIBE_APP_NAME_MAX 16u
 
+#define VIBE_APP_COMPAT_LOAD_ADDR_20260325 0x02000000u
+#define VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 0x04000000u
+#define VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325 0x06000000u
+
 #define VIBE_APP_LOAD_ADDR 0x10000000u
 #define VIBE_APP_DESKTOP_LOAD_ADDR 0x14000000u
-#define VIBE_APP_BOOT_LOAD_ADDR 0x18000000u
-#define VIBE_APP_ARENA_SIZE 0x01000000u
-#define VIBE_APP_STACK_SIZE 0x00010000u
+#define VIBE_APP_BOOT_LOAD_ADDR 0x38000000u
+#define VIBE_APP_ARENA_SIZE 0x04000000u
+#define VIBE_APP_DESKTOP_ARENA_SIZE 0x24000000u
+#define VIBE_APP_BOOT_ARENA_SIZE 0x01000000u
+#define VIBE_APP_STACK_SIZE 0x00100000u
+#define VIBE_APP_DESKTOP_STACK_SIZE 0x01000000u
+#define VIBE_APP_BOOT_STACK_SIZE VIBE_APP_STACK_SIZE
 #define VIBE_APP_STACK_TOP (VIBE_APP_LOAD_ADDR + VIBE_APP_ARENA_SIZE)
-#define VIBE_APP_DESKTOP_STACK_TOP (VIBE_APP_DESKTOP_LOAD_ADDR + VIBE_APP_ARENA_SIZE)
-#define VIBE_APP_BOOT_STACK_TOP (VIBE_APP_BOOT_LOAD_ADDR + VIBE_APP_ARENA_SIZE)
+#define VIBE_APP_DESKTOP_STACK_TOP (VIBE_APP_DESKTOP_LOAD_ADDR + VIBE_APP_DESKTOP_ARENA_SIZE)
+#define VIBE_APP_BOOT_STACK_TOP (VIBE_APP_BOOT_LOAD_ADDR + VIBE_APP_BOOT_ARENA_SIZE)
 #define VIBE_APP_RESERVED_TOP VIBE_APP_BOOT_STACK_TOP
 
 struct vibe_app_stat {
     int size;
     int is_dir;
+};
+
+struct vibe_app_header_legacy {
+    uint32_t magic;
+    uint16_t abi_version;
+    uint16_t header_size;
+    uint32_t image_size;
+    uint32_t memory_size;
+    uint32_t entry_offset;
+    uint32_t required_heap_size;
+    char name[VIBE_APP_NAME_MAX];
 };
 
 struct vibe_app_header {
@@ -68,5 +87,10 @@ struct vibe_app_context {
 };
 
 typedef int (*vibe_app_entry_t)(const struct vibe_app_context *ctx, int argc, char **argv);
+
+_Static_assert(sizeof(struct vibe_app_header_legacy) == 40u,
+               "legacy vibe_app_header layout must stay packed at 40 bytes");
+_Static_assert(sizeof(struct vibe_app_header) == 44u,
+               "current vibe_app_header layout must stay packed at 44 bytes");
 
 #endif

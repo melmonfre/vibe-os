@@ -15,6 +15,8 @@ enum app_type {
     APP_SKETCHPAD,
     APP_SNAKE,
     APP_TETRIS,
+    APP_2048,
+    APP_MINESWEEPER,
     APP_PACMAN,
     APP_SPACE_INVADERS,
     APP_PONG,
@@ -39,6 +41,8 @@ enum app_type {
 #define MAX_SKETCHPADS 1
 #define MAX_SNAKES 1
 #define MAX_TETRIS 1
+#define MAX_2048_GAMES 1
+#define MAX_MINESWEEPERS 1
 #define MAX_PACMAN 1
 #define MAX_SPACE_INVADERS 1
 #define MAX_PONG 1

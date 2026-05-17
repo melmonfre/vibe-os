@@ -44,6 +44,7 @@ static int netmgrd_write_state_file(const char *path,
                                     const char *auto_ssid,
                                     const char *manager_mode,
                                     const char *lease_source);
+static int netmgrd_write_runtime_hosts_file(const struct mk_network_status *status);
 static int netmgrd_export_runtime_state(const char *manager_mode, const char *lease_source);
 static int netmgrd_status_matches_target(const struct mk_network_status *status,
                                          uint32_t expected_kind,
@@ -819,13 +820,16 @@ static int netmgrd_export_runtime_state(const char *manager_mode, const char *le
                                     (int)sizeof(auto_ssid)) != 0) {
         return -1;
     }
-    return netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
-                                    &info,
-                                    &status,
-                                    saved_count,
-                                    auto_ssid,
-                                    manager_mode,
-                                    lease_source);
+    if (netmgrd_write_state_file(NETMGRD_STATUS_EXPORT_PATH,
+                                 &info,
+                                 &status,
+                                 saved_count,
+                                 auto_ssid,
+                                 manager_mode,
+                                 lease_source) != 0) {
+        return -1;
+    }
+    return netmgrd_write_runtime_hosts_file(&status);
 }
 
 static int netmgrd_connect_ethernet_with_runtime_state(const char *manager_mode,
@@ -1146,6 +1150,49 @@ static int netmgrd_write_state_file(const char *path,
     return vibe_app_write_file(target, text, (int)strlen(text));
 }
 
+static int netmgrd_write_runtime_hosts_file(const struct mk_network_status *status) {
+    char text[512];
+    int offset = 0;
+
+    if (status == 0) {
+        return -1;
+    }
+    (void)vibe_app_create_dir("/runtime");
+    offset += snprintf(text + offset,
+                       sizeof(text) - (size_t)offset,
+                       "127.0.0.1 localhost lo0 loopback\n");
+    if (status->ip_address[0] != '\0' && strcmp(status->ip_address, "-") != 0) {
+        offset += snprintf(text + offset,
+                           sizeof(text) - (size_t)offset,
+                           "%s vibe vibe.local\n",
+                           status->ip_address);
+        if (status->active_if[0] != '\0' && strcmp(status->active_if, "-") != 0) {
+            offset += snprintf(text + offset,
+                               sizeof(text) - (size_t)offset,
+                               "%s %s\n",
+                               status->ip_address,
+                               status->active_if);
+        }
+    }
+    if (status->gateway[0] != '\0' && strcmp(status->gateway, "-") != 0) {
+        offset += snprintf(text + offset,
+                           sizeof(text) - (size_t)offset,
+                           "%s gateway router gw\n",
+                           status->gateway);
+    }
+    if (status->dns_server[0] != '\0' && strcmp(status->dns_server, "-") != 0) {
+        offset += snprintf(text + offset,
+                           sizeof(text) - (size_t)offset,
+                           "%s dns resolver nameserver\n",
+                           status->dns_server);
+    }
+    if (offset < 0 || (size_t)offset >= sizeof(text)) {
+        offset = (int)sizeof(text) - 1;
+        text[offset] = '\0';
+    }
+    return vibe_app_write_file("/runtime/net-hosts.txt", text, (int)strlen(text));
+}
+
 static int netmgrd_command_status(void) {
     struct mk_network_info info;
     struct mk_network_status status;
@@ -1257,7 +1304,6 @@ static int netmgrd_command_export_state(const char *path) {
         printf("netmgrd: failed to write %s\n", target);
         return 1;
     }
-    printf("state exported to %s\n", target);
     return 0;
 }
 

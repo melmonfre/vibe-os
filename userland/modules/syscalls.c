@@ -1,5 +1,52 @@
 #include <userland/modules/include/syscalls.h>
 
+#include <stdlib.h>
+#include <string.h>
+
+static uint8_t *g_sys_blit_clip_buffer = 0;
+static size_t g_sys_blit_clip_buffer_capacity = 0u;
+
+static const uint8_t *sys_pack_clipped_blit_region(const uint8_t *src,
+                                                   int src_pitch,
+                                                   int src_off_x,
+                                                   int src_off_y,
+                                                   int width,
+                                                   int height) {
+    size_t row_bytes;
+    size_t total_bytes;
+    uint8_t *dst;
+
+    if (src == 0 || src_pitch <= 0 || width <= 0 || height <= 0 ||
+        src_off_x < 0 || src_off_y < 0) {
+        return 0;
+    }
+
+    row_bytes = (size_t)width;
+    total_bytes = row_bytes * (size_t)height;
+    if (total_bytes == 0u) {
+        return 0;
+    }
+    if (total_bytes > g_sys_blit_clip_buffer_capacity) {
+        dst = (uint8_t *)realloc(g_sys_blit_clip_buffer, total_bytes);
+        if (dst == 0) {
+            return 0;
+        }
+        g_sys_blit_clip_buffer = dst;
+        g_sys_blit_clip_buffer_capacity = total_bytes;
+    }
+
+    dst = g_sys_blit_clip_buffer;
+    for (int row = 0; row < height; ++row) {
+        const uint8_t *src_row = src + ((size_t)(src_off_y + row) * (size_t)src_pitch) + (size_t)src_off_x;
+        memcpy(dst + ((size_t)row * row_bytes), src_row, row_bytes);
+    }
+    return dst;
+}
+
+extern int clip_rect(int *out_x, int *out_y, int *out_w, int *out_h,
+                     int x, int y, int w, int h) __attribute__((weak));
+extern int clip_intersects(int x, int y, int w, int h) __attribute__((weak));
+
 static inline int syscall5(int num, int a, int b, int c, int d, int e) {
     int ret;
     __asm__ volatile("int $0x80"
@@ -7,6 +54,175 @@ static inline int syscall5(int num, int a, int b, int c, int d, int e) {
                      : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
                      : "memory", "cc");
     return ret;
+}
+
+static void sys_text_measure(const char *text, int *out_w, int *out_h) {
+    int line_len = 0;
+    int max_len = 0;
+    int line_count = 1;
+
+    if (out_w == 0 || out_h == 0) {
+        return;
+    }
+
+    *out_w = 0;
+    *out_h = 0;
+    if (text == 0 || *text == '\0') {
+        return;
+    }
+
+    while (*text != '\0') {
+        if (*text == '\n') {
+            if (line_len > max_len) {
+                max_len = line_len;
+            }
+            line_len = 0;
+            line_count += 1;
+        } else {
+            line_len += 1;
+        }
+        ++text;
+    }
+
+    if (line_len > max_len) {
+        max_len = line_len;
+    }
+    *out_w = max_len > 0 ? (max_len * 6) - 1 : 0;
+    *out_h = ((line_count - 1) * 8) + 7;
+}
+
+static char sys_text_uppercase_char(char c) {
+    if (c >= 'a' && c <= 'z') {
+        return (char)(c - 'a' + 'A');
+    }
+    return c;
+}
+
+static uint8_t sys_text_font_row_bits(char c, int row) {
+    c = sys_text_uppercase_char(c);
+    switch (c) {
+    case 'A': { static const uint8_t g[7] = {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}; return g[row]; }
+    case 'B': { static const uint8_t g[7] = {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}; return g[row]; }
+    case 'C': { static const uint8_t g[7] = {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}; return g[row]; }
+    case 'D': { static const uint8_t g[7] = {0x1C,0x12,0x11,0x11,0x11,0x12,0x1C}; return g[row]; }
+    case 'E': { static const uint8_t g[7] = {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}; return g[row]; }
+    case 'F': { static const uint8_t g[7] = {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}; return g[row]; }
+    case 'G': { static const uint8_t g[7] = {0x0E,0x11,0x10,0x17,0x11,0x11,0x0E}; return g[row]; }
+    case 'H': { static const uint8_t g[7] = {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}; return g[row]; }
+    case 'I': { static const uint8_t g[7] = {0x1F,0x04,0x04,0x04,0x04,0x04,0x1F}; return g[row]; }
+    case 'J': { static const uint8_t g[7] = {0x1F,0x02,0x02,0x02,0x12,0x12,0x0C}; return g[row]; }
+    case 'K': { static const uint8_t g[7] = {0x11,0x12,0x14,0x18,0x14,0x12,0x11}; return g[row]; }
+    case 'L': { static const uint8_t g[7] = {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}; return g[row]; }
+    case 'M': { static const uint8_t g[7] = {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}; return g[row]; }
+    case 'N': { static const uint8_t g[7] = {0x11,0x11,0x19,0x15,0x13,0x11,0x11}; return g[row]; }
+    case 'O': { static const uint8_t g[7] = {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}; return g[row]; }
+    case 'P': { static const uint8_t g[7] = {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}; return g[row]; }
+    case 'Q': { static const uint8_t g[7] = {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}; return g[row]; }
+    case 'R': { static const uint8_t g[7] = {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}; return g[row]; }
+    case 'S': { static const uint8_t g[7] = {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}; return g[row]; }
+    case 'T': { static const uint8_t g[7] = {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}; return g[row]; }
+    case 'U': { static const uint8_t g[7] = {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}; return g[row]; }
+    case 'V': { static const uint8_t g[7] = {0x11,0x11,0x11,0x11,0x11,0x0A,0x04}; return g[row]; }
+    case 'W': { static const uint8_t g[7] = {0x11,0x11,0x11,0x15,0x15,0x1B,0x11}; return g[row]; }
+    case 'X': { static const uint8_t g[7] = {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}; return g[row]; }
+    case 'Y': { static const uint8_t g[7] = {0x11,0x11,0x0A,0x04,0x04,0x04,0x04}; return g[row]; }
+    case 'Z': { static const uint8_t g[7] = {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}; return g[row]; }
+    case '0': { static const uint8_t g[7] = {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}; return g[row]; }
+    case '1': { static const uint8_t g[7] = {0x04,0x0C,0x14,0x04,0x04,0x04,0x1F}; return g[row]; }
+    case '2': { static const uint8_t g[7] = {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}; return g[row]; }
+    case '3': { static const uint8_t g[7] = {0x1E,0x01,0x01,0x0E,0x01,0x01,0x1E}; return g[row]; }
+    case '4': { static const uint8_t g[7] = {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}; return g[row]; }
+    case '5': { static const uint8_t g[7] = {0x1F,0x10,0x10,0x1E,0x01,0x01,0x1E}; return g[row]; }
+    case '6': { static const uint8_t g[7] = {0x0E,0x10,0x10,0x1E,0x11,0x11,0x0E}; return g[row]; }
+    case '7': { static const uint8_t g[7] = {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}; return g[row]; }
+    case '8': { static const uint8_t g[7] = {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}; return g[row]; }
+    case '9': { static const uint8_t g[7] = {0x0E,0x11,0x11,0x0F,0x01,0x01,0x0E}; return g[row]; }
+    case '>': { static const uint8_t g[7] = {0x10,0x08,0x04,0x02,0x04,0x08,0x10}; return g[row]; }
+    case '<': { static const uint8_t g[7] = {0x01,0x02,0x04,0x08,0x04,0x02,0x01}; return g[row]; }
+    case ':': { static const uint8_t g[7] = {0x00,0x04,0x04,0x00,0x04,0x04,0x00}; return g[row]; }
+    case '-': { static const uint8_t g[7] = {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}; return g[row]; }
+    case '_': { static const uint8_t g[7] = {0x00,0x00,0x00,0x00,0x00,0x00,0x1F}; return g[row]; }
+    case '.': { static const uint8_t g[7] = {0x00,0x00,0x00,0x00,0x00,0x0C,0x0C}; return g[row]; }
+    case '/': { static const uint8_t g[7] = {0x01,0x02,0x04,0x08,0x10,0x00,0x00}; return g[row]; }
+    case '\\': { static const uint8_t g[7] = {0x10,0x08,0x04,0x02,0x01,0x00,0x00}; return g[row]; }
+    case '[': { static const uint8_t g[7] = {0x0E,0x08,0x08,0x08,0x08,0x08,0x0E}; return g[row]; }
+    case ']': { static const uint8_t g[7] = {0x0E,0x02,0x02,0x02,0x02,0x02,0x0E}; return g[row]; }
+    case '=': { static const uint8_t g[7] = {0x00,0x00,0x1F,0x00,0x1F,0x00,0x00}; return g[row]; }
+    case '+': { static const uint8_t g[7] = {0x00,0x04,0x04,0x1F,0x04,0x04,0x00}; return g[row]; }
+    case '(':{ static const uint8_t g[7] = {0x02,0x04,0x08,0x08,0x08,0x04,0x02}; return g[row]; }
+    case ')':{ static const uint8_t g[7] = {0x08,0x04,0x02,0x02,0x02,0x04,0x08}; return g[row]; }
+    case '?':{ static const uint8_t g[7] = {0x0E,0x11,0x01,0x02,0x04,0x00,0x04}; return g[row]; }
+    case '!':{ static const uint8_t g[7] = {0x04,0x04,0x04,0x04,0x04,0x00,0x04}; return g[row]; }
+    case ' ': return 0x00;
+    default: { static const uint8_t g[7] = {0x1F,0x01,0x05,0x09,0x11,0x00,0x11}; return g[row]; }
+    }
+}
+
+static void sys_draw_text_fallback(int x, int y, uint8_t color, const char *text) {
+    int origin_x = x;
+    int cx = x;
+    int cy = y;
+
+    if (text == 0) {
+        return;
+    }
+
+    while (*text != '\0') {
+        char c = *text++;
+
+        if (c == '\n') {
+            cx = origin_x;
+            cy += 8;
+            continue;
+        }
+
+        for (int row = 0; row < 7; ++row) {
+            uint8_t bits = sys_text_font_row_bits(c, row);
+            int run_start = -1;
+
+            for (int col = 0; col < 5; ++col) {
+                if (bits & (1u << (4 - col))) {
+                    if (run_start < 0) {
+                        run_start = col;
+                    }
+                } else if (run_start >= 0) {
+                    sys_rect(cx + run_start, cy + row, col - run_start, 1, color);
+                    run_start = -1;
+                }
+            }
+
+            if (run_start >= 0) {
+                sys_rect(cx + run_start, cy + row, 5 - run_start, 1, color);
+            }
+        }
+
+        cx += 6;
+    }
+}
+
+static int sys_clip_rect_or_passthrough(int *out_x,
+                                        int *out_y,
+                                        int *out_w,
+                                        int *out_h,
+                                        int x,
+                                        int y,
+                                        int w,
+                                        int h) {
+    if (clip_rect != 0) {
+        return clip_rect(out_x, out_y, out_w, out_h, x, y, w, h);
+    }
+    *out_x = x;
+    *out_y = y;
+    *out_w = w;
+    *out_h = h;
+    return w > 0 && h > 0;
+}
+
+static int sys_clip_intersects_or_passthrough(int x, int y, int w, int h) {
+    if (clip_intersects != 0) {
+        return clip_intersects(x, y, w, h);
+    }
+    return w > 0 && h > 0;
 }
 
 int sys_poll_mouse(struct mouse_state *state) {
@@ -26,11 +242,42 @@ void sys_clear(uint8_t color) {
 }
 
 void sys_rect(int x, int y, int w, int h, uint8_t color) {
-    (void)syscall5(SYSCALL_GFX_RECT, x, y, w, h, color);
+    int clipped_x;
+    int clipped_y;
+    int clipped_w;
+    int clipped_h;
+
+    if (!sys_clip_rect_or_passthrough(&clipped_x, &clipped_y, &clipped_w, &clipped_h,
+                                      x, y, w, h)) {
+        return;
+    }
+    (void)syscall5(SYSCALL_GFX_RECT, clipped_x, clipped_y, clipped_w, clipped_h, color);
 }
 
 void sys_text(int x, int y, uint8_t color, const char *text) {
-    (void)syscall5(SYSCALL_GFX_TEXT, x, y, (int)(uintptr_t)text, color, 0);
+    int w;
+    int h;
+    int clipped_x;
+    int clipped_y;
+    int clipped_w;
+    int clipped_h;
+
+    sys_text_measure(text, &w, &h);
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+
+    if (!sys_clip_rect_or_passthrough(&clipped_x, &clipped_y, &clipped_w, &clipped_h,
+                                      x, y, w, h)) {
+        return;
+    }
+
+    if (clipped_x == x && clipped_y == y && clipped_w == w && clipped_h == h) {
+        (void)syscall5(SYSCALL_GFX_TEXT, x, y, (int)(uintptr_t)text, color, 0);
+        return;
+    }
+
+    sys_draw_text_fallback(x, y, color, text);
 }
 
 void sys_present(void) {
@@ -87,7 +334,44 @@ int sys_gfx_get_palette(uint8_t *rgb_triplets) {
 }
 
 void sys_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale) {
-    int packed_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
+    int packed_wh;
+
+    if (src == 0 || src_w <= 0 || src_h <= 0 || scale <= 0) {
+        return;
+    }
+    if (scale == 1) {
+        int clipped_x;
+        int clipped_y;
+        int clipped_w;
+        int clipped_h;
+        int src_off_x;
+        int src_off_y;
+
+        if (!sys_clip_rect_or_passthrough(&clipped_x, &clipped_y, &clipped_w, &clipped_h,
+                                          dst_x, dst_y, src_w, src_h)) {
+            return;
+        }
+        src_off_x = clipped_x - dst_x;
+        src_off_y = clipped_y - dst_y;
+        if (src_off_x != 0 || src_off_y != 0 ||
+            clipped_w != src_w || clipped_h != src_h) {
+            src = sys_pack_clipped_blit_region(src,
+                                               src_w,
+                                               src_off_x,
+                                               src_off_y,
+                                               clipped_w,
+                                               clipped_h);
+            if (src == 0) {
+                return;
+            }
+        }
+        src_w = clipped_w;
+        src_h = clipped_h;
+        dst_x = clipped_x;
+        dst_y = clipped_y;
+    }
+
+    packed_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
     (void)syscall5(SYSCALL_GFX_BLIT8,
                    (int)(uintptr_t)src,
                    packed_wh,
@@ -97,7 +381,44 @@ void sys_gfx_blit8(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_
 }
 
 void sys_gfx_blit8_present(const uint8_t *src, int src_w, int src_h, int dst_x, int dst_y, int scale) {
-    int packed_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
+    int packed_wh;
+
+    if (src == 0 || src_w <= 0 || src_h <= 0 || scale <= 0) {
+        return;
+    }
+    if (scale == 1) {
+        int clipped_x;
+        int clipped_y;
+        int clipped_w;
+        int clipped_h;
+        int src_off_x;
+        int src_off_y;
+
+        if (!sys_clip_rect_or_passthrough(&clipped_x, &clipped_y, &clipped_w, &clipped_h,
+                                          dst_x, dst_y, src_w, src_h)) {
+            return;
+        }
+        src_off_x = clipped_x - dst_x;
+        src_off_y = clipped_y - dst_y;
+        if (src_off_x != 0 || src_off_y != 0 ||
+            clipped_w != src_w || clipped_h != src_h) {
+            src = sys_pack_clipped_blit_region(src,
+                                               src_w,
+                                               src_off_x,
+                                               src_off_y,
+                                               clipped_w,
+                                               clipped_h);
+            if (src == 0) {
+                return;
+            }
+        }
+        src_w = clipped_w;
+        src_h = clipped_h;
+        dst_x = clipped_x;
+        dst_y = clipped_y;
+    }
+
+    packed_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
     (void)syscall5(SYSCALL_GFX_BLIT8_PRESENT,
                    (int)(uintptr_t)src,
                    packed_wh,
@@ -110,6 +431,13 @@ void sys_gfx_blit8_stretch(const uint8_t *src, int src_w, int src_h,
                            int dst_x, int dst_y, int dst_w, int dst_h) {
     int packed_src_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
     int packed_dst_wh = ((dst_h & 0xFFFF) << 16) | (dst_w & 0xFFFF);
+
+    if (src == 0 || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
+        return;
+    }
+    if (!sys_clip_intersects_or_passthrough(dst_x, dst_y, dst_w, dst_h)) {
+        return;
+    }
     (void)syscall5(SYSCALL_GFX_BLIT8_STRETCH,
                    (int)(uintptr_t)src,
                    packed_src_wh,
@@ -122,6 +450,13 @@ void sys_gfx_blit8_stretch_present(const uint8_t *src, int src_w, int src_h,
                                    int dst_x, int dst_y, int dst_w, int dst_h) {
     int packed_src_wh = ((src_h & 0xFFFF) << 16) | (src_w & 0xFFFF);
     int packed_dst_wh = ((dst_h & 0xFFFF) << 16) | (dst_w & 0xFFFF);
+
+    if (src == 0 || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
+        return;
+    }
+    if (!sys_clip_intersects_or_passthrough(dst_x, dst_y, dst_w, dst_h)) {
+        return;
+    }
     (void)syscall5(SYSCALL_GFX_BLIT8_STRETCH_PRESENT,
                    (int)(uintptr_t)src,
                    packed_src_wh,
@@ -162,6 +497,40 @@ uint32_t sys_storage_total_sectors(void) {
 
 uint32_t sys_storage_partition_start_lba(void) {
     return (uint32_t)syscall5(SYSCALL_STORAGE_PARTITION_START_LBA, 0, 0, 0, 0, 0);
+}
+
+int sys_storage_backend_load(void *dst, uint32_t size) {
+    return syscall5(SYSCALL_STORAGE_BACKEND_LOAD, (int)(uintptr_t)dst, (int)size, 0, 0, 0);
+}
+
+int sys_storage_backend_save(const void *src, uint32_t size) {
+    return syscall5(SYSCALL_STORAGE_BACKEND_SAVE, (int)(uintptr_t)src, (int)size, 0, 0, 0);
+}
+
+int sys_storage_backend_read_sectors(uint32_t lba, void *dst, uint32_t sector_count) {
+    return syscall5(SYSCALL_STORAGE_BACKEND_READ_SECTORS,
+                    (int)lba,
+                    (int)(uintptr_t)dst,
+                    (int)sector_count,
+                    0,
+                    0);
+}
+
+int sys_storage_backend_write_sectors(uint32_t lba, const void *src, uint32_t sector_count) {
+    return syscall5(SYSCALL_STORAGE_BACKEND_WRITE_SECTORS,
+                    (int)lba,
+                    (int)(uintptr_t)src,
+                    (int)sector_count,
+                    0,
+                    0);
+}
+
+uint32_t sys_storage_backend_total_sectors(void) {
+    return (uint32_t)syscall5(SYSCALL_STORAGE_BACKEND_TOTAL_SECTORS, 0, 0, 0, 0, 0);
+}
+
+uint32_t sys_storage_backend_partition_start_lba(void) {
+    return (uint32_t)syscall5(SYSCALL_STORAGE_BACKEND_PARTITION_START_LBA, 0, 0, 0, 0, 0);
 }
 
 int sys_open(const char *path, int flags) {
@@ -211,8 +580,35 @@ int sys_task_snapshot(struct task_snapshot_summary *summary,
                     0);
 }
 
+int sys_memory_status(struct mk_memory_status *status) {
+    return syscall5(SYSCALL_MEMORY_STATUS,
+                    (int)(uintptr_t)status,
+                    0,
+                    0,
+                    0,
+                    0);
+}
+
+int sys_memory_budget(struct mk_memory_budget *budget) {
+    return syscall5(SYSCALL_MEMORY_BUDGET,
+                    (int)(uintptr_t)budget,
+                    0,
+                    0,
+                    0,
+                    0);
+}
+
 int sys_task_terminate(uint32_t pid) {
     return syscall5(SYSCALL_TASK_TERMINATE, (int)pid, 0, 0, 0, 0);
+}
+
+int sys_task_create(uintptr_t entry, void *arg, uint32_t stack_size, uint32_t task_class) {
+    return syscall5(SYSCALL_TASK_CREATE,
+                    (int)entry,
+                    (int)(uintptr_t)arg,
+                    (int)stack_size,
+                    (int)task_class,
+                    0);
 }
 
 int sys_launch_app(const char *name) {
@@ -465,6 +861,19 @@ int sys_service_receive(struct mk_message *message) {
 
 int sys_service_send(const struct mk_message *message) {
     return syscall5(SYSCALL_SERVICE_SEND, (int)(uintptr_t)message, 0, 0, 0, 0);
+}
+
+int sys_message_post(struct mk_async_message *message) {
+    return syscall5(SYSCALL_MESSAGE_POST, (int)(uintptr_t)message, 0, 0, 0, 0);
+}
+
+int sys_message_receive(struct mk_async_message *message, uint32_t timeout_ticks) {
+    return syscall5(SYSCALL_MESSAGE_RECV,
+                    (int)(uintptr_t)message,
+                    (int)timeout_ticks,
+                    0,
+                    0,
+                    0);
 }
 
 int sys_service_subscribe(uint32_t service_type) {

@@ -39,6 +39,30 @@ Comandos minimos que ainda precisam ficar de pe:
 Status em arvore:
 - a superficie CLI e o diagnostico de fronteira agora existem; o que ainda falta e fazer esses comandos atravessarem uma pilha de rede remota de verdade
 
+Ordem pratica para fechar sem regressao:
+1. promover o substrate de rede para `packet_path=real` e `socket_scope=network`
+2. fechar DHCP e DNS reais no caminho normal, mantendo `netmgrd`/`netctl` como camada canonica de estado, lease e eventos
+3. promover os binarios de usuario em ordem de dependencia:
+   - `ifconfig`, `route`, `netstat`
+   - `host`, `dig`
+   - `ping`
+   - `curl`
+   - `ftp`
+4. validar sempre em dois ambientes obrigatorios:
+   - shell host/rescue
+   - app `terminal`
+5. tratar como criterio de pronto que a sequencia de comandos nao derruba o userspace:
+   - o comando volta ao prompt
+   - `desktop` continua vivo
+   - `userland.app` nao cai
+   - o terminal continua responsivo
+   - ainda e possivel abrir um app grafico simples depois dos comandos
+
+Trilha oficial de validacao dessa frente:
+- `make validate-network-surface` continua cobrindo a superficie de shell host/rescue
+- `make validate-network-terminal-surface` cobre a superficie equivalente no app `terminal` e exige prova de que a sessao grafica sobrevive
+- enquanto o datapath remoto ainda nao estiver fechado, comandos de internet podem falhar de forma honesta, mas precisam falhar sem derrubar `desktop`, `terminal` ou `userland.app`
+
 ### 2. Audio real em hardware [fechado em arvore para o corte microkernel]
 
 O corte de servico/dataplane ja esta entregue em arvore (`make validate-phase-c`).

@@ -1,6 +1,7 @@
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/drivers/storage/block_device.h>
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/drivers/video/video.h>
 #include <kernel/hal/io.h>
 #include <kernel/kernel_string.h>
 #include <kernel/lock.h>
@@ -127,6 +128,7 @@ static void ata_select_lba(uint32_t lba) {
 
 static int ata_identify(void) {
     uint16_t identify_data[256];
+    uint8_t status;
 
     ata_select_lba(0u);
     outb(ATA_PRIMARY_CTRL, 0u);
@@ -136,16 +138,25 @@ static int ata_identify(void) {
     outb(ATA_REG_LBA2, 0u);
     outb(ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
 
-    if (inb(ATA_REG_STATUS) == 0u) {
+    status = inb(ATA_REG_STATUS);
+    if (status == 0u) {
+        kernel_debug_puts("ata: identify status zero\n");
         return -1;
     }
     if (ata_wait_not_busy() != 0) {
+        kernel_debug_printf("ata: identify wait_not_busy failed status=%x\n",
+                            (unsigned int)inb(ATA_REG_STATUS));
         return -1;
     }
     if (inb(ATA_REG_LBA1) != 0u || inb(ATA_REG_LBA2) != 0u) {
+        kernel_debug_printf("ata: identify non-ata signature lba1=%x lba2=%x\n",
+                            (unsigned int)inb(ATA_REG_LBA1),
+                            (unsigned int)inb(ATA_REG_LBA2));
         return -1;
     }
     if (ata_wait_data_ready() != 0) {
+        kernel_debug_printf("ata: identify data not ready status=%x\n",
+                            (unsigned int)inb(ATA_REG_STATUS));
         return -1;
     }
 
@@ -295,10 +306,13 @@ static int ata_write_sector(uint32_t lba, const uint8_t *buf) {
 
 int kernel_ata_init(void) {
     spinlock_init(&g_ata_lock);
+    kernel_text_puts("    ata: identify\n");
     g_ata_ready = ata_identify() == 0;
     if (!g_ata_ready) {
+        kernel_text_puts("    ata: identify fail\n");
         return -1;
     }
+    kernel_text_puts("    ata: partition\n");
     g_storage_partition_start_lba = 0u;
     g_storage_partition_sector_count = g_ata_total_sectors;
     if (kernel_block_device_resolve_partition(0,
@@ -306,18 +320,22 @@ int kernel_ata_init(void) {
                                               ata_disk_read,
                                               &g_storage_partition_start_lba,
                                               &g_storage_partition_sector_count) != 0) {
+        kernel_text_puts("    ata: partition fail\n");
         g_ata_ready = 0;
         return -1;
     }
+    kernel_text_puts("    ata: register\n");
     if (kernel_block_device_register_primary("ata",
                                              0,
                                              g_storage_partition_sector_count,
                                              g_storage_partition_start_lba,
                                              ata_block_read,
                                              ata_block_write) != 0) {
+        kernel_text_puts("    ata: register fail\n");
         g_ata_ready = 0;
         return -1;
     }
+    kernel_text_puts("    ata: done\n");
     kernel_debug_printf("ata: start=%d sectors=%d total=%d\n",
                         g_storage_partition_start_lba,
                         g_storage_partition_sector_count,

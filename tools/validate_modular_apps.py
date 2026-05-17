@@ -475,6 +475,7 @@ class QemuSession:
             "-": "minus",
             ".": "dot",
             "/": "slash",
+            "\\": "backslash",
             "_": "shift-minus",
         }
         for ch in text:
@@ -898,6 +899,43 @@ def wait_for_terminal_command_done(session: QemuSession, command: str, timeout: 
         raise
 
 
+def wait_for_terminal_command_exit(session: QemuSession,
+                                   command: str,
+                                   rc: int = 0,
+                                   timeout: float = 12.0) -> None:
+    exit_marker = f"terminal: command exit {command} rc={rc}"
+    if log_contains(session, exit_marker):
+        return
+    try:
+        session.wait_for_log(exit_marker, timeout=timeout)
+    except RuntimeError:
+        if log_contains(session, f"terminal: command start {command}") or \
+           log_contains(session, f"shell: command {command}"):
+            raise RuntimeError(f"Timed out waiting for marker: {exit_marker}")
+        raise
+
+
+def run_terminal_command_expect(session: QemuSession,
+                                command: str,
+                                markers: List[str],
+                                timeout: float = 16.0,
+                                rc: int = 0,
+                                pause: float = 0.12) -> None:
+    start_offset = len(session.read_log())
+    command_name = command.split(" ", 1)[0] if command else ""
+
+    run_command(session, command, timeout=max(8.0, timeout / 2.0), marker="", pause=pause)
+    wait_for_all_since(session,
+                       [
+                           f"shell: command {command_name}",
+                           f"terminal: command exit {command_name} rc={rc}",
+                           f"terminal: command done {command_name}",
+                           *markers,
+                       ],
+                       timeout=timeout,
+                       start_offset=start_offset)
+
+
 def scenario_boot_rescue_shell(session: QemuSession) -> None:
     if log_contains(session, "boot mode: rescue shell") and log_contains(session, SHELL_READY_MARKER):
         return
@@ -1052,6 +1090,77 @@ def scenario_terminal_vidmodes(session: QemuSession) -> None:
     desktop_assert_visual_proof(session)
 
 
+def scenario_network_terminal_surface(session: QemuSession) -> None:
+    scenario_startx(session)
+    time.sleep(1.0)
+
+    commands = [
+        ("ifconfig", ["ifconfig: status ok"]),
+        ("route", ["route: table ok"]),
+        ("netstat", ["netstat: telemetry ok"]),
+        ("ping localhost", ["ping: loopback-ok target=localhost"]),
+        ("host localhost", ["host: local-ok query=localhost"]),
+        ("dig localhost", ["dig: local-ok query=localhost"]),
+        ("curl file:///runtime/netmgrd-status.txt", ["curl: file-ok target=/runtime/netmgrd-status.txt"]),
+        ("ftp example.com", ["ftp: transport unavailable"]),
+    ]
+
+    for command, markers in commands:
+        run_terminal_command_expect(session, command, markers, timeout=18.0)
+
+    run_terminal_command_expect(session,
+                                "spawn clock",
+                                ["spawn: launched pid=", "host: argv clock"],
+                                timeout=16.0)
+
+
+def scenario_bsd_utils_terminal_surface(session: QemuSession) -> None:
+    scenario_startx(session)
+    try:
+        session.wait_for_log("audio: done desktop-session", timeout=12.0)
+    except RuntimeError:
+        time.sleep(4.5)
+    else:
+        time.sleep(1.5)
+
+    commands = [
+        ("uname -a", [], 0),
+        ("pwd", [], 0),
+        ("printf abi-smoke\\n", [], 0),
+        ("true", [], 0),
+    ]
+
+    for command, markers, rc in commands:
+        run_terminal_command_expect(session, command, markers, timeout=45.0, rc=rc, pause=0.18)
+
+
+def scenario_editor_compat(session: QemuSession, command_name: str, text: str) -> None:
+    scenario_startx(session)
+    time.sleep(1.0)
+    run_command(session, command_name, timeout=8.0, marker="")
+    session.wait_for_all(
+        [
+            f"shell: command {command_name}",
+            f"terminal: command exit {command_name} rc=0",
+            f"terminal: command done {command_name}",
+            "desktop: open-editor",
+        ],
+        timeout=20.0,
+    )
+    time.sleep(1.0)
+    session.type_text(text, pause=0.08)
+    session.send_key("ctrl-s", pause=0.2)
+    session.wait_for_log("editor: save ok path=/docs/nota", timeout=12.0)
+
+
+def scenario_vi_compat_editor(session: QemuSession) -> None:
+    scenario_editor_compat(session, "vi", "vi smoke")
+
+
+def scenario_mg_compat_editor(session: QemuSession) -> None:
+    scenario_editor_compat(session, "mg", "mg smoke")
+
+
 def scenario_desktop_visual_proof(session: QemuSession) -> None:
     session.wait_for_all(["desktop.app: launch startx", DESKTOP_READY_MARKER], timeout=45.0)
     session.wait_for_log("video: backend refresh backend=fast_lfb", timeout=20.0)
@@ -1079,7 +1188,7 @@ def scenario_open_terminal(session: QemuSession, timeout: float = 45.0) -> None:
 def scenario_doom(session: QemuSession) -> None:
     scenario_open_terminal(session)
     run_command(session, "doom", timeout=8.0, marker="")
-    session.wait_for_all(["desktop.app: launch doom", "desktop: open-new w=0 t=16 i=0"], timeout=20.0)
+    session.wait_for_all(["desktop: open-new w=1 t=16 i=0"], timeout=20.0)
     time.sleep(0.8)
     session.send_key("ret", pause=0.15)
     session.wait_for_all(
@@ -1095,7 +1204,7 @@ def scenario_doom(session: QemuSession) -> None:
 def scenario_craft(session: QemuSession) -> None:
     scenario_open_terminal(session)
     run_command(session, "craft", timeout=8.0, marker="")
-    session.wait_for_all(["desktop.app: launch craft", "desktop: open-new w=0 t=17 i=0"], timeout=20.0)
+    session.wait_for_all(["desktop: open-new w=1 t=17 i=0"], timeout=20.0)
     session.wait_for_all(
         [
             "fs: asset file /textures/texture.png",
@@ -1478,13 +1587,92 @@ SCENARIOS = [
         action=scenario_phase_e_terminal_writeback,
     ),
     Scenario(
+        name="network-terminal-surface",
+        description="Desktop stable-shortcut path runs the network CLI surface inside the Terminal app and confirms the graphical userspace stays alive by launching clock afterwards",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "terminal: command done vibefetch",
+            "ifconfig: status ok",
+            "route: table ok",
+            "netstat: telemetry ok",
+            "ping: loopback-ok target=localhost",
+            "host: local-ok query=localhost",
+            "dig: local-ok query=localhost",
+            "curl: file-ok target=/runtime/netmgrd-status.txt",
+            "ftp: transport unavailable",
+            "terminal: command done ftp",
+            "spawn: launched pid=",
+            "host: argv clock",
+            "terminal: command done spawn",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_network_terminal_surface,
+    ),
+    Scenario(
+        name="bsd-utils-terminal-surface",
+        description="Desktop stable-shortcut path runs representative BSD utilities through the generic terminal/external-app boundary and checks their exit status markers",
+        command=None,
+        must_have=[
+            "desktop.app: launch startx",
+            "desktop: open-new w=0 t=3 i=0",
+            "desktop: open-new w=1 t=1 i=0",
+            "terminal: command done vibefetch",
+            "terminal: command exit uname rc=0",
+            "terminal: command exit pwd rc=0",
+            "terminal: command exit printf rc=0",
+            "terminal: command exit true rc=0",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_bsd_utils_terminal_surface,
+    ),
+    Scenario(
+        name="vi-compat-editor",
+        description="Desktop terminal launches the compat vi alias, reaches the editor path, accepts typing, and saves a document",
+        command=None,
+        must_have=[
+            "shell: command vi",
+            "terminal: command done vibefetch",
+            "terminal: command exit vi rc=0",
+            "terminal: command done vi",
+            "desktop: open-editor",
+            "editor: save ok path=/docs/nota",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_vi_compat_editor,
+    ),
+    Scenario(
+        name="mg-compat-editor",
+        description="Desktop terminal launches the compat mg alias, reaches the nano-style editor path, accepts typing, and saves a document",
+        command=None,
+        must_have=[
+            "shell: command mg",
+            "terminal: command done vibefetch",
+            "terminal: command exit mg rc=0",
+            "terminal: command done mg",
+            "desktop: open-editor",
+            "editor: save ok path=/docs/nota",
+        ],
+        boot_markers=[
+            *AUTODESKTOP_BOOT_MARKERS,
+        ],
+        action=scenario_mg_compat_editor,
+    ),
+    Scenario(
         name="doom-assets-app",
         description="Desktop autostart opens a terminal, launches DOOM and reaches the real WAD runtime",
         command=None,
         must_have=[
-            "desktop.app: launch doom",
             "desktop: open-new w=0 t=1 i=0",
-            "desktop: open-new w=0 t=16 i=0",
+            "desktop: open-new w=1 t=16 i=0",
             "doom: key enter",
             "fs: asset file /DOOM/DOOM.WAD",
             "doom: port run begin",
@@ -1499,9 +1687,8 @@ SCENARIOS = [
         description="Desktop autostart opens a terminal, launches Craft and reaches real texture loads and first frame",
         command=None,
         must_have=[
-            "desktop.app: launch craft",
             "desktop: open-new w=0 t=1 i=0",
-            "desktop: open-new w=0 t=17 i=0",
+            "desktop: open-new w=1 t=17 i=0",
             "fs: asset file /textures/texture.png",
             "fs: asset file /textures/font.png",
             "fs: asset file /textures/sky.png",

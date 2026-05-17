@@ -348,23 +348,62 @@ void imageviewer_draw_window(struct imageviewer_state *viewer, int active,
     struct rect prev = imageviewer_button_rect(viewer, IMAGEVIEWER_BUTTON_PREV);
     struct rect next = imageviewer_button_rect(viewer, IMAGEVIEWER_BUTTON_NEXT);
     struct rect wallpaper = imageviewer_button_rect(viewer, IMAGEVIEWER_BUTTON_WALLPAPER);
+    struct rect title_bounds = {toolbar.x + 30, toolbar.y, prev.x - (toolbar.x + 30) - 8, toolbar.h};
+    struct rect dims_bounds = {toolbar.x + toolbar.w - 214, toolbar.y, 54, toolbar.h};
     char status_text[80];
     char dims[24];
+    char title_fit[48];
+    char dims_fit[24];
 
     draw_window_frame(&viewer->window, "IMAGEM", active, min_hover, max_hover, close_hover);
     ui_draw_surface(&body, theme->window_bg);
     ui_draw_surface(&toolbar, ui_color_panel());
     ui_draw_surface(&canvas, ui_color_panel());
     ui_draw_inset(&canvas, ui_color_window_bg());
-    ui_draw_button(&prev, "ANT", UI_BUTTON_NORMAL, 0);
-    ui_draw_button(&next, "PROX", UI_BUTTON_PRIMARY, 0);
-    ui_draw_button(&wallpaper, "PLANO", UI_BUTTON_ACTIVE, 0);
+    (void)icon_theme_draw("camera-photo",
+                          ICON_THEME_CONTEXT_APPS,
+                          16,
+                          toolbar.x + 8,
+                          toolbar.y + 6,
+                          16,
+                          16);
+    ui_draw_button_with_icon(&prev,
+                             "ANT",
+                             UI_BUTTON_NORMAL,
+                             0,
+                             "go-up",
+                             ICON_THEME_CONTEXT_ACTIONS,
+                             16,
+                             8,
+                             8);
+    ui_draw_button_with_icon(&next,
+                             "PROX",
+                             UI_BUTTON_PRIMARY,
+                             0,
+                             "go-down",
+                             ICON_THEME_CONTEXT_ACTIONS,
+                             16,
+                             8,
+                             8);
+    ui_draw_button_with_icon(&wallpaper,
+                             "PLANO",
+                             UI_BUTTON_ACTIVE,
+                             0,
+                             "preferences-desktop-wallpaper",
+                             ICON_THEME_CONTEXT_APPS,
+                             16,
+                             10,
+                             10);
 
     if (viewer->image_node >= 0 && g_fs_nodes[viewer->image_node].used) {
-        sys_text(toolbar.x + 8, toolbar.y + 10, theme->text, g_fs_nodes[viewer->image_node].name);
+        ui_text_copy_fit(title_fit,
+                         (int)sizeof(title_fit),
+                         g_fs_nodes[viewer->image_node].name,
+                         title_bounds.w);
     } else {
-        sys_text(toolbar.x + 8, toolbar.y + 10, theme->text, "Nenhuma imagem");
+        ui_text_copy_fit(title_fit, (int)sizeof(title_fit), "Nenhuma imagem", title_bounds.w);
     }
+    ui_draw_text_clipped(&title_bounds, title_bounds.x, toolbar.y + 10, theme->text, title_fit);
 
     if (viewer->image_node >= 0) {
         (void)imageviewer_refresh_scaled(viewer);
@@ -372,7 +411,8 @@ void imageviewer_draw_window(struct imageviewer_state *viewer, int active,
 
     imageviewer_build_dims(viewer, dims, (int)sizeof(dims));
     if (dims[0] != '\0') {
-        sys_text(toolbar.x + toolbar.w - 214, toolbar.y + 10, ui_color_muted(), dims);
+        ui_text_copy_fit(dims_fit, (int)sizeof(dims_fit), dims, dims_bounds.w);
+        ui_draw_text_clipped(&dims_bounds, dims_bounds.x, toolbar.y + 10, ui_color_muted(), dims_fit);
     }
 
     if (viewer->pixels && viewer->image_w > 0 && viewer->image_h > 0) {
@@ -381,8 +421,8 @@ void imageviewer_draw_window(struct imageviewer_state *viewer, int active,
 
         sys_gfx_blit8(viewer->pixels, viewer->image_w, viewer->image_h, dst_x, dst_y, 1);
     } else {
-        sys_text(canvas.x + 12, canvas.y + 14, ui_color_muted(), "Abra uma imagem .png ou .bmp");
-        sys_text(canvas.x + 12, canvas.y + 28, ui_color_muted(), "O wallpaper atual aparece por padrao");
+        ui_draw_text_clipped(&canvas, canvas.x + 12, canvas.y + 14, ui_color_muted(), "Abra uma imagem .png ou .bmp");
+        ui_draw_text_clipped(&canvas, canvas.x + 12, canvas.y + 28, ui_color_muted(), "O wallpaper atual aparece por padrao");
     }
 
     imageviewer_build_status(viewer, status_text, (int)sizeof(status_text));

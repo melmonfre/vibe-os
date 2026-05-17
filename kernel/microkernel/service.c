@@ -9,9 +9,11 @@
 #include <kernel/process.h>
 #include <kernel/scheduler.h>
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/drivers/video/video.h>
 #include <include/userland_api.h>
 
 static struct mk_service_record g_services[MK_SERVICE_SLOTS];
+static mk_service_deferred_launcher_fn g_service_deferred_launchers[MK_SERVICE_SLOTS];
 static int g_console_request_trace_emitted = 0;
 static int g_console_worker_entry_trace_emitted = 0;
 static int g_console_worker_trace_emitted = 0;
@@ -26,15 +28,20 @@ static int g_storage_worker_trace_budget = 8;
 static int g_storage_reply_trace_budget = 8;
 static int g_interactive_request_trace_budget = 24;
 static spinlock_t g_service_event_lock;
+static kernel_waitable_t g_service_retry_waitable;
+static process_t *g_service_retry_worker = 0;
 
 #define MK_SERVICE_REQUEST_REPLY_TIMEOUT_TICKS 32u
 #define MK_SERVICE_VIDEO_CONTROL_TIMEOUT_TICKS 192u
-#define MK_SERVICE_STORAGE_TIMEOUT_TICKS 256u
+#define MK_SERVICE_STORAGE_TIMEOUT_TICKS 8192u
 #define MK_SERVICE_FILESYSTEM_TIMEOUT_TICKS 128u
 #define MK_SERVICE_DEFERRED_REPLIES_MAX 8u
 #define MK_SERVICE_RECOVERY_RETRY_LIMIT 1u
+#define MK_SERVICE_BACKGROUND_RETRY_LIMIT 10u
+#define MK_SERVICE_BACKGROUND_RETRY_BASE_TICKS 25u
 
 static void mk_service_worker_entry(void);
+static void mk_service_retry_worker_entry(void);
 static void mk_service_publish_event(struct mk_service_record *service, uint32_t event_type);
 static void mk_service_enqueue_event(struct mk_service_record *service,
                                      struct mk_service_event_subscription *subscription,
@@ -44,6 +51,14 @@ static uint32_t mk_service_request_timeout_ticks(const struct mk_service_record 
 static void mk_service_restore_deferred_messages(process_t *destination,
                                                  const struct mk_message *messages,
                                                  uint32_t count);
+static int mk_service_background_retryable(const struct mk_service_record *service);
+static void mk_service_retry_reset(struct mk_service_record *service);
+static int mk_service_schedule_async_recovery(struct mk_service_record *service,
+                                              const struct mk_message *request);
+static uint32_t mk_service_retry_delay_ticks(uint32_t retry_attempts);
+static void mk_service_schedule_retry(struct mk_service_record *service, uint32_t now_ticks);
+static void mk_service_note_retry_failure(struct mk_service_record *service, uint32_t now_ticks);
+static uint32_t mk_service_process_background_retries(uint32_t now_ticks);
 
 static int mk_service_type_allows_rescue_local_fallback(uint32_t service_type) {
     switch (service_type) {
@@ -56,6 +71,29 @@ static int mk_service_type_allows_rescue_local_fallback(uint32_t service_type) {
     }
 }
 
+static uint32_t mk_service_task_class(uint32_t service_type) {
+    switch (service_type) {
+    case MK_SERVICE_STORAGE:
+        return MK_TASK_CLASS_STORAGE_IO;
+    case MK_SERVICE_FILESYSTEM:
+        return MK_TASK_CLASS_FILESYSTEM_IO;
+    case MK_SERVICE_VIDEO:
+        return MK_TASK_CLASS_VIDEO_CONTROL;
+    case MK_SERVICE_INPUT:
+        return MK_TASK_CLASS_INPUT;
+    case MK_SERVICE_CONSOLE:
+        return MK_TASK_CLASS_CONSOLE_IO;
+    case MK_SERVICE_NETWORK:
+        return MK_TASK_CLASS_NETWORK_IO;
+    case MK_SERVICE_AUDIO:
+        return MK_TASK_CLASS_AUDIO_IO;
+    case MK_SERVICE_INIT:
+        return MK_TASK_CLASS_SUPERVISION;
+    default:
+        return MK_TASK_CLASS_SUPERVISION;
+    }
+}
+
 static void mk_service_mark_transport_degraded(struct mk_service_record *service) {
     if (service == 0) {
         return;
@@ -63,6 +101,9 @@ static void mk_service_mark_transport_degraded(struct mk_service_record *service
     if (service->transport_degraded == 0u) {
         service->transport_degraded = 1u;
         mk_service_publish_event(service, MK_SERVICE_EVENT_DEGRADED);
+    }
+    if (mk_service_background_retryable(service)) {
+        kernel_waitable_signal(&g_service_retry_waitable, 1u);
     }
 }
 
@@ -228,8 +269,25 @@ static void mk_service_restore_deferred_messages(process_t *destination,
 }
 
 void mk_service_init(void) {
+    process_t *retry_worker;
+
     memset(g_services, 0, sizeof(g_services));
+    memset(g_service_deferred_launchers, 0, sizeof(g_service_deferred_launchers));
     spinlock_init(&g_service_event_lock);
+    kernel_waitable_init_ex(&g_service_retry_waitable,
+                            TASK_WAIT_EVENT_WAITABLE,
+                            TASK_WAIT_CLASS_SUPERVISION,
+                            0u);
+    retry_worker = process_create_with_stack(mk_service_retry_worker_entry,
+                                             PROCESS_KIND_KERNEL_TASK,
+                                             MK_SERVICE_NONE,
+                                             0u,
+                                             MK_TASK_CLASS_SUPERVISION,
+                                             4096u);
+    if (retry_worker != 0) {
+        g_service_retry_worker = retry_worker;
+        scheduler_add_task(retry_worker);
+    }
 }
 
 static int mk_service_name_equals(const char *lhs, const char *rhs) {
@@ -275,6 +333,7 @@ static void mk_service_init_subscriptions(struct mk_service_record *service) {
                             TASK_WAIT_CLASS_SUPERVISION,
                             service->type);
     }
+    service->subscriptions_ready = 1u;
 }
 
 static int mk_service_register_impl(uint32_t type,
@@ -296,6 +355,10 @@ static int mk_service_register_impl(uint32_t type,
                 g_services[slot].pid = pid;
                 g_services[slot].process = process;
                 g_services[slot].transport_degraded = 0u;
+                mk_service_retry_reset(&g_services[slot]);
+                if (g_services[slot].subscriptions_ready == 0u) {
+                    mk_service_init_subscriptions(&g_services[slot]);
+                }
             }
             if (local_handler != 0) {
                 g_services[slot].local_handler = local_handler;
@@ -315,7 +378,12 @@ static int mk_service_register_impl(uint32_t type,
             g_services[slot].local_handler = local_handler;
             g_services[slot].context = context;
             g_services[slot].transport_degraded = 0u;
-            mk_service_init_subscriptions(&g_services[slot]);
+            mk_service_retry_reset(&g_services[slot]);
+            if (pid != 0 || process != 0) {
+                mk_service_init_subscriptions(&g_services[slot]);
+            } else {
+                g_services[slot].subscriptions_ready = 0u;
+            }
             strncpy(g_services[slot].name, name, MK_SERVICE_NAME_MAX - 1u);
             g_services[slot].name[MK_SERVICE_NAME_MAX - 1u] = '\0';
             return 0;
@@ -344,6 +412,15 @@ int mk_service_register_local_handler(uint32_t type,
         return -1;
     }
     return mk_service_register_impl(type, name, 0, 0, handler, context);
+}
+
+int mk_service_register_deferred_launcher(uint32_t type,
+                                          mk_service_deferred_launcher_fn launcher) {
+    if (type == MK_SERVICE_NONE || type >= MK_SERVICE_SLOTS || launcher == 0) {
+        return -1;
+    }
+    g_service_deferred_launchers[type] = launcher;
+    return 0;
 }
 
 static int mk_service_process_online(const struct mk_service_record *service) {
@@ -418,11 +495,13 @@ static int mk_service_restart_worker_record(struct mk_service_record *service) {
 
     pid = mk_launch_bootstrap(&descriptor);
     if (pid < 0) {
+        mk_service_note_retry_failure(service, kernel_timer_get_ticks());
         return -1;
     }
 
     service->transport_degraded = 0u;
     service->restart_count += 1u;
+    mk_service_retry_reset(service);
     mk_service_publish_event(service, force_restart ? MK_SERVICE_EVENT_RESTARTED : MK_SERVICE_EVENT_ONLINE);
     return 0;
 }
@@ -672,15 +751,14 @@ int mk_service_launch_worker(uint32_t type,
                                   MK_LAUNCH_FLAG_BOOTSTRAP | MK_LAUNCH_FLAG_BUILTIN);
 }
 
-int mk_service_launch_task(uint32_t type,
-                           const char *name,
-                           mk_service_local_handler_fn handler,
-                           void *context,
-                           mk_service_entry_fn entry,
-                           uint32_t stack_size,
-                           uint32_t launch_flags) {
+int mk_service_prepare_task(uint32_t type,
+                            const char *name,
+                            mk_service_local_handler_fn handler,
+                            void *context,
+                            mk_service_entry_fn entry,
+                            uint32_t stack_size,
+                            uint32_t launch_flags) {
     struct mk_service_record *service;
-    struct mk_launch_descriptor descriptor;
 
     if (type == MK_SERVICE_NONE || name == 0 || handler == 0 || entry == 0) {
         return -1;
@@ -691,7 +769,50 @@ int mk_service_launch_task(uint32_t type,
         return service->pid;
     }
 
-    if (mk_service_register_local_handler(type, name, handler, context) != 0) {
+    service = mk_service_find_mutable_by_type(type);
+    if (service == 0) {
+        uint32_t slot;
+
+        for (slot = 0; slot < MK_SERVICE_SLOTS; ++slot) {
+            if (g_services[slot].type == MK_SERVICE_NONE) {
+                service = &g_services[slot];
+                memset(service, 0, sizeof(*service));
+                service->type = type;
+                strncpy(service->name, name, MK_SERVICE_NAME_MAX - 1u);
+                service->name[MK_SERVICE_NAME_MAX - 1u] = '\0';
+                break;
+            }
+        }
+        if (service == 0) {
+            return -1;
+        }
+    }
+
+    service->local_handler = handler;
+    service->context = context;
+    service->entry = entry;
+    service->launch_flags = launch_flags;
+    service->stack_size = stack_size;
+    return 0;
+}
+
+int mk_service_launch_task(uint32_t type,
+                           const char *name,
+                           mk_service_local_handler_fn handler,
+                           void *context,
+                           mk_service_entry_fn entry,
+                           uint32_t stack_size,
+                           uint32_t launch_flags) {
+    struct mk_service_record *service;
+    struct mk_launch_descriptor descriptor;
+
+    if (mk_service_prepare_task(type,
+                                name,
+                                handler,
+                                context,
+                                entry,
+                                stack_size,
+                                launch_flags) != 0) {
         return -1;
     }
 
@@ -704,15 +825,22 @@ int mk_service_launch_task(uint32_t type,
     descriptor.abi_version = MK_LAUNCH_ABI_VERSION;
     descriptor.kind = MK_LAUNCH_KIND_SERVICE;
     descriptor.service_type = type;
-    descriptor.flags = launch_flags;
-    descriptor.stack_size = stack_size;
+    descriptor.flags = service->launch_flags;
+    descriptor.task_class = mk_service_task_class(type);
+    descriptor.stack_size = service->stack_size;
     strncpy(descriptor.name, name, MK_LAUNCH_NAME_MAX - 1u);
     descriptor.name[MK_LAUNCH_NAME_MAX - 1u] = '\0';
-    descriptor.entry = entry;
-    service->entry = entry;
-    service->launch_flags = descriptor.flags;
-    service->stack_size = descriptor.stack_size;
-    return mk_launch_bootstrap(&descriptor);
+    descriptor.entry = service->entry;
+    {
+        int pid = mk_launch_bootstrap(&descriptor);
+
+        if (pid < 0) {
+            mk_service_note_retry_failure(service, kernel_timer_get_ticks());
+            return -1;
+        }
+        mk_service_retry_reset(service);
+        return pid;
+    }
 }
 
 int mk_service_is_online(uint32_t type) {
@@ -728,6 +856,11 @@ int mk_service_ensure(uint32_t type) {
     struct mk_service_record *service = mk_service_find_mutable_by_type(type);
 
     if (service == 0) {
+        if (type != MK_SERVICE_NONE &&
+            type < MK_SERVICE_SLOTS &&
+            g_service_deferred_launchers[type] != 0) {
+            return g_service_deferred_launchers[type]();
+        }
         return -1;
     }
     return mk_service_restart_worker_record(service);
@@ -737,6 +870,11 @@ int mk_service_restart(uint32_t type) {
     struct mk_service_record *service = mk_service_find_mutable_by_type(type);
 
     if (service == 0) {
+        if (type != MK_SERVICE_NONE &&
+            type < MK_SERVICE_SLOTS &&
+            g_service_deferred_launchers[type] != 0) {
+            return g_service_deferred_launchers[type]();
+        }
         return -1;
     }
     if (service->type == MK_SERVICE_INIT) {
@@ -780,6 +918,9 @@ static int mk_service_request_process(const struct mk_service_record *service,
     if (request_copy.abi_version == 0u) {
         request_copy.abi_version = MK_MESSAGE_ABI_VERSION;
     }
+    if (mk_message_validate(&request_copy) != 0) {
+        return -1;
+    }
     request_copy.source_pid = (uint32_t)current->pid;
     if (service->pid > 0) {
         request_copy.target_pid = (uint32_t)service->pid;
@@ -801,7 +942,9 @@ static int mk_service_request_process(const struct mk_service_record *service,
                 service != 0 ? mk_service_find_mutable_by_type(service->type) : 0;
 
             if (mutable_service != 0) {
-                mk_service_mark_transport_degraded(mutable_service);
+                if (mk_service_schedule_async_recovery(mutable_service, &request_copy)) {
+                    return -1;
+                }
                 if (recovery_attempts < MK_SERVICE_RECOVERY_RETRY_LIMIT &&
                     mk_service_restart_worker_record(mutable_service) == 0) {
                     recovery_attempts += 1u;
@@ -863,7 +1006,9 @@ static int mk_service_request_process(const struct mk_service_record *service,
             struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
 
             if (mutable_service != 0) {
-                mk_service_mark_transport_degraded(mutable_service);
+                if (mk_service_schedule_async_recovery(mutable_service, &request_copy)) {
+                    return -1;
+                }
                 if (recovery_attempts < MK_SERVICE_RECOVERY_RETRY_LIMIT &&
                     mk_service_restart_worker_record(mutable_service) == 0) {
                     recovery_attempts += 1u;
@@ -971,7 +1116,12 @@ static int mk_service_request_process(const struct mk_service_record *service,
                 }
 
                 if (mutable_service != 0) {
-                    mk_service_mark_transport_degraded(mutable_service);
+                    if (mk_service_schedule_async_recovery(mutable_service, &request_copy)) {
+                        mk_service_restore_deferred_messages(current,
+                                                             deferred_replies,
+                                                             deferred_reply_count);
+                        return -1;
+                    }
                     if (recovery_attempts < MK_SERVICE_RECOVERY_RETRY_LIMIT &&
                         mk_service_restart_worker_record(mutable_service) == 0) {
                         recovery_attempts += 1u;
@@ -1008,16 +1158,6 @@ static int mk_service_request_process(const struct mk_service_record *service,
                                                      deferred_reply_count);
                 return -1;
             }
-            if (live_service->transport_degraded != 0u && live_service->process != 0) {
-                (void)mk_service_ensure(service->type);
-                live_service = mk_service_find_by_type(service->type);
-                if (live_service == 0) {
-                    mk_service_restore_deferred_messages(current,
-                                                         deferred_replies,
-                                                         deferred_reply_count);
-                    return -1;
-                }
-            }
             if (live_service->pid != (int)waiting_pid ||
                 !mk_service_process_online(live_service)) {
                 service = live_service;
@@ -1039,14 +1179,6 @@ int mk_service_request(uint32_t type, const struct mk_message *request, struct m
         return -1;
     }
 
-    if (service->transport_degraded != 0u && service->process != 0) {
-        (void)mk_service_ensure(type);
-        service = mk_service_find_by_type(type);
-        if (service == 0) {
-            return -1;
-        }
-    }
-
     if (service->transport_degraded != 0u &&
         service->local_handler != 0 &&
         mk_service_current_allows_local_fallback(service, request)) {
@@ -1054,8 +1186,12 @@ int mk_service_request(uint32_t type, const struct mk_message *request, struct m
     }
 
     if (service->process != 0) {
-        if (!mk_service_process_online(service) && mk_service_ensure(type) != 0) {
-            return -1;
+        if (!mk_service_process_online(service)) {
+            struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(type);
+
+            if (mutable_service != 0 && mk_service_schedule_async_recovery(mutable_service, request)) {
+                return -1;
+            }
         }
         service = mk_service_find_by_type(type);
         if (service == 0 || service->process == 0 || !mk_service_process_online(service)) {
@@ -1238,4 +1374,172 @@ const struct mk_service_record *mk_service_find_by_name(const char *name) {
     }
 
     return 0;
+}
+
+static int mk_service_background_retryable(const struct mk_service_record *service) {
+    if (service == 0) {
+        return 0;
+    }
+    if (service->type == MK_SERVICE_NONE || service->local_handler == 0) {
+        return 0;
+    }
+    return service->entry != 0 && service->launch_flags != 0u;
+}
+
+static void mk_service_retry_reset(struct mk_service_record *service) {
+    if (service == 0) {
+        return;
+    }
+    service->retry_attempts = 0u;
+    service->retry_next_tick = 0u;
+    service->retry_scheduled = 0u;
+    service->retry_exhausted = 0u;
+}
+
+static int mk_service_schedule_async_recovery(struct mk_service_record *service,
+                                              const struct mk_message *request) {
+    if (service == 0) {
+        return 0;
+    }
+
+    mk_service_mark_transport_degraded(service);
+
+    if (service->local_handler != 0 &&
+        request != 0 &&
+        mk_service_current_allows_local_fallback(service, request)) {
+        return 0;
+    }
+
+    if (!mk_service_background_retryable(service)) {
+        return 0;
+    }
+    if (service->retry_exhausted != 0u) {
+        return 1;
+    }
+    if (service->retry_scheduled == 0u) {
+        mk_service_note_retry_failure(service, kernel_timer_get_ticks());
+    } else {
+        kernel_waitable_signal(&g_service_retry_waitable, 1u);
+    }
+    return 1;
+}
+
+static uint32_t mk_service_retry_delay_ticks(uint32_t retry_attempts) {
+    static const uint8_t fib[MK_SERVICE_BACKGROUND_RETRY_LIMIT] = {
+        1u, 1u, 2u, 3u, 5u, 8u, 13u, 21u, 34u, 55u
+    };
+    uint32_t index = retry_attempts;
+
+    if (index >= MK_SERVICE_BACKGROUND_RETRY_LIMIT) {
+        index = MK_SERVICE_BACKGROUND_RETRY_LIMIT - 1u;
+    }
+    return (uint32_t)fib[index] * MK_SERVICE_BACKGROUND_RETRY_BASE_TICKS;
+}
+
+static void mk_service_schedule_retry(struct mk_service_record *service, uint32_t now_ticks) {
+    uint32_t delay_ticks;
+
+    if (!mk_service_background_retryable(service) || service->retry_exhausted != 0u) {
+        return;
+    }
+
+    delay_ticks = mk_service_retry_delay_ticks(service->retry_attempts);
+    if (delay_ticks == 0u) {
+        delay_ticks = 1u;
+    }
+    service->retry_scheduled = 1u;
+    service->retry_next_tick = now_ticks + delay_ticks;
+    kernel_debug_printf("service: retry scheduled type=%d attempt=%u/%u in=%u ticks\n",
+                        (int)service->type,
+                        (unsigned int)(service->retry_attempts + 1u),
+                        (unsigned int)MK_SERVICE_BACKGROUND_RETRY_LIMIT,
+                        (unsigned int)delay_ticks);
+    kernel_waitable_signal(&g_service_retry_waitable, 1u);
+}
+
+static void mk_service_note_retry_failure(struct mk_service_record *service, uint32_t now_ticks) {
+    if (!mk_service_background_retryable(service)) {
+        return;
+    }
+    if (service->retry_attempts >= MK_SERVICE_BACKGROUND_RETRY_LIMIT) {
+        if (service->retry_exhausted == 0u) {
+            service->retry_exhausted = 1u;
+            service->retry_scheduled = 0u;
+            service->retry_next_tick = 0u;
+            kernel_text_puts("service retry exhausted\n");
+            kernel_debug_printf("service: retry exhausted type=%d attempts=%u\n",
+                                (int)service->type,
+                                (unsigned int)service->retry_attempts);
+        }
+        return;
+    }
+    service->retry_attempts += 1u;
+    mk_service_schedule_retry(service, now_ticks);
+}
+
+static uint32_t mk_service_process_background_retries(uint32_t now_ticks) {
+    uint32_t next_wake_tick = 0u;
+
+    for (uint32_t slot = 0u; slot < MK_SERVICE_SLOTS; ++slot) {
+        struct mk_service_record *service = &g_services[slot];
+
+        if (!mk_service_background_retryable(service) || service->retry_exhausted != 0u) {
+            continue;
+        }
+
+        if (service->process != 0 &&
+            service->pid > 0 &&
+            !mk_service_process_online(service) &&
+            service->retry_scheduled == 0u) {
+            mk_service_mark_transport_degraded(service);
+            mk_service_schedule_retry(service, now_ticks);
+        } else if (service->transport_degraded != 0u &&
+                   service->retry_scheduled == 0u &&
+                   (service->process == 0 || !mk_service_process_online(service))) {
+            mk_service_schedule_retry(service, now_ticks);
+        }
+
+        if (service->retry_scheduled != 0u) {
+            if ((int32_t)(now_ticks - service->retry_next_tick) >= 0) {
+                service->retry_scheduled = 0u;
+                service->retry_next_tick = 0u;
+                if (service->retry_attempts >= MK_SERVICE_BACKGROUND_RETRY_LIMIT) {
+                    service->retry_exhausted = 1u;
+                    kernel_text_puts("service retry exhausted\n");
+                    kernel_debug_printf("service: retry exhausted type=%d attempts=%u\n",
+                                        (int)service->type,
+                                        (unsigned int)service->retry_attempts);
+                    continue;
+                }
+                kernel_debug_printf("service: retry firing type=%d attempt=%u/%u\n",
+                                    (int)service->type,
+                                    (unsigned int)(service->retry_attempts + 1u),
+                                    (unsigned int)MK_SERVICE_BACKGROUND_RETRY_LIMIT);
+                if (mk_service_restart_worker_record(service) != 0) {
+                    continue;
+                }
+            } else if (next_wake_tick == 0u ||
+                       (int32_t)(service->retry_next_tick - next_wake_tick) < 0) {
+                next_wake_tick = service->retry_next_tick;
+            }
+        }
+    }
+
+    return next_wake_tick;
+}
+
+static void mk_service_retry_worker_entry(void) {
+    for (;;) {
+        uint32_t now_ticks = kernel_timer_get_ticks();
+        uint32_t next_wake_tick = mk_service_process_background_retries(now_ticks);
+        uint32_t wait_ticks = 0u;
+
+        if (next_wake_tick != 0u) {
+            if ((int32_t)(next_wake_tick - now_ticks) <= 0) {
+                continue;
+            }
+            wait_ticks = next_wake_tick - now_ticks;
+        }
+        (void)kernel_waitable_wait_timeout(&g_service_retry_waitable, wait_ticks);
+    }
 }

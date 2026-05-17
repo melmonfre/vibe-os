@@ -136,6 +136,7 @@ static void __attribute__((unused)) kernel_video_record_benchmarks(void);
 static void kernel_video_activate_backend(enum kernel_video_backend_kind kind,
                                           const struct video_mode *mode);
 static void kernel_video_select_present_kind(void);
+static int kernel_video_cpu_prefers_conservative_stream_copy(void);
 static void kernel_video_present_rect_internal(const struct kernel_video_rect *rect);
 static void kernel_video_mark_full_dirty(void);
 static void kernel_video_reset_dirty_state(void);
@@ -218,6 +219,10 @@ static void kernel_video_select_present_kind(void) {
     if (!kernel_video_backbuffer_is_lfb()) {
         if (!kernel_video_backend_prefers_safe_present_copy()) {
             if (kernel_cpu_sse_enabled() && paging_pat_wc_enabled()) {
+                if (kernel_video_cpu_prefers_conservative_stream_copy()) {
+                    g_present_kind = KERNEL_VIDEO_PRESENT_REP_MOVSD;
+                    return;
+                }
                 g_present_kind = KERNEL_VIDEO_PRESENT_MOVNTDQ;
                 return;
             }
@@ -228,6 +233,36 @@ static void kernel_video_select_present_kind(void) {
         return;
     }
     g_present_kind = KERNEL_VIDEO_PRESENT_REP_MOVSD;
+}
+
+static int kernel_video_cpu_prefers_conservative_stream_copy(void) {
+    const struct kernel_cpu_topology *topology = kernel_cpu_topology();
+
+    if (topology == 0 || topology->cpuid_supported == 0u) {
+        return 0;
+    }
+
+    /*
+     * Older Intel Core/Pentium/Celeron parts can exhibit visible corruption in
+     * the first scanlines of a WC-mapped framebuffer when we drive presents via
+     * movntdq under concurrent DMA load (notably during desktop audio startup).
+     * Keeping those CPUs on rep movsd is slower but materially more stable,
+     * while newer parts such as Ivy Bridge and later keep the faster path.
+     */
+    if (strcmp(topology->vendor, "GenuineIntel") == 0) {
+        return topology->cpuid_family == 6u && topology->cpuid_model < 0x1Au;
+    }
+
+    /*
+     * Apply the same conservative choice to very old AMD family-0Fh parts,
+     * where write-combined streaming stores are also more likely to misbehave
+     * against legacy LFB mappings than plain cached copies.
+     */
+    if (strcmp(topology->vendor, "AuthenticAMD") == 0) {
+        return topology->cpuid_family <= 0x0Fu;
+    }
+
+    return 0;
 }
 
 static void kernel_video_copy_row_byte(uint8_t *dst, const volatile uint8_t *src, size_t bytes) {

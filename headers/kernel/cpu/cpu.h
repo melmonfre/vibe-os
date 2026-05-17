@@ -3,11 +3,17 @@
 
 #include <stdint.h>
 
-/* Architecture‑level bring‑up helpers. These are currently minimal stubs
-   because the bootloader already sets protected mode and a flat GDT. */
+#define KERNEL_CS_SELECTOR 0x08u
+#define KERNEL_DS_SELECTOR 0x10u
+#define USER_CS_SELECTOR 0x1Bu
+#define USER_DS_SELECTOR 0x23u
+
+/* Architecture-level bring-up helpers for protected-mode segmentation/TSS. */
 void cpu_init(void);
 void gdt_init(void);
 void kernel_cpu_enable_current_features(void);
+uint16_t kernel_cpu_tss_selector(uint32_t cpu_index);
+void kernel_tss_set_kernel_stack(uintptr_t stack_top);
 int kernel_cpu_has_pat(void);
 int kernel_cpu_has_sse2(void);
 int kernel_cpu_sse_enabled(void);

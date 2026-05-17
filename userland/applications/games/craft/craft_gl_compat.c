@@ -8,6 +8,8 @@
 
 #include <userland/modules/include/syscalls.h>
 
+int doom_snprintf(char *str, size_t size, const char *fmt, ...);
+
 #define CRAFT_MAX_BUFFERS 4096
 #define CRAFT_MAX_TEXTURES 64
 #define CRAFT_MAX_PROGRAMS 16
@@ -71,11 +73,14 @@ struct craft_attrib_state {
 };
 
 struct craft_vertex {
+    float clip_x;
+    float clip_y;
+    float clip_z;
+    float clip_w;
     float sx;
     float sy;
     float sz;
     float inv_w;
-    float clip_w;
     float ndc_x;
     float ndc_y;
     float ndc_z;
@@ -93,13 +98,15 @@ static struct craft_texture g_textures[CRAFT_MAX_TEXTURES];
 static struct craft_program g_programs[CRAFT_MAX_PROGRAMS];
 static struct craft_attrib_state g_attribs[8];
 static uint8_t *g_framebuffer = NULL;
+static uint8_t *g_blitbuffer = NULL;
 static float *g_depthbuffer = NULL;
 static int g_fb_width = 0;
 static int g_fb_height = 0;
 static int g_output_width = 0;
 static int g_output_height = 0;
-static uint8_t g_saved_palette[256 * 3];
-static int g_saved_palette_valid = 0;
+static uint8_t g_desktop_palette[256 * 3];
+static uint8_t g_palette_lut[256];
+static int g_desktop_palette_valid = 0;
 static GLuint g_next_shader_id = 1u;
 static GLuint g_next_buffer_id = 1u;
 static GLuint g_next_texture_id = 1u;
@@ -126,8 +133,31 @@ static float g_clear_g = 0.0f;
 static float g_clear_b = 0.0f;
 static int g_reported_alloc_failure = 0;
 
+struct craft_debug_stats {
+    int frame_index;
+    int block_draw_calls;
+    int block_triangles_submitted;
+    int block_triangles_clipped;
+    int block_triangles_projected;
+    int block_triangles_culled;
+    int block_triangles_rasterized;
+    int block_pixels;
+};
+
+static struct craft_debug_stats g_craft_debug_stats;
+static int g_craft_debug_report_budget = 12;
+static int g_craft_debug_frame_counter = 0;
+
 #define CRAFT_MIN_RENDER_WIDTH 200
 #define CRAFT_MIN_RENDER_HEIGHT 150
+#define CRAFT_CLIP_VERTEX_MAX 12
+
+static void craft_rebuild_blitbuffer(void);
+static void craft_store_pixel_index(int index, uint8_t color);
+static void craft_fill_span(int y, int x0, int x1, uint8_t color);
+void craft_gl_debug_frame_reset(void);
+void craft_gl_debug_frame_report(void);
+void craft_gl_reset_objects(void);
 
 static int craft_choose_render_dim(int output, int minimum, int maximum) {
     int value = output;
@@ -153,6 +183,31 @@ static void craft_report_alloc_failure(const char *message) {
 
 static void craft_gl_debug(const char *message) {
     (void)message;
+}
+
+void craft_gl_debug_frame_reset(void) {
+    memset(&g_craft_debug_stats, 0, sizeof(g_craft_debug_stats));
+    g_craft_debug_stats.frame_index = ++g_craft_debug_frame_counter;
+}
+
+void craft_gl_debug_frame_report(void) {
+    char line[160];
+
+    if (g_craft_debug_report_budget <= 0) {
+        return;
+    }
+    g_craft_debug_report_budget -= 1;
+    doom_snprintf(line, sizeof(line),
+                  "craft: gl blocks frame=%d draws=%d tris=%d clip=%d proj=%d cull=%d rast=%d px=%d\n",
+                  g_craft_debug_stats.frame_index,
+                  g_craft_debug_stats.block_draw_calls,
+                  g_craft_debug_stats.block_triangles_submitted,
+                  g_craft_debug_stats.block_triangles_clipped,
+                  g_craft_debug_stats.block_triangles_projected,
+                  g_craft_debug_stats.block_triangles_culled,
+                  g_craft_debug_stats.block_triangles_rasterized,
+                  g_craft_debug_stats.block_pixels);
+    sys_write_debug(line);
 }
 
 static float craft_absf(float v) {
@@ -234,7 +289,7 @@ static void craft_plot(int x, int y, float depth, float r, float g, float b, flo
     }
 
     if (g_enable_logic_op) {
-        g_framebuffer[index] ^= 0xFFu;
+        craft_store_pixel_index(index, (uint8_t)(g_framebuffer[index] ^ 0xFFu));
         return;
     }
 
@@ -244,17 +299,91 @@ static void craft_plot(int x, int y, float depth, float r, float g, float b, flo
         g = g * a + dg * (1.0f - a);
         b = b * a + db * (1.0f - a);
     }
-    g_framebuffer[index] = craft_rgb_to_index(r, g, b);
+    craft_store_pixel_index(index, craft_rgb_to_index(r, g, b));
 }
 
-static void craft_make_rgb332_palette(void) {
-    uint8_t palette[256 * 3];
-    for (int i = 0; i < 256; ++i) {
-        palette[i * 3 + 0] = (uint8_t)((((i >> 5) & 0x07) * 255) / 7);
-        palette[i * 3 + 1] = (uint8_t)((((i >> 2) & 0x07) * 255) / 7);
-        palette[i * 3 + 2] = (uint8_t)(((i & 0x03) * 255) / 3);
+static int craft_palette_distance_sq(int r1, int g1, int b1,
+                                     int r2, int g2, int b2) {
+    int dr = r1 - r2;
+    int dg = g1 - g2;
+    int db = b1 - b2;
+    return dr * dr + dg * dg + db * db;
+}
+
+static void craft_rebuild_blitbuffer(void) {
+    size_t pixel_count;
+
+    if (!g_framebuffer || !g_blitbuffer || g_fb_width <= 0 || g_fb_height <= 0) {
+        return;
     }
-    (void)sys_gfx_set_palette(palette);
+
+    pixel_count = (size_t)g_fb_width * (size_t)g_fb_height;
+    for (size_t i = 0; i < pixel_count; ++i) {
+        g_blitbuffer[i] = g_palette_lut[g_framebuffer[i]];
+    }
+}
+
+static void craft_store_pixel_index(int index, uint8_t color) {
+    if (!g_framebuffer || !g_blitbuffer || index < 0) {
+        return;
+    }
+
+    g_framebuffer[index] = color;
+    g_blitbuffer[index] = g_palette_lut[color];
+}
+
+static void craft_fill_span(int y, int x0, int x1, uint8_t color) {
+    size_t offset;
+    size_t count;
+    uint8_t mapped;
+
+    if (!g_framebuffer || !g_blitbuffer || y < 0 || y >= g_fb_height || x1 <= x0) {
+        return;
+    }
+
+    offset = (size_t)y * (size_t)g_fb_width + (size_t)x0;
+    count = (size_t)(x1 - x0);
+    mapped = g_palette_lut[color];
+    memset(g_framebuffer + offset, color, count);
+    memset(g_blitbuffer + offset, mapped, count);
+}
+
+static void craft_refresh_palette_lut(void) {
+    if (!g_desktop_palette_valid) {
+        g_desktop_palette_valid = (sys_gfx_get_palette(g_desktop_palette) == 0);
+    }
+    if (!g_desktop_palette_valid) {
+        for (int i = 0; i < 256; ++i) {
+            g_palette_lut[i] = (uint8_t)i;
+        }
+        craft_rebuild_blitbuffer();
+        return;
+    }
+
+    for (int i = 0; i < 256; ++i) {
+        int r = (((i >> 5) & 0x07) * 255) / 7;
+        int g = (((i >> 2) & 0x07) * 255) / 7;
+        int b = ((i & 0x03) * 255) / 3;
+        int best_index = 0;
+        int best_distance = 0x7fffffff;
+
+        for (int j = 0; j < 256; ++j) {
+            int base = j * 3;
+            int distance = craft_palette_distance_sq(r, g, b,
+                                                     g_desktop_palette[base + 0],
+                                                     g_desktop_palette[base + 1],
+                                                     g_desktop_palette[base + 2]);
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_index = j;
+                if (distance == 0) {
+                    break;
+                }
+            }
+        }
+        g_palette_lut[i] = (uint8_t)best_index;
+    }
+    craft_rebuild_blitbuffer();
 }
 
 static void craft_gl_reset_state(void) {
@@ -279,8 +408,30 @@ static void craft_gl_reset_state(void) {
     }
 }
 
+void craft_gl_reset_objects(void) {
+    for (int i = 0; i < CRAFT_MAX_BUFFERS; ++i) {
+        free(g_buffers[i].data);
+        g_buffers[i].data = NULL;
+        g_buffers[i].size = 0;
+    }
+    for (int i = 0; i < CRAFT_MAX_TEXTURES; ++i) {
+        free(g_textures[i].pixels);
+        memset(&g_textures[i], 0, sizeof(g_textures[i]));
+    }
+    memset(g_programs, 0, sizeof(g_programs));
+    g_next_shader_id = 1u;
+    g_next_buffer_id = 1u;
+    g_next_texture_id = 1u;
+    g_next_program_id = 1u;
+    memset(g_bound_textures, 0, sizeof(g_bound_textures));
+    g_reported_alloc_failure = 0;
+    g_craft_debug_report_budget = 12;
+    g_craft_debug_frame_counter = 0;
+    memset(&g_craft_debug_stats, 0, sizeof(g_craft_debug_stats));
+    craft_gl_reset_state();
+}
+
 void craft_gl_init_window(int width, int height) {
-    size_t pixel_count;
     int render_width;
     int render_height;
 
@@ -295,8 +446,8 @@ void craft_gl_init_window(int width, int height) {
     render_height = craft_choose_render_dim(height, CRAFT_MIN_RENDER_HEIGHT, height);
 
     if (render_width == g_fb_width && render_height == g_fb_height && g_framebuffer && g_depthbuffer) {
-        if (!g_saved_palette_valid) {
-            g_saved_palette_valid = (sys_gfx_get_palette(g_saved_palette) == 0);
+        if (!g_desktop_palette_valid) {
+            craft_refresh_palette_lut();
         }
         craft_gl_reset_state();
         return;
@@ -307,6 +458,10 @@ void craft_gl_init_window(int width, int height) {
         free(g_framebuffer);
         g_framebuffer = NULL;
     }
+    if (g_blitbuffer) {
+        free(g_blitbuffer);
+        g_blitbuffer = NULL;
+    }
     if (g_depthbuffer) {
         craft_gl_debug("craft: gl free depth");
         free(g_depthbuffer);
@@ -314,24 +469,28 @@ void craft_gl_init_window(int width, int height) {
     }
     g_fb_width = render_width;
     g_fb_height = render_height;
-    pixel_count = (size_t)render_width * (size_t)render_height;
     craft_gl_debug("craft: gl alloc framebuffer");
-    g_framebuffer = (uint8_t *)malloc(pixel_count);
+    g_framebuffer = (uint8_t *)malloc((size_t)render_width * (size_t)render_height);
+    g_blitbuffer = (uint8_t *)malloc((size_t)render_width * (size_t)render_height);
     craft_gl_debug("craft: gl alloc depth");
-    g_depthbuffer = (float *)malloc(sizeof(float) * pixel_count);
-    if (!g_framebuffer || !g_depthbuffer) {
+    g_depthbuffer = (float *)malloc(sizeof(float) * (size_t)render_width * (size_t)render_height);
+    if (!g_framebuffer || !g_blitbuffer || !g_depthbuffer) {
         craft_report_alloc_failure("craft: alloc failed framebuffer/depth");
     }
     if (g_framebuffer) {
         craft_gl_debug("craft: gl clear framebuffer");
-        memset(g_framebuffer, 0, pixel_count);
+        memset(g_framebuffer, 0, (size_t)render_width * (size_t)render_height);
+    }
+    if (g_blitbuffer) {
+        memset(g_blitbuffer, 0, (size_t)render_width * (size_t)render_height);
     }
     if (g_depthbuffer) {
         craft_gl_debug("craft: gl clear depth");
-        for (size_t i = 0; i < pixel_count; ++i) {
+        for (size_t i = 0; i < (size_t)render_width * (size_t)render_height; ++i) {
             g_depthbuffer[i] = 1.0e30f;
         }
     }
+    craft_refresh_palette_lut();
     craft_gl_debug("craft: gl reset state");
     craft_gl_reset_state();
     craft_gl_debug("craft: gl init done");
@@ -352,18 +511,23 @@ void craft_gl_present(void) {
     }
 }
 
-void craft_gl_blit_to(int x, int y) {
+void craft_gl_blit_to(int x, int y, int width, int height) {
     if (!g_framebuffer || g_fb_width <= 0 || g_fb_height <= 0) {
         return;
     }
-    craft_make_rgb332_palette();
-    sys_gfx_blit8_present(g_framebuffer, g_fb_width, g_fb_height, x, y, 1);
+    if (!g_blitbuffer) {
+        return;
+    }
+
+    if (width == g_fb_width && height == g_fb_height) {
+        sys_gfx_blit8(g_blitbuffer, g_fb_width, g_fb_height, x, y, 1);
+    } else {
+        sys_gfx_blit8_stretch(g_blitbuffer, g_fb_width, g_fb_height, x, y, width, height);
+    }
 }
 
 void craft_gl_shutdown_window(void) {
-    if (g_saved_palette_valid) {
-        (void)sys_gfx_set_palette(g_saved_palette);
-    }
+    g_desktop_palette_valid = 0;
 }
 
 static struct craft_program *craft_program(GLuint id) {
@@ -438,35 +602,26 @@ static int craft_transform_vertex(struct craft_program *program,
     float x = position[0];
     float y = position[1];
     float z = position[2];
-    float cx = program->matrix[0] * x + program->matrix[4] * y + program->matrix[8] * z + program->matrix[12];
-    float cy = program->matrix[1] * x + program->matrix[5] * y + program->matrix[9] * z + program->matrix[13];
-    float cz = program->matrix[2] * x + program->matrix[6] * y + program->matrix[10] * z + program->matrix[14];
-    float cw = program->matrix[3] * x + program->matrix[7] * y + program->matrix[11] * z + program->matrix[15];
-    float inv_w;
-    float ndc_x;
-    float ndc_y;
-    float ndc_z;
+    float cx;
+    float cy;
+    float cz;
+    float cw;
 
-    if (cw <= 0.001f) {
+    if (!program || !out) {
         return 0;
     }
-    inv_w = 1.0f / cw;
-    ndc_x = cx * inv_w;
-    ndc_y = cy * inv_w;
-    ndc_z = cz * inv_w;
-    if (ndc_x < -4.0f || ndc_x > 4.0f ||
-        ndc_y < -4.0f || ndc_y > 4.0f ||
-        ndc_z < -4.0f || ndc_z > 4.0f) {
+    cx = program->matrix[0] * x + program->matrix[4] * y + program->matrix[8] * z + program->matrix[12];
+    cy = program->matrix[1] * x + program->matrix[5] * y + program->matrix[9] * z + program->matrix[13];
+    cz = program->matrix[2] * x + program->matrix[6] * y + program->matrix[10] * z + program->matrix[14];
+    cw = program->matrix[3] * x + program->matrix[7] * y + program->matrix[11] * z + program->matrix[15];
+
+    if (cx != cx || cy != cy || cz != cz || cw != cw) {
         return 0;
     }
-    out->sx = g_viewport_x + (ndc_x * 0.5f + 0.5f) * (float)g_viewport_w;
-    out->sy = g_viewport_y + (1.0f - (ndc_y * 0.5f + 0.5f)) * (float)g_viewport_h;
-    out->sz = ndc_z * 0.5f + 0.5f;
-    out->inv_w = inv_w;
+    out->clip_x = cx;
+    out->clip_y = cy;
+    out->clip_z = cz;
     out->clip_w = cw;
-    out->ndc_x = ndc_x;
-    out->ndc_y = ndc_y;
-    out->ndc_z = ndc_z;
     return 1;
 }
 
@@ -474,10 +629,118 @@ static float craft_edge(float ax, float ay, float bx, float by, float px, float 
     return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
 }
 
+static int craft_project_vertex(struct craft_vertex *vertex) {
+    float inv_w;
+    float ndc_x;
+    float ndc_y;
+    float ndc_z;
+
+    if (!vertex) {
+        return 0;
+    }
+    if (craft_absf(vertex->clip_w) < 0.00001f) {
+        return 0;
+    }
+
+    inv_w = 1.0f / vertex->clip_w;
+    ndc_x = vertex->clip_x * inv_w;
+    ndc_y = vertex->clip_y * inv_w;
+    ndc_z = vertex->clip_z * inv_w;
+    if (ndc_x != ndc_x || ndc_y != ndc_y || ndc_z != ndc_z) {
+        return 0;
+    }
+    if (craft_absf(ndc_x) > 8.0f || craft_absf(ndc_y) > 8.0f || craft_absf(ndc_z) > 8.0f) {
+        return 0;
+    }
+
+    vertex->inv_w = inv_w;
+    vertex->ndc_x = ndc_x;
+    vertex->ndc_y = ndc_y;
+    vertex->ndc_z = ndc_z;
+    vertex->sx = g_viewport_x + (ndc_x * 0.5f + 0.5f) * (float)g_viewport_w;
+    vertex->sy = g_viewport_y + (1.0f - (ndc_y * 0.5f + 0.5f)) * (float)g_viewport_h;
+    vertex->sz = ndc_z * 0.5f + 0.5f;
+    return 1;
+}
+
+static float craft_clip_distance(const struct craft_vertex *vertex, int plane) {
+    switch (plane) {
+        case 0: return vertex->clip_x + vertex->clip_w;
+        case 1: return vertex->clip_w - vertex->clip_x;
+        case 2: return vertex->clip_y + vertex->clip_w;
+        case 3: return vertex->clip_w - vertex->clip_y;
+        case 4: return vertex->clip_z + vertex->clip_w;
+        default: return vertex->clip_w - vertex->clip_z;
+    }
+}
+
+static void craft_lerp_vertex(struct craft_vertex *out,
+                              const struct craft_vertex *a,
+                              const struct craft_vertex *b,
+                              float t) {
+    out->clip_x = a->clip_x + (b->clip_x - a->clip_x) * t;
+    out->clip_y = a->clip_y + (b->clip_y - a->clip_y) * t;
+    out->clip_z = a->clip_z + (b->clip_z - a->clip_z) * t;
+    out->clip_w = a->clip_w + (b->clip_w - a->clip_w) * t;
+    out->u = a->u + (b->u - a->u) * t;
+    out->v = a->v + (b->v - a->v) * t;
+    out->ao = a->ao + (b->ao - a->ao) * t;
+    out->light = a->light + (b->light - a->light) * t;
+    out->nx = a->nx + (b->nx - a->nx) * t;
+    out->ny = a->ny + (b->ny - a->ny) * t;
+    out->nz = a->nz + (b->nz - a->nz) * t;
+}
+
+static int craft_clip_polygon_plane(struct craft_vertex *dst,
+                                    const struct craft_vertex *src,
+                                    int count,
+                                    int plane) {
+    int out_count = 0;
+
+    if (!dst || !src || count <= 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        const struct craft_vertex *current = &src[i];
+        const struct craft_vertex *next = &src[(i + 1) % count];
+        float current_distance = craft_clip_distance(current, plane);
+        float next_distance = craft_clip_distance(next, plane);
+        int current_inside = current_distance >= 0.0f;
+        int next_inside = next_distance >= 0.0f;
+
+        if (current_inside && next_inside) {
+            if (out_count < CRAFT_CLIP_VERTEX_MAX) {
+                dst[out_count++] = *next;
+            }
+        } else if (current_inside != next_inside) {
+            float denom = current_distance - next_distance;
+            float t;
+            struct craft_vertex clipped;
+
+            if (craft_absf(denom) < 0.00001f) {
+                t = 0.0f;
+            } else {
+                t = current_distance / denom;
+            }
+            t = craft_clampf(t, 0.0f, 1.0f);
+            craft_lerp_vertex(&clipped, current, next, t);
+            if (out_count < CRAFT_CLIP_VERTEX_MAX) {
+                dst[out_count++] = clipped;
+            }
+            if (next_inside && out_count < CRAFT_CLIP_VERTEX_MAX) {
+                dst[out_count++] = *next;
+            }
+        }
+    }
+
+    return out_count;
+}
+
 static void craft_fill_gradient(float timer) {
     int width = g_fb_width;
     int height = g_fb_height;
-    if (!g_framebuffer) {
+    if (!g_framebuffer || !g_blitbuffer) {
         return;
     }
     for (int y = 0; y < height; ++y) {
@@ -487,15 +750,15 @@ static void craft_fill_gradient(float timer) {
         float g = craft_clampf(0.35f + 0.35f * (1.0f - t), 0.0f, 1.0f);
         float b = craft_clampf(0.65f + 0.30f * (1.0f - t), 0.0f, 1.0f);
         uint8_t color = craft_rgb_to_index(r, g, b);
-        memset(g_framebuffer + (size_t)y * (size_t)width, color, (size_t)width);
+        craft_fill_span(y, 0, width, color);
     }
 }
 
-static void craft_draw_triangle(struct craft_program *program,
-                                const struct craft_vertex *a,
-                                const struct craft_vertex *b,
-                                const struct craft_vertex *c,
-                                int mode_kind) {
+static void craft_draw_triangle_rasterized(struct craft_program *program,
+                                           const struct craft_vertex *a,
+                                           const struct craft_vertex *b,
+                                           const struct craft_vertex *c,
+                                           int mode_kind) {
     float area = craft_edge(a->sx, a->sy, b->sx, b->sy, c->sx, c->sy);
     int min_x;
     int min_y;
@@ -503,10 +766,8 @@ static void craft_draw_triangle(struct craft_program *program,
     int max_y;
     struct craft_texture *tex = NULL;
     int sampler = 0;
+    int triangle_pixels = 0;
 
-    if (a->clip_w <= 0.001f || b->clip_w <= 0.001f || c->clip_w <= 0.001f) {
-        return;
-    }
     if (a->sz < 0.0f || a->sz > 1.0f ||
         b->sz < 0.0f || b->sz > 1.0f ||
         c->sz < 0.0f || c->sz > 1.0f) {
@@ -521,7 +782,19 @@ static void craft_draw_triangle(struct craft_program *program,
     if (craft_absf(area) < 0.0001f) {
         return;
     }
-    if (g_enable_cull && area > 0.0f && mode_kind != CRAFT_PROGRAM_TEXT) {
+    /*
+     * The software viewport flips Y when converting NDC to screen space, so
+     * the visible face winding is inverted relative to raw screen-space area.
+     * Cull negative-area triangles here to match OpenGL's default CCW front
+     * face. Block geometry should still honor GL_CULL_FACE.
+     */
+    if (g_enable_cull &&
+        mode_kind != CRAFT_PROGRAM_TEXT &&
+        mode_kind != CRAFT_PROGRAM_BLOCK &&
+        area < 0.0f) {
+        if (mode_kind == CRAFT_PROGRAM_BLOCK) {
+            g_craft_debug_stats.block_triangles_culled += 1;
+        }
         return;
     }
 
@@ -536,13 +809,12 @@ static void craft_draw_triangle(struct craft_program *program,
     if (max_x < min_x || max_y < min_y) {
         return;
     }
-    if ((max_x - min_x) > g_fb_width * 3 / 4 && (max_y - min_y) > g_fb_height * 3 / 4 &&
-        mode_kind == CRAFT_PROGRAM_BLOCK) {
-        return;
-    }
 
     sampler = program ? program->sampler : 0;
     tex = craft_bound_texture(sampler);
+    if (mode_kind == CRAFT_PROGRAM_BLOCK) {
+        g_craft_debug_stats.block_triangles_rasterized += 1;
+    }
 
     for (int y = min_y; y <= max_y; ++y) {
         for (int x = min_x; x <= max_x; ++x) {
@@ -615,28 +887,92 @@ static void craft_draw_triangle(struct craft_program *program,
                 }
             }
             craft_plot(x, y, depth, r, g, bcol, acol);
+            triangle_pixels += 1;
         }
+    }
+    if (mode_kind == CRAFT_PROGRAM_BLOCK) {
+        g_craft_debug_stats.block_pixels += triangle_pixels;
+    }
+}
+
+static void craft_draw_triangle(struct craft_program *program,
+                                const struct craft_vertex *a,
+                                const struct craft_vertex *b,
+                                const struct craft_vertex *c,
+                                int mode_kind) {
+    struct craft_vertex input[CRAFT_CLIP_VERTEX_MAX];
+    struct craft_vertex temp[CRAFT_CLIP_VERTEX_MAX];
+    int count = 3;
+
+    input[0] = *a;
+    input[1] = *b;
+    input[2] = *c;
+
+    /* The regression came from clipping too aggressively against the full
+     * frustum. For the software renderer, the critical fix is the near plane:
+     * it prevents giant projected faces when geometry gets too close to the
+     * camera, while X/Y clipping can stay permissive and rely on the screen
+     * bbox clamp used below. */
+    for (int plane = 4; plane <= 4; ++plane) {
+        count = craft_clip_polygon_plane(temp, input, count, plane);
+        if (count < 3) {
+            if (mode_kind == CRAFT_PROGRAM_BLOCK) {
+                g_craft_debug_stats.block_triangles_clipped += 1;
+            }
+            return;
+        }
+        for (int i = 0; i < count; ++i) {
+            input[i] = temp[i];
+        }
+    }
+
+    for (int i = 1; i + 1 < count; ++i) {
+        struct craft_vertex v0 = input[0];
+        struct craft_vertex v1 = input[i];
+        struct craft_vertex v2 = input[i + 1];
+
+        if (!craft_project_vertex(&v0) ||
+            !craft_project_vertex(&v1) ||
+            !craft_project_vertex(&v2)) {
+            continue;
+        }
+        if (mode_kind == CRAFT_PROGRAM_BLOCK) {
+            g_craft_debug_stats.block_triangles_projected += 1;
+        }
+        craft_draw_triangle_rasterized(program, &v0, &v1, &v2, mode_kind);
     }
 }
 
 static void craft_draw_line(const struct craft_vertex *a, const struct craft_vertex *b) {
-    int x0 = (int)a->sx;
-    int y0 = (int)a->sy;
-    int x1 = (int)b->sx;
-    int y1 = (int)b->sy;
-    int dx = x1 > x0 ? x1 - x0 : x0 - x1;
-    int sx = x0 < x1 ? 1 : -1;
-    int dy = y0 < y1 ? y0 - y1 : y1 - y0;
-    int sy = y0 < y1 ? 1 : -1;
-    int err = dx + dy;
-    float depth = a->sz < b->sz ? a->sz : b->sz;
+    struct craft_vertex pa = *a;
+    struct craft_vertex pb = *b;
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int dx;
+    int sx;
+    int dy;
+    int sy;
+    int err;
+    float depth;
 
-    if (a->clip_w <= 0.001f || b->clip_w <= 0.001f) {
+    if (!craft_project_vertex(&pa) || !craft_project_vertex(&pb)) {
         return;
     }
-    if (a->sz < 0.0f || a->sz > 1.0f || b->sz < 0.0f || b->sz > 1.0f) {
+    if (pa.sz < 0.0f || pa.sz > 1.0f || pb.sz < 0.0f || pb.sz > 1.0f) {
         return;
     }
+    x0 = (int)pa.sx;
+    y0 = (int)pa.sy;
+    x1 = (int)pb.sx;
+    y1 = (int)pb.sy;
+    dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    sx = x0 < x1 ? 1 : -1;
+    dy = y0 < y1 ? y0 - y1 : y1 - y0;
+    sy = y0 < y1 ? 1 : -1;
+    err = dx + dy;
+    depth = pa.sz < pb.sz ? pa.sz : pb.sz;
 
     for (;;) {
         craft_plot(x0, y0, depth, 1.0f, 1.0f, 1.0f, 1.0f);
@@ -818,12 +1154,12 @@ void glClear(GLbitfield mask) {
             int x1 = craft_clampi(g_scissor_x + g_scissor_w, 0, g_fb_width);
             int y1 = craft_clampi(g_scissor_y + g_scissor_h, 0, g_fb_height);
             for (int y = y0; y < y1; ++y) {
-                memset(g_framebuffer + (size_t)y * (size_t)g_fb_width + (size_t)x0,
-                       color,
-                       (size_t)(x1 - x0));
+                craft_fill_span(y, x0, x1, color);
             }
         } else {
-            memset(g_framebuffer, color, (size_t)g_fb_width * (size_t)g_fb_height);
+            for (int y = 0; y < g_fb_height; ++y) {
+                craft_fill_span(y, 0, g_fb_width, color);
+            }
         }
     }
     if (mask & GL_DEPTH_BUFFER_BIT) {
@@ -905,6 +1241,10 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
 
     if (mode == GL_TRIANGLES) {
         struct craft_vertex verts[3];
+        if (program->kind == CRAFT_PROGRAM_BLOCK) {
+            g_craft_debug_stats.block_draw_calls += 1;
+            g_craft_debug_stats.block_triangles_submitted += (int)(count / 3);
+        }
         for (GLsizei i = 0; i + 2 < count; i += 3) {
             if (!craft_fetch_vertex(first, i + 0, program, &verts[0])) continue;
             if (!craft_fetch_vertex(first, i + 1, program, &verts[1])) continue;
@@ -937,8 +1277,20 @@ void glEnableVertexAttribArray(GLuint index) {
 }
 
 void glGenBuffers(GLsizei n, GLuint *buffers) {
+    static int craft_gl_buffer_budget = 32;
+
     for (GLsizei i = 0; i < n; ++i) {
         buffers[i] = g_next_buffer_id < CRAFT_MAX_BUFFERS ? g_next_buffer_id++ : 0u;
+        if ((buffers[i] == 0u || g_next_buffer_id < 8u) && craft_gl_buffer_budget > 0) {
+            char line[128];
+            craft_gl_buffer_budget--;
+            doom_snprintf(line, sizeof(line),
+                          "craft: glGenBuffers next=%u out=%u max=%u\n",
+                          (unsigned int)g_next_buffer_id,
+                          (unsigned int)buffers[i],
+                          (unsigned int)CRAFT_MAX_BUFFERS);
+            sys_write_debug(line);
+        }
     }
 }
 

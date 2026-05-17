@@ -35,6 +35,18 @@
 #ifndef _USER_SIGNAL_H
 #define _USER_SIGNAL_H
 
+#include <sys/cdefs.h>
+
+#ifndef __BSD_VISIBLE
+#define __BSD_VISIBLE 1
+#endif
+#ifndef __POSIX_VISIBLE
+#define __POSIX_VISIBLE 200809L
+#endif
+#ifndef __XPG_VISIBLE
+#define __XPG_VISIBLE 700
+#endif
+
 #include <sys/signal.h>
 
 #if __BSD_VISIBLE || __POSIX_VISIBLE || __XPG_VISIBLE

@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #define VIBE_APP_SYSCALL_TIME_TICKS 7
+#define VIBE_APP_SYSCALL_YIELD 10
 #define VIBE_APP_CLOCK_HZ 100u
 #define EOF (-1)
 
@@ -39,6 +40,7 @@ struct heap_block {
 };
 
 static struct heap_block *g_heap_head = 0;
+static volatile int g_heap_lock = 0;
 static void (*g_atexit_handlers[16])(void);
 static int g_atexit_count = 0;
 static FILE g_file_pool[VIBE_APP_MAX_OPEN_FILES];
@@ -107,6 +109,17 @@ static void coalesce_blocks(void) {
             block = block->next;
         }
     }
+}
+
+static void heap_lock(void) {
+    while (__sync_lock_test_and_set(&g_heap_lock, 1) != 0) {
+        (void)vibe_app_syscall5(VIBE_APP_SYSCALL_YIELD, 0, 0, 0, 0, 0);
+    }
+}
+
+static void heap_unlock(void) {
+    __sync_synchronize();
+    __sync_lock_release(&g_heap_lock);
 }
 
 static int vibe_is_console_file(FILE *f) {
@@ -218,6 +231,7 @@ void vibe_app_runtime_init(const struct vibe_app_context *ctx) {
     g_desktop_app_ctx = ctx;
     g_atexit_count = 0;
     memset(g_file_pool, 0, sizeof(g_file_pool));
+    g_heap_lock = 0;
     if (ctx) {
         heap_init(ctx->heap_base, ctx->heap_size);
     } else {
@@ -371,6 +385,7 @@ int vibe_app_sleep_ms(unsigned int ms) {
 
 void *vibe_app_malloc(size_t size) {
     struct heap_block *block;
+    void *result = 0;
 
     if (size == 0u) {
         return 0;
@@ -379,22 +394,27 @@ void *vibe_app_malloc(size_t size) {
         size += 8u - (size & 7u);
     }
 
+    heap_lock();
     for (block = g_heap_head; block; block = block->next) {
         if (block->free && block->size >= size) {
             split_block(block, size);
             block->free = 0;
-            return block_payload(block);
+            result = block_payload(block);
+            break;
         }
     }
-    return 0;
+    heap_unlock();
+    return result;
 }
 
 void vibe_app_free(void *ptr) {
     if (!ptr) {
         return;
     }
+    heap_lock();
     payload_block(ptr)->free = 1;
     coalesce_blocks();
+    heap_unlock();
 }
 
 void *vibe_app_realloc(void *ptr, size_t size) {
@@ -409,10 +429,13 @@ void *vibe_app_realloc(void *ptr, size_t size) {
         return 0;
     }
 
+    heap_lock();
     block = payload_block(ptr);
     if (block->size >= size) {
+        heap_unlock();
         return ptr;
     }
+    heap_unlock();
 
     new_ptr = vibe_app_malloc(size);
     if (!new_ptr) {

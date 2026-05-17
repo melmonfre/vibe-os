@@ -6,7 +6,7 @@
 #define BLOCK_DEVICE_MBR_PARTITION_OFFSET 446u
 #define BLOCK_DEVICE_MBR_SIGNATURE_OFFSET 510u
 #define BLOCK_DEVICE_STORAGE_PARTITION_INDEX 1u
-#define BLOCK_DEVICE_IO_RETRIES 3u
+#define BLOCK_DEVICE_IO_RETRIES 6u
 
 struct kernel_block_device {
     const char *name;
@@ -78,15 +78,35 @@ int kernel_block_device_detect_mbr_partition(void *context,
     entry = &mbr[BLOCK_DEVICE_MBR_PARTITION_OFFSET + (BLOCK_DEVICE_STORAGE_PARTITION_INDEX * 16u)];
     start_lba = block_device_read_u32_le(entry + 8);
     sector_count = block_device_read_u32_le(entry + 12);
-    if (start_lba == 0u || sector_count == 0u || start_lba >= total_sectors) {
+    if (start_lba != 0u && sector_count != 0u && start_lba < total_sectors) {
+        if (sector_count > (total_sectors - start_lba)) {
+            sector_count = total_sectors - start_lba;
+        }
+        *partition_start_lba = start_lba;
+        *partition_sector_count = sector_count;
         return 0;
     }
-    if (sector_count > (total_sectors - start_lba)) {
-        sector_count = total_sectors - start_lba;
+
+    /* Fallback: if the canonical raw-data partition entry is invalid, scan all
+     * partition slots for a compatible non-empty partition. This improves
+     * support for disks with unusual partition layouts while preserving the
+     * documented entry-1 convention when it is valid. */
+    for (uint32_t index = 0u; index < 4u; ++index) {
+        const uint8_t *probe_entry = &mbr[BLOCK_DEVICE_MBR_PARTITION_OFFSET + (index * 16u)];
+        uint32_t probe_start = block_device_read_u32_le(probe_entry + 8);
+        uint32_t probe_count = block_device_read_u32_le(probe_entry + 12);
+
+        if (probe_start == 0u || probe_count == 0u || probe_start >= total_sectors) {
+            continue;
+        }
+        if (probe_count > (total_sectors - probe_start)) {
+            probe_count = total_sectors - probe_start;
+        }
+        *partition_start_lba = probe_start;
+        *partition_sector_count = probe_count;
+        return 0;
     }
 
-    *partition_start_lba = start_lba;
-    *partition_sector_count = sector_count;
     return 0;
 }
 

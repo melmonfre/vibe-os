@@ -11,6 +11,7 @@
 
 static struct mk_message g_last_storage_request;
 static struct mk_message g_last_storage_reply;
+#define MK_STORAGE_PERSIST_IO_CHUNK_SECTORS 64u
 
 static uint32_t mk_storage_current_pid(void) {
     return scheduler_current_pid();
@@ -310,11 +311,11 @@ int mk_storage_service_write_sectors(uint32_t lba, const void *src, uint32_t sec
 }
 
 int mk_storage_service_load(void *dst, uint32_t size) {
-    struct mk_message request_message;
-    struct mk_message reply;
-    struct mk_storage_persist_request payload;
-    uint32_t transfer_id;
-    int rc;
+    uint8_t *out = (uint8_t *)dst;
+    uint32_t full_sectors;
+    uint32_t tail_bytes;
+    uint32_t sector_index = 0u;
+    uint8_t tail_sector[KERNEL_PERSIST_SECTOR_SIZE];
 
     if (dst == 0 || size == 0u) {
         return -1;
@@ -324,32 +325,39 @@ int mk_storage_service_load(void *dst, uint32_t size) {
         return kernel_storage_load(dst, size);
     }
 
-    if (mk_transfer_create(mk_storage_current_pid(), size, &transfer_id) != 0) {
-        return -1;
+    /*
+     * Persist-image loads are only used by the in-memory VFS snapshot restore.
+     * On slower machines the single large transfer/request path has proven much
+     * more fragile than the regular sector IPC used by AppFS. Reuse the proven
+     * sector-read path in bounded chunks so desktop/shell startup exercises the
+     * normal storage boundary without stalling on one monolithic request.
+     */
+    full_sectors = size / KERNEL_PERSIST_SECTOR_SIZE;
+    tail_bytes = size % KERNEL_PERSIST_SECTOR_SIZE;
+
+    while (sector_index < full_sectors) {
+        uint32_t chunk_sectors = full_sectors - sector_index;
+        if (chunk_sectors > MK_STORAGE_PERSIST_IO_CHUNK_SECTORS) {
+            chunk_sectors = MK_STORAGE_PERSIST_IO_CHUNK_SECTORS;
+        }
+        if (mk_storage_service_read_sectors(KERNEL_PERSIST_START_LBA + sector_index,
+                                            out + (sector_index * KERNEL_PERSIST_SECTOR_SIZE),
+                                            chunk_sectors) != 0) {
+            return -1;
+        }
+        sector_index += chunk_sectors;
     }
-    if (mk_storage_share_transfer(transfer_id, MK_TRANSFER_PERM_WRITE) != 0) {
-        (void)mk_transfer_destroy(transfer_id);
-        return -1;
+
+    if (tail_bytes != 0u) {
+        if (mk_storage_service_read_sectors(KERNEL_PERSIST_START_LBA + full_sectors,
+                                            tail_sector,
+                                            1u) != 0) {
+            return -1;
+        }
+        memcpy(out + (full_sectors * KERNEL_PERSIST_SECTOR_SIZE), tail_sector, tail_bytes);
     }
-    payload.size = size;
-    payload.transfer_id = transfer_id;
-    if (mk_storage_prepare_request(&request_message, MK_MSG_BLOCK_READ, &payload, sizeof(payload)) != 0) {
-        (void)mk_transfer_destroy(transfer_id);
-        return -1;
-    }
-    g_last_storage_request = request_message;
-    if (mk_service_request(MK_SERVICE_STORAGE, &request_message, &reply) != 0) {
-        (void)mk_transfer_destroy(transfer_id);
-        return -1;
-    }
-    g_last_storage_reply = reply;
-    rc = mk_storage_decode_result(&reply);
-    if (rc == 0 && mk_transfer_copy_to(transfer_id, dst, size) != 0) {
-        (void)mk_transfer_destroy(transfer_id);
-        return -1;
-    }
-    (void)mk_transfer_destroy(transfer_id);
-    return rc;
+
+    return 0;
 }
 
 int mk_storage_service_save(const void *src, uint32_t size) {

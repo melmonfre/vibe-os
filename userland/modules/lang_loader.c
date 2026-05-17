@@ -18,6 +18,7 @@ static volatile uint32_t g_lang_arena_owner[3];
 static void lang_debug_vga(int row, const char *text);
 static int lang_has_runtime_stub(const char *name);
 static int lang_catalog_command_exists(const char *name);
+static const char *lang_command_alias_target(const char *name);
 static int lang_load_directory(struct vibe_appfs_directory *directory);
 static const struct vibe_appfs_entry *lang_find_entry(const struct vibe_appfs_directory *directory,
                                                       const char *name);
@@ -70,13 +71,42 @@ static uintptr_t align_down_uintptr(uintptr_t value, uintptr_t align) {
     return value & ~(align - 1u);
 }
 
+static uint32_t lang_app_stack_size(uint32_t load_address) {
+    switch (load_address) {
+    case VIBE_APP_DESKTOP_LOAD_ADDR:
+    case VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325:
+        return VIBE_APP_DESKTOP_STACK_SIZE;
+    case VIBE_APP_BOOT_LOAD_ADDR:
+    case VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325:
+        return VIBE_APP_BOOT_STACK_SIZE;
+    default:
+        return VIBE_APP_STACK_SIZE;
+    }
+}
+
+static uint32_t lang_app_arena_size(uint32_t load_address) {
+    switch (load_address) {
+    case VIBE_APP_DESKTOP_LOAD_ADDR:
+    case VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325:
+        return VIBE_APP_DESKTOP_ARENA_SIZE;
+    case VIBE_APP_BOOT_LOAD_ADDR:
+    case VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325:
+        return VIBE_APP_BOOT_ARENA_SIZE;
+    default:
+        return VIBE_APP_ARENA_SIZE;
+    }
+}
+
 static int lang_arena_slot_for_load_address(uint32_t load_address) {
     switch (load_address) {
     case VIBE_APP_LOAD_ADDR:
+    case VIBE_APP_COMPAT_LOAD_ADDR_20260325:
         return 0;
     case VIBE_APP_DESKTOP_LOAD_ADDR:
+    case VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325:
         return 1;
     case VIBE_APP_BOOT_LOAD_ADDR:
+    case VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325:
         return 2;
     default:
         return -1;
@@ -688,10 +718,54 @@ static const struct vibe_app_host_api g_host_api = {
     host_sync_filesystem
 };
 
+static int lang_decode_app_header(const void *raw_header,
+                                  struct vibe_app_header *header_out) {
+    const struct vibe_app_header *current;
+    const struct vibe_app_header_legacy *legacy;
+
+    if (raw_header == 0 || header_out == 0) {
+        return -1;
+    }
+
+    current = (const struct vibe_app_header *)raw_header;
+    if (current->magic != VIBE_APP_MAGIC) {
+        return -1;
+    }
+    if (current->abi_version != VIBE_APP_ABI_VERSION) {
+        sys_write_debug("lang: header abi mismatch\n");
+        return -1;
+    }
+    if (current->header_size >= sizeof(struct vibe_app_header)) {
+        lang_memcpy(header_out, current, (uint32_t)sizeof(*header_out));
+        return 0;
+    }
+
+    if (current->header_size == sizeof(struct vibe_app_header_legacy)) {
+        /*
+         * The oldest AppFS layout predates the dedicated load-address field.
+         * Those binaries were linked against an earlier low-memory arena map,
+         * so on the current kernel we fail loudly instead of pretending the
+         * layout is interchangeable.
+         */
+        legacy = (const struct vibe_app_header_legacy *)raw_header;
+        if (legacy->magic == VIBE_APP_MAGIC &&
+            legacy->abi_version == VIBE_APP_ABI_VERSION) {
+            sys_write_debug("lang: legacy header layout requires rebuild\n");
+        }
+        return -1;
+    }
+
+    sys_write_debug("lang: header size unsupported\n");
+    return -1;
+}
+
 static int lang_load_address_valid(uint32_t load_address) {
     return load_address == VIBE_APP_LOAD_ADDR ||
+           load_address == VIBE_APP_COMPAT_LOAD_ADDR_20260325 ||
            load_address == VIBE_APP_DESKTOP_LOAD_ADDR ||
-           load_address == VIBE_APP_BOOT_LOAD_ADDR;
+           load_address == VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 ||
+           load_address == VIBE_APP_BOOT_LOAD_ADDR ||
+           load_address == VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325;
 }
 
 void lang_invalidate_directory_cache(void) {
@@ -713,15 +787,30 @@ static int lang_catalog_command_exists(const char *name) {
     return 0;
 }
 
+static const char *lang_command_alias_target(const char *name) {
+    if (name == 0 || name[0] == '\0') {
+        return 0;
+    }
+    if (str_eq(name, "vi") || str_eq(name, "vim")) {
+        return "edit";
+    }
+    if (str_eq(name, "mg")) {
+        return "nano";
+    }
+    return 0;
+}
+
 int lang_normalize_command_name(const char *name_or_path, char *normalized, int max_len) {
     int node;
+    const char *alias_target;
 
     if (name_or_path == 0 || normalized == 0 || max_len <= 0 || name_or_path[0] == '\0') {
         return -1;
     }
 
     if (!lang_has_slash(name_or_path)) {
-        str_copy_limited(normalized, name_or_path, max_len);
+        alias_target = lang_command_alias_target(name_or_path);
+        str_copy_limited(normalized, alias_target ? alias_target : name_or_path, max_len);
         return 0;
     }
 
@@ -730,11 +819,18 @@ int lang_normalize_command_name(const char *name_or_path, char *normalized, int 
         if (g_fs_nodes[node].is_dir) {
             return -1;
         }
-        str_copy_limited(normalized, lang_path_basename(name_or_path), max_len);
+        alias_target = lang_command_alias_target(lang_path_basename(name_or_path));
+        str_copy_limited(normalized,
+                         alias_target ? alias_target : lang_path_basename(name_or_path),
+                         max_len);
         return 0;
     }
 
     if (fs_lookup_executable_alias(name_or_path, normalized, max_len) == 0) {
+        alias_target = lang_command_alias_target(normalized);
+        if (alias_target != 0) {
+            str_copy_limited(normalized, alias_target, max_len);
+        }
         return 0;
     }
 
@@ -890,10 +986,7 @@ static int lang_read_header_copy(const struct vibe_appfs_entry *entry,
         return -1;
     }
 
-    lang_memcpy(header_out, first_sector, (uint32_t)sizeof(*header_out));
-    if (header_out->magic != VIBE_APP_MAGIC ||
-        header_out->abi_version != VIBE_APP_ABI_VERSION ||
-        header_out->header_size < sizeof(struct vibe_app_header)) {
+    if (lang_decode_app_header(first_sector, header_out) != 0) {
         sys_write_debug("lang: header invalid before read\n");
         return -1;
     }
@@ -920,7 +1013,7 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
         sys_write_debug("lang: entry exceeds app area\n");
         return -1;
     }
-    if (entry->sector_count > (VIBE_APP_ARENA_SIZE / LANG_SECTOR_SIZE)) {
+    if (entry->sector_count > (lang_app_arena_size(header_copy_in->load_address) / LANG_SECTOR_SIZE)) {
         sys_write_debug("lang: entry exceeds arena\n");
         return -1;
     }
@@ -942,12 +1035,11 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
     lang_debug_vga(19, "lang: app read ok");
 
     header = (struct vibe_app_header *)load_base;
-    if (header->magic != VIBE_APP_MAGIC ||
-        header->abi_version != VIBE_APP_ABI_VERSION ||
-        header->header_size < sizeof(struct vibe_app_header)) {
+    if (lang_decode_app_header(load_base, &header_copy) != 0) {
         sys_write_debug("lang: header invalid after read\n");
         return -1;
     }
+    lang_memcpy(header, &header_copy, (uint32_t)sizeof(header_copy));
     lang_debug_vga(20, "lang: hdr ok");
 
     if (header->load_address != (uint32_t)load_address) {
@@ -958,7 +1050,7 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
     if (header->image_size == 0u ||
         header->image_size > entry->image_size ||
         header->memory_size < header->image_size ||
-        header->memory_size > VIBE_APP_ARENA_SIZE ||
+        header->memory_size > lang_app_arena_size((uint32_t)load_address) ||
         header->entry_offset >= header->memory_size ||
         header->entry_offset >= header->image_size) {
         sys_write_debug("lang: header sizing invalid\n");
@@ -973,7 +1065,7 @@ static int lang_prepare_context(const struct vibe_appfs_entry *entry,
     lang_memset(load_base + header->image_size, 0, header->memory_size - header->image_size);
 
     heap_base = align_up_uintptr(load_address + header->memory_size, 16u);
-    heap_limit = load_address + VIBE_APP_ARENA_SIZE - VIBE_APP_STACK_SIZE;
+    heap_limit = load_address + lang_app_arena_size((uint32_t)load_address) - lang_app_stack_size((uint32_t)load_address);
     if (heap_base >= heap_limit) {
         sys_write_debug("lang: heap base beyond limit\n");
         return -1;
@@ -1012,7 +1104,224 @@ static void lang_write_missing_runtime(const char *name) {
 }
 
 static uintptr_t lang_app_stack_top(uint32_t load_address) {
-    return align_down_uintptr((uintptr_t)load_address + VIBE_APP_ARENA_SIZE, 16u);
+    return align_down_uintptr((uintptr_t)load_address + lang_app_arena_size(load_address), 16u);
+}
+
+struct lang_ring3_bootstrap {
+    uint32_t app_entry;
+    uint32_t ctx_ptr;
+    uint32_t argc;
+    uint32_t argv_ptr;
+};
+
+static const uint8_t g_lang_ring3_stub[] = {
+    0x8B, 0x44, 0x24, 0x04,       /* mov eax, [esp + 4] */
+    0x8B, 0x08,                   /* mov ecx, [eax] */
+    0xFF, 0x70, 0x0C,             /* push dword [eax + 12] */
+    0xFF, 0x70, 0x08,             /* push dword [eax + 8] */
+    0xFF, 0x70, 0x04,             /* push dword [eax + 4] */
+    0xFF, 0xD1,                   /* call ecx */
+    0x83, 0xC4, 0x0C,             /* add esp, 12 */
+    0x31, 0xDB,                   /* xor ebx, ebx */
+    0xB8, 0x2C, 0x00, 0x00, 0x00, /* mov eax, 44 */
+    0xCD, 0x80,                   /* int 0x80 */
+    0x0F, 0x0B,                   /* ud2 */
+    0xEB, 0xFE                    /* jmp $ */
+};
+
+static uint32_t lang_string_length(const char *text) {
+    uint32_t len = 0u;
+
+    if (text == 0) {
+        return 0u;
+    }
+    while (text[len] != '\0') {
+        len += 1u;
+    }
+    return len;
+}
+
+static int lang_task_pid_alive(uint32_t pid) {
+    struct task_snapshot_summary summary;
+    struct task_snapshot_entry entries[TASK_SNAPSHOT_MAX];
+    uint32_t count;
+    uint32_t i;
+
+    if (pid == 0u) {
+        return 0;
+    }
+    if (sys_task_snapshot(&summary, entries, TASK_SNAPSHOT_MAX) != 0) {
+        return 1;
+    }
+
+    count = summary.total_tasks;
+    if (count > TASK_SNAPSHOT_MAX) {
+        count = TASK_SNAPSHOT_MAX;
+    }
+    for (i = 0u; i < count; ++i) {
+        if (entries[i].pid == pid && entries[i].state != 3u) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int lang_wait_for_task_exit(uint32_t pid) {
+    if (pid == 0u) {
+        return -1;
+    }
+
+    while (lang_task_pid_alive(pid)) {
+        sys_yield();
+    }
+    return 0;
+}
+
+static int lang_ring3_direct_allowed(const char *normalized_name,
+                                     const struct vibe_app_header *header) {
+    if (normalized_name == 0 || header == 0) {
+        return 0;
+    }
+
+    switch (header->load_address) {
+    case VIBE_APP_DESKTOP_LOAD_ADDR:
+    case VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325:
+    case VIBE_APP_BOOT_LOAD_ADDR:
+    case VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325:
+        return 1;
+    default:
+        break;
+    }
+
+    return str_eq(normalized_name, "taskmgr") ||
+           str_eq(normalized_name, "audiosvc") ||
+           str_eq(normalized_name, "soundctl") ||
+           str_eq(normalized_name, "netmgrd") ||
+           str_eq(normalized_name, "netctl") ||
+           str_eq(normalized_name, "userland");
+}
+
+static int lang_prepare_ring3_payload(vibe_app_entry_t app_entry,
+                                      const struct vibe_app_header *header,
+                                      const struct vibe_app_context *ctx_in,
+                                      int argc,
+                                      char **argv,
+                                      uintptr_t *stub_entry_out,
+                                      uintptr_t *bootstrap_out) {
+    uintptr_t heap_base;
+    uintptr_t heap_limit;
+    uintptr_t payload_base;
+    uintptr_t cursor;
+    uintptr_t string_cursor;
+    uint32_t strings_bytes = 0u;
+    uint32_t argv_bytes;
+    uint32_t total_bytes;
+    struct vibe_app_context *user_ctx;
+    struct lang_ring3_bootstrap *bootstrap;
+    char **argv_ptrs;
+    int i;
+
+    if (app_entry == 0 || header == 0 || ctx_in == 0 ||
+        stub_entry_out == 0 || bootstrap_out == 0 || argc <= 0 || argv == 0) {
+        return -1;
+    }
+
+    heap_base = (uintptr_t)ctx_in->heap_base;
+    heap_limit = heap_base + ctx_in->heap_size;
+    argv_bytes = (uint32_t)((argc + 1) * (int)sizeof(char *));
+    for (i = 0; i < argc; ++i) {
+        if (argv[i] == 0) {
+            return -1;
+        }
+        strings_bytes += lang_string_length(argv[i]) + 1u;
+    }
+
+    total_bytes =
+        (uint32_t)align_up_uintptr(sizeof(struct vibe_app_context), 16u) +
+        (uint32_t)align_up_uintptr(sizeof(struct lang_ring3_bootstrap), 16u) +
+        (uint32_t)align_up_uintptr(argv_bytes, 16u) +
+        strings_bytes +
+        (uint32_t)align_up_uintptr(sizeof(g_lang_ring3_stub), 16u);
+    if ((uintptr_t)total_bytes >= ctx_in->heap_size) {
+        return -1;
+    }
+
+    payload_base = align_down_uintptr(heap_limit - total_bytes, 16u);
+    if (payload_base < heap_base) {
+        return -1;
+    }
+
+    user_ctx = (struct vibe_app_context *)payload_base;
+    *user_ctx = *ctx_in;
+    user_ctx->host = 0;
+    user_ctx->heap_base = (void *)heap_base;
+    user_ctx->heap_size = (uint32_t)(payload_base - heap_base);
+    if (user_ctx->heap_size < header->required_heap_size) {
+        return -1;
+    }
+
+    cursor = align_up_uintptr(payload_base + sizeof(*user_ctx), 16u);
+    bootstrap = (struct lang_ring3_bootstrap *)cursor;
+    cursor = align_up_uintptr(cursor + sizeof(*bootstrap), 16u);
+    argv_ptrs = (char **)cursor;
+    cursor = align_up_uintptr(cursor + argv_bytes, 16u);
+    string_cursor = cursor;
+
+    for (i = 0; i < argc; ++i) {
+        uint32_t len = lang_string_length(argv[i]) + 1u;
+
+        argv_ptrs[i] = (char *)string_cursor;
+        lang_memcpy((void *)string_cursor, argv[i], len);
+        string_cursor += len;
+    }
+    argv_ptrs[argc] = 0;
+
+    cursor = align_up_uintptr(string_cursor, 16u);
+    lang_memcpy((void *)cursor, g_lang_ring3_stub, (uint32_t)sizeof(g_lang_ring3_stub));
+
+    bootstrap->app_entry = (uint32_t)(uintptr_t)app_entry;
+    bootstrap->ctx_ptr = (uint32_t)(uintptr_t)user_ctx;
+    bootstrap->argc = (uint32_t)argc;
+    bootstrap->argv_ptr = (uint32_t)(uintptr_t)argv_ptrs;
+
+    *stub_entry_out = cursor;
+    *bootstrap_out = (uintptr_t)bootstrap;
+    return 0;
+}
+
+static int lang_launch_ring3_app(const char *normalized_name,
+                                 vibe_app_entry_t app_entry,
+                                 const struct vibe_app_header *header,
+                                 const struct vibe_app_context *ctx,
+                                 int argc,
+                                 char **argv) {
+    uintptr_t stub_entry;
+    uintptr_t bootstrap_ptr;
+    int pid;
+
+    if (!lang_ring3_direct_allowed(normalized_name, header)) {
+        return -1;
+    }
+    if (lang_prepare_ring3_payload(app_entry,
+                                   header,
+                                   ctx,
+                                   argc,
+                                   argv,
+                                   &stub_entry,
+                                   &bootstrap_ptr) != 0) {
+        return -1;
+    }
+
+    sys_write_debug("lang: launching ring3 child\n");
+    pid = sys_task_create(stub_entry, (void *)bootstrap_ptr, 16384u, 0u);
+    if (pid <= 0) {
+        return -1;
+    }
+
+    if (lang_wait_for_task_exit((uint32_t)pid) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 __attribute__((noinline, optimize("O0")))
@@ -1127,11 +1436,18 @@ int lang_try_run(int argc, char **argv) {
     entry_addr = (uintptr_t)header->load_address + header->entry_offset;
     app_entry = (vibe_app_entry_t)entry_addr;
     sys_write_debug("lang: app entry resolved\n");
-    (void)lang_call_app(app_entry,
-                        &g_app_ctx,
-                        argc,
-                        argv,
-                        lang_app_stack_top(header->load_address));
+    if (lang_launch_ring3_app(normalized_name,
+                              app_entry,
+                              header,
+                              &g_app_ctx,
+                              argc,
+                              argv) != 0) {
+        (void)lang_call_app(app_entry,
+                            &g_app_ctx,
+                            argc,
+                            argv,
+                            lang_app_stack_top(header->load_address));
+    }
     sys_write_debug("lang: app returned\n");
     lang_reset_host_fds();
     lang_memcpy((void *)(uintptr_t)header->load_address,

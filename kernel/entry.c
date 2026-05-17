@@ -306,7 +306,10 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     enum {
         USERLAND_STACK_RESERVE = 512 * 1024,
         HEAP_GUARD_BYTES = 64 * 1024,
-        APP_ARENA_TOTAL_BYTES = VIBE_APP_ARENA_SIZE * 3u,
+        APP_USER_ARENA_BYTES = VIBE_APP_ARENA_SIZE,
+        APP_DESKTOP_ARENA_BYTES = VIBE_APP_DESKTOP_ARENA_SIZE,
+        APP_BOOT_ARENA_BYTES = VIBE_APP_BOOT_ARENA_SIZE,
+        APP_ARENA_TOTAL_BYTES = APP_USER_ARENA_BYTES + APP_DESKTOP_ARENA_BYTES + APP_BOOT_ARENA_BYTES,
         APP_BACKING_ALIGN = 0x00400000u
     };
     extern uint8_t __bss_end[];
@@ -456,16 +459,21 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
                                          APP_ARENA_TOTAL_BYTES,
                                          app_pde_snapshot,
                                          sizeof(app_pde_snapshot) / sizeof(app_pde_snapshot[0])) == 0 &&
-            paging_map_large_region(VIBE_APP_LOAD_ADDR, app_phys, VIBE_APP_ARENA_SIZE) == 0 &&
-            paging_map_large_region(VIBE_APP_DESKTOP_LOAD_ADDR, app_phys + VIBE_APP_ARENA_SIZE, VIBE_APP_ARENA_SIZE) == 0 &&
-            paging_map_large_region(VIBE_APP_BOOT_LOAD_ADDR, app_phys + (VIBE_APP_ARENA_SIZE * 2u), VIBE_APP_ARENA_SIZE) == 0) {
+            paging_map_large_region(VIBE_APP_LOAD_ADDR, app_phys, APP_USER_ARENA_BYTES) == 0 &&
+            paging_map_large_region(VIBE_APP_DESKTOP_LOAD_ADDR, app_phys + APP_USER_ARENA_BYTES, APP_DESKTOP_ARENA_BYTES) == 0 &&
+            paging_map_large_region(VIBE_APP_BOOT_LOAD_ADDR,
+                                    app_phys + APP_USER_ARENA_BYTES + APP_DESKTOP_ARENA_BYTES,
+                                    APP_BOOT_ARENA_BYTES) == 0 &&
+            paging_set_large_region_user_access(VIBE_APP_LOAD_ADDR,
+                                                APP_ARENA_TOTAL_BYTES,
+                                                1) == 0) {
             kernel_debug_printf("memory: app arenas mapped v=%x/%x/%x p=%x/%x/%x\n",
                                 (uint32_t)VIBE_APP_LOAD_ADDR,
                                 (uint32_t)VIBE_APP_DESKTOP_LOAD_ADDR,
                                 (uint32_t)VIBE_APP_BOOT_LOAD_ADDR,
                                 (uint32_t)app_phys,
-                                (uint32_t)(app_phys + VIBE_APP_ARENA_SIZE),
-                                (uint32_t)(app_phys + (VIBE_APP_ARENA_SIZE * 2u)));
+                                (uint32_t)(app_phys + APP_USER_ARENA_BYTES),
+                                (uint32_t)(app_phys + APP_USER_ARENA_BYTES + APP_DESKTOP_ARENA_BYTES));
             reserved_count = 3u;
             mapped = 1;
         } else {
@@ -505,6 +513,13 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     scheduler_init();
     driver_manager_init(); /* second call to debug init performs HW setup */
     kernel_usb_host_init();
+    if (!kernel_storage_ready()) {
+        kernel_text_puts("Reprobing storage after USB...\n");
+        kernel_storage_init();
+        if (kernel_storage_ready()) {
+            kernel_text_puts("USB Storage OK\n");
+        }
+    }
     kernel_text_puts("Scheduler OK\n");
 
     if (kernel_cpu_is_smp_capable() &&
@@ -534,13 +549,21 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     }
 
     kernel_text_puts("Initializing VFS...\n");
+    kernel_text_puts("  vfs\n");
     vfs_init();
+    kernel_text_puts("  storage svc\n");
     mk_storage_service_init();
+    kernel_text_puts("  video svc\n");
     mk_video_service_init();
+    kernel_text_puts("  audio svc\n");
     mk_audio_service_init();
+    kernel_text_puts("  filesystem svc\n");
     mk_filesystem_service_init();
+    kernel_text_puts("  input svc\n");
     mk_input_service_init();
+    kernel_text_puts("  console svc\n");
     mk_console_service_init();
+    kernel_text_puts("  network svc\n");
     mk_network_service_init();
     kernel_text_puts("VFS OK\n");
 

@@ -1,7 +1,10 @@
 #include <userland/applications/games/doom_port/doom_port.h>
 #include <userland/modules/include/utils.h>
 #include <setjmp.h>
+#pragma push_macro("mkdir")
+#undef mkdir
 #include <userland/modules/include/syscalls.h>
+#pragma pop_macro("mkdir")
 
 void D_DoomMain(void);
 extern int myargc;

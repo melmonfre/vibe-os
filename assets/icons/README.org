@@ -1,0 +1,17 @@
+* BeOS-r5-Icons
+[[./screenshot.png]]
+** About
+A large collection of BeOS & period correct icons.
+- Curated by [[https://gitlab.com/metsatron][Metsatron]]
+
+Icons from various authors including but not limited to:
+ + My own creations
+ + My own adaptations
+Original and derived icons from:
+ + BeOS-r5
+ + Zeta OS
+ + Haiku OS
+ + KDEclassic
+ + OldGNOME2
+ + Copland
+ + classic95 (Windows 95)
