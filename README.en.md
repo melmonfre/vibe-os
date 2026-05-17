@@ -155,8 +155,9 @@ Today there are two storage "worlds":
   - `i686-elf-ld`
   - `i686-elf-objcopy`
 - `qemu-system-i386` or `qemu-system-x86_64`
-- FAT tools to format/copy files into the boot partition:
+- FAT formatter for the boot partition:
   - `mkfs.fat` or equivalent
+- optional FAT userspace tools:
   - `mcopy`
   - `mmd`
 
@@ -166,7 +167,7 @@ Minimal Debian/Ubuntu example:
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential make python3 nasm qemu-system-x86 mtools dosfstools binutils gcc-multilib
+sudo apt install -y build-essential make python3 nasm qemu-system-x86 dosfstools binutils gcc-multilib
 ```
 
 ### macOS
@@ -174,7 +175,7 @@ sudo apt install -y build-essential make python3 nasm qemu-system-x86 mtools dos
 Homebrew example:
 
 ```bash
-brew install nasm qemu mtools dosfstools i686-elf-gcc
+brew install nasm qemu dosfstools i686-elf-gcc
 ```
 
 ### Main command

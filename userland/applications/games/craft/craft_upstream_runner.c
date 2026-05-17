@@ -53,18 +53,25 @@ static void craft_debug_metrics(const char *label,
     sys_write_debug(line);
 }
 
-static void *craft_runner_calloc(size_t count, size_t size) {
-    size_t total = count * size;
-    unsigned char *ptr;
-    if (count != 0u && total / count != size) {
-        return 0;
+    if (!message || !message[0] || g_craft_debug_budget <= 0) {
+        return;
     }
-    ptr = (unsigned char *)malloc(total);
-    if (!ptr) {
-        return 0;
+    g_craft_debug_budget -= 1;
+    sys_write_debug(message);
+    sys_write_debug("\n");
+}
+
+static void craft_debug_metrics(const char *label,
+                                int a, int b, int c, int d) {
+    static int g_craft_metrics_budget = 24;
+    char line[128];
+
+    if (!label || g_craft_metrics_budget <= 0) {
+        return;
     }
-    memset(ptr, 0, total);
-    return ptr;
+    g_craft_metrics_budget -= 1;
+    doom_snprintf(line, sizeof(line), "%s %d %d %d %d\n", label, a, b, c, d);
+    sys_write_debug(line);
 }
 
 static char *craft_runner_strncat(char *dest, const char *src, size_t n) {
@@ -118,7 +125,6 @@ static int craft_runner_rand(void) {
 #define printf doom_printf
 #define snprintf doom_snprintf
 #define sscanf doom_sscanf
-#define calloc craft_runner_calloc
 #define strncat craft_runner_strncat
 #define atoi craft_runner_atoi
 #define srand craft_runner_srand
@@ -130,7 +136,6 @@ static int craft_runner_rand(void) {
 #undef srand
 #undef atoi
 #undef strncat
-#undef calloc
 #undef sscanf
 #undef snprintf
 #undef printf
@@ -533,6 +538,7 @@ static int craft_upstream_begin_session(void) {
     g_runtime.last_commit = glfwGetTime();
     g_runtime.last_update = glfwGetTime();
     g_runtime.sky_buffer = gen_sky_buffer();
+    craft_refresh_memory_budget(1);
 
     me = g->players;
     s = &g->players->state;

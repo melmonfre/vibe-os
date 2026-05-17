@@ -892,6 +892,15 @@ NETCTL_APP_OBJS := \
 NETCTL_APP_ELF := $(BUILD_DIR)/lang/netctl.elf
 NETCTL_APP_BIN := $(BUILD_DIR)/lang/netctl.app
 
+FOXXOD_APP_BUILD_DIR := $(BUILD_DIR)/lang/foxxod
+FOXXOD_APP_OBJS := \
+	$(FOXXOD_APP_BUILD_DIR)/app_entry.o \
+	$(FOXXOD_APP_BUILD_DIR)/app_runtime.o \
+	$(FOXXOD_APP_BUILD_DIR)/foxxod_main.o \
+	$(BUILD_DIR)/userland/modules/syscalls.o
+FOXXOD_APP_ELF := $(BUILD_DIR)/lang/foxxod.elf
+FOXXOD_APP_BIN := $(BUILD_DIR)/lang/foxxod.app
+
 JS_APP_BUILD_DIR := $(BUILD_DIR)/lang/js
 JS_APP_OBJS := \
 	$(JS_APP_BUILD_DIR)/app_entry.o \
@@ -1218,13 +1227,14 @@ BOOT_SMOKE_APP_BINS := \
 	$(SOUNDCTL_APP_BIN) \
 	$(AUDIOSVC_APP_BIN) \
 	$(NETMGRD_APP_BIN) \
-	$(NETCTL_APP_BIN)
+	$(NETCTL_APP_BIN) \
+	$(FOXXOD_APP_BIN)
 
 # Include compatibility layer build rules
 include Build.compat.mk
 
 REQUIRED_BUILD_TOOLS := $(AS) $(CC) $(LD) $(NM) $(OBJCOPY) $(AR) $(RANLIB) $(PYTHON)
-REQUIRED_IMAGE_TOOLS := $(MKFS_FAT_TOOL) $(MCOPY_TOOL) $(MMD_TOOL)
+REQUIRED_IMAGE_TOOLS := $(MKFS_FAT_TOOL)
 
 all: check-tools $(IMAGE)
 # Optional legacy monolithic payload for experiments outside the default image.
@@ -1241,7 +1251,7 @@ check-tools:
 		if ! command -v $$tool >/dev/null 2>&1; then \
 			echo "Erro: '$$tool' nao encontrado no PATH."; \
 			if [ "$(UNAME_S)" = "Darwin" ]; then \
-				echo "macOS: use uma cross-toolchain i686-elf/x86_64-elf e instale nasm/qemu/mtools."; \
+				echo "macOS: use uma cross-toolchain i686-elf/x86_64-elf e instale nasm/qemu."; \
 			else \
 				echo "Linux: instale binutils/gcc 32-bit + nasm + qemu-system-x86"; \
 				echo "Ou use toolchain cruzada i686-elf-*."; \
@@ -1253,10 +1263,9 @@ check-tools:
 		if ! command -v $$tool >/dev/null 2>&1; then \
 			echo "Erro: '$$tool' nao encontrado no PATH."; \
 			if [ "$(UNAME_S)" = "Darwin" ]; then \
-				echo "macOS: newfs_msdos ja pode vir no sistema, mas mtools (mcopy/mmd) ainda sao necessarios."; \
-				echo "Homebrew: brew install mtools"; \
+				echo "macOS: instale um formatador FAT32 compativel como mkfs.fat (dosfstools) ou use newfs_msdos."; \
 			else \
-				echo "Instale os utilitarios de imagem FAT32/mtools (ex.: dosfstools + mtools)."; \
+				echo "Instale um formatador FAT32 compativel (ex.: dosfstools)."; \
 			fi; \
 			exit 1; \
 		fi; \
@@ -1404,6 +1413,18 @@ $(NETCTL_APP_BUILD_DIR)/netctl_main.o: lang/apps/netctl/netctl_main.c | $(BUILD_
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(FOXXOD_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"foxxod\" -DVIBE_APP_BUILD_HEAP_SIZE=65536u -c $< -o $@
+
+$(FOXXOD_APP_BUILD_DIR)/app_runtime.o: lang/sdk/app_runtime.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(FOXXOD_APP_BUILD_DIR)/foxxod_main.o: lang/apps/foxxod/foxxod_main.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(JS_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -DVIBE_APP_BUILD_NAME=\"js\" -DVIBE_APP_BUILD_HEAP_SIZE=65536u -c $< -o $@
@@ -1548,6 +1569,15 @@ $(NETCTL_APP_ELF): $(NETCTL_APP_OBJS) $(LINKER_DIR)/app.ld
 	$(LD) $(LDFLAGS_APP) $(NETCTL_APP_OBJS) -o $@ $(LIBGCC_A)
 
 $(NETCTL_APP_BIN): $(NETCTL_APP_ELF)
+	cp $< $<.keep
+	$(OBJCOPY) -O binary $< $@
+	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
+	rm -f $<.keep
+
+$(FOXXOD_APP_ELF): $(FOXXOD_APP_OBJS) $(LINKER_DIR)/app.ld
+	$(LD) $(LDFLAGS_APP) $(FOXXOD_APP_OBJS) -o $@ $(LIBGCC_A)
+
+$(FOXXOD_APP_BIN): $(FOXXOD_APP_ELF)
 	cp $< $<.keep
 	$(OBJCOPY) -O binary $< $@
 	$(PYTHON) tools/patch_app_header.py --nm $(NM) --elf $<.keep --bin $@
@@ -1825,7 +1855,7 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOO
 		--boot-file "$(BOOTLOADER_BG_BIN)::/VIBEBG.BIN" \
 		--boot-file "$(VIBE_BOOTLOADER_AUDIO_RAW)::/VIBEBOOT.RAW" \
 		--boot-file "$(BOOT_VOLUME_MANIFEST)::/LAYOUT.TXT" \
-		--boot-file "$(BOOT_POLICY_MANIFEST)::/BOOTPOLICY.TXT" \
+		--boot-file "$(BOOT_POLICY_MANIFEST)::/BOOTPOL.TXT" \
 		--boot-file "$(DATA_IMAGE_MANIFEST)::/DATAINFO.TXT"
 	@echo "Imagem gerada: $(IMAGE)"
 

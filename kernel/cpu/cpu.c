@@ -1,6 +1,7 @@
 #include <kernel/cpu/cpu.h>
 #include <kernel/apic.h>
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/kernel_string.h>
 #include <stddef.h>
 
 struct mp_floating_pointer {
@@ -97,6 +98,46 @@ struct acpi_madt_x2apic {
 #define ACPI_MADT_TYPE_LAPIC 0u
 #define ACPI_MADT_TYPE_X2APIC 9u
 #define ACPI_MADT_ENABLED 0x00000001u
+#define GDT_MAX_CPUS 32u
+#define GDT_BASE_ENTRIES 5u
+#define GDT_TSS_ENTRY_STRIDE 2u
+#define GDT_TOTAL_ENTRIES (GDT_BASE_ENTRIES + (GDT_MAX_CPUS * GDT_TSS_ENTRY_STRIDE))
+#define GDT_TSS_ENTRY_INDEX(cpu_index) (GDT_BASE_ENTRIES + ((cpu_index) * GDT_TSS_ENTRY_STRIDE))
+
+struct gdt_ptr32 {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed));
+
+struct tss32 {
+    uint32_t prev_tss;
+    uint32_t esp0;
+    uint32_t ss0;
+    uint32_t esp1;
+    uint32_t ss1;
+    uint32_t esp2;
+    uint32_t ss2;
+    uint32_t cr3;
+    uint32_t eip;
+    uint32_t eflags;
+    uint32_t eax;
+    uint32_t ecx;
+    uint32_t edx;
+    uint32_t ebx;
+    uint32_t esp;
+    uint32_t ebp;
+    uint32_t esi;
+    uint32_t edi;
+    uint32_t es;
+    uint32_t cs;
+    uint32_t ss;
+    uint32_t ds;
+    uint32_t fs;
+    uint32_t gs;
+    uint32_t ldt;
+    uint16_t trap;
+    uint16_t iomap_base;
+} __attribute__((packed));
 
 static struct kernel_cpu_topology g_cpu_topology = {
     1u, 0u, 0u, 0u, 1u, 1u, 0u, 0u, 0u, 0u, 0u, 0u, "unknown"
@@ -105,6 +146,69 @@ static struct kernel_cpu_state g_cpu_states[32];
 static uint32_t g_cpu_has_pat = 0u;
 static uint32_t g_cpu_has_sse2 = 0u;
 static uint32_t g_cpu_sse_enabled = 0u;
+static uint64_t g_kernel_gdt[GDT_TOTAL_ENTRIES] __attribute__((aligned(16)));
+static struct gdt_ptr32 g_kernel_gdt_ptr;
+static struct tss32 g_cpu_tss[GDT_MAX_CPUS] __attribute__((aligned(16)));
+static uint32_t g_kernel_gdt_built = 0u;
+
+static void gdt_set_entry(uint32_t index,
+                          uint32_t base,
+                          uint32_t limit,
+                          uint8_t access,
+                          uint8_t flags) {
+    uint64_t descriptor = 0u;
+
+    descriptor |= (uint64_t)(limit & 0xFFFFu);
+    descriptor |= (uint64_t)(base & 0xFFFFu) << 16;
+    descriptor |= (uint64_t)((base >> 16) & 0xFFu) << 32;
+    descriptor |= (uint64_t)access << 40;
+    descriptor |= (uint64_t)((limit >> 16) & 0x0Fu) << 48;
+    descriptor |= (uint64_t)(flags & 0xF0u) << 48;
+    descriptor |= (uint64_t)((base >> 24) & 0xFFu) << 56;
+    g_kernel_gdt[index] = descriptor;
+}
+
+static void gdt_set_system_entry(uint32_t index,
+                                 uintptr_t base,
+                                 uint32_t limit,
+                                 uint8_t access,
+                                 uint8_t flags) {
+    uint64_t low = 0u;
+
+    low |= (uint64_t)(limit & 0xFFFFu);
+    low |= (uint64_t)(base & 0xFFFFu) << 16;
+    low |= (uint64_t)((base >> 16) & 0xFFu) << 32;
+    low |= (uint64_t)access << 40;
+    low |= (uint64_t)((limit >> 16) & 0x0Fu) << 48;
+    low |= (uint64_t)(flags & 0xF0u) << 48;
+    low |= (uint64_t)((base >> 24) & 0xFFu) << 56;
+    g_kernel_gdt[index] = low;
+    g_kernel_gdt[index + 1u] = 0u;
+}
+
+static void gdt_install_current_cpu(uint32_t cpu_index) {
+    uint16_t tss_selector = kernel_cpu_tss_selector(cpu_index);
+
+    __asm__ volatile(
+        "lgdt %0\n\t"
+        "pushl %[kernel_cs]\n\t"
+        "pushl $1f\n\t"
+        "lret\n\t"
+        "1:\n\t"
+        "movw %[kernel_ds], %%ax\n\t"
+        "movw %%ax, %%ds\n\t"
+        "movw %%ax, %%es\n\t"
+        "movw %%ax, %%fs\n\t"
+        "movw %%ax, %%gs\n\t"
+        "movw %%ax, %%ss\n\t"
+        "ltr %[tss_selector]\n\t"
+        :
+        : "m"(g_kernel_gdt_ptr),
+          [kernel_cs] "i"(KERNEL_CS_SELECTOR),
+          [kernel_ds] "i"(KERNEL_DS_SELECTOR),
+          [tss_selector] "r"(tss_selector)
+        : "eax", "memory");
+}
 
 static int cpu_has_cpuid(void) {
     uint32_t before;
@@ -770,7 +874,56 @@ void cpu_init(void) {
 }
 
 void gdt_init(void) {
-    /* Flat GDT loaded by bootloader; stub retained for clarity and future work. */
+    uint32_t cpu_index = kernel_cpu_index();
+
+    if (cpu_index >= GDT_MAX_CPUS) {
+        cpu_index = 0u;
+    }
+
+    if (!g_kernel_gdt_built) {
+        memset(g_kernel_gdt, 0, sizeof(g_kernel_gdt));
+        memset(g_cpu_tss, 0, sizeof(g_cpu_tss));
+
+        gdt_set_entry(1u, 0u, 0x000FFFFFu, 0x9Au, 0xC0u);
+        gdt_set_entry(2u, 0u, 0x000FFFFFu, 0x92u, 0xC0u);
+        gdt_set_entry(3u, 0u, 0x000FFFFFu, 0xFAu, 0xC0u);
+        gdt_set_entry(4u, 0u, 0x000FFFFFu, 0xF2u, 0xC0u);
+
+        for (uint32_t i = 0u; i < GDT_MAX_CPUS; ++i) {
+            struct tss32 *tss = &g_cpu_tss[i];
+
+            tss->ss0 = KERNEL_DS_SELECTOR;
+            tss->iomap_base = (uint16_t)sizeof(*tss);
+            gdt_set_system_entry(GDT_TSS_ENTRY_INDEX(i),
+                                 (uintptr_t)tss,
+                                 (uint32_t)(sizeof(*tss) - 1u),
+                                 0x89u,
+                                 0x00u);
+        }
+
+        g_kernel_gdt_ptr.limit = (uint16_t)(sizeof(g_kernel_gdt) - 1u);
+        g_kernel_gdt_ptr.base = (uint32_t)(uintptr_t)&g_kernel_gdt[0];
+        g_kernel_gdt_built = 1u;
+    }
+    kernel_tss_set_kernel_stack(0u);
+    gdt_install_current_cpu(cpu_index);
+}
+
+uint16_t kernel_cpu_tss_selector(uint32_t cpu_index) {
+    if (cpu_index >= GDT_MAX_CPUS) {
+        cpu_index = 0u;
+    }
+    return (uint16_t)(GDT_TSS_ENTRY_INDEX(cpu_index) * 8u);
+}
+
+void kernel_tss_set_kernel_stack(uintptr_t stack_top) {
+    uint32_t cpu_index = kernel_cpu_index();
+
+    if (cpu_index >= GDT_MAX_CPUS) {
+        cpu_index = 0u;
+    }
+    g_cpu_tss[cpu_index].esp0 = (uint32_t)stack_top;
+    g_cpu_tss[cpu_index].ss0 = KERNEL_DS_SELECTOR;
 }
 
 const struct kernel_cpu_topology *kernel_cpu_topology(void) {

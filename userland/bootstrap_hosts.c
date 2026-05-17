@@ -11,6 +11,7 @@
 
 #define HOST_PENDING_TASK_EVENTS_MAX 8u
 #define HOST_TASK_EXIT_POLL_TICKS 4u
+#define DESKTOP_STARTX_RETRY_MAX 3
 static struct mk_task_event g_host_pending_task_events[HOST_PENDING_TASK_EVENTS_MAX];
 static uint32_t g_host_pending_task_event_count = 0u;
 
@@ -395,11 +396,18 @@ void userland_desktop_host_entry(void) {
 
     if (sys_launch_info(&info) == 0 &&
         (info.boot_flags & (BOOTINFO_FLAG_BOOT_SAFE_MODE | BOOTINFO_FLAG_BOOT_RESCUE_SHELL)) == 0u) {
+        int startx_retries = 0;
+
         session_pid = desktop_host_launch_startx_session();
         if (session_pid > 0) {
             for (;;) {
                 if (host_wait_for_task_exit((uint32_t)session_pid) == 0) {
                     host_debug("host: desktop session exited", 0);
+                    if (++startx_retries >= DESKTOP_STARTX_RETRY_MAX) {
+                        host_debug("host: desktop session failed too quickly, fallback to builtin session", 0);
+                        break;
+                    }
+                    sys_sleep();
                     session_pid = desktop_host_launch_startx_session();
                     if (session_pid <= 0) {
                         break;
@@ -409,7 +417,9 @@ void userland_desktop_host_entry(void) {
                     break;
                 }
             }
-        } else {
+        }
+
+        if (session_pid <= 0) {
             (void)desktop_host_run_builtin_session();
         }
     } else {

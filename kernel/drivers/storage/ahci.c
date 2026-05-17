@@ -125,7 +125,7 @@ static struct kernel_ahci_port *g_ahci_primary_port = 0;
 static uint8_t g_ahci_cmd_lists[AHCI_MAX_PORTS][1024] __attribute__((aligned(1024)));
 static uint8_t g_ahci_rfis[AHCI_MAX_PORTS][256] __attribute__((aligned(256)));
 static struct ahci_cmd_table g_ahci_cmd_tables[AHCI_MAX_PORTS] __attribute__((aligned(128)));
-static uint8_t g_ahci_dma_buffers[AHCI_MAX_PORTS][KERNEL_PERSIST_SECTOR_SIZE] __attribute__((aligned(2)));
+static uint8_t g_ahci_dma_buffers[AHCI_MAX_PORTS][KERNEL_PERSIST_SECTOR_SIZE] __attribute__((aligned(512)));
 static spinlock_t g_ahci_lock;
 
 static int ahci_find_controller(uint8_t *bus_out,

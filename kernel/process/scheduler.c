@@ -110,6 +110,8 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
                                                             kernel_trap_frame_t *frame) {
     uint32_t original_cs;
     uint32_t original_eflags;
+    uint32_t expected_cs;
+    int frame_is_user_mode;
 
     if (frame == NULL) {
         return NULL;
@@ -117,19 +119,51 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
 
     original_cs = frame->cs;
     original_eflags = frame->eflags;
-    if (original_cs != 0x08u ||
-        (original_eflags & (0x4000u | 0x3000u)) != 0u) {
-        kernel_debug_printf("scheduler: sanitize cpu=%d old=%d next=%d frame=%x eip=%x cs=%x eflags=%x stack=%x size=%u\n",
-                            (int)cpu_index,
-                            old_task != NULL ? old_task->pid : -1,
-                            next_task != NULL ? next_task->pid : -1,
-                            (unsigned int)(uintptr_t)frame,
-                            (unsigned int)frame->eip,
-                            (unsigned int)original_cs,
-                            (unsigned int)original_eflags,
-                            next_task != NULL ? (unsigned int)(uintptr_t)next_task->stack : 0u,
-                            next_task != NULL ? (unsigned int)next_task->stack_size : 0u);
-        frame->cs = 0x08u;
+    frame_is_user_mode = process_frame_is_user_mode(frame);
+    expected_cs = frame_is_user_mode ? USER_CS_SELECTOR : KERNEL_CS_SELECTOR;
+
+    if (next_task != NULL && next_task->stack != NULL) {
+        kernel_tss_set_kernel_stack((uintptr_t)next_task->stack + next_task->stack_size);
+    } else {
+        kernel_tss_set_kernel_stack(0u);
+    }
+
+    if (!frame_is_user_mode) {
+        if (original_cs != KERNEL_CS_SELECTOR ||
+            (original_eflags & (0x4000u | 0x3000u)) != 0u) {
+            kernel_debug_printf("scheduler: sanitize cpu=%d old=%d next=%d frame=%x eip=%x cs=%x eflags=%x stack=%x size=%u\n",
+                                (int)cpu_index,
+                                old_task != NULL ? old_task->pid : -1,
+                                next_task != NULL ? next_task->pid : -1,
+                                (unsigned int)(uintptr_t)frame,
+                                (unsigned int)frame->eip,
+                                (unsigned int)original_cs,
+                                (unsigned int)original_eflags,
+                                next_task != NULL ? (unsigned int)(uintptr_t)next_task->stack : 0u,
+                                next_task != NULL ? (unsigned int)next_task->stack_size : 0u);
+            frame->cs = KERNEL_CS_SELECTOR;
+            frame->eflags = (original_eflags | 0x00000202u) & ~(0x4000u | 0x3000u);
+        }
+    } else {
+        kernel_user_trap_frame_t *user_frame = (kernel_user_trap_frame_t *)(void *)frame;
+        if (original_cs != expected_cs) {
+            kernel_debug_printf("scheduler: user-frame mismatch cpu=%d old=%d next=%d frame=%x eip=%x cs=%x expected=%x esp_dummy=%x user_esp=%x user_ss=%x\n",
+                                (int)cpu_index,
+                                old_task != NULL ? old_task->pid : -1,
+                                next_task != NULL ? next_task->pid : -1,
+                                (unsigned int)(uintptr_t)frame,
+                                (unsigned int)frame->eip,
+                                (unsigned int)original_cs,
+                                (unsigned int)expected_cs,
+                                (unsigned int)frame->esp_dummy,
+                                (unsigned int)user_frame->user_esp,
+                                (unsigned int)user_frame->user_ss);
+        }
+        frame->cs = USER_CS_SELECTOR;
+        user_frame->user_ss = USER_DS_SELECTOR;
+        if (user_frame->user_esp == 0u && next_task != NULL && next_task->user_stack_top >= (sizeof(uint32_t) * 2u)) {
+            user_frame->user_esp = (uint32_t)(next_task->user_stack_top - (sizeof(uint32_t) * 2u));
+        }
         frame->eflags = (original_eflags | 0x00000202u) & ~(0x4000u | 0x3000u);
     }
     return frame;
@@ -794,6 +828,10 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
         g_current[cpu_index] = next;
         resume_frame = next->context;
+        if (resume_frame == NULL) {
+            kernel_debug_printf("scheduler: select missing context pid=%d next_context=NULL\n",
+                                next->pid);
+        }
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         if (!g_audio_first_dispatch_trace_emitted &&
             next->service_type == MK_SERVICE_AUDIO) {

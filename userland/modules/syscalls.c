@@ -515,6 +515,24 @@ int sys_task_snapshot(struct task_snapshot_summary *summary,
                     0);
 }
 
+int sys_memory_status(struct mk_memory_status *status) {
+    return syscall5(SYSCALL_MEMORY_STATUS,
+                    (int)(uintptr_t)status,
+                    0,
+                    0,
+                    0,
+                    0);
+}
+
+int sys_memory_budget(struct mk_memory_budget *budget) {
+    return syscall5(SYSCALL_MEMORY_BUDGET,
+                    (int)(uintptr_t)budget,
+                    0,
+                    0,
+                    0,
+                    0);
+}
+
 int sys_task_terminate(uint32_t pid) {
     return syscall5(SYSCALL_TASK_TERMINATE, (int)pid, 0, 0, 0, 0);
 }
@@ -778,6 +796,19 @@ int sys_service_receive(struct mk_message *message) {
 
 int sys_service_send(const struct mk_message *message) {
     return syscall5(SYSCALL_SERVICE_SEND, (int)(uintptr_t)message, 0, 0, 0, 0);
+}
+
+int sys_message_post(struct mk_async_message *message) {
+    return syscall5(SYSCALL_MESSAGE_POST, (int)(uintptr_t)message, 0, 0, 0, 0);
+}
+
+int sys_message_receive(struct mk_async_message *message, uint32_t timeout_ticks) {
+    return syscall5(SYSCALL_MESSAGE_RECV,
+                    (int)(uintptr_t)message,
+                    (int)timeout_ticks,
+                    0,
+                    0,
+                    0);
 }
 
 int sys_service_subscribe(uint32_t service_type) {

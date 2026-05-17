@@ -566,6 +566,10 @@ int chunk_distance(Chunk *chunk, int p, int q) {
 }
 
 int chunk_visible(float planes[6][4], int p, int q, int miny, int maxy) {
+    if (g->render_radius <= 1) {
+        return 1;
+    }
+
     int x = p * CHUNK_SIZE - 1;
     int z = q * CHUNK_SIZE - 1;
     int d = CHUNK_SIZE + 1;
@@ -983,6 +987,12 @@ void compute_chunk(WorkerItem *item) {
     char *opaque = (char *)calloc(XZ_SIZE * XZ_SIZE * Y_SIZE, sizeof(char));
     char *light = (char *)calloc(XZ_SIZE * XZ_SIZE * Y_SIZE, sizeof(char));
     char *highest = (char *)calloc(XZ_SIZE * XZ_SIZE, sizeof(char));
+    int ox = item->p * CHUNK_SIZE - CHUNK_SIZE - 1;
+    int oy = -1;
+    int oz = item->q * CHUNK_SIZE - CHUNK_SIZE - 1;
+    int has_light = 0;
+    Map *map = item->block_maps[1][1];
+
     if (!opaque || !light || !highest) {
         free(opaque);
         free(light);
@@ -994,44 +1004,35 @@ void compute_chunk(WorkerItem *item) {
         return;
     }
 
-    int ox = item->p * CHUNK_SIZE - CHUNK_SIZE - 1;
-    int oy = -1;
-    int oz = item->q * CHUNK_SIZE - CHUNK_SIZE - 1;
-
-    // check for lights
-    int has_light = 0;
     if (SHOW_LIGHTS) {
         for (int a = 0; a < 3; a++) {
             for (int b = 0; b < 3; b++) {
-                Map *map = item->light_maps[a][b];
-                if (map && map->size) {
+                Map *light_map = item->light_maps[a][b];
+                if (light_map && light_map->size) {
                     has_light = 1;
                 }
             }
         }
     }
 
-    // populate opaque array
     for (int a = 0; a < 3; a++) {
         for (int b = 0; b < 3; b++) {
-            Map *map = item->block_maps[a][b];
-            if (!map) {
+            Map *block_map = item->block_maps[a][b];
+            if (!block_map) {
                 continue;
             }
-            MAP_FOR_EACH(map, ex, ey, ez, ew) {
+            MAP_FOR_EACH(block_map, ex, ey, ez, ew) {
                 int x = ex - ox;
                 int y = ey - oy;
                 int z = ez - oz;
-                int w = ew;
-                // TODO: this should be unnecessary
+
                 if (x < 0 || y < 0 || z < 0) {
                     continue;
                 }
                 if (x >= XZ_SIZE || y >= Y_SIZE || z >= XZ_SIZE) {
                     continue;
                 }
-                // END TODO
-                opaque[XYZ(x, y, z)] = !is_transparent(w);
+                opaque[XYZ(x, y, z)] = !is_transparent(ew);
                 if (opaque[XYZ(x, y, z)]) {
                     highest[XZ(x, z)] = MAX(highest[XZ(x, z)], y);
                 }
@@ -1039,15 +1040,14 @@ void compute_chunk(WorkerItem *item) {
         }
     }
 
-    // flood fill light intensities
     if (has_light) {
         for (int a = 0; a < 3; a++) {
             for (int b = 0; b < 3; b++) {
-                Map *map = item->light_maps[a][b];
-                if (!map) {
+                Map *light_map = item->light_maps[a][b];
+                if (!light_map) {
                     continue;
                 }
-                MAP_FOR_EACH(map, ex, ey, ez, ew) {
+                MAP_FOR_EACH(light_map, ex, ey, ez, ew) {
                     int x = ex - ox;
                     int y = ey - oy;
                     int z = ez - oz;
@@ -1057,19 +1057,18 @@ void compute_chunk(WorkerItem *item) {
         }
     }
 
-    Map *map = item->block_maps[1][1];
-
     // count exposed faces
     int miny = 256;
     int maxy = 0;
     int faces = 0;
     MAP_FOR_EACH(map, ex, ey, ez, ew) {
-        if (ew <= 0) {
-            continue;
-        }
         int x = ex - ox;
         int y = ey - oy;
         int z = ez - oz;
+
+        if (ew <= 0) {
+            continue;
+        }
         int f1 = !opaque[XYZ(x - 1, y, z)];
         int f2 = !opaque[XYZ(x + 1, y, z)];
         int f3 = !opaque[XYZ(x, y + 1, z)];
@@ -1102,12 +1101,13 @@ void compute_chunk(WorkerItem *item) {
     }
     int offset = 0;
     MAP_FOR_EACH(map, ex, ey, ez, ew) {
-        if (ew <= 0) {
-            continue;
-        }
         int x = ex - ox;
         int y = ey - oy;
         int z = ez - oz;
+
+        if (ew <= 0) {
+            continue;
+        }
         int f1 = !opaque[XYZ(x - 1, y, z)];
         int f2 = !opaque[XYZ(x + 1, y, z)];
         int f3 = !opaque[XYZ(x, y + 1, z)];
@@ -1131,9 +1131,9 @@ void compute_chunk(WorkerItem *item) {
                     if (y + dy <= highest[XZ(x + dx, z + dz)]) {
                         for (int oy = 0; oy < 8; oy++) {
                             if (opaque[XYZ(x + dx, y + dy + oy, z + dz)]) {
-                                shades[index] = 1.0 - oy * 0.125;
-                                break;
-                            }
+                            shades[index] = 1.0 - oy * 0.125;
+                            break;
+                        }
                         }
                     }
                     index++;
@@ -1292,11 +1292,30 @@ void delete_chunks() {
     for (int i = 0; i < count; i++) {
         Chunk *chunk = g->chunks + i;
         int delete = 1;
+        int worker_busy = 0;
+
+        for (int worker_index = 0; worker_index < WORKERS; ++worker_index) {
+            Worker *worker = g->workers + worker_index;
+            mtx_lock(&worker->mtx);
+            if (worker->state == WORKER_BUSY &&
+                worker->item.p == chunk->p &&
+                worker->item.q == chunk->q) {
+                worker_busy = 1;
+            }
+            mtx_unlock(&worker->mtx);
+            if (worker_busy) {
+                break;
+            }
+        }
+        if (worker_busy) {
+            continue;
+        }
+
         for (int j = 0; j < 3; j++) {
             State *s = states[j];
             int p = chunked(s->x);
             int q = chunked(s->z);
-            if (chunk_distance(chunk, p, q) < g->delete_radius) {
+            if (chunk_distance(chunk, p, q) <= g->delete_radius) {
                 delete = 0;
                 break;
             }
@@ -1449,12 +1468,13 @@ void ensure_chunks_worker(Player *player, Worker *worker) {
                 continue;
             }
             int distance = MAX(ABS(dp), ABS(dq));
-            int invisible = !chunk_visible(planes, a, b, 0, 256);
+            int invisible = (g->render_radius <= 1) ? 0 : !chunk_visible(planes, a, b, 0, 256);
+            int view_priority = chunk_view_priority(s, a, b);
             int priority = 0;
             if (chunk) {
                 priority = chunk->buffer && chunk->dirty;
             }
-            int score = (invisible << 24) | (priority << 16) | distance;
+            int score = (invisible << 24) | (view_priority << 20) | (priority << 16) | distance;
             if (score < best_score) {
                 best_score = score;
                 best_a = a;
@@ -1513,7 +1533,9 @@ void ensure_chunks(Player *player) {
     int worker_limit = craft_thread_parallel_workers();
 
     check_workers();
-    force_chunks(player);
+    if (count_drawable_chunks(p, q, 1) == 0 && count_busy_workers() == 0) {
+        force_chunks_budget(player, 1, craft_runtime_chunk_preload_budget());
+    }
     if (g->create_radius <= 0) {
         return;
     }
@@ -1723,10 +1745,12 @@ void builder_block(int x, int y, int z, int w) {
 int render_chunks(Attrib *attrib, Player *player) {
     int result = 0;
     State *s = &player->state;
-    ensure_chunks(player);
     int p = chunked(s->x);
     int q = chunked(s->z);
     float light = get_daylight();
+
+    ensure_chunks(player);
+
     float matrix[16];
     set_matrix_3d(
         matrix, g->width, g->height,
@@ -1739,17 +1763,34 @@ int render_chunks(Attrib *attrib, Player *player) {
     glUniform1i(attrib->sampler, 0);
     glUniform1i(attrib->extra1, 2);
     glUniform1f(attrib->extra2, light);
-    glUniform1f(attrib->extra3, g->render_radius * CHUNK_SIZE);
+    glUniform1f(attrib->extra3, chunk_fog_distance(g->render_radius));
     glUniform1i(attrib->extra4, g->ortho);
     glUniform1f(attrib->timer, time_of_day());
     for (int i = 0; i < g->chunk_count; i++) {
         Chunk *chunk = g->chunks + i;
-        if (chunk_distance(chunk, p, q) > g->render_radius) {
+        if (chunk_distance(chunk, p, q) > 1) {
             continue;
         }
-        if (!chunk_visible(
-            planes, chunk->p, chunk->q, chunk->miny, chunk->maxy))
-        {
+        if (!chunk_ready_to_draw(chunk)) {
+            continue;
+        }
+        draw_chunk(attrib, chunk);
+        result += chunk->faces;
+    }
+    if (result > 0) {
+        return result;
+    }
+    craft_debug_chunk_event("craft: render empty",
+                            p, q,
+                            g->chunk_count,
+                            count_drawable_chunks(p, q, 1),
+                            count_drawable_chunks(p, q, 2));
+
+    force_chunks_budget(player, 1, craft_runtime_chunk_preload_budget());
+
+    for (int i = 0; i < g->chunk_count; i++) {
+        Chunk *chunk = g->chunks + i;
+        if (chunk_distance(chunk, p, q) > 1) {
             continue;
         }
         if (!chunk_ready_to_draw(chunk)) {

@@ -954,7 +954,6 @@ static int netctl_command_socket_smoke(void) {
 
     memset(&bind_addr, 0, sizeof(bind_addr));
     memset(&connect_addr, 0, sizeof(connect_addr));
-    bind_addr.sa_len = sizeof(bind_addr);
     bind_addr.sa_family = AF_UNIX;
     strcpy(bind_addr.sa_data, "net-smoke");
     connect_addr = bind_addr;

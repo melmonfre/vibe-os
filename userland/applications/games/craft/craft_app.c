@@ -83,6 +83,8 @@ static void craft_embedded_render_size(const struct rect *client,
                                        int *render_h) {
     int width = client ? client->w : 0;
     int height = client ? client->h : 0;
+    int max_width = fullscreen ? (int)SCREEN_WIDTH : width;
+    int max_height = fullscreen ? (int)SCREEN_HEIGHT : height;
 
     if (fullscreen) {
         width = craft_clamp_dimension(width, 64, (int)SCREEN_WIDTH);

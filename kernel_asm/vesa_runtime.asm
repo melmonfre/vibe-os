@@ -238,6 +238,7 @@ enable_a20:
     xor ax, ax
     mov ds, ax
     mov es, ax
+    call a20_probe_settle
     call a20_is_enabled_any
     cmp ax, 1
     je .done
@@ -246,11 +247,13 @@ enable_a20:
     and al, 0xFE
     or al, 2
     out 0x92, al
+    call a20_probe_settle
     call a20_is_enabled_any
     cmp ax, 1
     je .done
 
     call a20_enable_kbc
+    call a20_probe_settle
     call a20_is_enabled_any
     cmp ax, 1
     je .done
@@ -270,8 +273,20 @@ a20_is_enabled_any:
     mov bx, ax
     call a20_is_enabled_alt
     or ax, bx
+    cmp ax, 1
+    je .done
+    call a20_bios_reports_enabled
 
+.done:
     pop bx
+    ret
+
+a20_probe_settle:
+    push cx
+    mov cx, 0x1000
+.loop:
+    loop .loop
+    pop cx
     ret
 
 a20_bios_reports_enabled:
