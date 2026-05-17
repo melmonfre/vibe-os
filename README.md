@@ -110,7 +110,8 @@ Requisitos minimos praticos:
 - `make`
 - `python3`
 - `qemu-system-i386` ou `qemu-system-x86_64`
-- `mtools` e `mkfs.fat` ou equivalente
+- `mkfs.fat` ou equivalente
+- `mtools` opcional para operar a FAT por userspace (`mcopy`/`mmd`)
 
 Toolchain:
 

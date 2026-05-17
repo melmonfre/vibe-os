@@ -31,7 +31,7 @@ Evoluir o boot atual do vibeOS para um bootloader com identidade propria, chamad
 - [x] `boot/stage2.asm` parseia FAT32, encontra apenas `KERNEL.BIN`, carrega o kernel e entra em protected mode.
 - [x] O build reserva `BOOT_STAGE2_START_SECTOR=8` e `BOOT_KERNEL_START_SECTOR=32`, logo o loader em setores fixos nao deve crescer sem controle.
 - [x] O binario atual `build/stage2.bin` mede 1115 bytes, entao existe folga, mas nao o bastante para transformar o stage atual em um GRUB inteiro sem planejamento.
-- [x] A FAT do boot hoje recebe `KERNEL.BIN`, `STAGE2.BIN`, `LAYOUT.TXT`, `BOOTPOLICY.TXT` e `DATAINFO.TXT`.
+- [x] A FAT do boot hoje recebe `KERNEL.BIN`, `STAGE2.BIN`, `LAYOUT.TXT`, `BOOTPOL.TXT` e `DATAINFO.TXT`.
 - [x] `stage2/` e `linker/stage2.ld` existem no repo, mas nao estao ligados ao build real do boot neste momento.
 - [x] `userland/modules/ui.c` persiste o caminho do wallpaper em `/config/ui.cfg`.
 - [x] `userland/modules/ui.c` ainda decodifica wallpaper apenas por `bmp_decode_to_palette(...)`.

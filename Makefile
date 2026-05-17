@@ -1234,7 +1234,7 @@ BOOT_SMOKE_APP_BINS := \
 include Build.compat.mk
 
 REQUIRED_BUILD_TOOLS := $(AS) $(CC) $(LD) $(NM) $(OBJCOPY) $(AR) $(RANLIB) $(PYTHON)
-REQUIRED_IMAGE_TOOLS := $(MKFS_FAT_TOOL) $(MCOPY_TOOL) $(MMD_TOOL)
+REQUIRED_IMAGE_TOOLS := $(MKFS_FAT_TOOL)
 
 all: check-tools $(IMAGE)
 # Optional legacy monolithic payload for experiments outside the default image.
@@ -1251,7 +1251,7 @@ check-tools:
 		if ! command -v $$tool >/dev/null 2>&1; then \
 			echo "Erro: '$$tool' nao encontrado no PATH."; \
 			if [ "$(UNAME_S)" = "Darwin" ]; then \
-				echo "macOS: use uma cross-toolchain i686-elf/x86_64-elf e instale nasm/qemu/mtools."; \
+				echo "macOS: use uma cross-toolchain i686-elf/x86_64-elf e instale nasm/qemu."; \
 			else \
 				echo "Linux: instale binutils/gcc 32-bit + nasm + qemu-system-x86"; \
 				echo "Ou use toolchain cruzada i686-elf-*."; \
@@ -1263,10 +1263,9 @@ check-tools:
 		if ! command -v $$tool >/dev/null 2>&1; then \
 			echo "Erro: '$$tool' nao encontrado no PATH."; \
 			if [ "$(UNAME_S)" = "Darwin" ]; then \
-				echo "macOS: newfs_msdos ja pode vir no sistema, mas mtools (mcopy/mmd) ainda sao necessarios."; \
-				echo "Homebrew: brew install mtools"; \
+				echo "macOS: instale um formatador FAT32 compativel como mkfs.fat (dosfstools) ou use newfs_msdos."; \
 			else \
-				echo "Instale os utilitarios de imagem FAT32/mtools (ex.: dosfstools + mtools)."; \
+				echo "Instale um formatador FAT32 compativel (ex.: dosfstools)."; \
 			fi; \
 			exit 1; \
 		fi; \
@@ -1856,7 +1855,7 @@ $(IMAGE): $(MBR_BIN) $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN) $(DATA_IMAGE) $(BOO
 		--boot-file "$(BOOTLOADER_BG_BIN)::/VIBEBG.BIN" \
 		--boot-file "$(VIBE_BOOTLOADER_AUDIO_RAW)::/VIBEBOOT.RAW" \
 		--boot-file "$(BOOT_VOLUME_MANIFEST)::/LAYOUT.TXT" \
-		--boot-file "$(BOOT_POLICY_MANIFEST)::/BOOTPOLICY.TXT" \
+		--boot-file "$(BOOT_POLICY_MANIFEST)::/BOOTPOL.TXT" \
 		--boot-file "$(DATA_IMAGE_MANIFEST)::/DATAINFO.TXT"
 	@echo "Imagem gerada: $(IMAGE)"
 
