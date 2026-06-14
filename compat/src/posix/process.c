@@ -20,9 +20,27 @@ static inline long syscall6(long num, long a1, long a2, long a3, long a4, long a
     return ret;
 }
 
-pid_t fork(void) {
-    long ret = syscall6(SYSCALL_FORK, 0, 0, 0, 0, 0, 0);
+/* Child entry for fork. Called by kernel with eax=0.
+ * The stack contains a copy of the parent's user stack with the
+ * return address at the correct position. We just "ret" to pop it
+ * and return to terminal_init_ksh with eax=0 (fork returns 0 for child). */
+__attribute__((naked)) void fork_child_entry(void) {
+    __asm__ volatile(
+        "xor %eax, %eax\n"       /* eax = 0 (fork returns 0 for child) */
+        "ret\n"                  /* pop return address, jump to terminal_init_ksh */
+    );
+}
 
+pid_t fork(void) {
+    long ret;
+    /* Pass return address (caller of fork) in edi (arg5).
+     * Child entry in esi (arg4). */
+    void *ret_addr = __builtin_return_address(0);
+    __asm__ volatile("int $0x80"
+        : "=a"(ret)
+        : "a"(SYSCALL_FORK), "b"(0), "c"(0), "d"(0),
+          "S"(fork_child_entry), "D"(ret_addr)
+        : "memory");
     if (ret < 0) {
         errno = EAGAIN;
         return (pid_t)-1;

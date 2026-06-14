@@ -314,12 +314,8 @@ static void terminal_build_cwd(char *buf, int max_len) {
 }
 
 static void terminal_build_prompt(char *buf, int max_len) {
-    char cwd[96];
-    terminal_build_cwd(cwd, (int)sizeof(cwd));
     buf[0] = '\0';
-    str_append(buf, "[", max_len);
-    str_append(buf, cwd, max_len);
-    str_append(buf, "] $ ", max_len);
+    str_append(buf, "vibe@vibeOS $ ", max_len);
 }
 
 static void terminal_history_add(struct terminal_state *t, const char *line) {
@@ -340,13 +336,15 @@ static void terminal_history_add(struct terminal_state *t, const char *line) {
 /* removed - input goes directly to cell buffer */
 
 static void write_prompt(struct terminal_state *t) {
-    const char *p = "$ ";
+    const char *p = "vibe@vibeOS $ ";
     int row_idx = t->cur_row & ROW_MASK;
-    for (int i = 0; p[i] && i < t->cols; i++) {
+    int max = t->cols < 15 ? t->cols : 15;
+    int i;
+    for (i = 0; p[i] && i < max; i++) {
         t->cells[row_idx][i].ch = p[i];
         t->cells[row_idx][i].attr = (uint8_t)attr_pack(t->cur_fg, t->cur_bg);
     }
-    t->cur_x = 2;
+    t->cur_x = i;
 }
 
 void terminal_init_state(struct terminal_state *t) {
@@ -497,8 +495,9 @@ static void terminal_debug_cmd_status(const char *cmd, int rc) {
 
 static void read_input_line(struct terminal_state *t, char *buf, int max) {
     int row_idx = t->cur_row & ROW_MASK;
+    int plen = 15; /* "vibe@vibeOS $ " */
     int len = 0;
-    for (int i = 2; i < t->cols && i < max - 1; i++) {
+    for (int i = plen; i < t->cols && i < max - 1; i++) {
         char ch = t->cells[row_idx][i].ch;
         if (ch == ' ' || ch == '\0') break;
         buf[len++] = ch;

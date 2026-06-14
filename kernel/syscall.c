@@ -2016,9 +2016,31 @@ static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
     stack_offset = (uintptr_t)current->context - (uintptr_t)current->stack;
     child->context = (kernel_trap_frame_t *)((uintptr_t)child->stack + stack_offset);
 
-    if (process_frame_is_user_mode(current->context)) {
+    if (current->runs_in_user_mode) {
+        /* Forking a user-mode task. Create a fresh user-mode context
+         * for the child instead of copying the parent's (possibly
+         * kernel-mode) saved context from the last timer interrupt. */
         context_size = sizeof(kernel_user_trap_frame_t);
         user_stack_top = current->user_stack_top;
+        uintptr_t child_stack_top = 0u;
+        if (current->user_stack_top == VIBE_APP_DESKTOP_STACK_TOP)
+            child_stack_top = VIBE_APP_DESKTOP_LOAD_ADDR + VIBE_APP_DESKTOP_ARENA_SIZE / 2u;
+        else if (current->user_stack_top == VIBE_APP_STACK_TOP)
+            child_stack_top = VIBE_APP_LOAD_ADDR + VIBE_APP_ARENA_SIZE / 2u;
+        else if (current->user_stack_top == VIBE_APP_BOOT_STACK_TOP)
+            child_stack_top = VIBE_APP_BOOT_LOAD_ADDR + VIBE_APP_BOOT_ARENA_SIZE / 2u;
+        if (child_stack_top != 0u) {
+            uint32_t parent_used = current->user_stack_top - current->user_stack_top / 4u;
+            uint32_t max_stack = VIBE_APP_DESKTOP_ARENA_SIZE / 4u;
+            if (parent_used > max_stack) parent_used = max_stack;
+            uint32_t child_esp = (uint32_t)(child_stack_top - parent_used);
+            if (child_esp > VIBE_APP_LOAD_ADDR) {
+                memcpy((void *)(uintptr_t)child_esp,
+                       (void *)(uintptr_t)(current->user_stack_top - parent_used),
+                       parent_used);
+                user_stack_top = child_stack_top;
+            }
+        }
     } else {
         context_size = sizeof(kernel_trap_frame_t);
         user_stack_top = 0u;
@@ -2051,6 +2073,61 @@ static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
     child->exit_status = 0;
     child->child_exit_pid = 0;
     child->child_exit_status = 0;
+
+    /* For user-mode forks: copy parent's entire used user stack to
+     * the child's new stack area, then set child EIP to fork_child_entry
+     * which does jmp *%edi (where edi = return address from parent). */
+    if (current->runs_in_user_mode) {
+        uint32_t child_eip = d;  /* fork_child_entry from esi */
+        uintptr_t child_st = 0u;
+        if (current->user_stack_top == VIBE_APP_DESKTOP_STACK_TOP)
+            child_st = VIBE_APP_DESKTOP_LOAD_ADDR + VIBE_APP_DESKTOP_ARENA_SIZE / 2u;
+        else if (current->user_stack_top == VIBE_APP_STACK_TOP)
+            child_st = VIBE_APP_LOAD_ADDR + VIBE_APP_ARENA_SIZE / 2u;
+        else if (current->user_stack_top == VIBE_APP_BOOT_STACK_TOP)
+            child_st = VIBE_APP_BOOT_LOAD_ADDR + VIBE_APP_BOOT_ARENA_SIZE / 2u;
+        if (child_st != 0u) {
+            /* Copy parent's user stack (top 8KB) to child's stack */
+            uint32_t copy_sz = 8192u;
+            uintptr_t parent_bot = current->user_stack_top - copy_sz;
+            uintptr_t child_bot = child_st - copy_sz;
+            if (parent_bot >= VIBE_APP_LOAD_ADDR && child_bot >= VIBE_APP_LOAD_ADDR) {
+                memcpy((void *)child_bot, (void *)parent_bot, copy_sz);
+            }
+            /* Build user trap frame. Child EIP = fork_child_entry.
+             * It jumps to edi which holds the parent's return address.
+             * Child ESP = parent's ESP relative position. */
+            kernel_user_trap_frame_t *kf;
+            uintptr_t kt = (uintptr_t)child->stack + child->stack_size;
+            kf = (kernel_user_trap_frame_t *)(kt - sizeof(*kf));
+            memset(kf, 0, sizeof(*kf));
+            kf->base.esp_dummy = (uint32_t)(uintptr_t)&kf->base.eip;
+            kf->base.eip = child_eip;
+            kf->base.cs = USER_CS_SELECTOR;
+            kf->base.eflags = 0x00000202u;
+            kf->base.eax = 0u;
+            /* ESP offset: return address at ESP + 20.
+             * fork prologue: push ebp, push edi, push esi, push ebx, push ecx
+             * EBP = ESP + 16 → return_addr at EBP+4 = ESP + 20.
+             * Child ret pops [ESP] = return_address. */
+            kf->user_esp = (uint32_t)(child_st - copy_sz + 20u);
+            kf->user_ss = USER_DS_SELECTOR;
+            child->context = &kf->base;
+            child->runs_in_user_mode = 1u;
+            child->user_stack_top = child_st;
+            user_stack_top = child_st;
+        }
+    }
+
+    kernel_debug_printf("fork: child_pid=%d eip=%x cs=%x user_esp=%x user_ss=%x runs_user=%d\n",
+        child->pid,
+        child->context ? child->context->eip : 0,
+        child->context ? child->context->cs : 0,
+        (current->runs_in_user_mode && child->context) ?
+            ((kernel_user_trap_frame_t*)child->context)->user_esp : 0,
+        (current->runs_in_user_mode && child->context) ?
+            ((kernel_user_trap_frame_t*)child->context)->user_ss : 0,
+        current->runs_in_user_mode);
 
     /*
      * Return value in eax: for the child, set eax to 0 so
