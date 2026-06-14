@@ -498,7 +498,7 @@ static void terminal_debug_cmd_status(const char *cmd, int rc) {
 static void read_input_line(struct terminal_state *t, char *buf, int max) {
     int row_idx = t->cur_row & ROW_MASK;
     int len = 0;
-    for (int i = 0; i < t->cols && i < max - 1; i++) {
+    for (int i = 2; i < t->cols && i < max - 1; i++) {
         char ch = t->cells[row_idx][i].ch;
         if (ch == ' ' || ch == '\0') break;
         buf[len++] = ch;
@@ -755,21 +755,5 @@ void terminal_draw_window(struct terminal_state *t, int active,
         }
     }
 
-    /* Draw prompt on the current input row if it's empty */
-    {
-        int row_idx = t->cur_row & ROW_MASK;
-        if (t->cells[row_idx][0].ch == ' ' || t->cells[row_idx][0].ch == '\0') {
-            int cy;
-            if (content_rows < t->rows)
-                cy = t->cur_row - first_content + (t->rows - content_rows);
-            else
-                cy = t->cur_row - (last_content - t->rows + 1);
-            if (cy >= 0 && cy < t->rows) {
-                int lx = log.x + 4;
-                int ly = log.y + 4 + cy * FONT_H;
-                sys_rect(lx, ly, log.w - 8, FONT_H, 0u);
-                ui_draw_text_clipped(&log, lx, ly, theme->text, prompt);
-            }
-        }
-    }
+    /* prompt is already in cell buffer */
 }
