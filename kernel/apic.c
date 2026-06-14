@@ -79,8 +79,9 @@ static int local_apic_wait_icr_idle(void) {
 static void local_apic_wait_ticks(uint32_t ticks) {
     uint32_t start = kernel_timer_get_ticks();
     uint32_t deadline = start + ticks;
+    uint32_t spins = 50000000u;
 
-    while ((int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
+    while (spins-- > 0u && (int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
         io_wait();
         __asm__ volatile("pause");
     }

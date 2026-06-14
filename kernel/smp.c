@@ -30,7 +30,7 @@
 #define AP_TRAMPOLINE_PMODE_OFFSET 0x33u
 #define AP_TRAMPOLINE_DEBUG_STAGE_ADDR 0x7FF0u
 #define AP_STACK_SIZE 4096u
-#define AP_START_TIMEOUT_TICKS 20u
+#define AP_START_TIMEOUT_TICKS 500u
 #define BIOS_WARM_RESET_VECTOR_OFFSET_ADDR 0x467u
 #define BIOS_WARM_RESET_VECTOR_SEGMENT_ADDR 0x469u
 #define CMOS_INDEX_PORT 0x70u
@@ -72,6 +72,9 @@ static uint8_t g_smp_saved_cmos_shutdown = 0u;
 static uint16_t g_smp_saved_warm_reset_offset = 0u;
 static uint16_t g_smp_saved_warm_reset_segment = 0u;
 static int g_smp_ap_reset_vector_armed = 0;
+
+static smp_ipi_handler_t g_smp_ipi_handlers[256];
+static int g_smp_ipi_initialized = 0;
 
 void smp_persist_trace_arm(void) {
     g_smp_bootdebug->magic = BOOTDEBUG_MAGIC;
@@ -158,21 +161,41 @@ static void smp_prepare_trampoline(uint32_t entry, uint32_t stack_top) {
 
 static int smp_wait_for_cpu(uint32_t expected_count) {
     uint32_t deadline = kernel_timer_get_ticks() + AP_START_TIMEOUT_TICKS;
-    while ((int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
+    uint32_t deadline2 = 5000000u;
+
+    while (deadline2-- > 0u) {
         if (g_smp_started_cpus >= expected_count) {
             return 0;
         }
+        if ((int32_t)(kernel_timer_get_ticks() - deadline) >= 0) {
+            break;
+        }
         __asm__ volatile("pause");
     }
+    kernel_debug_printf("smp: wait timeout for %u cpus (started=%u, spins_remaining=%u)\n",
+                        (unsigned int)expected_count,
+                        (unsigned int)g_smp_started_cpus,
+                        (unsigned int)deadline2);
     return -1;
 }
 
 static void smp_wait_ticks(uint32_t ticks) {
     uint32_t deadline = kernel_timer_get_ticks() + ticks;
+    uint32_t spins = 10000000u;
 
-    while ((int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
+    while (spins-- > 0u && (int32_t)(kernel_timer_get_ticks() - deadline) < 0) {
         io_wait();
         __asm__ volatile("pause");
+    }
+}
+
+static void smp_send_sipi_with_retry(uint32_t apic_id, uint8_t vector) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        if (local_apic_send_startup(apic_id, vector) == 0) {
+            smp_wait_ticks(1u);
+            return;
+        }
+        smp_wait_ticks(2u);
     }
 }
 
@@ -305,6 +328,15 @@ void smp_init(void) {
     }
     g_smp_cpu_stage[0] = SMP_CPU_STAGE_AP_SCHED;
 
+    if (!g_smp_ipi_initialized) {
+        for (uint32_t i = 0; i < 256u; ++i) {
+            g_smp_ipi_handlers[i] = NULL;
+        }
+        g_smp_ipi_initialized = 1;
+        g_smp_ipi_handlers[SMP_IPI_WAKE_VECTOR] = smp_wakeup_ipi_handler;
+        kernel_debug_puts("smp: IPI handler table initialized\n");
+    }
+
     if (!kernel_cpu_is_smp_capable() || !local_apic_enabled() || kernel_cpu_count() <= 1u) {
         return;
     }
@@ -327,7 +359,7 @@ void smp_init(void) {
         uint32_t stack_top;
 
         if (!cpu) {
-            break;
+            continue;
         }
         if (cpu->apic_id == local_apic_id()) {
             kernel_text_puts("SMP: skip self apic\n");
@@ -339,76 +371,82 @@ void smp_init(void) {
         stack = kernel_malloc(AP_STACK_SIZE);
         if (!stack) {
             kernel_debug_printf("smp: no stack for cpu idx=%d\n", (int)i);
-            break;
+            continue;
         }
         stack_top = (uint32_t)(uintptr_t)stack + AP_STACK_SIZE;
 
-        spinlock_lock(&g_smp_boot_lock);
-        smp_persist_trace_mark('P');
-        kernel_text_puts("SMP: prepare ap\n");
-        smp_text_put_apic_line("SMP: target apic ", cpu->apic_id);
-        smp_prepare_trampoline((uint32_t)(uintptr_t)smp_ap_entry, stack_top);
-        g_smp_cpu_stage[i] = SMP_CPU_STAGE_PREPARED;
-        kernel_debug_printf("smp: starting ap idx=%d apic=%x stack=%x\n",
-                            (int)i,
-                            cpu->apic_id,
-                            stack_top);
-        smp_persist_trace_mark('I');
-        kernel_text_puts("SMP: send INIT\n");
-        if (local_apic_send_init(cpu->apic_id) == 0) {
-            g_smp_cpu_stage[i] = SMP_CPU_STAGE_INIT_SENT;
-            kernel_debug_printf("smp: init sent apic=%x\n", cpu->apic_id);
-            smp_wait_ticks(1u);
-            smp_persist_trace_mark('1');
-            kernel_text_puts("SMP: send SIPI1\n");
-            kernel_debug_printf("smp: attempting sipi1 apic=%x vec=%x\n",
-                                cpu->apic_id,
-                                (unsigned)AP_TRAMPOLINE_VECTOR);
-            if (local_apic_send_startup(cpu->apic_id, (uint8_t)AP_TRAMPOLINE_VECTOR) == 0) {
-                g_smp_cpu_stage[i] = SMP_CPU_STAGE_SIPI1_SENT;
-                kernel_debug_printf("smp: sipi1 sent apic=%x vec=%x\n",
+        {
+            int ap_started = 0;
+            for (int ap_retry = 0; ap_retry < 3 && !ap_started; ++ap_retry) {
+                spinlock_lock(&g_smp_boot_lock);
+                smp_persist_trace_mark('P');
+                kernel_text_puts("SMP: prepare ap\n");
+                smp_text_put_apic_line("SMP: target apic ", cpu->apic_id);
+                smp_prepare_trampoline((uint32_t)(uintptr_t)smp_ap_entry, stack_top);
+                g_smp_cpu_stage[i] = SMP_CPU_STAGE_PREPARED;
+                kernel_debug_printf("smp: starting ap idx=%d apic=%x stack=%x (attempt %d)\n",
+                                    (int)i,
                                     cpu->apic_id,
-                                    (unsigned)AP_TRAMPOLINE_VECTOR);
-                smp_wait_ticks(1u);
-                kernel_text_puts("SMP: ap stage ");
-                smp_text_put_hex8(smp_trampoline_debug_stage());
-                kernel_text_puts("\n");
-            } else {
-                kernel_debug_printf("smp: sipi1 failed apic=%x stage=%x\n",
-                                    cpu->apic_id,
-                                    (unsigned)smp_trampoline_debug_stage());
-            }
-            smp_persist_trace_mark('2');
-            kernel_text_puts("SMP: send SIPI2\n");
-            kernel_debug_printf("smp: attempting sipi2 apic=%x vec=%x\n",
-                                cpu->apic_id,
-                                (unsigned)AP_TRAMPOLINE_VECTOR);
-            if (local_apic_send_startup(cpu->apic_id, (uint8_t)AP_TRAMPOLINE_VECTOR) == 0) {
-                g_smp_cpu_stage[i] = SMP_CPU_STAGE_SIPI2_SENT;
-                kernel_debug_printf("smp: sipi2 sent apic=%x vec=%x\n",
-                                    cpu->apic_id,
-                                    (unsigned)AP_TRAMPOLINE_VECTOR);
-            } else {
-                kernel_debug_printf("smp: sipi2 failed apic=%x stage=%x\n",
-                                    cpu->apic_id,
-                                    (unsigned)smp_trampoline_debug_stage());
-            }
-        } else {
-            kernel_debug_printf("smp: init failed apic=%x\n", cpu->apic_id);
-        }
-        spinlock_unlock(&g_smp_boot_lock);
+                                    stack_top,
+                                    ap_retry + 1);
+                smp_persist_trace_mark('I');
+                kernel_text_puts("SMP: send INIT\n");
+                if (local_apic_send_init(cpu->apic_id) == 0) {
+                    g_smp_cpu_stage[i] = SMP_CPU_STAGE_INIT_SENT;
+                    kernel_debug_printf("smp: init sent apic=%x\n", cpu->apic_id);
+                    smp_wait_ticks(10u);
+                    smp_persist_trace_mark('1');
+                    kernel_text_puts("SMP: send SIPI1\n");
+                    kernel_debug_printf("smp: attempting sipi1 apic=%x vec=%x\n",
+                                        cpu->apic_id,
+                                        (unsigned)AP_TRAMPOLINE_VECTOR);
+                    smp_send_sipi_with_retry(cpu->apic_id, (uint8_t)AP_TRAMPOLINE_VECTOR);
+                    g_smp_cpu_stage[i] = SMP_CPU_STAGE_SIPI1_SENT;
+                    kernel_debug_printf("smp: sipi1 sent apic=%x vec=%x\n",
+                                        cpu->apic_id,
+                                        (unsigned)AP_TRAMPOLINE_VECTOR);
+                    smp_wait_ticks(2u);
 
-        if (smp_wait_for_cpu(i + 1u) != 0) {
-            smp_persist_trace_mark('F');
-            kernel_text_puts("SMP: wait timeout\n");
-            kernel_debug_printf("smp: ap idx=%d apic=%x did not respond\n",
-                                (int)i,
-                                cpu->apic_id);
-            smp_dump_cpu_stages();
-            break;
+                    smp_persist_trace_mark('2');
+                    kernel_text_puts("SMP: send SIPI2\n");
+                    kernel_debug_printf("smp: attempting sipi2 apic=%x vec=%x\n",
+                                        cpu->apic_id,
+                                        (unsigned)AP_TRAMPOLINE_VECTOR);
+                    smp_send_sipi_with_retry(cpu->apic_id, (uint8_t)AP_TRAMPOLINE_VECTOR);
+                    g_smp_cpu_stage[i] = SMP_CPU_STAGE_SIPI2_SENT;
+                    kernel_debug_printf("smp: sipi2 sent apic=%x vec=%x\n",
+                                        cpu->apic_id,
+                                        (unsigned)AP_TRAMPOLINE_VECTOR);
+                } else {
+                    kernel_debug_printf("smp: init failed apic=%x\n", cpu->apic_id);
+                }
+                spinlock_unlock(&g_smp_boot_lock);
+
+                if (smp_wait_for_cpu(i + 1u) == 0) {
+                    ap_started = 1;
+                    smp_persist_trace_mark('O');
+                    kernel_text_puts("SMP: ap online\n");
+                    kernel_debug_printf("smp: ap idx=%d apic=%x started successfully\n",
+                                        (int)i,
+                                        cpu->apic_id);
+                } else if (ap_retry < 2) {
+                    kernel_debug_printf("smp: retry %d for apic=%x\n", ap_retry + 1, cpu->apic_id);
+                    g_smp_started_cpus = i; /* reset counter for retry */
+                }
+            }
+            if (!ap_started) {
+                smp_persist_trace_mark('F');
+                kernel_text_puts("SMP: wait timeout\n");
+                kernel_debug_printf("smp: ap idx=%d apic=%x did not respond after 3 attempts\n",
+                                    (int)i,
+                                    cpu->apic_id);
+                kernel_debug_printf("smp: continuing without ap idx=%d apic=%x\n",
+                                    (int)i,
+                                    cpu->apic_id);
+                smp_dump_cpu_stages();
+                continue;
+            }
         }
-        smp_persist_trace_mark('O');
-        kernel_text_puts("SMP: ap online\n");
     }
     smp_restore_ap_reset_vector();
 
@@ -456,4 +494,61 @@ uint32_t smp_cpu_stage(uint32_t cpu_index) {
 
 uint8_t smp_trampoline_debug_stage(void) {
     return *(volatile uint8_t *)(uintptr_t)AP_TRAMPOLINE_DEBUG_STAGE_ADDR;
+}
+
+void smp_print_topology(void) {
+    const struct kernel_cpu_topology *topo = kernel_cpu_topology();
+
+    kernel_text_puts("SMP topology:\n");
+    kernel_debug_printf("smp: cpu_count=%u boot_apic=%u apic_supported=%d\n",
+                        (unsigned int)kernel_cpu_count(),
+                        (unsigned int)kernel_cpu_boot_id(),
+                        topo ? topo->apic_supported : 0);
+    kernel_debug_printf("smp: mp_table=%d acpi_madt=%d synth_map=%d\n",
+                        topo ? topo->mp_table_present : 0,
+                        topo ? topo->acpi_madt_present : 0,
+                        topo ? topo->synthetic_apic_map : 0);
+    kernel_debug_printf("smp: online=%u started=%u\n",
+                        (unsigned int)smp_started_cpu_count(),
+                        (unsigned int)g_smp_started_cpus);
+
+    for (uint32_t i = 0; i < kernel_cpu_count(); ++i) {
+        const struct kernel_cpu_state *cpu = kernel_cpu_state(i);
+        if (!cpu) continue;
+        kernel_debug_printf("smp:   cpu[%u] apic=%x started=%d boot=%d stage=%u\n",
+                            (unsigned int)i,
+                            (unsigned int)cpu->apic_id,
+                            cpu->started,
+                            cpu->is_boot_cpu,
+                            (unsigned int)smp_cpu_stage(i));
+    }
+}
+
+uint32_t smp_cpu_count(void) {
+    return g_smp_started_cpus;
+}
+
+void smp_ipi_dispatch(uint8_t vector) {
+    if (vector < 32u && g_smp_ipi_handlers[vector] != NULL) {
+        g_smp_ipi_handlers[vector]();
+    }
+    local_apic_eoi();
+}
+
+int smp_register_ipi_handler(uint8_t vector, smp_ipi_handler_t handler) {
+    if (!g_smp_ipi_initialized || vector >= 32u || handler == NULL) {
+        return -1;
+    }
+    g_smp_ipi_handlers[vector] = handler;
+    kernel_debug_printf("smp: registered IPI handler for vector %x\n",
+                        (unsigned int)vector);
+    return 0;
+}
+
+int smp_unregister_ipi_handler(uint8_t vector) {
+    if (!g_smp_ipi_initialized || vector >= 32u) {
+        return -1;
+    }
+    g_smp_ipi_handlers[vector] = NULL;
+    return 0;
 }

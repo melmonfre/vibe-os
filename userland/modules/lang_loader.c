@@ -1391,7 +1391,7 @@ int lang_try_run(int argc, char **argv) {
         sys_write_debug("lang: directory load failed\n");
         if (lang_has_runtime_stub(normalized_name)) {
             lang_write_load_error("catalog");
-            return 0;
+            return 1;
         }
         return -1;
     }
@@ -1405,7 +1405,7 @@ int lang_try_run(int argc, char **argv) {
         lang_debug_vga(13, "lang: no entry");
         if (lang_has_runtime_stub(normalized_name)) {
             lang_write_missing_runtime(normalized_name);
-            return 0;
+            return 1;
         }
         return -1;
     }
@@ -1414,14 +1414,14 @@ int lang_try_run(int argc, char **argv) {
 
     if (lang_read_header_copy(entry, &header_copy) != 0) {
         lang_write_load_error(entry->name);
-        return 0;
+        return 1;
     }
     sys_write_debug("lang: header ok\n");
     arena_load_address = header_copy.load_address;
     if (lang_arena_acquire(arena_load_address) != 0) {
         sys_write_debug("lang: arena acquire failed\n");
         lang_write_load_error(entry->name);
-        return 0;
+        return 1;
     }
     sys_write_debug("lang: arena ok\n");
     arena_acquired = 1;
@@ -1429,7 +1429,7 @@ int lang_try_run(int argc, char **argv) {
     if (lang_prepare_context(entry, &header_copy, &header, &g_app_ctx) != 0) {
         sys_write_debug("lang: prepare failed\n");
         lang_write_load_error(entry->name);
-        rc = 0;
+        rc = 1;
         goto done;
     }
     sys_write_debug("lang: prepare ok\n");

@@ -321,8 +321,8 @@ void sys_leave_graphics(void) {
     (void)syscall5(SYSCALL_GFX_LEAVE, 0, 0, 0, 0, 0);
 }
 
-int sys_gfx_set_mode(uint32_t width, uint32_t height) {
-    return syscall5(SYSCALL_GFX_SET_MODE, (int)width, (int)height, 0, 0, 0);
+int sys_gfx_set_mode(uint32_t width, uint32_t height, uint8_t bpp) {
+    return syscall5(SYSCALL_GFX_SET_MODE, (int)width, (int)height, (int)bpp, 0, 0);
 }
 
 int sys_gfx_set_palette(const uint8_t *rgb_triplets) {
@@ -790,6 +790,26 @@ int sys_network_recv(int handle, void *buffer, uint32_t size) {
                     0);
 }
 
+int sys_network_sendto(int handle, const void *data, uint32_t size,
+                       const struct sockaddr *dest_addr, uint32_t addrlen) {
+    return syscall5(SYSCALL_NETWORK_SENDTO,
+                    handle,
+                    (int)(uintptr_t)data,
+                    (int)size,
+                    (int)(uintptr_t)dest_addr,
+                    (int)addrlen);
+}
+
+int sys_network_recvfrom(int handle, void *buffer, uint32_t size,
+                         struct sockaddr *src_addr, uint32_t *addrlen) {
+    return syscall5(SYSCALL_NETWORK_RECVFROM,
+                    handle,
+                    (int)(uintptr_t)buffer,
+                    (int)size,
+                    (int)(uintptr_t)src_addr,
+                    (int)(uintptr_t)addrlen);
+}
+
 int sys_network_close(int handle) {
     return syscall5(SYSCALL_NETWORK_CLOSE, handle, 0, 0, 0, 0);
 }
@@ -886,6 +906,10 @@ int sys_service_pid(uint32_t service_type) {
 
 int sys_service_restart(uint32_t service_type) {
     return syscall5(SYSCALL_SERVICE_RESTART, (int)service_type, 0, 0, 0, 0);
+}
+
+int sys_service_health(uint32_t service_type, struct mk_service_health_stats *stats) {
+    return syscall5(SYSCALL_SERVICE_HEALTH, (int)(uintptr_t)stats, (int)service_type, 0, 0, 0);
 }
 
 int sys_service_event_receive(uint32_t service_type,

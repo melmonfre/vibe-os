@@ -9703,6 +9703,7 @@ void desktop_main(void) {
     file_dialog_reset(&file_dialog);
     sound_applet_load_settings();
     network_applet_load_settings();
+    g_launch_terminal_pending = 0;
     desktop_queue_startup_background_tasks();
     desktop_startup_task_gate_tick = 0u;
 

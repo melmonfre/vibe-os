@@ -145,6 +145,7 @@ void divide_error_handler(uint32_t eip, uint32_t cs) {
     if (exception_is_user_mode(cs)) {
         exception_kill_user_task("Divide Error", 0u, eip, cs, 0u);
     }
+    kernel_debug_printf("DIVIDE ERROR at eip=%x cs=%x\n", (unsigned int)eip, (unsigned int)cs);
     kernel_panic("Divide Error");
 }
 

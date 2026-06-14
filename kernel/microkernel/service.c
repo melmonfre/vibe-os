@@ -65,6 +65,7 @@ static int mk_service_type_allows_rescue_local_fallback(uint32_t service_type) {
     case MK_SERVICE_STORAGE:
     case MK_SERVICE_FILESYSTEM:
     case MK_SERVICE_CONSOLE:
+    case MK_SERVICE_NETWORK:
         return 1;
     default:
         return 0;
@@ -355,6 +356,9 @@ static int mk_service_register_impl(uint32_t type,
                 g_services[slot].pid = pid;
                 g_services[slot].process = process;
                 g_services[slot].transport_degraded = 0u;
+                g_services[slot].last_error = 0u;
+                g_services[slot].start_tick = kernel_timer_get_ticks();
+                g_services[slot].pending_request_count = 0u;
                 mk_service_retry_reset(&g_services[slot]);
                 if (g_services[slot].subscriptions_ready == 0u) {
                     mk_service_init_subscriptions(&g_services[slot]);
@@ -378,6 +382,9 @@ static int mk_service_register_impl(uint32_t type,
             g_services[slot].local_handler = local_handler;
             g_services[slot].context = context;
             g_services[slot].transport_degraded = 0u;
+            g_services[slot].last_error = 0u;
+            g_services[slot].start_tick = kernel_timer_get_ticks();
+            g_services[slot].pending_request_count = 0u;
             mk_service_retry_reset(&g_services[slot]);
             if (pid != 0 || process != 0) {
                 mk_service_init_subscriptions(&g_services[slot]);
@@ -1002,6 +1009,13 @@ static int mk_service_request_process(const struct mk_service_record *service,
                                 service->pid);
         }
 
+        {
+            struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
+            if (mutable_service != 0) {
+                mutable_service->pending_request_count++;
+            }
+        }
+
         if (ipc_send(service->process, &request_copy, sizeof(request_copy)) != 0) {
             struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
 
@@ -1055,13 +1069,19 @@ static int mk_service_request_process(const struct mk_service_record *service,
                                                     remaining_ticks);
             }
 
-            if (received == (int)sizeof(response)) {
+                    if (received == (int)sizeof(response)) {
                 if (response.source_pid == waiting_pid &&
                     response.target_pid == (uint32_t)current->pid) {
                     mk_service_restore_deferred_messages(current,
                                                          deferred_replies,
                                                          deferred_reply_count);
                     deferred_reply_count = 0u;
+                    {
+                        struct mk_service_record *mutable_service = mk_service_find_mutable_by_type(service->type);
+                        if (mutable_service != 0 && mutable_service->pending_request_count > 0u) {
+                            mutable_service->pending_request_count--;
+                        }
+                    }
                     if (service->type == MK_SERVICE_CONSOLE && !g_console_reply_trace_emitted) {
                         g_console_reply_trace_emitted = 1;
                         kernel_debug_printf("service: console reply type=%d src=%d dst=%d\n",
@@ -1194,10 +1214,9 @@ int mk_service_request(uint32_t type, const struct mk_message *request, struct m
             }
         }
         service = mk_service_find_by_type(type);
-        if (service == 0 || service->process == 0 || !mk_service_process_online(service)) {
-            return -1;
+        if (service != 0 && service->process != 0 && mk_service_process_online(service)) {
+            return mk_service_request_process(service, request, reply);
         }
-        return mk_service_request_process(service, request, reply);
     }
 
     if (service->local_handler != 0 &&
@@ -1526,6 +1545,34 @@ static uint32_t mk_service_process_background_retries(uint32_t now_ticks) {
     }
 
     return next_wake_tick;
+}
+
+int mk_service_query_health(uint32_t type, struct mk_service_health_stats *stats) {
+    const struct mk_service_record *service;
+
+    if (stats == 0) {
+        return -1;
+    }
+    memset(stats, 0, sizeof(*stats));
+    stats->abi_version = 1u;
+    stats->service_type = type;
+
+    service = mk_service_find_by_type(type);
+    if (service == 0) {
+        stats->online = 0u;
+        stats->degraded = 0u;
+        stats->restart_count = 0u;
+        return 0;
+    }
+
+    stats->online = mk_service_process_online(service) ? 1u : 0u;
+    stats->degraded = service->transport_degraded;
+    stats->uptime_ticks = stats->online ? (kernel_timer_get_ticks() - service->start_tick) : 0u;
+    stats->last_error = service->last_error;
+    stats->pending_requests = service->pending_request_count;
+    stats->restart_count = service->restart_count;
+    stats->retry_attempts = service->retry_attempts;
+    return 0;
 }
 
 static void mk_service_retry_worker_entry(void) {

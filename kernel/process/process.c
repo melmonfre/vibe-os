@@ -36,7 +36,7 @@ static uint32_t process_normalize_stack_size(uint32_t stack_size) {
     return (stack_size + 15u) & ~15u;
 }
 
-static int g_next_pid = 1;
+int g_next_pid = 1;
 
 static int process_entry_in_range(uintptr_t entry, uintptr_t base, uint32_t size) {
     return entry >= base && entry < (base + (uintptr_t)size);
@@ -313,7 +313,10 @@ process_t *process_create_with_stack(void (*entry)(void),
     memset(p, 0, sizeof(*p));
 
     p->pid = g_next_pid++;
+    p->pgid = p->pid;
+    p->sid = p->pid;
     p->current_cpu = -1;
+    { int i; for (i = 0; i < RLIMIT_NLIMITS; ++i) { p->rlimits[i].rlim_cur = -1; p->rlimits[i].rlim_max = -1; } }
     p->preferred_cpu = -1;
     p->last_cpu = -1;
     p->state = PROCESS_READY;

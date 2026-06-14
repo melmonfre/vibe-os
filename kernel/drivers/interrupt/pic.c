@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <kernel/apic.h>
+#include <kernel/ioapic.h>
 #include <kernel/interrupt.h>
 #include <kernel/hal/io.h>
 
@@ -69,11 +70,19 @@ void kernel_irq_unmask(uint8_t irq_line) {
     if (irq_line >= 16u) {
         return;
     }
+    if (ioapic_active()) {
+        ioapic_unmask_irq((uint32_t)irq_line);
+        return;
+    }
     pic_unmask_irq(irq_line);
 }
 
 void kernel_irq_mask(uint8_t irq_line) {
     if (irq_line >= 16u) {
+        return;
+    }
+    if (ioapic_active()) {
+        ioapic_mask_irq((uint32_t)irq_line);
         return;
     }
     pic_mask_irq(irq_line);
@@ -100,14 +109,23 @@ void kernel_irq_dispatch(uint8_t irq_line) {
         return;
     }
 
-    kernel_pic_send_eoi(irq_line);
+    if (!ioapic_active()) {
+        kernel_pic_send_eoi(irq_line);
+    }
 }
 
 void kernel_irq_enable(void) {
-    pic_unmask_irq(0);
-    pic_unmask_irq(1);
-    pic_unmask_irq(2);
-    pic_unmask_irq(12);
+    if (ioapic_active()) {
+        kernel_irq_unmask(0);
+        kernel_irq_unmask(1);
+        kernel_irq_unmask(2);
+        kernel_irq_unmask(12);
+    } else {
+        pic_unmask_irq(0);
+        pic_unmask_irq(1);
+        pic_unmask_irq(2);
+        pic_unmask_irq(12);
+    }
     __asm__ volatile("sti");
 }
 
@@ -129,8 +147,10 @@ void kernel_pic_send_eoi(uint8_t irq_line) {
 }
 
 void kernel_irq_complete(uint8_t irq_line) {
-    if (irq_line < 16u) {
-        kernel_pic_send_eoi(irq_line);
+    if (!ioapic_active()) {
+        if (irq_line < 16u) {
+            kernel_pic_send_eoi(irq_line);
+        }
     }
     if (local_apic_enabled()) {
         local_apic_eoi();
