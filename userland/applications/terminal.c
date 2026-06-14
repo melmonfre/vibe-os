@@ -571,7 +571,7 @@ int terminal_run_command(struct terminal_state *t, const char *command, int clea
     int row_idx = t->cur_row & ROW_MASK;
     int i = 2;
     while (command[i - 2] && i < t->cols) {
-        t->cells[row_idx][i].ch = command[i];
+        t->cells[row_idx][i].ch = command[i - 2];
         t->cells[row_idx][i].attr = (uint8_t)attr_pack(t->cur_fg, t->cur_bg);
         i++;
     }
@@ -663,9 +663,8 @@ void terminal_draw_window(struct terminal_state *t, int active,
     char cwd[96];
     char cwd_fit[96];
     char hint_fit[64];
-    const char *prompt = "$ ";
-    int prompt_len = 2;
-    (void)prompt_len;
+
+
     
     int new_cols = (log.w - 10) / FONT_W;
     int new_rows = (log.h - 8) / FONT_H;
