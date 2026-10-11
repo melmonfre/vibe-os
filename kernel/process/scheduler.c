@@ -174,7 +174,7 @@ static uint32_t scheduler_online_cpu_count(void) {
         return 1u;
     }
 
-    uint32_t count = smp_started_cpu_count();
+    uint32_t count = smp_cpu_count();
 
     if (count == 0u) {
         count = 1u;

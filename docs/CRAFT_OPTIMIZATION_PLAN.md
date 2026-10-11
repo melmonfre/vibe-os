@@ -16,6 +16,14 @@ O objetivo e ter um clone funcional de Minecraft no VibeOS:
 
 Se o jogo nao entregar isso, qualquer micro-otimizacao de frame continua sendo secundaria.
 
+## ponto critico
+o jogo abre, mas esta com render cara pois prestando atencao da pra ver que ele ta renderizando faces que deviam estar ocultas, como blocos cercados por outros blocos, ou seja, o renderer nao esta respeitando a semantica minima de culling e depth que um jogo de voxel precisa ter para parecer um jogo de voxel. 
+
+Tratativa implementada nesta rodada:
+
+- o `compute_chunk()` passa a consultar vizinhanca real de blocos/luzes antes de emitir faces, em vez de aceitar geometria interna por erro de bootstrap/local cache
+- o renderer compat volta a honrar `GL_CULL_FACE` tambem para blocos, mantendo depth/culling coerentes com o contrato voxel minimo
+
 ## Diretriz Central
 
 O plano anterior estava otimista demais com "performance first".
@@ -109,6 +117,7 @@ Arquivos-alvo:
 - [ ] Revisar a logica de `force_chunks()` e o papel dela no primeiro frame util.
 - [ ] Validar `highest_block()` e spawn inicial para evitar nascer em posicao ruim ou olhando para vazio.
 - [ ] Confirmar que `compute_chunk()` realmente gera faces e que `generate_chunk()` entrega buffers validos.
+- [x] Remover emissao de faces internas causadas por leitura incompleta de vizinhanca no `compute_chunk()`.
 - [ ] Confirmar que os chunks visiveis nao estao sendo descartados por `chunk_visible()` de forma indevida.
 - [ ] Confirmar que o renderer desenha cubos com profundidade correta.
 

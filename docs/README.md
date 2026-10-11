@@ -1,5 +1,32 @@
 # Docs Map
 
+**VibeOS** — A service-oriented microkernel operating system for x86 (i386), with real hardware drivers, a lightweight GUI, and microkernel-based services.
+
+## Project Status
+
+| Component | Status |
+| --- | --- |
+| Boot chain (MBR → VBR → Stage2 → Kernel) | ✅ Complete |
+| Memory subsystem (free-list allocator, 4GB physmem, 4KB paging) | ✅ Complete |
+| Storage: ATA, AHCI, NVMe, USB BOT | ✅ Complete |
+| Network: VirtIO, e1000, rtl8139, Intel 7260 Wi-Fi | ✅ Complete |
+| Audio: Intel HDA, AC97, USB Audio, pcspkr fallback | ✅ Complete |
+| Input: PS/2 keyboard, mouse | ✅ Complete |
+| Video: LFB, VESA, native DRM (BGA, i915, radeon, nouveau) | ✅ Complete |
+| Desktop GUI (microui, dynamic desktop, taskbar, applets) | ✅ Complete |
+| Microkernel services (IPC, restart, events, async) | ✅ Complete (Phases A-G) |
+| ABI compatibility (BSD/POSIX shapes, ELF32, sockets, termios) | ✅ Complete |
+| Wi-Fi WPA2 (PBKDF2-SHA1, 4-way handshake, 802.11 scanning) | ✅ Complete |
+| USB substrate (UHCI/OHCI/EHCI/XHCI discovery, device descriptors) | ✅ Complete |
+| Native USB mass-storage runtime (NVMe, USB BOT) | ✅ Complete |
+| Video DRM backends (BGA, i915, radeon, nouveau) | ✅ Complete |
+| POSIX/Compat layer (BSD libc, pthreads, sockets, X11) | ✅ Complete |
+| SMP bring-up and validation | 🔄 In progress |
+| POSIX Graphics X-Like compatibility | 🔄 In progress |
+| Craft (voxel game) | 🔄 In progress |
+
+## Layout
+
 This directory is split into two kinds of documentation:
 
 - technical reference docs in `docs/`

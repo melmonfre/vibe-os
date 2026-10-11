@@ -29,7 +29,7 @@ void kernel_debug_init(void) {
     outb(SERIAL_PORT + 0, 0x01);  /* Divisor low byte (115200 baud) */
     outb(SERIAL_PORT + 1, 0x00);  /* Divisor high byte */
     outb(SERIAL_PORT + 3, 0x03);  /* 8 bits, 1 stop, no parity */
-    outb(SERIAL_PORT + 2, 0xC7);  /* Enable FIFO */
+    outb(SERIAL_PORT + 2, 0x07);  /* Reset FIFOs but keep in single-byte mode (disable FIFO) */
     outb(SERIAL_PORT + 4, 0x0B);  /* Set RTS/DTR */
 }
 
@@ -38,7 +38,11 @@ static int serial_is_transmitter_empty(void) {
 }
 
 static void serial_putc_raw(char c) {
+    uint32_t timeout = 100000u;
     while (!serial_is_transmitter_empty()) {
+        if (--timeout == 0u) {
+            return; /* drop character if serial port stuck */
+        }
     }
     outb(SERIAL_PORT, (uint8_t)c);
 }
@@ -77,7 +81,6 @@ static void serial_vprintf_raw(const char *fmt, va_list args) {
                     serial_putc_raw('-');
                     value = -value;
                 }
-                
                 char buf[16];
                 int len = 0;
                 if (value == 0) {
@@ -85,6 +88,27 @@ static void serial_vprintf_raw(const char *fmt, va_list args) {
                 } else {
                     int v = value;
                     for (int w = v; w > 0; w /= 10) {
+                        ++len;
+                    }
+                    for (int i = len - 1; i >= 0; --i) {
+                        buf[i] = (char)('0' + (value % 10));
+                        value /= 10;
+                    }
+                }
+                for (int i = 0; i < len; ++i) {
+                    serial_putc_raw(buf[i]);
+                }
+                break;
+            }
+            case 'u': {
+                unsigned int value = va_arg(args, unsigned int);
+                char buf[16];
+                int len = 0;
+                if (value == 0) {
+                    buf[len++] = '0';
+                } else {
+                    unsigned int v = value;
+                    for (unsigned int w = v; w > 0; w /= 10) {
                         ++len;
                     }
                     for (int i = len - 1; i >= 0; --i) {

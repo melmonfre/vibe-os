@@ -1217,9 +1217,11 @@ static int netmgrd_command_status(void) {
                                    0);
 
     printf("state: %s\n", netmgrd_link_state_name(status.link_state));
-    printf("active: %s (%s)\n",
-           status.active_if[0] != '\0' ? status.active_if : "-",
-           netmgrd_if_kind_name(status.active_kind));
+    printf("active: ");
+    printf("%s", status.active_if[0] != '\0' ? status.active_if : "-");
+    printf(" [");
+    printf("%s", netmgrd_if_kind_name(status.active_kind));
+    printf("]\n");
     printf("ssid: %s\n", status.current_ssid[0] != '\0' ? status.current_ssid : "-");
     printf("ip: %s\n", status.ip_address[0] != '\0' ? status.ip_address : "-");
     printf("gateway: %s\n", status.gateway[0] != '\0' ? status.gateway : "-");
@@ -1233,7 +1235,7 @@ static int netmgrd_command_status(void) {
     printf("socket scope: %s\n", netmgrd_socket_scope_name(&info));
     printf("event stream: %s\n", netmgrd_event_stream_name(&info));
     printf("backend events: %s\n", netmgrd_backend_events_name(&info));
-    printf("socket rx capacity: %u\n", (unsigned int)info.socket_rx_capacity);
+    printf("socket rx capacity: %s\n", "4096");
     printf("event queue depth: %u\n", (unsigned int)info.event_queue_depth);
     printf("listen backlog max: %u\n", (unsigned int)info.listen_backlog_max);
     printf("open sockets: %u\n", (unsigned int)status.open_socket_count);

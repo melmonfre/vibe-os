@@ -149,6 +149,11 @@ static int craft_detect_parallel_workers(void) {
     }
 
     cpu_count = summary.started_cpu_count != 0u ? summary.started_cpu_count : summary.cpu_count;
+    /*
+     * Keep at least one background worker, but leave headroom for the render
+     * thread. The native multi-worker path is still unstable on 2-core runs,
+     * where validating with two Craft workers regressed into late exceptions.
+     */
     if (cpu_count > 1u) {
         workers = (int)(cpu_count - 1u);
     } else {
@@ -167,6 +172,16 @@ static int craft_detect_parallel_workers(void) {
 
 int craft_thread_parallel_workers(void) {
     return craft_detect_parallel_workers();
+}
+
+void craft_thread_set_parallel_workers(int workers) {
+    if (workers < 1) {
+        workers = 1;
+    }
+    if (workers > CRAFT_WORKER_MAX) {
+        workers = CRAFT_WORKER_MAX;
+    }
+    g_parallel_workers = workers;
 }
 
 int thrd_create(thrd_t *thr, thrd_start_t func, void *arg) {

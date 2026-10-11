@@ -5,6 +5,7 @@
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/drivers/usb/usb_host.h>
+#include <kernel/drivers/audio/uaudio.h>
 #include <kernel/drivers/video/video.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/physmem.h>
@@ -9751,9 +9752,14 @@ static void mk_audio_service_init_state(void) {
     mk_audio_state_reset_async_write();
     mk_audio_state_reset_capture();
     mk_audio_event_init_subscribers();
-    (void)kernel_timer_register_tick_hook(mk_audio_service_tick);
+    if (!g_audio_tick_hook_registered) {
+        (void)kernel_timer_register_tick_hook(mk_audio_service_tick);
+        g_audio_tick_hook_registered = 1u;
+    }
     kernel_text_puts("    audio: soft\n");
     mk_audio_select_soft_backend();
+    kernel_text_puts("    audio: uaudio-driver\n");
+    (void)kernel_uaudio_init();
     kernel_text_puts("    audio: usb-snap\n");
     mk_audio_refresh_usb_attach_snapshot();
 }
@@ -9770,6 +9776,11 @@ static int mk_audio_service_launch_deferred(void) {
         kernel_text_puts("    audio: compat ok\n");
         kernel_debug_puts("audio: using compat ac97 backend\n");
         kernel_text_puts("    audio: topo\n");
+    } else if (kernel_uaudio_present()) {
+        kernel_text_puts("    audio: uaudio\n");
+        mk_audio_select_uaudio_backend();
+        kernel_debug_puts("audio: using usb audio class backend\n");
+        kernel_text_puts("    audio: topo\n");
     } else if (kernel_timer_pc_speaker_available()) {
         kernel_text_puts("    audio: pcspkr\n");
         mk_audio_select_pcspkr_backend();
@@ -9784,20 +9795,33 @@ static int mk_audio_service_launch_deferred(void) {
     }
 
     mk_audio_refresh_topology_snapshot();
-    mk_audio_debug_backend_state("audio: service init exit backend=");
+    mk_audio_debug_backend_state("audio: deferred launch backend=");
 
     kernel_text_puts("    audio: launch\n");
-    (void)mk_service_launch_task(MK_SERVICE_AUDIO,
-                                 "audio",
-                                 mk_audio_local_handler,
-                                 0,
-                                 userland_audio_service_entry,
-                                 8192u,
-                                 MK_LAUNCH_FLAG_BOOTSTRAP |
-                                 MK_LAUNCH_FLAG_BUILTIN |
-                                 MK_LAUNCH_FLAG_CRITICAL);
+    if (mk_service_launch_task(MK_SERVICE_AUDIO,
+                               "audio",
+                               mk_audio_local_handler,
+                               0,
+                               userland_audio_service_entry,
+                               8192u,
+                               MK_LAUNCH_FLAG_BOOTSTRAP |
+                               MK_LAUNCH_FLAG_BUILTIN) != 0) {
+        kernel_text_puts("    audio: launch failed\n");
+        return -1;
+    }
     g_audio_bootstrap_defer_probe = 0u;
     kernel_text_puts("    audio: done\n");
+    return 0;
+}
+
+void mk_audio_service_init(void) {
+    mk_audio_service_init_state();
+    (void)mk_service_register_local_handler(MK_SERVICE_AUDIO,
+                                            "audio",
+                                            mk_audio_local_handler,
+                                            0);
+    (void)mk_service_register_deferred_launcher(MK_SERVICE_AUDIO,
+                                                mk_audio_service_launch_deferred);
 }
 
 int mk_audio_service_ready(void) {
@@ -10106,12 +10130,12 @@ void mk_audio_service_pump_async(void) {
             chunk_size = chunk_limit;
         }
         if (mk_audio_async_ring_peek(chunk, chunk_size) == 0u) {
-            return;
+            goto drain_playback;
         }
         written = g_audio_backend->write(chunk, chunk_size);
         if (written <= 0) {
             mk_audio_refresh_status_snapshot();
-            return;
+            goto drain_playback;
         }
         mk_audio_async_ring_consume((uint32_t)written);
         iterations += 1u;
@@ -10120,6 +10144,19 @@ void mk_audio_service_pump_async(void) {
             break;
         }
     }
+
+drain_playback:
+    
+    if (g_audio_state.playback_fill > 0u) {
+        if (g_audio_backend == &g_audio_backend_soft) {
+            
+            g_audio_state.playback_head = 0u;
+            g_audio_state.playback_tail = 0u;
+            g_audio_state.playback_bytes_consumed += g_audio_state.playback_fill;
+            g_audio_state.playback_fill = 0u;
+        }
+    }
+
     mk_audio_refresh_status_snapshot();
 }
 

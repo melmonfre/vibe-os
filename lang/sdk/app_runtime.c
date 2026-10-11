@@ -198,9 +198,7 @@ void vibe_app_console_write(const char *text) {
         g_app_ctx->host->console_write(text);
         return;
     }
-    while (*text != '\0') {
-        vibe_app_console_putc(*text++);
-    }
+    vibe_app_syscall5(39, (int)(uintptr_t)text, 0, 0, 0, 0);
 }
 
 int vibe_app_poll_key(void) {

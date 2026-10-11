@@ -157,6 +157,7 @@ static Model model;
 static Model *g = &model;
 
 int craft_thread_parallel_workers(void);
+int craft_runtime_chunk_preload_budget(void);
 void craft_thread_reset(void);
 int doom_snprintf(char *str, size_t size, const char *fmt, ...);
 void sys_write_debug(const char *s);
@@ -1408,6 +1409,75 @@ static int count_drawable_chunks(int p, int q, int radius) {
     return count;
 }
 
+static int count_busy_workers(void) {
+    int busy = 0;
+
+    for (int i = 0; i < WORKERS; ++i) {
+        Worker *worker = g->workers + i;
+        mtx_lock(&worker->mtx);
+        if (worker->state == WORKER_BUSY) {
+            busy += 1;
+        }
+        mtx_unlock(&worker->mtx);
+    }
+    return busy;
+}
+
+static float chunk_fog_distance(int render_radius) {
+    int fog_radius = render_radius;
+
+    if (fog_radius < 4) {
+        fog_radius = 4;
+    }
+    return (float)(fog_radius * CHUNK_SIZE);
+}
+
+static void force_chunks_budget(Player *player, int radius, int budget) {
+    State *s = &player->state;
+    int p = chunked(s->x);
+    int q = chunked(s->z);
+    int r = radius;
+    int remaining = budget;
+
+    if (r < 0) {
+        r = 0;
+    }
+    if (remaining < 1) {
+        remaining = 1;
+    }
+    for (int ring = 0; ring <= r && remaining > 0; ++ring) {
+        for (int dp = -ring; dp <= ring && remaining > 0; ++dp) {
+            for (int dq = -ring; dq <= ring && remaining > 0; ++dq) {
+                int a;
+                int b;
+                Chunk *chunk;
+
+                if (MAX(ABS(dp), ABS(dq)) != ring) {
+                    continue;
+                }
+                a = p + dp;
+                b = q + dq;
+                chunk = find_chunk(a, b);
+                if (chunk) {
+                    if (!chunk->dirty && chunk->buffer != 0) {
+                        continue;
+                    }
+                    gen_chunk_buffer(chunk);
+                }
+                else if (g->chunk_count < MAX_CHUNKS) {
+                    chunk = g->chunks + g->chunk_count++;
+                    create_chunk(chunk, a, b);
+                    gen_chunk_buffer(chunk);
+                }
+                else {
+                    return;
+                }
+                remaining -= 1;
+            }
+        }
+    }
+}
+
 void force_chunks_radius(Player *player, int radius) {
     State *s = &player->state;
     int p = chunked(s->x);
@@ -1437,7 +1507,48 @@ void force_chunks_radius(Player *player, int radius) {
 }
 
 void force_chunks(Player *player) {
-    force_chunks_radius(player, 1);
+    force_chunks_budget(player, 0, 1);
+}
+
+static int chunk_view_priority(const State *state, int p, int q) {
+    int facing_x = 0;
+    int facing_z = 0;
+    int dx = 0;
+    int dz = 0;
+    int forward = 0;
+    int lateral = 0;
+
+    if (state == 0) {
+        return 2;
+    }
+
+    dx = p - chunked(state->x);
+    dz = q - chunked(state->z);
+    if (state->ry > -45.0f && state->ry <= 45.0f) {
+        facing_z = -1;
+    }
+    else if (state->ry > 45.0f && state->ry <= 135.0f) {
+        facing_x = 1;
+    }
+    else if (state->ry > 135.0f || state->ry <= -135.0f) {
+        facing_z = 1;
+    }
+    else {
+        facing_x = -1;
+    }
+
+    forward = dx * facing_x + dz * facing_z;
+    lateral = ABS(dx * facing_z - dz * facing_x);
+    if (forward < 0) {
+        return 3;
+    }
+    if (lateral == 0) {
+        return 0;
+    }
+    if (lateral == 1) {
+        return 1;
+    }
+    return 2;
 }
 
 void ensure_chunks_worker(Player *player, Worker *worker) {
@@ -1531,6 +1642,9 @@ void ensure_chunks_worker(Player *player, Worker *worker) {
 void ensure_chunks(Player *player) {
     int inflight = 0;
     int worker_limit = craft_thread_parallel_workers();
+    State *s = &player->state;
+    int p = chunked(s->x);
+    int q = chunked(s->z);
 
     check_workers();
     if (count_drawable_chunks(p, q, 1) == 0 && count_busy_workers() == 0) {
@@ -1798,66 +1912,6 @@ int render_chunks(Attrib *attrib, Player *player) {
         }
         draw_chunk(attrib, chunk);
         result += chunk->faces;
-    }
-    if (result > 0) {
-        return result;
-    }
-    craft_debug_chunk_event("craft: render empty",
-                            p, q,
-                            g->chunk_count,
-                            count_drawable_chunks(p, q, 1),
-                            count_drawable_chunks(p, q, 2));
-
-    /*
-     * If the frustum path draws nothing, recover locally before giving up on
-     * the frame. This preserves a visible voxel bootstrap while the async
-     * chunk pipeline is still warming up.
-     */
-    if (count_drawable_chunks(p, q, 2) == 0) {
-        force_chunks_radius(player, 2);
-    }
-    for (int i = 0; i < g->chunk_count; i++) {
-        Chunk *chunk = g->chunks + i;
-        if (chunk_distance(chunk, p, q) > MAX(g->render_radius, 2)) {
-            continue;
-        }
-        if (!chunk_ready_to_draw(chunk)) {
-            continue;
-        }
-        draw_chunk(attrib, chunk);
-        result += chunk->faces;
-    }
-    if (result > 0) {
-        return result;
-    }
-
-    if (count_drawable_chunks(p, q, 3) == 0) {
-        force_chunks_radius(player, 3);
-        for (int i = 0; i < g->chunk_count; i++) {
-            Chunk *chunk = g->chunks + i;
-            if (chunk_distance(chunk, p, q) > MAX(g->render_radius, 3)) {
-                continue;
-            }
-            if (!chunk_ready_to_draw(chunk)) {
-                continue;
-            }
-            draw_chunk(attrib, chunk);
-            result += chunk->faces;
-        }
-    }
-    if (result == 0 && count_drawable_chunks(p, q, 4) == 0) {
-        force_chunks_radius(player, 4);
-        for (int i = 0; i < g->chunk_count; i++) {
-            Chunk *chunk = g->chunks + i;
-            if (chunk_distance(chunk, p, q) > MAX(g->render_radius, 4)) {
-                continue;
-            }
-            if (!chunk_ready_to_draw(chunk)) {
-                continue;
-            }
-            draw_chunk(attrib, chunk);
-            result += chunk->faces;
-        }
     }
     return result;
 }

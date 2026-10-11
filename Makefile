@@ -91,12 +91,13 @@ QEMU_IMAGE_OPTS ?= format=raw,file=$(IMAGE),snapshot=on
 QEMU_NET_OPTS ?= -netdev user,id=net0 -device virtio-net-pci,netdev=net0
 QEMU_RUN_MACHINE ?= pc
 QEMU_RUN_CPU ?= core2duo
-QEMU_RUN_SMP ?= 2,sockets=1,cores=2,threads=1,maxcpus=2
+QEMU_RUN_SMP ?= 1,sockets=1,cores=1,threads=1,maxcpus=1
 QEMU_RUN_VGA ?= std
 QEMU_RUN_GPU_OPTS ?=
 QEMU_RUN_VIDEO_OPTS ?= -vga $(QEMU_RUN_VGA) $(QEMU_RUN_GPU_OPTS)
 QEMU_RUN_RTC_OPTS ?= -rtc base=localtime
 QEMU_RUN_USB_OPTS ?= -usb
+QEMU_SMP ?= 1
 QEMU_RUN_COMMON_OPTS ?= -machine $(QEMU_RUN_MACHINE) -cpu $(QEMU_RUN_CPU) -smp $(QEMU_RUN_SMP) $(QEMU_RUN_VIDEO_OPTS) $(QEMU_RUN_RTC_OPTS) $(QEMU_RUN_USB_OPTS)
 QEMU_AUDIO_DEVICE ?= AC97
 QEMU_AUDIO_LIVE_CONTROLLER ?= intel-hda
@@ -556,10 +557,18 @@ BOOT_SMOKE_PHASE6_REPORT := $(BUILD_DIR)/phase6-validation-boot-smoke.md
 BOOTLOADER_BG_SMOKE_BIN := $(BUILD_DIR)/bootloader-bg.smoke.bin
 WALLPAPER_RUNTIME_SMOKE_PNG := $(BUILD_DIR)/wallpaper-runtime.smoke.png
 
+# Include BSD USB build rules
+-include kernel/drivers/usb/Build.usb.mk
+
+
+# Build.ksh.mk must be included early for KSH_LIB variable
+-include compat/bin/ksh/Build.ksh.mk
+
 # Kernel sources - kernel only, no stage2
-KERNEL_SRCS := $(shell find kernel -name '*.c' ! -name '* *')
+KERNEL_SRCS := $(shell find kernel -name '*.c' ! -name '* *' ! -path 'kernel/drivers/usb/bsd_usb_impl.c' ! -path 'kernel/drivers/usb/bsd_usb_pci.c')
 KEYMAP_SRCS := $(shell find kernel/drivers/input/keymaps -name '*.c' ! -name '* *')
 KERNEL_OBJS := $(addprefix $(BUILD_DIR)/,$(patsubst %.c,%.o,$(KERNEL_SRCS)))
+KERNEL_OBJS += $(BSD_USB_OBJS)
 KEYMAP_OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(KEYMAP_SRCS))
 
 KERNEL_ASM_SRCS := $(shell find kernel_asm -name '*.asm' ! -name '* *')
@@ -837,7 +846,8 @@ CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pi
 CFLAGS += -I$(APP_CATALOG_GENERATED_DIR)
 CFLAGS += -MMD -MP
 LUA_CFLAGS := -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src
-INTEL_I915_EXPERIMENTAL_COMMIT ?= 0
+# i915 modeset is now enabled by default (was experimental)
+INTEL_I915_EXPERIMENTAL_COMMIT ?= 1
 CFLAGS += -DINTEL_I915_EXPERIMENTAL_COMMIT=$(INTEL_I915_EXPERIMENTAL_COMMIT)
 VIDEO_DRM_TEST_FORCE_HANDOFF_FAIL ?= 0
 CFLAGS += -DVIDEO_DRM_TEST_FORCE_HANDOFF_FAIL=$(VIDEO_DRM_TEST_FORCE_HANDOFF_FAIL)
@@ -997,6 +1007,8 @@ DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/modules/dirty_rects.c \
 	$(USERLAND_DIR)/modules/ui_clip.c \
 	$(USERLAND_DIR)/modules/ui_cursor.c \
+	$(USERLAND_DIR)/modules/microui.c \
+	$(USERLAND_DIR)/modules/mu_renderer.c \
 	$(USERLAND_DIR)/applications/desktop_math_compat.c \
 	$(USERLAND_DIR)/applications/desktop.c \
 	$(USERLAND_DIR)/applications/terminal.c \
@@ -1513,7 +1525,7 @@ $(AP_TRAMPOLINE_OBJ): $(AP_TRAMPOLINE_BIN) | $(BUILD_DIR)
 	$(OBJCOPY) -I binary -O elf32-i386 -B i386 $< $@
 
 $(KERNEL_ELF): $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(KERNEL_USERLAND_OBJS) $(LINKER_DIR)/kernel.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(KERNEL_USERLAND_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS_KERNEL) $(KERNEL_OBJS) $(KERNEL_ASM_OBJS) $(AP_TRAMPOLINE_OBJ) $(KERNEL_USERLAND_OBJS)  $(COMPAT_LIB) -o $@
 
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
@@ -1524,7 +1536,7 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 	fi
 
 $(USERLAND_MAIN_ELF): $(USERLAND_OBJS) $(LINKER_DIR)/userland.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_USERLAND) $(USERLAND_OBJS) $(COMPAT_LIB) -o $@
+	$(LD) $(LDFLAGS_USERLAND) $(USERLAND_OBJS)  $(COMPAT_LIB) -o $@
 
 $(USERLAND_MAIN_BIN): $(USERLAND_MAIN_ELF)
 	$(OBJCOPY) -O binary $< $@
@@ -1629,7 +1641,7 @@ $(JAVAC_APP_BIN): $(JAVAC_APP_ELF)
 	rm -f $<.keep
 
 $(LUA_APP_ELF): $(LUA_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_APP) $(LUA_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+	$(LD) $(LDFLAGS_APP) $(LUA_APP_OBJS)  $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(LUA_APP_BIN): $(LUA_APP_ELF)
 	cp $< $<.keep
@@ -1650,8 +1662,8 @@ $(BUILD_DIR)/lang/$(1)_app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
 	@mkdir -p $$(dir $$@)
 	$$(CC) $$(CFLAGS) -DVIBE_APP_BUILD_NAME=\"$(1)\" -DVIBE_APP_BUILD_HEAP_SIZE=$$(or $$(DESKTOP_LAUNCHER_HEAP_$(1)),$$(DESKTOP_LAUNCHER_HEAP_DEFAULT)) -c $$< -o $$@
 
-$(BUILD_DIR)/lang/$(1).elf: $$(DESKTOP_APP_MAIN_OBJ) $$(DESKTOP_APP_RUNTIME_OBJ) $$(DESKTOP_RUNTIME_OBJS) $(BUILD_DIR)/lang/$(1)_app_entry.o $$(LINKER_DIR)/app_desktop.ld $$(COMPAT_LIB)
-	$$(LD) -m elf_i386 -T $$(LINKER_DIR)/app_desktop.ld -nostdlib -N $$(DESKTOP_APP_MAIN_OBJ) $$(DESKTOP_APP_RUNTIME_OBJ) $$(DESKTOP_RUNTIME_OBJS) $(BUILD_DIR)/lang/$(1)_app_entry.o $$(COMPAT_LIB) -o $$@ $$(LIBGCC_A)
+$(BUILD_DIR)/lang/$(1).elf: $$(DESKTOP_APP_MAIN_OBJ) $$(DESKTOP_APP_RUNTIME_OBJ) $$(DESKTOP_RUNTIME_OBJS) $(BUILD_DIR)/lang/$(1)_app_entry.o $$(LINKER_DIR)/app_desktop.ld $ $(COMPAT_LIB)
+	$$(LD) -m elf_i386 -T $$(LINKER_DIR)/app_desktop.ld -nostdlib -N --allow-multiple-definition $$(DESKTOP_APP_MAIN_OBJ) $$(DESKTOP_APP_RUNTIME_OBJ) $$(DESKTOP_RUNTIME_OBJS) $(BUILD_DIR)/lang/$(1)_app_entry.o $ $(COMPAT_LIB) -o $$@ $$(LIBGCC_A)
 
 $(BUILD_DIR)/lang/$(1).app: $(BUILD_DIR)/lang/$(1).elf
 	cp $$< $$<.keep
@@ -1663,7 +1675,7 @@ endef
 $(foreach app,$(DESKTOP_LAUNCHER_APPS),$(eval $(call DESKTOP_LAUNCHER_RULES,$(app))))
 
 $(SECTORC_APP_ELF): $(SECTORC_APP_OBJS) $(LINKER_DIR)/app.ld $(COMPAT_LIB)
-	$(LD) $(LDFLAGS_APP) $(SECTORC_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+	$(LD) $(LDFLAGS_APP) $(SECTORC_APP_OBJS)  $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(SECTORC_APP_BIN): $(SECTORC_APP_ELF)
 	cp $< $<.keep
@@ -1684,7 +1696,7 @@ $(USERLAND_BOOT_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DVIBE_USERLAND_APP -c $< -o $@
 
 $(USERLAND_BOOT_APP_ELF): $(USERLAND_BOOT_APP_OBJS) $(LINKER_DIR)/app_boot.ld $(COMPAT_LIB)
-	$(LD) -m elf_i386 -T $(LINKER_DIR)/app_boot.ld -nostdlib -N $(USERLAND_BOOT_APP_OBJS) $(COMPAT_LIB) -o $@ $(LIBGCC_A)
+	$(LD) -m elf_i386 -T $(LINKER_DIR)/app_boot.ld -nostdlib -N $(USERLAND_BOOT_APP_OBJS)  $(COMPAT_LIB) -o $@ $(LIBGCC_A)
 
 $(USERLAND_BOOT_APP_BIN): $(USERLAND_BOOT_APP_ELF)
 	cp $< $<.keep
@@ -2400,9 +2412,37 @@ full: clean all
 img: $(IMAGE)
 	@echo "Imagem pronta: $(IMAGE)"
 
+run-imb: all
+	$(MAKE) run
+	$(MAKE) imb
+
 imb: $(IMAGE)
 	@echo "Copiando imagem para build/vibe-os-usb.img"
 	@cp $(IMAGE) build/vibe-os-usb.img
 	@echo "Imagem para hardware real pronta: build/vibe-os-usb.img"
 
+# Links2 Web Browser port
+LINKS2_APP_BIN := build/links2/links2.app
+LINKS2_STAMP := build/links2.stamp
+
+$(LINKS2_STAMP): $(COMPAT_LIB) Build.links2.mk lang/sdk/app_entry.c lang/sdk/app_runtime.c lang/include/vibe_app.h tools/patch_app_header.py \
+	userland/applications/network/links2/config-vibeos.h \
+	userland/applications/network/links2/vibeos.c userland/applications/network/links2/vibeos.h
+	@mkdir -p $(dir $@)
+	$(MAKE) -j1 -f Build.links2.mk \
+		CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NM="$(NM)" AR="$(AR)" RANLIB="$(RANLIB)" \
+		ported-links2
+	@touch $@
+
+$(LINKS2_APP_BIN): $(LINKS2_STAMP)
+
+ported-links2: $(LINKS2_APP_BIN)
+
+ported-links2-clean:
+	rm -f $(LINKS2_STAMP)
+	$(MAKE) -f Build.links2.mk ported-links2-clean
+
 -include $(shell test -d $(BUILD_DIR) && find $(BUILD_DIR) -name '*.d' ! -name '* *' -print)
+
+-include compat/bin/ksh/Build.ksh.mk
+-include compat/bin/ksh/Build.ksh.mk

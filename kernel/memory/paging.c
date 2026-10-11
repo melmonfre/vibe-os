@@ -1,10 +1,15 @@
 #include <kernel/memory/paging.h>
+#include <kernel/memory/physmem.h>
 #include <kernel/cpu/cpu.h>
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/kernel_string.h>
 #include <stddef.h>
 
 #define PAGING_PAGE_DIR_ENTRIES 1024u
+#define PAGING_PAGE_TABLE_ENTRIES 1024u
 #define PAGING_4MB_PAGE_BYTES 0x00400000u
+#define PAGING_4KB_PAGE_BYTES 0x00001000u
+
 #define PAGING_PDE_PRESENT 0x001u
 #define PAGING_PDE_WRITABLE 0x002u
 #define PAGING_PDE_USER 0x004u
@@ -12,11 +17,26 @@
 #define PAGING_PDE_PCD 0x010u
 #define PAGING_PDE_PAGE_SIZE 0x080u
 #define PAGING_PDE_PAT_LARGE 0x1000u
+
+#define PAGING_PTE_PRESENT 0x001u
+#define PAGING_PTE_WRITABLE 0x002u
+#define PAGING_PTE_USER 0x004u
+#define PAGING_PTE_PWT 0x008u
+#define PAGING_PTE_PCD 0x010u
+#define PAGING_PTE_ACCESSED 0x020u
+#define PAGING_PTE_DIRTY 0x040u
+#define PAGING_PTE_PAT 0x080u
+#define PAGING_PTE_GLOBAL 0x100u
+
 #define PAGING_CR0_PG 0x80000000u
 #define PAGING_CR4_PSE 0x00000010u
+
 #define PAGING_MSR_IA32_PAT 0x277u
 #define PAGING_PAT_ENTRY_WB 0x06u
 #define PAGING_PAT_ENTRY_WC 0x01u
+
+#define PAGING_PDE_INDEX(virt) ((uint32_t)((virt) >> 22))
+#define PAGING_PTE_INDEX(virt) ((uint32_t)(((virt) >> 12) & 0x3FFu))
 
 static uint32_t g_kernel_page_directory[PAGING_PAGE_DIR_ENTRIES] __attribute__((aligned(4096)));
 static int g_paging_enabled = 0;
@@ -31,6 +51,10 @@ static void paging_flush_tlb(void) {
     __asm__ volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
 }
 
+static void paging_flush_tlb_page(uintptr_t virt) {
+    __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
+}
+
 static int paging_large_region_params_valid(uintptr_t virtual_start, uintptr_t physical_start, size_t size) {
     return !(size == 0u ||
              (virtual_start & (PAGING_4MB_PAGE_BYTES - 1u)) != 0u ||
@@ -43,20 +67,16 @@ static int paging_large_region_virtual_valid(uintptr_t virtual_start, size_t siz
 
     if (size == 0u ||
         (virtual_start & (PAGING_4MB_PAGE_BYTES - 1u)) != 0u ||
-        (size & (PAGING_4MB_PAGE_BYTES - 1u)) != 0u) {
+        (size & (PAGING_4MB_PAGE_BYTES - 1u)) != 0u)
         return 0;
-    }
     page_count = size / PAGING_4MB_PAGE_BYTES;
-    if (page_count == 0u) {
+    if (page_count == 0u)
         return 0;
-    }
     for (size_t i = 0; i < page_count; ++i) {
-        uintptr_t virt = virtual_start + (i * PAGING_4MB_PAGE_BYTES);
-        uint32_t pde_index = (uint32_t)(virt / PAGING_4MB_PAGE_BYTES);
+        uint32_t pde_index = PAGING_PDE_INDEX(virtual_start + (i * PAGING_4MB_PAGE_BYTES));
 
-        if (pde_index >= PAGING_PAGE_DIR_ENTRIES) {
+        if (pde_index >= PAGING_PAGE_DIR_ENTRIES)
             return 0;
-        }
     }
     return 1;
 }
@@ -94,10 +114,8 @@ static void paging_restore_default_pde_range(uint32_t first_pde, uint32_t page_c
     for (uint32_t i = 0u; i < page_count; ++i) {
         uint32_t pde_index = first_pde + i;
 
-        if (pde_index >= PAGING_PAGE_DIR_ENTRIES) {
+        if (pde_index >= PAGING_PAGE_DIR_ENTRIES)
             break;
-        }
-
         g_kernel_page_directory[pde_index] =
             (pde_index * PAGING_4MB_PAGE_BYTES) |
             PAGING_PDE_PRESENT |
@@ -117,14 +135,11 @@ static void paging_init_pat(void) {
 
     pat_value = paging_rdmsr(PAGING_MSR_IA32_PAT);
     updated_value = (pat_value & ~(0xFFull << 8)) | ((uint64_t)PAGING_PAT_ENTRY_WC << 8);
-    if (updated_value != pat_value) {
+    if (updated_value != pat_value)
         paging_wrmsr(PAGING_MSR_IA32_PAT, updated_value);
-    }
 
     g_pat_wc_enabled = 1;
-    kernel_debug_printf("paging: pat wc slot=%d msr=%x\n",
-                        1,
-                        (uint32_t)updated_value);
+    kernel_debug_printf("paging: pat wc slot=%d msr=%x\n", 1, (uint32_t)updated_value);
 }
 
 void paging_init(void) {
@@ -166,17 +181,14 @@ uintptr_t paging_page_directory_phys(void) {
 int paging_snapshot_large_region(uintptr_t virtual_start, size_t size, uint32_t *entries_out, size_t entry_capacity) {
     size_t page_count;
 
-    if (!entries_out || !paging_large_region_virtual_valid(virtual_start, size)) {
+    if (!entries_out || !paging_large_region_virtual_valid(virtual_start, size))
         return -1;
-    }
     page_count = size / PAGING_4MB_PAGE_BYTES;
-    if (entry_capacity < page_count) {
+    if (entry_capacity < page_count)
         return -1;
-    }
 
     for (size_t i = 0; i < page_count; ++i) {
-        uintptr_t virt = virtual_start + (i * PAGING_4MB_PAGE_BYTES);
-        uint32_t pde_index = (uint32_t)(virt / PAGING_4MB_PAGE_BYTES);
+        uint32_t pde_index = PAGING_PDE_INDEX(virtual_start + (i * PAGING_4MB_PAGE_BYTES));
 
         entries_out[i] = g_kernel_page_directory[pde_index];
     }
@@ -186,24 +198,21 @@ int paging_snapshot_large_region(uintptr_t virtual_start, size_t size, uint32_t 
 int paging_map_large_region(uintptr_t virtual_start, uintptr_t physical_start, size_t size) {
     size_t page_count;
 
-    if (!paging_large_region_params_valid(virtual_start, physical_start, size)) {
+    if (!paging_large_region_params_valid(virtual_start, physical_start, size))
         return -1;
-    }
 
     page_count = size / PAGING_4MB_PAGE_BYTES;
     for (size_t i = 0; i < page_count; ++i) {
-        uintptr_t virt = virtual_start + (i * PAGING_4MB_PAGE_BYTES);
-        uint32_t pde_index = (uint32_t)(virt / PAGING_4MB_PAGE_BYTES);
+        uint32_t pde_index = PAGING_PDE_INDEX(virtual_start + (i * PAGING_4MB_PAGE_BYTES));
 
-        if (pde_index >= PAGING_PAGE_DIR_ENTRIES) {
+        if (pde_index >= PAGING_PAGE_DIR_ENTRIES)
             return -1;
-        }
     }
 
     for (size_t i = 0; i < page_count; ++i) {
         uintptr_t virt = virtual_start + (i * PAGING_4MB_PAGE_BYTES);
         uintptr_t phys = physical_start + (i * PAGING_4MB_PAGE_BYTES);
-        uint32_t pde_index = (uint32_t)(virt / PAGING_4MB_PAGE_BYTES);
+        uint32_t pde_index = PAGING_PDE_INDEX(virt);
 
         g_kernel_page_directory[pde_index] = (uint32_t)phys |
                                              PAGING_PDE_PRESENT |
@@ -218,29 +227,24 @@ int paging_map_large_region(uintptr_t virtual_start, uintptr_t physical_start, s
 int paging_set_large_region_user_access(uintptr_t virtual_start, size_t size, int user_accessible) {
     size_t page_count;
 
-    if (!paging_large_region_virtual_valid(virtual_start, size)) {
+    if (!paging_large_region_virtual_valid(virtual_start, size))
         return -1;
-    }
 
     page_count = size / PAGING_4MB_PAGE_BYTES;
     for (size_t i = 0; i < page_count; ++i) {
-        uintptr_t virt = virtual_start + (i * PAGING_4MB_PAGE_BYTES);
-        uint32_t pde_index = (uint32_t)(virt / PAGING_4MB_PAGE_BYTES);
+        uint32_t pde_index = PAGING_PDE_INDEX(virtual_start + (i * PAGING_4MB_PAGE_BYTES));
 
-        if ((g_kernel_page_directory[pde_index] & PAGING_PDE_PRESENT) == 0u) {
+        if ((g_kernel_page_directory[pde_index] & PAGING_PDE_PRESENT) == 0u)
             return -1;
-        }
     }
 
     for (size_t i = 0; i < page_count; ++i) {
-        uintptr_t virt = virtual_start + (i * PAGING_4MB_PAGE_BYTES);
-        uint32_t pde_index = (uint32_t)(virt / PAGING_4MB_PAGE_BYTES);
+        uint32_t pde_index = PAGING_PDE_INDEX(virtual_start + (i * PAGING_4MB_PAGE_BYTES));
 
-        if (user_accessible) {
+        if (user_accessible)
             g_kernel_page_directory[pde_index] |= PAGING_PDE_USER;
-        } else {
+        else
             g_kernel_page_directory[pde_index] &= ~PAGING_PDE_USER;
-        }
     }
 
     paging_flush_tlb();
@@ -250,17 +254,14 @@ int paging_set_large_region_user_access(uintptr_t virtual_start, size_t size, in
 int paging_restore_large_region(uintptr_t virtual_start, size_t size, const uint32_t *entries, size_t entry_capacity) {
     size_t page_count;
 
-    if (!entries || !paging_large_region_virtual_valid(virtual_start, size)) {
+    if (!entries || !paging_large_region_virtual_valid(virtual_start, size))
         return -1;
-    }
     page_count = size / PAGING_4MB_PAGE_BYTES;
-    if (entry_capacity < page_count) {
+    if (entry_capacity < page_count)
         return -1;
-    }
 
     for (size_t i = 0; i < page_count; ++i) {
-        uintptr_t virt = virtual_start + (i * PAGING_4MB_PAGE_BYTES);
-        uint32_t pde_index = (uint32_t)(virt / PAGING_4MB_PAGE_BYTES);
+        uint32_t pde_index = PAGING_PDE_INDEX(virtual_start + (i * PAGING_4MB_PAGE_BYTES));
 
         g_kernel_page_directory[pde_index] = entries[i];
     }
@@ -279,25 +280,21 @@ int paging_set_framebuffer_wc(uintptr_t fb_addr, size_t size) {
     uint32_t first_pde;
     uint32_t page_count;
 
-    if (!g_paging_enabled || !g_pat_wc_enabled || fb_addr == 0u || size == 0u) {
+    if (!g_paging_enabled || !g_pat_wc_enabled || fb_addr == 0u || size == 0u)
         return -1;
-    }
 
     start = paging_align_down(fb_addr, PAGING_4MB_PAGE_BYTES);
     end = paging_align_up(fb_addr + size, PAGING_4MB_PAGE_BYTES);
-    if (end <= start) {
+    if (end <= start)
         return -1;
-    }
 
     first_pde = (uint32_t)(start / PAGING_4MB_PAGE_BYTES);
     page_count = (uint32_t)((end - start) / PAGING_4MB_PAGE_BYTES);
-    if (first_pde >= PAGING_PAGE_DIR_ENTRIES || (first_pde + page_count) > PAGING_PAGE_DIR_ENTRIES) {
+    if (first_pde >= PAGING_PAGE_DIR_ENTRIES || (first_pde + page_count) > PAGING_PAGE_DIR_ENTRIES)
         return -1;
-    }
 
-    if (g_fb_wc_pde_count != 0u) {
+    if (g_fb_wc_pde_count != 0u)
         paging_restore_default_pde_range(g_fb_wc_first_pde, g_fb_wc_pde_count);
-    }
 
     for (uint32_t i = 0u; i < page_count; ++i) {
         uint32_t pde_index = first_pde + i;
@@ -319,4 +316,176 @@ int paging_set_framebuffer_wc(uintptr_t fb_addr, size_t size) {
                         (int)first_pde,
                         (int)page_count);
     return 0;
+}
+
+static uint32_t *paging_get_page_table(uint32_t pde_index, uint32_t flags) {
+    uint32_t pde = g_kernel_page_directory[pde_index];
+
+    if (pde & PAGING_PDE_PRESENT) {
+        if (pde & PAGING_PDE_PAGE_SIZE) {
+            uint32_t *new_pt;
+            uintptr_t page_base;
+            uint32_t pte_flags;
+
+            new_pt = (uint32_t *)alloc_phys_page();
+            if (!new_pt)
+                return NULL;
+
+            page_base = pde & 0xFFC00000u;
+            pte_flags = PAGING_PTE_PRESENT;
+            if (pde & PAGING_PDE_WRITABLE)
+                pte_flags |= PAGING_PTE_WRITABLE;
+            if (pde & PAGING_PDE_USER)
+                pte_flags |= PAGING_PTE_USER;
+
+            for (uint32_t i = 0u; i < PAGING_PAGE_TABLE_ENTRIES; ++i)
+                new_pt[i] = (uint32_t)(page_base + (i * PAGING_4KB_PAGE_BYTES)) | pte_flags;
+
+            g_kernel_page_directory[pde_index] = (uint32_t)(uintptr_t)new_pt |
+                                                  (pde & (PAGING_PDE_PRESENT |
+                                                          PAGING_PDE_WRITABLE |
+                                                          PAGING_PDE_USER |
+                                                          PAGING_PDE_PWT |
+                                                          PAGING_PDE_PCD));
+            paging_flush_tlb();
+            pde = g_kernel_page_directory[pde_index];
+        }
+        return (uint32_t *)(uintptr_t)(pde & 0xFFFFF000u);
+    }
+
+    {
+        uint32_t *new_pt = (uint32_t *)alloc_phys_page();
+
+        if (!new_pt)
+            return NULL;
+        memset(new_pt, 0, PAGING_4KB_PAGE_BYTES);
+        g_kernel_page_directory[pde_index] = (uint32_t)(uintptr_t)new_pt |
+                                              PAGING_PDE_PRESENT |
+                                              PAGING_PDE_WRITABLE |
+                                              (flags & PAGING_PDE_USER);
+        paging_flush_tlb();
+        return new_pt;
+    }
+}
+
+int paging_map_page(uintptr_t virt, uintptr_t phys, uint32_t flags) {
+    uint32_t pde_index = PAGING_PDE_INDEX(virt);
+    uint32_t pte_index = PAGING_PTE_INDEX(virt);
+    uint32_t *page_table;
+    uint32_t pte_flags;
+
+    if (!g_paging_enabled)
+        return -1;
+    if (pde_index >= PAGING_PAGE_DIR_ENTRIES)
+        return -1;
+    if (phys & (PAGING_4KB_PAGE_BYTES - 1u))
+        return -1;
+    if (virt & (PAGING_4KB_PAGE_BYTES - 1u))
+        return -1;
+
+    page_table = paging_get_page_table(pde_index, flags);
+    if (!page_table)
+        return -1;
+
+    pte_flags = PAGING_PTE_PRESENT;
+    if (flags & 0x002u)
+        pte_flags |= PAGING_PTE_WRITABLE;
+    if (flags & 0x004u)
+        pte_flags |= PAGING_PTE_USER;
+
+    page_table[pte_index] = (uint32_t)phys | pte_flags;
+    paging_flush_tlb_page(virt);
+    return 0;
+}
+
+int paging_unmap_page(uintptr_t virt) {
+    uint32_t pde_index = PAGING_PDE_INDEX(virt);
+    uint32_t pte_index = PAGING_PTE_INDEX(virt);
+    uint32_t pde;
+
+    if (!g_paging_enabled)
+        return -1;
+    if (pde_index >= PAGING_PAGE_DIR_ENTRIES)
+        return -1;
+
+    pde = g_kernel_page_directory[pde_index];
+    if (!(pde & PAGING_PDE_PRESENT))
+        return -1;
+    if (pde & PAGING_PDE_PAGE_SIZE)
+        return -1;
+
+    ((uint32_t *)(uintptr_t)(pde & 0xFFFFF000u))[pte_index] = 0u;
+    paging_flush_tlb_page(virt);
+    return 0;
+}
+
+uintptr_t paging_get_phys_addr(uintptr_t virt) {
+    uint32_t pde_index = PAGING_PDE_INDEX(virt);
+    uint32_t pte_index = PAGING_PTE_INDEX(virt);
+    uint32_t pde;
+
+    if (!g_paging_enabled)
+        return 0u;
+    if (pde_index >= PAGING_PAGE_DIR_ENTRIES)
+        return 0u;
+
+    pde = g_kernel_page_directory[pde_index];
+    if (!(pde & PAGING_PDE_PRESENT))
+        return 0u;
+    if (pde & PAGING_PDE_PAGE_SIZE)
+        return (pde & 0xFFC00000u) | (virt & 0x003FFFFFu);
+
+    return (((uint32_t *)(uintptr_t)(pde & 0xFFFFF000u))[pte_index] & 0xFFFFF000u) |
+           (virt & 0xFFFu);
+}
+
+int paging_set_page_flags(uintptr_t virt, uint32_t flags) {
+    uint32_t pde_index = PAGING_PDE_INDEX(virt);
+    uint32_t pte_index = PAGING_PTE_INDEX(virt);
+    uint32_t pde;
+    uint32_t *pte;
+    uint32_t pte_flags;
+
+    if (!g_paging_enabled)
+        return -1;
+    if (pde_index >= PAGING_PAGE_DIR_ENTRIES)
+        return -1;
+    if (virt & (PAGING_4KB_PAGE_BYTES - 1u))
+        return -1;
+
+    pde = g_kernel_page_directory[pde_index];
+    if (!(pde & PAGING_PDE_PRESENT))
+        return -1;
+    if (pde & PAGING_PDE_PAGE_SIZE)
+        return -1;
+
+    pte = (uint32_t *)(uintptr_t)(pde & 0xFFFFF000u);
+    pte_flags = PAGING_PTE_PRESENT;
+    if (flags & 0x002u)
+        pte_flags |= PAGING_PTE_WRITABLE;
+    if (flags & 0x004u)
+        pte_flags |= PAGING_PTE_USER;
+
+    pte[pte_index] = (pte[pte_index] & 0xFFFFF000u) | pte_flags;
+    paging_flush_tlb_page(virt);
+    return 0;
+}
+
+int paging_page_present(uintptr_t virt) {
+    uint32_t pde_index = PAGING_PDE_INDEX(virt);
+    uint32_t pte_index = PAGING_PTE_INDEX(virt);
+    uint32_t pde;
+
+    if (!g_paging_enabled)
+        return 0;
+    if (pde_index >= PAGING_PAGE_DIR_ENTRIES)
+        return 0;
+
+    pde = g_kernel_page_directory[pde_index];
+    if (!(pde & PAGING_PDE_PRESENT))
+        return 0;
+    if (pde & PAGING_PDE_PAGE_SIZE)
+        return 1;
+
+    return (((uint32_t *)(uintptr_t)(pde & 0xFFFFF000u))[pte_index] & PAGING_PTE_PRESENT) != 0u;
 }

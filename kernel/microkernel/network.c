@@ -12,6 +12,7 @@
 #include <kernel/userland_service.h>
 #include <kernel/drivers/network/virtio_net.h>
 #include <kernel/drivers/network/wifi_pci.h>
+#include <netinet/in.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -65,6 +66,20 @@
 #define MK_NETWORK_IPV4_DEFAULT_DNS 0x0A000203u
 #define MK_NETWORK_IPV4_DEFAULT_NETMASK 0xFFFFFF00u
 #define MK_NETWORK_ICMP_WAIT_TICKS 25u
+#define MK_NETWORK_IPPROTO_TCP 6u
+#define MK_TCP_FLAG_FIN 1u
+#define MK_TCP_FLAG_SYN 2u
+#define MK_TCP_FLAG_RST 4u
+#define MK_TCP_FLAG_PSH 8u
+#define MK_TCP_FLAG_ACK 16u
+#define MK_TCP_OPT_END 0u
+#define MK_TCP_OPT_NOP 1u
+#define MK_TCP_OPT_MSS 2u
+#define MK_TCP_OPT_MSS_LEN 4u
+#define MK_TCP_DEFAULT_MSS 1460u
+#define MK_TCP_HEADER_LEN 20u
+#define MK_TCP_RETRY_TICKS 50
+#define MK_TCP_MAX_RETRIES 5
 
 struct mk_network_scan_entry_state {
     char ssid[MK_NETWORK_SSID_MAX + 1];
@@ -94,8 +109,13 @@ struct mk_network_socket_state {
     uint16_t local_port;
     uint16_t icmp_identifier;
     uint16_t icmp_next_sequence;
-    uint32_t rx_size;
-    uint8_t rx_buffer[MK_NETWORK_SOCKET_RX_CAPACITY];
+    uint32_t tcp_snd_nxt;
+    uint32_t tcp_rcv_nxt;
+    uint32_t tcp_snd_una;
+    int tcp_retries;
+    int tcp_retry_ticks;
+    uint32_t tcp_tx_pending_len;
+    uint8_t tcp_tx_pending_data[MK_NETWORK_SOCKET_RX_CAPACITY];
 };
 
 struct mk_network_arp_cache_entry {
@@ -190,6 +210,8 @@ struct mk_network_virtio_link_state {
     int tx_smoke_logged;
     int rx_activity_logged;
     int rx_arp_reply_logged;
+    int dhcp_offer_logged;
+    int dhcp_ack_logged;
     uint32_t tx_frames_submitted;
     uint32_t tx_frames_completed;
     uint32_t rx_frames_completed;
@@ -232,6 +254,75 @@ static struct mk_network_service_state g_network_state;
 static struct mk_network_event_subscription g_network_event_subscribers[MK_NETWORK_EVENT_SUBSCRIBERS];
 static uint32_t g_network_event_sequence = 0u;
 
+/* DHCP client state */
+#define MK_DHCP_SERVER_PORT 67u
+#define MK_DHCP_CLIENT_PORT 68u
+#define MK_DHCP_MAGIC_COOKIE 0x63825363u
+#define MK_DHCP_BROADCAST 0xFFFFFFFFu
+#define MK_DHCP_OP_REQUEST 1u
+#define MK_DHCP_OP_REPLY 2u
+#define MK_DHCP_HTYPE_ETHERNET 1u
+#define MK_DHCP_HLEN_ETHERNET 6u
+#define MK_DHCP_OPT_PAD 0u
+#define MK_DHCP_OPT_SUBNET_MASK 1u
+#define MK_DHCP_OPT_ROUTER 3u
+#define MK_DHCP_OPT_DNS 6u
+#define MK_DHCP_OPT_REQUESTED_IP 50u
+#define MK_DHCP_OPT_LEASE_TIME 51u
+#define MK_DHCP_OPT_MSG_TYPE 53u
+#define MK_DHCP_OPT_SERVER_ID 54u
+#define MK_DHCP_OPT_PARAM_REQ_LIST 55u
+#define MK_DHCP_OPT_END 255u
+#define MK_DHCP_MSG_DISCOVER 1u
+#define MK_DHCP_MSG_OFFER 2u
+#define MK_DHCP_MSG_REQUEST 3u
+#define MK_DHCP_MSG_ACK 5u
+#define MK_DHCP_MSG_NAK 6u
+#define MK_DHCP_TIMEOUT_TICKS 50u
+#define MK_DHCP_MAX_XID_RETRIES 3u
+
+struct mk_dhcp_packet {
+    uint8_t op;
+    uint8_t htype;
+    uint8_t hlen;
+    uint8_t hops;
+    uint32_t xid;
+    uint16_t secs;
+    uint16_t flags;
+    uint32_t ciaddr;
+    uint32_t yiaddr;
+    uint32_t siaddr;
+    uint32_t giaddr;
+    uint8_t chaddr[16];
+    uint8_t sname[64];
+    uint8_t file[128];
+    uint32_t magic;
+    uint8_t options[312];
+} __attribute__((packed));
+
+enum mk_dhcp_state {
+    DHCP_STATE_IDLE = 0,
+    DHCP_STATE_DISCOVER_SENT,
+    DHCP_STATE_OFFER_RECEIVED,
+    DHCP_STATE_REQUEST_SENT,
+    DHCP_STATE_BOUND
+};
+
+static enum mk_dhcp_state g_dhcp_state = DHCP_STATE_IDLE;
+static uint32_t g_dhcp_xid = 0u;
+static uint32_t g_dhcp_server_ipv4 = 0u;
+static uint32_t g_dhcp_offered_ipv4 = 0u;
+static uint32_t g_dhcp_offered_netmask = 0u;
+static uint32_t g_dhcp_offered_gateway = 0u;
+static uint32_t g_dhcp_offered_dns = 0u;
+static uint32_t g_dhcp_lease_time = 0u;
+static uint32_t g_dhcp_lease_ticks = 0u;
+static int g_dhcp_renew_sent = 0;
+static uint32_t g_dhcp_ticks_remaining = 0u;
+static uint32_t g_dhcp_xid_retries = 0u;
+static int g_dhcp_discover_sent = 0;
+static int g_dhcp_request_sent = 0;
+
 static void mk_network_event_init_subscribers(void);
 static struct mk_network_event_subscription *mk_network_find_subscription(const process_t *subscriber);
 static struct mk_network_event_subscription *mk_network_alloc_subscription(process_t *subscriber);
@@ -251,8 +342,13 @@ static void mk_network_publish_status_event(void);
 static void mk_network_refresh_socket_telemetry(void);
 static void mk_network_progress_state(void);
 static int mk_network_virtio_submit_frame(struct mk_network_pci_probe_state *probe,
-                                          const uint8_t *frame,
-                                          uint32_t frame_len);
+                                           const uint8_t *frame,
+                                           uint32_t frame_len);
+static struct mk_network_socket_state *mk_network_socket_allocate(uint32_t owner_pid,
+                                                                   uint32_t domain,
+                                                                   uint32_t type,
+                                                                   uint32_t protocol,
+                                                                   int *handle_out);
 
 static uint16_t mk_network_be16_load(const uint8_t *src) {
     if (src == 0) {
@@ -287,6 +383,51 @@ static void mk_network_be32_store(uint8_t *dst, uint32_t value) {
     dst[1] = (uint8_t)((value >> 16) & 0xffu);
     dst[2] = (uint8_t)((value >> 8) & 0xffu);
     dst[3] = (uint8_t)(value & 0xffu);
+}
+
+static uint16_t mk_network_be16_store_value(uint16_t value) {
+    /* Return value in big-endian byte order (network byte order) */
+    return (uint16_t)((value >> 8u) | (value << 8u));
+}
+
+static uint32_t mk_network_be32_store_value(uint32_t value) {
+    /* Return value in big-endian byte order (network byte order) */
+    return ((value >> 24u) & 0x000000FFu) |
+           ((value >> 8u)  & 0x0000FF00u) |
+           ((value << 8u)  & 0x00FF0000u) |
+           ((value << 24u) & 0xFF000000u);
+}
+
+static void mk_network_format_ipv4(char *buffer, uint32_t buffer_size, uint32_t ipv4) {
+    if (buffer == 0 || buffer_size == 0u) {
+        return;
+    }
+    {
+        uint8_t bytes[4];
+        uint32_t pos = 0u;
+        uint32_t i;
+        bytes[0] = (uint8_t)((ipv4 >> 24) & 0xffu);
+        bytes[1] = (uint8_t)((ipv4 >> 16) & 0xffu);
+        bytes[2] = (uint8_t)((ipv4 >> 8) & 0xffu);
+        bytes[3] = (uint8_t)(ipv4 & 0xffu);
+        for (i = 0u; i < 4u && pos + 4u < buffer_size; ++i) {
+            uint32_t val = (uint32_t)bytes[i];
+            if (val >= 100u) {
+                buffer[pos++] = (char)('0' + (val / 100u));
+                val %= 100u;
+                buffer[pos++] = (char)('0' + (val / 10u));
+                val %= 10u;
+            } else if (val >= 10u) {
+                buffer[pos++] = (char)('0' + (val / 10u));
+                val %= 10u;
+            }
+            buffer[pos++] = (char)('0' + val);
+            if (i < 3u) {
+                buffer[pos++] = '.';
+            }
+            buffer[pos] = '\0';
+        }
+    }
 }
 
 static uint16_t mk_network_checksum16(const uint8_t *data, uint32_t length) {
@@ -357,6 +498,22 @@ static int mk_network_socket_is_inet_icmp(const struct mk_network_socket_state *
            socket_state->domain == AF_INET &&
            socket_state->type == SOCK_DGRAM &&
            socket_state->protocol == MK_NETWORK_IPPROTO_ICMP;
+}
+
+static int mk_network_socket_is_inet_udp(const struct mk_network_socket_state *socket_state) {
+    return socket_state != 0 &&
+           socket_state->domain == AF_INET &&
+           socket_state->type == SOCK_DGRAM &&
+           socket_state->protocol == MK_NETWORK_IPPROTO_UDP;
+}
+
+static uint16_t mk_network_sockaddr_port(const struct sockaddr *address, uint32_t address_length) {
+    const uint8_t *raw;
+    if (address == 0 || address_length < 8u) {
+        return 0u;
+    }
+    raw = (const uint8_t *)address;
+    return mk_network_be16_load(raw + 2u);
 }
 
 static void mk_network_cache_arp(uint32_t ipv4, const uint8_t *mac) {
@@ -839,6 +996,195 @@ static int mk_network_virtio_send_icmp_echo(struct mk_network_pci_probe_state *p
     return mk_network_virtio_submit_frame(probe, frame, frame_len);
 }
 
+static int mk_network_virtio_send_udp(struct mk_network_pci_probe_state *probe,
+                                      const uint8_t *dest_mac,
+                                      uint32_t destination_ipv4,
+                                      uint16_t dest_port,
+                                      uint32_t source_ipv4,
+                                      uint16_t source_port,
+                                      const uint8_t *payload,
+                                      uint32_t payload_len) {
+    uint8_t *frame = g_network_virtio_tx_frame;
+    const uint8_t *source_mac;
+    uint32_t frame_len;
+    uint32_t ip_total_length;
+    uint32_t udp_length;
+    uint8_t *ip_header;
+    uint8_t *udp_header;
+
+    if (probe == 0 || dest_mac == 0 || payload == 0 || !probe->virtio_queue_ready) {
+        return -1;
+    }
+    if (destination_ipv4 == 0u || dest_port == 0u || source_port == 0u) {
+        return -1;
+    }
+    if (payload_len > (MK_NETWORK_VIRTIO_TX_FRAME_BYTES - 14u - 20u - 8u)) {
+        return -1;
+    }
+
+    source_mac = probe->mac_valid ? probe->mac : g_network_virtio_fallback_mac;
+    udp_length = 8u + payload_len;
+    ip_total_length = 20u + udp_length;
+    frame_len = 14u + ip_total_length;
+    memset(frame, 0, frame_len);
+    memcpy(frame, dest_mac, 6u);
+    memcpy(frame + 6u, source_mac, 6u);
+    mk_network_be16_store(frame + 12u, MK_NETWORK_ETHERTYPE_IPV4);
+
+    ip_header = frame + 14u;
+    ip_header[0] = 0x45u;
+    ip_header[1] = 0u;
+    mk_network_be16_store(ip_header + 2u, (uint16_t)ip_total_length);
+    g_network_state.ipv4_packet_id = (uint16_t)(g_network_state.ipv4_packet_id + 1u);
+    mk_network_be16_store(ip_header + 4u, g_network_state.ipv4_packet_id);
+    mk_network_be16_store(ip_header + 6u, 0x4000u);
+    ip_header[8] = 64u;
+    ip_header[9] = (uint8_t)MK_NETWORK_IPPROTO_UDP;
+    mk_network_be32_store(ip_header + 12u, source_ipv4);
+    mk_network_be32_store(ip_header + 16u, destination_ipv4);
+    mk_network_be16_store(ip_header + 10u, mk_network_checksum16(ip_header, 20u));
+
+    udp_header = ip_header + 20u;
+    mk_network_be16_store(udp_header, source_port);
+    mk_network_be16_store(udp_header + 2u, dest_port);
+    mk_network_be16_store(udp_header + 4u, (uint16_t)udp_length);
+    mk_network_be16_store(udp_header + 6u, 0u);
+    memcpy(udp_header + 8u, payload, payload_len);
+    return mk_network_virtio_submit_frame(probe, frame, frame_len);
+}
+
+static int mk_network_socket_is_inet_tcp(const struct mk_network_socket_state *socket_state) {
+    return socket_state != 0 &&
+           socket_state->domain == AF_INET &&
+           socket_state->type == SOCK_STREAM &&
+           socket_state->protocol == MK_NETWORK_IPPROTO_TCP;
+}
+
+static uint16_t mk_network_tcp_checksum(const uint8_t *tcp_header, uint32_t tcp_len,
+                                         uint32_t source_ipv4, uint32_t destination_ipv4) {
+    uint32_t sum = 0u;
+    uint32_t i;
+    uint32_t word_count;
+    uint8_t pseudo_header[12];
+
+    if (tcp_header == 0 || tcp_len == 0u) {
+        return 0u;
+    }
+
+    mk_network_be32_store(pseudo_header, source_ipv4);
+    mk_network_be32_store(pseudo_header + 4u, destination_ipv4);
+    pseudo_header[8] = 0u;
+    pseudo_header[9] = MK_NETWORK_IPPROTO_TCP;
+    mk_network_be16_store(pseudo_header + 10u, (uint16_t)tcp_len);
+
+    word_count = 12u / 2u;
+    for (i = 0u; i < word_count; ++i) {
+        sum += (uint32_t)mk_network_be16_load(pseudo_header + i * 2u);
+    }
+
+    word_count = tcp_len / 2u;
+    for (i = 0u; i < word_count; ++i) {
+        sum += (uint32_t)mk_network_be16_load(tcp_header + i * 2u);
+    }
+
+    if ((tcp_len & 1u) != 0u) {
+        uint16_t last_word = (uint16_t)((uint16_t)tcp_header[tcp_len - 1u] << 8u);
+        sum += (uint32_t)last_word;
+    }
+
+    while ((sum >> 16u) != 0u) {
+        sum = (sum & 0xFFFFu) + (sum >> 16u);
+    }
+    return (uint16_t)(~sum & 0xFFFFu);
+}
+
+#define MK_TCP_MSS_OPT_LEN 4u
+#define MK_TCP_HEADER_SYN 24u
+#define MK_TCP_HEADER_DATA 20u
+
+static int mk_network_virtio_send_tcp_segment(struct mk_network_pci_probe_state *probe,
+                                               const uint8_t *dest_mac,
+                                               uint32_t destination_ipv4,
+                                               uint32_t source_ipv4,
+                                               uint16_t dest_port,
+                                               uint16_t source_port,
+                                               uint32_t seq_number,
+                                               uint32_t ack_number,
+                                               uint8_t flags,
+                                               const uint8_t *payload,
+                                               uint32_t payload_len) {
+    uint8_t *frame = g_network_virtio_tx_frame;
+    const uint8_t *source_mac;
+    uint32_t frame_len;
+    uint32_t tcp_len;
+    uint32_t ip_total_length;
+    uint32_t tcp_header_len;
+    uint8_t *ip_header;
+    uint8_t *tcp_header;
+    uint16_t checksum_val;
+
+    if (probe == 0 || dest_mac == 0 || !probe->virtio_queue_ready) {
+        return -1;
+    }
+    if (destination_ipv4 == 0u || dest_port == 0u || source_port == 0u) {
+        return -1;
+    }
+
+    tcp_header_len = (flags & (MK_TCP_FLAG_SYN)) ? MK_TCP_HEADER_SYN : MK_TCP_HEADER_DATA;
+    if (payload_len > (MK_NETWORK_VIRTIO_TX_FRAME_BYTES - 14u - 20u - tcp_header_len)) {
+        return -1;
+    }
+
+    source_mac = probe->mac_valid ? probe->mac : g_network_virtio_fallback_mac;
+    tcp_len = tcp_header_len + payload_len;
+    ip_total_length = 20u + tcp_len;
+    frame_len = 14u + ip_total_length;
+    memset(frame, 0, frame_len);
+    memcpy(frame, dest_mac, 6u);
+    memcpy(frame + 6u, source_mac, 6u);
+    mk_network_be16_store(frame + 12u, MK_NETWORK_ETHERTYPE_IPV4);
+
+    ip_header = frame + 14u;
+    ip_header[0] = 0x45u;
+    ip_header[1] = 0u;
+    mk_network_be16_store(ip_header + 2u, (uint16_t)ip_total_length);
+    g_network_state.ipv4_packet_id = (uint16_t)(g_network_state.ipv4_packet_id + 1u);
+    mk_network_be16_store(ip_header + 4u, g_network_state.ipv4_packet_id);
+    mk_network_be16_store(ip_header + 6u, 0x4000u);
+    ip_header[8] = 64u;
+    ip_header[9] = (uint8_t)MK_NETWORK_IPPROTO_TCP;
+    mk_network_be32_store(ip_header + 12u, source_ipv4);
+    mk_network_be32_store(ip_header + 16u, destination_ipv4);
+    mk_network_be16_store(ip_header + 10u, mk_network_checksum16(ip_header, 20u));
+
+    tcp_header = ip_header + 20u;
+    mk_network_be16_store(tcp_header, source_port);
+    mk_network_be16_store(tcp_header + 2u, dest_port);
+    mk_network_be32_store(tcp_header + 4u, seq_number);
+    mk_network_be32_store(tcp_header + 8u, ack_number);
+    tcp_header[12] = (uint8_t)((tcp_header_len / 4u) << 4);
+    tcp_header[13] = flags;
+    mk_network_be16_store(tcp_header + 14u, 8192u);
+    mk_network_be16_store(tcp_header + 16u, 0u);
+    mk_network_be16_store(tcp_header + 18u, 0u);
+
+    /* Add MSS option for SYN segments */
+    if (flags & MK_TCP_FLAG_SYN) {
+        tcp_header[20] = MK_TCP_OPT_MSS;
+        tcp_header[21] = MK_TCP_OPT_MSS_LEN;
+        mk_network_be16_store(tcp_header + 22u, (uint16_t)MK_TCP_DEFAULT_MSS);
+    }
+
+    if (payload_len > 0u && payload != 0) {
+        memcpy(tcp_header + tcp_header_len, payload, payload_len);
+    }
+
+    checksum_val = mk_network_tcp_checksum(tcp_header, tcp_len, source_ipv4, destination_ipv4);
+    mk_network_be16_store(tcp_header + 16u, checksum_val);
+
+    return mk_network_virtio_submit_frame(probe, frame, frame_len);
+}
+
 static void mk_network_backend_ingest_ipv4(const uint8_t *frame, uint32_t payload_len) {
     const uint8_t *ip_header;
     const uint8_t *icmp_header;
@@ -849,7 +1195,7 @@ static void mk_network_backend_ingest_ipv4(const uint8_t *frame, uint32_t payloa
     uint32_t icmp_len;
     uint32_t index;
 
-    if (frame == 0 || payload_len < 34u || g_network_state.local_ipv4 == 0u) {
+    if (frame == 0 || payload_len < 34u) {
         return;
     }
     ip_header = frame + 14u;
@@ -866,35 +1212,441 @@ static void mk_network_backend_ingest_ipv4(const uint8_t *frame, uint32_t payloa
     }
     source_ipv4 = mk_network_be32_load(ip_header + 12u);
     destination_ipv4 = mk_network_be32_load(ip_header + 16u);
-    if (destination_ipv4 != g_network_state.local_ipv4) {
-        return;
-    }
-    if (ip_header[9] != (uint8_t)MK_NETWORK_IPPROTO_ICMP) {
-        return;
-    }
-
-    icmp_header = ip_header + ip_header_len;
-    icmp_len = ip_total_len - ip_header_len;
-    if (icmp_header[0] != 0u || icmp_header[1] != 0u || icmp_len < 8u) {
+    if (g_network_state.local_ipv4 != 0u &&
+        destination_ipv4 != g_network_state.local_ipv4 &&
+        destination_ipv4 != 0xFFFFFFFFu) {
         return;
     }
 
-    for (index = 0u; index < MK_NETWORK_SOCKET_MAX; ++index) {
-        struct mk_network_socket_state *socket_state = &g_network_state.sockets[index];
-        uint16_t identifier;
+    /* Learn MAC from incoming IPv4 frames for ARP cache */
+    if (source_ipv4 != 0u && source_ipv4 != g_network_state.local_ipv4) {
+        mk_network_cache_arp(source_ipv4, frame + 6u);
+    }
 
-        if (!socket_state->used ||
-            !socket_state->connected ||
-            !mk_network_socket_is_inet_icmp(socket_state) ||
-            socket_state->remote_ipv4 != source_ipv4) {
-            continue;
+    if (ip_header[9] == (uint8_t)MK_NETWORK_IPPROTO_ICMP) {
+        icmp_header = ip_header + ip_header_len;
+        icmp_len = ip_total_len - ip_header_len;
+        if (icmp_header[0] != 0u || icmp_header[1] != 0u || icmp_len < 8u) {
+            return;
         }
-        identifier = mk_network_be16_load(icmp_header + 4u);
-        if (identifier != socket_state->icmp_identifier) {
-            continue;
+
+        for (index = 0u; index < MK_NETWORK_SOCKET_MAX; ++index) {
+            struct mk_network_socket_state *socket_state = &g_network_state.sockets[index];
+            uint16_t identifier;
+
+            if (!socket_state->used ||
+                !socket_state->connected ||
+                !mk_network_socket_is_inet_icmp(socket_state) ||
+                socket_state->remote_ipv4 != source_ipv4) {
+                continue;
+            }
+            identifier = mk_network_be16_load(icmp_header + 4u);
+            if (identifier != socket_state->icmp_identifier) {
+                continue;
+            }
+            (void)network_queue_rx_enqueue(icmp_header, icmp_len, (int32_t)index + 1);
+            break;
         }
-        (void)network_queue_rx_enqueue(icmp_header, icmp_len, (int32_t)index + 1);
-        break;
+        return;
+    }
+
+    if (ip_header[9] == (uint8_t)MK_NETWORK_IPPROTO_UDP) {
+        const uint8_t *udp_header;
+        uint32_t udp_len;
+        uint16_t dest_port;
+
+        udp_header = ip_header + ip_header_len;
+        udp_len = (uint32_t)mk_network_be16_load(udp_header + 4u);
+        if (udp_len < 8u || udp_len > (ip_total_len - ip_header_len)) {
+            return;
+        }
+        dest_port = mk_network_be16_load(udp_header + 2u);
+
+        if (dest_port == MK_DHCP_CLIENT_PORT) {
+            uint32_t dhcp_payload_len = udp_len - 8u;
+            const uint8_t *dhcp_data = udp_header + 8u;
+
+            if (dhcp_payload_len >= (uint32_t)(offsetof(struct mk_dhcp_packet, magic) + 4u)) {
+                const struct mk_dhcp_packet *dhcp = (const struct mk_dhcp_packet *)dhcp_data;
+
+                if ((dhcp->op == MK_DHCP_OP_REPLY) &&
+                    mk_network_be32_load((const uint8_t *)&dhcp->xid) == g_dhcp_xid &&
+                    dhcp_payload_len >= (uint32_t)(offsetof(struct mk_dhcp_packet, magic) + 4u) &&
+                    mk_network_be32_load((const uint8_t *)&dhcp->magic) == MK_DHCP_MAGIC_COOKIE &&
+                    dhcp_payload_len >= (uint32_t)(offsetof(struct mk_dhcp_packet, options) + 4u)) {
+                    uint32_t opt_offset = 0u;
+                    int dhcp_msg_type = 0;
+                    uint32_t opt_server_id = 0u;
+                    uint32_t opt_subnet = 0u;
+                    uint32_t opt_gateway = 0u;
+                    uint32_t opt_dns = 0u;
+                    uint32_t opt_lease = 0u;
+
+                    while (opt_offset + 2u <= dhcp_payload_len - offsetof(struct mk_dhcp_packet, options)) {
+                        uint8_t opt_type = dhcp->options[opt_offset];
+                        uint8_t opt_len;
+
+                        if (opt_type == MK_DHCP_OPT_END) {
+                            break;
+                        }
+                        if (opt_type == MK_DHCP_OPT_PAD) {
+                            opt_offset += 1u;
+                            continue;
+                        }
+                        opt_len = dhcp->options[opt_offset + 1u];
+                        if (opt_offset + 2u + (uint32_t)opt_len > dhcp_payload_len - offsetof(struct mk_dhcp_packet, options)) {
+                            break;
+                        }
+                        if (opt_type == MK_DHCP_OPT_MSG_TYPE && opt_len >= 1u) {
+                            dhcp_msg_type = dhcp->options[opt_offset + 2u];
+                        } else if (opt_type == MK_DHCP_OPT_SERVER_ID && opt_len >= 4u) {
+                            opt_server_id = mk_network_be32_load(&dhcp->options[opt_offset + 2u]);
+                        } else if (opt_type == MK_DHCP_OPT_SUBNET_MASK && opt_len >= 4u) {
+                            opt_subnet = mk_network_be32_load(&dhcp->options[opt_offset + 2u]);
+                        } else if (opt_type == MK_DHCP_OPT_ROUTER && opt_len >= 4u) {
+                            opt_gateway = mk_network_be32_load(&dhcp->options[opt_offset + 2u]);
+                        } else if (opt_type == MK_DHCP_OPT_DNS && opt_len >= 4u) {
+                            opt_dns = mk_network_be32_load(&dhcp->options[opt_offset + 2u]);
+                        } else if (opt_type == MK_DHCP_OPT_LEASE_TIME && opt_len >= 4u) {
+                            opt_lease = mk_network_be32_load(&dhcp->options[opt_offset + 2u]);
+                        }
+                        opt_offset += 2u + (uint32_t)opt_len;
+                    }
+
+                    if (dhcp_msg_type == MK_DHCP_MSG_OFFER && g_dhcp_state == DHCP_STATE_DISCOVER_SENT) {
+                        g_dhcp_server_ipv4 = opt_server_id;
+                        g_dhcp_offered_ipv4 = mk_network_be32_load((const uint8_t *)&dhcp->yiaddr);
+                        g_dhcp_offered_netmask = opt_subnet;
+                        g_dhcp_offered_gateway = opt_gateway;
+                        g_dhcp_offered_dns = opt_dns;
+                        g_dhcp_lease_time = opt_lease;
+                        g_dhcp_state = DHCP_STATE_OFFER_RECEIVED;
+                        g_dhcp_request_sent = 0;
+                        if (!g_network_virtio_link.dhcp_offer_logged) {
+                            kernel_debug_printf("network: dhcp offer from %d.%d.%d.%d ip=%d.%d.%d.%d\n",
+                                (int)((opt_server_id >> 24) & 0xffu), (int)((opt_server_id >> 16) & 0xffu),
+                                (int)((opt_server_id >> 8) & 0xffu), (int)(opt_server_id & 0xffu),
+                                (int)((g_dhcp_offered_ipv4 >> 24) & 0xffu), (int)((g_dhcp_offered_ipv4 >> 16) & 0xffu),
+                                (int)((g_dhcp_offered_ipv4 >> 8) & 0xffu), (int)(g_dhcp_offered_ipv4 & 0xffu));
+                            g_network_virtio_link.dhcp_offer_logged = 1;
+                        }
+                    } else if (dhcp_msg_type == MK_DHCP_MSG_ACK && g_dhcp_state == DHCP_STATE_REQUEST_SENT) {
+                        if (g_dhcp_offered_netmask == 0u) g_dhcp_offered_netmask = opt_subnet;
+                        if (g_dhcp_offered_gateway == 0u) g_dhcp_offered_gateway = opt_gateway;
+                        if (g_dhcp_offered_dns == 0u) g_dhcp_offered_dns = opt_dns;
+                        if (opt_lease != 0u) g_dhcp_lease_time = opt_lease;
+                        g_dhcp_state = DHCP_STATE_BOUND;
+                        kernel_debug_printf("network: dhcp ack ip=%d.%d.%d.%d gw=%d.%d.%d.%d dns=%d.%d.%d.%d\n",
+                            (int)((g_dhcp_offered_ipv4 >> 24) & 0xffu), (int)((g_dhcp_offered_ipv4 >> 16) & 0xffu),
+                            (int)((g_dhcp_offered_ipv4 >> 8) & 0xffu), (int)(g_dhcp_offered_ipv4 & 0xffu),
+                            (int)((g_dhcp_offered_gateway >> 24) & 0xffu), (int)((g_dhcp_offered_gateway >> 16) & 0xffu),
+                            (int)((g_dhcp_offered_gateway >> 8) & 0xffu), (int)(g_dhcp_offered_gateway & 0xffu),
+                            (int)((g_dhcp_offered_dns >> 24) & 0xffu), (int)((g_dhcp_offered_dns >> 16) & 0xffu),
+                            (int)((g_dhcp_offered_dns >> 8) & 0xffu), (int)(g_dhcp_offered_dns & 0xffu));
+                    }
+                }
+            }
+        }
+
+        /* Route incoming UDP to open sockets by destination port */
+        {
+            uint32_t udp_index;
+
+            for (udp_index = 0u; udp_index < MK_NETWORK_SOCKET_MAX; ++udp_index) {
+                struct mk_network_socket_state *udp_sock = &g_network_state.sockets[udp_index];
+
+                if (!udp_sock->used ||
+                    !mk_network_socket_is_inet_udp(udp_sock) ||
+                    udp_sock->local_port == 0u) {
+                    continue;
+                }
+
+                if (udp_sock->local_port != dest_port) {
+                    continue;
+                }
+
+                {
+                    uint32_t udp_payload_len = udp_len - 8u;
+                    const uint8_t *udp_payload = udp_header + 8u;
+
+                    (void)network_queue_rx_enqueue(udp_payload, udp_payload_len, (int32_t)udp_index + 1);
+                    (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_RECV,
+                                                   (int32_t)(udp_index + 1),
+                                                   (int32_t)source_ipv4,
+                                                   g_network_state.status.link_state,
+                                                   udp_payload_len);
+                }
+                break;
+            }
+        }
+        return;
+    }
+
+    if (ip_header[9] == (uint8_t)MK_NETWORK_IPPROTO_TCP) {
+        const uint8_t *tcp_header;
+        uint32_t tcp_header_len;
+        uint32_t tcp_len;
+        uint16_t dest_port;
+        uint16_t src_port;
+        uint8_t tcp_flags;
+        uint32_t seq_number;
+        uint32_t ack_number;
+        uint32_t tcp_index;
+        int matched = 0;
+
+        tcp_header = ip_header + ip_header_len;
+        tcp_len = ip_total_len - ip_header_len;
+        if (tcp_len < 20u) {
+            return;
+        }
+        tcp_header_len = (uint32_t)((tcp_header[12] >> 4) & 0x0fu) * 4u;
+        if (tcp_header_len < 20u || tcp_len < tcp_header_len) {
+            return;
+        }
+        dest_port = mk_network_be16_load(tcp_header + 2u);
+        src_port = mk_network_be16_load(tcp_header);
+        tcp_flags = tcp_header[13];
+        seq_number = mk_network_be32_load(tcp_header + 4u);
+        ack_number = mk_network_be32_load(tcp_header + 8u);
+
+        /* Phase 1: match connected/connecting sockets by 4-tuple */
+        for (tcp_index = 0u; tcp_index < MK_NETWORK_SOCKET_MAX; ++tcp_index) {
+            struct mk_network_socket_state *tcp_sock = &g_network_state.sockets[tcp_index];
+
+            if (!tcp_sock->used || !mk_network_socket_is_inet_tcp(tcp_sock)) {
+                continue;
+            }
+            if (tcp_sock->local_port != dest_port) {
+                continue;
+            }
+            if (tcp_sock->connected < 2) {
+                continue;
+            }
+            if (tcp_sock->remote_port != src_port ||
+                tcp_sock->remote_ipv4 != source_ipv4) {
+                continue;
+            }
+            matched = 1;
+
+            /* RST */
+            if (tcp_flags & MK_TCP_FLAG_RST) {
+                tcp_sock->connected = 0;
+                kernel_debug_printf("network: tcp reset\n");
+                break;
+            }
+
+            /* SYN-ACK: client connect complete (SYN_SENT -> ESTABLISHED) */
+            if (tcp_sock->connected == 2 &&
+                (tcp_flags & MK_TCP_FLAG_SYN) &&
+                (tcp_flags & MK_TCP_FLAG_ACK)) {
+                uint32_t next_hop;
+                uint8_t dest_mac[6];
+
+                tcp_sock->tcp_rcv_nxt = seq_number + 1u;
+                if (ack_number == tcp_sock->tcp_snd_nxt) {
+                    tcp_sock->tcp_snd_una = ack_number;
+                }
+                tcp_sock->connected = 3;
+
+                next_hop = mk_network_next_hop_ipv4(tcp_sock->remote_ipv4);
+                if (next_hop != 0u && mk_network_lookup_arp(next_hop, dest_mac) == 0) {
+                    mk_network_virtio_send_tcp_segment(&g_network_state.pci_probe,
+                                                       dest_mac,
+                                                       tcp_sock->remote_ipv4,
+                                                       g_network_state.local_ipv4,
+                                                       tcp_sock->remote_port,
+                                                       tcp_sock->local_port,
+                                                       tcp_sock->tcp_snd_nxt,
+                                                       tcp_sock->tcp_rcv_nxt,
+                                                       MK_TCP_FLAG_ACK,
+                                                       0, 0u);
+                }
+                kernel_debug_printf("network: tcp connected\n");
+                (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_SEND,
+                                               (int32_t)(tcp_index + 1),
+                                               -1,
+                                               g_network_state.status.link_state,
+                                               0u);
+                break;
+            }
+
+            /* ACK/data/FIN on ESTABLISHED connection */
+            if (tcp_sock->connected == 3 && (tcp_flags & MK_TCP_FLAG_ACK)) {
+                uint32_t data_len = 0u;
+                uint32_t payload_offset = tcp_header_len;
+
+                /* Clear pending data when ACK acknowledges everything sent */
+                if (ack_number == tcp_sock->tcp_snd_nxt) {
+                    tcp_sock->tcp_snd_una = ack_number;
+                    tcp_sock->tcp_tx_pending_len = 0u;
+                }
+
+                if (tcp_len > payload_offset) {
+                    data_len = tcp_len - payload_offset;
+                    if (data_len > 0u) {
+                        (void)network_queue_rx_enqueue(tcp_header + payload_offset,
+                                                        data_len,
+                                                        (int32_t)tcp_index + 1);
+                        (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_RECV,
+                                                       (int32_t)(tcp_index + 1),
+                                                       (int32_t)source_ipv4,
+                                                       g_network_state.status.link_state,
+                                                       data_len);
+                    }
+                }
+
+                if (seq_number == tcp_sock->tcp_rcv_nxt && data_len > 0u) {
+                    tcp_sock->tcp_rcv_nxt += data_len;
+
+                    /* Send ACK for received data if ARP is available */
+                    {
+                        uint32_t ack_next_hop;
+                        uint8_t ack_dest_mac[6];
+
+                        ack_next_hop = mk_network_next_hop_ipv4(tcp_sock->remote_ipv4);
+                        if (ack_next_hop != 0u && mk_network_lookup_arp(ack_next_hop, ack_dest_mac) == 0) {
+                            mk_network_virtio_send_tcp_segment(&g_network_state.pci_probe,
+                                                               ack_dest_mac,
+                                                               tcp_sock->remote_ipv4,
+                                                               g_network_state.local_ipv4,
+                                                               tcp_sock->remote_port,
+                                                               tcp_sock->local_port,
+                                                               tcp_sock->tcp_snd_nxt,
+                                                               tcp_sock->tcp_rcv_nxt,
+                                                               MK_TCP_FLAG_ACK,
+                                                               0, 0u);
+                        }
+                    }
+                }
+
+                if (tcp_flags & MK_TCP_FLAG_FIN) {
+                    uint32_t next_hop;
+                    uint8_t dest_mac[6];
+
+                    tcp_sock->tcp_rcv_nxt += 1u;
+                    tcp_sock->connected = 0;
+
+                    next_hop = mk_network_next_hop_ipv4(tcp_sock->remote_ipv4);
+                    if (next_hop != 0u && mk_network_lookup_arp(next_hop, dest_mac) == 0) {
+                        mk_network_virtio_send_tcp_segment(&g_network_state.pci_probe,
+                                                           dest_mac,
+                                                           tcp_sock->remote_ipv4,
+                                                           g_network_state.local_ipv4,
+                                                           tcp_sock->remote_port,
+                                                           tcp_sock->local_port,
+                                                           tcp_sock->tcp_snd_nxt,
+                                                           tcp_sock->tcp_rcv_nxt,
+                                                           MK_TCP_FLAG_ACK | MK_TCP_FLAG_FIN,
+                                                           0, 0u);
+                        tcp_sock->tcp_snd_nxt += 1u;
+                    }
+                    kernel_debug_printf("network: tcp closed by peer\n");
+                    break;
+                }
+                break;
+            }
+            break;
+        }
+
+        if (matched) {
+            return;
+        }
+
+        /* Phase 2: handle incoming SYN to listening socket */
+        if ((tcp_flags & MK_TCP_FLAG_SYN) && !(tcp_flags & MK_TCP_FLAG_ACK)) {
+            uint32_t listen_index;
+
+            for (listen_index = 0u; listen_index < MK_NETWORK_SOCKET_MAX; ++listen_index) {
+                struct mk_network_socket_state *listen_sock = &g_network_state.sockets[listen_index];
+
+                if (!listen_sock->used || !mk_network_socket_is_inet_tcp(listen_sock) ||
+                    !listen_sock->listening || listen_sock->local_port != dest_port) {
+                    continue;
+                }
+
+                {
+                    int child_handle;
+                    struct mk_network_socket_state *child;
+                    uint32_t next_hop;
+                    uint8_t dest_mac[6];
+
+                    child = mk_network_socket_allocate(listen_sock->owner_pid,
+                                                       listen_sock->domain,
+                                                       listen_sock->type,
+                                                       listen_sock->protocol,
+                                                       &child_handle);
+                    if (child == 0) {
+                        break;
+                    }
+
+                    child->bound = 1;
+                    child->address_length = listen_sock->address_length;
+                    if (listen_sock->address_length > 0u) {
+                        memcpy(&child->address, &listen_sock->address, listen_sock->address_length);
+                    }
+                    child->local_port = listen_sock->local_port;
+                    child->remote_ipv4 = source_ipv4;
+                    child->remote_port = src_port;
+                    child->connected = 3;
+                    child->peer_handle = -1;
+
+                    child->tcp_snd_nxt = kernel_timer_get_ticks() ^ (uint32_t)(uintptr_t)child;
+                    if (child->tcp_snd_nxt == 0u) child->tcp_snd_nxt = 1u;
+                    child->tcp_rcv_nxt = seq_number + 1u;
+                    child->tcp_snd_una = child->tcp_snd_nxt;
+                    child->tcp_retries = 0;
+                    child->tcp_retry_ticks = MK_TCP_RETRY_TICKS;
+
+                    next_hop = mk_network_next_hop_ipv4(source_ipv4);
+                    if (next_hop != 0u && mk_network_lookup_arp(next_hop, dest_mac) == 0) {
+                        mk_network_virtio_send_tcp_segment(&g_network_state.pci_probe,
+                                                           dest_mac,
+                                                           source_ipv4,
+                                                           g_network_state.local_ipv4,
+                                                           src_port,
+                                                           listen_sock->local_port,
+                                                           child->tcp_snd_nxt,
+                                                           child->tcp_rcv_nxt,
+                                                           MK_TCP_FLAG_SYN | MK_TCP_FLAG_ACK,
+                                                           0, 0u);
+                        child->tcp_snd_nxt += 1u;
+                    }
+
+                    listen_sock->pending_accept_handle = child_handle;
+                    (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_ACCEPT,
+                                                   (int32_t)(listen_index + 1),
+                                                   child_handle,
+                                                   g_network_state.status.link_state,
+                                                   0u);
+                    kernel_debug_printf("network: tcp syn accept port=%u child=%d\n",
+                                        (unsigned int)dest_port, child_handle);
+                }
+                break;
+            }
+        }
+
+        /* Send RST for unmatched SYN or data segments */
+        if (!(tcp_flags & MK_TCP_FLAG_RST) && g_network_state.local_ipv4 != 0u &&
+            destination_ipv4 == g_network_state.local_ipv4) {
+            uint32_t rst_next_hop;
+            uint8_t rst_mac[6];
+            uint32_t rst_seq = ack_number;
+
+            rst_next_hop = mk_network_next_hop_ipv4(source_ipv4);
+            if (rst_next_hop != 0u && mk_network_lookup_arp(rst_next_hop, rst_mac) == 0) {
+                mk_network_virtio_send_tcp_segment(&g_network_state.pci_probe,
+                                                   rst_mac,
+                                                   source_ipv4,
+                                                   g_network_state.local_ipv4,
+                                                   src_port,
+                                                   dest_port,
+                                                   rst_seq,
+                                                   0u,
+                                                   MK_TCP_FLAG_RST,
+                                                   0, 0u);
+            }
+        }
+        return;
     }
 }
 
@@ -1534,16 +2286,38 @@ static void mk_network_apply_ethernet_profile(void) {
                                  sizeof(g_network_state.status.active_if),
                                  g_network_state.pci_probe.if_name);
     g_network_state.status.current_ssid[0] = '\0';
-    if (!g_network_state.pci_probe.virtio_legacy_ready) {
-        (void)mk_network_copy_string(g_network_state.status.ip_address,
-                                     sizeof(g_network_state.status.ip_address),
-                                     "10.0.2.15");
-        (void)mk_network_copy_string(g_network_state.status.gateway,
-                                     sizeof(g_network_state.status.gateway),
-                                     "10.0.2.2");
-        (void)mk_network_copy_string(g_network_state.status.dns_server,
-                                     sizeof(g_network_state.status.dns_server),
-                                     "10.0.2.3");
+
+    if (g_network_state.pci_probe.virtio_legacy_ready && g_network_state.pci_probe.virtio_queue_ready) {
+        /* Start DHCP client - use fallback IPs until DHCP completes */
+        if (g_dhcp_state == DHCP_STATE_BOUND && g_network_state.local_ipv4 != 0u) {
+            mk_network_format_ipv4(g_network_state.status.ip_address,
+                                    sizeof(g_network_state.status.ip_address),
+                                    g_network_state.local_ipv4);
+            mk_network_format_ipv4(g_network_state.status.gateway,
+                                    sizeof(g_network_state.status.gateway),
+                                    g_network_state.gateway_ipv4);
+            mk_network_format_ipv4(g_network_state.status.dns_server,
+                                    sizeof(g_network_state.status.dns_server),
+                                    g_network_state.dns_ipv4);
+        } else {
+            /* Use fallback IPs while DHCP is in progress */
+            (void)mk_network_copy_string(g_network_state.status.ip_address,
+                                         sizeof(g_network_state.status.ip_address),
+                                         "0.0.0.0");
+            (void)mk_network_copy_string(g_network_state.status.gateway,
+                                         sizeof(g_network_state.status.gateway),
+                                         "0.0.0.0");
+            (void)mk_network_copy_string(g_network_state.status.dns_server,
+                                         sizeof(g_network_state.status.dns_server),
+                                         "0.0.0.0");
+            g_network_state.local_ipv4 = 0u;
+            g_network_state.gateway_ipv4 = 0u;
+            g_network_state.dns_ipv4 = 0u;
+            /* Kick off DHCP if not already running */
+            if (g_dhcp_state == DHCP_STATE_IDLE && !g_dhcp_discover_sent) {
+                kernel_debug_puts("network: starting dhcp client\n");
+            }
+        }
     } else {
         (void)mk_network_copy_string(g_network_state.status.ip_address,
                                      sizeof(g_network_state.status.ip_address),
@@ -1554,11 +2328,11 @@ static void mk_network_apply_ethernet_profile(void) {
         (void)mk_network_copy_string(g_network_state.status.dns_server,
                                      sizeof(g_network_state.status.dns_server),
                                      "10.0.2.3");
+        g_network_state.local_ipv4 = MK_NETWORK_IPV4_DEFAULT_ADDR;
+        g_network_state.gateway_ipv4 = MK_NETWORK_IPV4_DEFAULT_GATEWAY;
+        g_network_state.dns_ipv4 = MK_NETWORK_IPV4_DEFAULT_DNS;
+        g_network_state.netmask_ipv4 = MK_NETWORK_IPV4_DEFAULT_NETMASK;
     }
-    g_network_state.local_ipv4 = MK_NETWORK_IPV4_DEFAULT_ADDR;
-    g_network_state.gateway_ipv4 = MK_NETWORK_IPV4_DEFAULT_GATEWAY;
-    g_network_state.dns_ipv4 = MK_NETWORK_IPV4_DEFAULT_DNS;
-    g_network_state.netmask_ipv4 = MK_NETWORK_IPV4_DEFAULT_NETMASK;
     mk_network_publish_status_event();
     mk_network_publish_lease_dns_events();
 }
@@ -1633,9 +2407,341 @@ static void mk_network_begin_ethernet_connect(void) {
     mk_network_publish_lease_dns_events();
 }
 
+static void mk_dhcp_build_bootp(struct mk_dhcp_packet *dhcp, uint8_t msg_type,
+                                 uint32_t xid, const uint8_t *client_mac) {
+    uint32_t opt_offset = 0u;
+    uint8_t *opts;
+    uint32_t i;
+
+    if (dhcp == 0 || client_mac == 0) {
+        return;
+    }
+    memset(dhcp, 0, sizeof(*dhcp));
+    dhcp->op = MK_DHCP_OP_REQUEST;
+    dhcp->htype = MK_DHCP_HTYPE_ETHERNET;
+    dhcp->hlen = MK_DHCP_HLEN_ETHERNET;
+    dhcp->xid = mk_network_be32_store_value(xid);
+    dhcp->flags = mk_network_be16_store_value(0x8000u);
+    memcpy(dhcp->chaddr, client_mac, 6u);
+    dhcp->magic = mk_network_be32_store_value(MK_DHCP_MAGIC_COOKIE);
+
+    opts = dhcp->options;
+    opts[opt_offset++] = MK_DHCP_OPT_MSG_TYPE;
+    opts[opt_offset++] = 1u;
+    opts[opt_offset++] = msg_type;
+
+    if (msg_type == MK_DHCP_MSG_REQUEST && g_dhcp_offered_ipv4 != 0u) {
+        opts[opt_offset++] = MK_DHCP_OPT_REQUESTED_IP;
+        opts[opt_offset++] = 4u;
+        mk_network_be32_store(&opts[opt_offset], g_dhcp_offered_ipv4);
+        opt_offset += 4u;
+    }
+
+    if (g_dhcp_server_ipv4 != 0u) {
+        opts[opt_offset++] = MK_DHCP_OPT_SERVER_ID;
+        opts[opt_offset++] = 4u;
+        mk_network_be32_store(&opts[opt_offset], g_dhcp_server_ipv4);
+        opt_offset += 4u;
+    }
+
+    opts[opt_offset++] = MK_DHCP_OPT_PARAM_REQ_LIST;
+    opts[opt_offset++] = 3u;
+    opts[opt_offset++] = MK_DHCP_OPT_SUBNET_MASK;
+    opts[opt_offset++] = MK_DHCP_OPT_ROUTER;
+    opts[opt_offset++] = MK_DHCP_OPT_DNS;
+    opts[opt_offset++] = MK_DHCP_OPT_END;
+
+    for (i = opt_offset; i < sizeof(dhcp->options); ++i) {
+        dhcp->options[i] = 0u;
+    }
+}
+
+static int mk_dhcp_send_discover(void) {
+    struct mk_dhcp_packet dhcp;
+    uint8_t server_mac[6];
+    const uint8_t *source_mac;
+    uint32_t broadcast_ip = MK_DHCP_BROADCAST;
+
+    if (!g_network_state.pci_probe.present || !g_network_state.pci_probe.virtio_queue_ready) {
+        return -1;
+    }
+
+    source_mac = g_network_state.pci_probe.mac_valid ? g_network_state.pci_probe.mac : g_network_virtio_fallback_mac;
+    memset(server_mac, 0xff, 6u);
+
+    g_dhcp_xid = kernel_timer_get_ticks() ^ ((uint32_t)(uintptr_t)source_mac);
+    if (g_dhcp_xid == 0u) g_dhcp_xid = 0x12345678u;
+    g_dhcp_xid_retries = 0u;
+
+    mk_dhcp_build_bootp(&dhcp, MK_DHCP_MSG_DISCOVER, g_dhcp_xid, source_mac);
+    if (mk_network_virtio_send_udp(&g_network_state.pci_probe,
+                                    server_mac, broadcast_ip,
+                                    MK_DHCP_SERVER_PORT,
+                                    0u, MK_DHCP_CLIENT_PORT,
+                                    (const uint8_t *)&dhcp, sizeof(dhcp)) != 0) {
+        return -1;
+    }
+    g_dhcp_discover_sent = 1;
+    g_dhcp_ticks_remaining = MK_DHCP_TIMEOUT_TICKS;
+    {
+        static unsigned int dhcp_discover_throttle = 0;
+        dhcp_discover_throttle++;
+        if ((dhcp_discover_throttle % 50u) == 1u) {
+            kernel_debug_puts("network: dhcp discover sent\n");
+        }
+    }
+    return 0;
+}
+
+static int mk_dhcp_send_request(void) {
+    struct mk_dhcp_packet dhcp;
+    uint8_t server_mac[6];
+    const uint8_t *source_mac;
+    uint32_t broadcast_ip = MK_DHCP_BROADCAST;
+
+    if (!g_network_state.pci_probe.present || !g_network_state.pci_probe.virtio_queue_ready) {
+        return -1;
+    }
+
+    source_mac = g_network_state.pci_probe.mac_valid ? g_network_state.pci_probe.mac : g_network_virtio_fallback_mac;
+    memset(server_mac, 0xff, 6u);
+
+    mk_dhcp_build_bootp(&dhcp, MK_DHCP_MSG_REQUEST, g_dhcp_xid, source_mac);
+    if (mk_network_virtio_send_udp(&g_network_state.pci_probe,
+                                    server_mac, broadcast_ip,
+                                    MK_DHCP_SERVER_PORT,
+                                    0u, MK_DHCP_CLIENT_PORT,
+                                    (const uint8_t *)&dhcp, sizeof(dhcp)) != 0) {
+        return -1;
+    }
+    g_dhcp_request_sent = 1;
+    g_dhcp_ticks_remaining = MK_DHCP_TIMEOUT_TICKS;
+    kernel_debug_puts("network: dhcp request sent\n");
+    return 0;
+}
+
+static void mk_dhcp_tick(void) {
+    if (!g_network_state.pci_probe.present || !g_network_state.pci_probe.virtio_queue_ready) {
+        return;
+    }
+
+    mk_network_virtio_poll_queues(&g_network_state.pci_probe);
+
+    switch (g_dhcp_state) {
+    case DHCP_STATE_IDLE:
+        if (g_dhcp_discover_sent) {
+            break;
+        }
+        g_dhcp_state = DHCP_STATE_DISCOVER_SENT;
+        g_dhcp_ticks_remaining = MK_DHCP_TIMEOUT_TICKS;
+        (void)mk_dhcp_send_discover();
+        break;
+
+    case DHCP_STATE_DISCOVER_SENT:
+        if (g_dhcp_state == DHCP_STATE_OFFER_RECEIVED) {
+            break;
+        }
+        if (g_dhcp_ticks_remaining > 0u) {
+            g_dhcp_ticks_remaining -= 1u;
+        }
+        if (g_dhcp_ticks_remaining == 0u && g_dhcp_xid_retries < MK_DHCP_MAX_XID_RETRIES) {
+            g_dhcp_xid_retries += 1u;
+            g_dhcp_ticks_remaining = MK_DHCP_TIMEOUT_TICKS;
+            (void)mk_dhcp_send_discover();
+        }
+        break;
+
+    case DHCP_STATE_OFFER_RECEIVED:
+        if (!g_dhcp_request_sent) {
+            g_dhcp_state = DHCP_STATE_REQUEST_SENT;
+            g_dhcp_ticks_remaining = MK_DHCP_TIMEOUT_TICKS;
+            (void)mk_dhcp_send_request();
+        }
+        break;
+
+    case DHCP_STATE_REQUEST_SENT:
+        if (g_dhcp_state == DHCP_STATE_BOUND) {
+            break;
+        }
+        if (g_dhcp_ticks_remaining > 0u) {
+            g_dhcp_ticks_remaining -= 1u;
+        }
+        if (g_dhcp_ticks_remaining == 0u && g_dhcp_xid_retries < MK_DHCP_MAX_XID_RETRIES) {
+            g_dhcp_xid_retries += 1u;
+            g_dhcp_ticks_remaining = MK_DHCP_TIMEOUT_TICKS;
+            (void)mk_dhcp_send_request();
+        }
+        if (g_dhcp_ticks_remaining == 0u) {
+            g_dhcp_state = DHCP_STATE_IDLE;
+            g_dhcp_discover_sent = 0;
+            g_dhcp_request_sent = 0;
+        }
+        break;
+
+    case DHCP_STATE_BOUND:
+        if (g_dhcp_lease_ticks > 0u) {
+            g_dhcp_lease_ticks -= 1u;
+        }
+        if (g_dhcp_lease_ticks == 0u && g_dhcp_lease_time > 0u && !g_dhcp_renew_sent) {
+            /* Time to renew - send REQUEST */
+            g_dhcp_state = DHCP_STATE_REQUEST_SENT;
+            g_dhcp_request_sent = 0;
+            g_dhcp_ticks_remaining = MK_DHCP_TIMEOUT_TICKS;
+            g_dhcp_xid_retries = 0u;
+            g_dhcp_renew_sent = 1;
+            g_dhcp_xid = kernel_timer_get_ticks() ^ 0xABCDu;
+            if (g_dhcp_xid == 0u) g_dhcp_xid = 0x87654321u;
+        }
+        break;
+    }
+}
+
+static void mk_dhcp_apply_lease_if_bound(void) {
+    if (g_dhcp_state != DHCP_STATE_BOUND || g_dhcp_offered_ipv4 == 0u) {
+        return;
+    }
+
+    g_dhcp_discover_sent = 0;
+    g_dhcp_request_sent = 0;
+
+    if (g_network_state.local_ipv4 == g_dhcp_offered_ipv4 &&
+        g_network_state.local_ipv4 != 0u && !g_dhcp_renew_sent) {
+        /* Already have this lease, no need to reapply */
+        return;
+    }
+
+    g_network_state.local_ipv4 = g_dhcp_offered_ipv4;
+    g_network_state.gateway_ipv4 = g_dhcp_offered_gateway;
+    g_network_state.dns_ipv4 = g_dhcp_offered_dns;
+    if (g_dhcp_offered_netmask != 0u) {
+        g_network_state.netmask_ipv4 = g_dhcp_offered_netmask;
+    }
+
+    if (g_dhcp_lease_time > 0u) {
+        g_dhcp_lease_ticks = g_dhcp_lease_time * 50u; /* T1 ~50% of lease */
+    } else {
+        g_dhcp_lease_ticks = 30000u; /* default ~5 minutes */
+    }
+    g_dhcp_renew_sent = 0;
+
+    {
+        uint8_t ip_bytes[4];
+        ip_bytes[0] = (uint8_t)(g_dhcp_offered_ipv4 >> 24);
+        ip_bytes[1] = (uint8_t)((g_dhcp_offered_ipv4 >> 16) & 0xffu);
+        ip_bytes[2] = (uint8_t)((g_dhcp_offered_ipv4 >> 8) & 0xffu);
+        ip_bytes[3] = (uint8_t)(g_dhcp_offered_ipv4 & 0xffu);
+        kernel_debug_printf("network: dhcp bound ip=%d.%d.%d.%d\n",
+            (int)ip_bytes[0], (int)ip_bytes[1], (int)ip_bytes[2], (int)ip_bytes[3]);
+    }
+
+    g_network_state.status.link_state = MK_NETWORK_LINK_CONNECTED;
+    g_network_state.status.active_kind = MK_NETWORK_IF_ETHERNET;
+    (void)mk_network_copy_string(g_network_state.status.active_if,
+                                  sizeof(g_network_state.status.active_if),
+                                  g_network_state.pci_probe.if_name);
+    mk_network_format_ipv4(g_network_state.status.ip_address,
+                            sizeof(g_network_state.status.ip_address),
+                            g_network_state.local_ipv4);
+    mk_network_format_ipv4(g_network_state.status.gateway,
+                            sizeof(g_network_state.status.gateway),
+                            g_network_state.gateway_ipv4);
+    mk_network_format_ipv4(g_network_state.status.dns_server,
+                            sizeof(g_network_state.status.dns_server),
+                            g_network_state.dns_ipv4);
+    mk_network_publish_status_event();
+    mk_network_publish_lease_dns_events();
+}
+
+static void mk_network_tcp_retry(void) {
+    uint32_t tcp_index;
+
+    for (tcp_index = 0u; tcp_index < MK_NETWORK_SOCKET_MAX; ++tcp_index) {
+        struct mk_network_socket_state *tcp_sock = &g_network_state.sockets[tcp_index];
+
+        if (!tcp_sock->used || !mk_network_socket_is_inet_tcp(tcp_sock)) {
+            continue;
+        }
+
+        /* SYN_SENT: retransmit SYN on timeout */
+        if (tcp_sock->connected == 2) {
+            if (tcp_sock->tcp_retry_ticks > 0) {
+                tcp_sock->tcp_retry_ticks -= 1;
+            }
+            if (tcp_sock->tcp_retry_ticks == 0) {
+                if (tcp_sock->tcp_retries >= MK_TCP_MAX_RETRIES) {
+                    tcp_sock->connected = 0;
+                    kernel_debug_printf("network: tcp connect timeout\n");
+                } else {
+                    uint32_t next_hop;
+                    uint8_t dest_mac[6];
+
+                    tcp_sock->tcp_retries += 1;
+                    tcp_sock->tcp_retry_ticks = MK_TCP_RETRY_TICKS;
+
+                    next_hop = mk_network_next_hop_ipv4(tcp_sock->remote_ipv4);
+                    if (next_hop != 0u && mk_network_lookup_arp(next_hop, dest_mac) == 0) {
+                        mk_network_virtio_send_tcp_segment(&g_network_state.pci_probe,
+                                                           dest_mac,
+                                                           tcp_sock->remote_ipv4,
+                                                           g_network_state.local_ipv4,
+                                                           tcp_sock->remote_port,
+                                                           tcp_sock->local_port,
+                                                           tcp_sock->tcp_snd_nxt - 1u,
+                                                           0u,
+                                                           MK_TCP_FLAG_SYN,
+                                                           0, 0u);
+                        kernel_debug_printf("network: tcp syn retry %d\n",
+                                            tcp_sock->tcp_retries);
+                    }
+                }
+            }
+        }
+
+        /* ESTABLISHED: retransmit unacknowledged data on timeout */
+        if (tcp_sock->connected == 3 && tcp_sock->tcp_tx_pending_len > 0u) {
+            if (tcp_sock->tcp_retry_ticks > 0) {
+                tcp_sock->tcp_retry_ticks -= 1;
+            }
+            if (tcp_sock->tcp_retry_ticks == 0) {
+                uint32_t next_hop;
+                uint8_t dest_mac[6];
+
+                tcp_sock->tcp_retries += 1;
+                if (tcp_sock->tcp_retries >= MK_TCP_MAX_RETRIES) {
+                    tcp_sock->connected = 0;
+                    kernel_debug_printf("network: tcp send timeout\n");
+                } else {
+                    tcp_sock->tcp_retry_ticks = MK_TCP_RETRY_TICKS;
+
+                    next_hop = mk_network_next_hop_ipv4(tcp_sock->remote_ipv4);
+                    if (next_hop != 0u && mk_network_lookup_arp(next_hop, dest_mac) == 0) {
+                        mk_network_virtio_send_tcp_segment(&g_network_state.pci_probe,
+                                                           dest_mac,
+                                                           tcp_sock->remote_ipv4,
+                                                           g_network_state.local_ipv4,
+                                                           tcp_sock->remote_port,
+                                                           tcp_sock->local_port,
+                                                           tcp_sock->tcp_snd_nxt - tcp_sock->tcp_tx_pending_len,
+                                                           tcp_sock->tcp_rcv_nxt,
+                                                           MK_TCP_FLAG_ACK | MK_TCP_FLAG_PSH,
+                                                           tcp_sock->tcp_tx_pending_data,
+                                                           tcp_sock->tcp_tx_pending_len);
+                        kernel_debug_printf("network: tcp data retry %d len=%u\n",
+                                            tcp_sock->tcp_retries,
+                                            (unsigned int)tcp_sock->tcp_tx_pending_len);
+                    }
+                }
+            }
+        }
+    }
+}
+
 static void mk_network_progress_state(void) {
     mk_network_virtio_maybe_activate_runtime(&g_network_state.pci_probe);
     mk_network_virtio_poll_queues(&g_network_state.pci_probe);
+    mk_dhcp_tick();
+    mk_dhcp_apply_lease_if_bound();
+    mk_network_tcp_retry();
     if (!g_network_state.ethernet_pending) {
         return;
     }
@@ -1646,6 +2752,11 @@ static void mk_network_progress_state(void) {
         }
     }
     mk_network_apply_ethernet_profile();
+}
+
+static void mk_network_timer_tick_hook(uint32_t tick) {
+    (void)tick;
+    mk_network_progress_state();
 }
 
 static void mk_network_refresh_socket_telemetry(void) {
@@ -2003,6 +3114,9 @@ void mk_network_service_init(void) {
     network_queue_set_ready_event_callback(mk_network_queue_ready_callback);
     (void)mk_service_register_deferred_launcher(MK_SERVICE_NETWORK,
                                                 mk_network_service_launch_deferred);
+
+    /* Register timer tick hook for periodic network progress (DHCP, TCP retry, etc) */
+    kernel_timer_register_tick_hook(mk_network_timer_tick_hook);
 }
 
 int mk_network_service_ready(void) {
@@ -2263,6 +3377,15 @@ int mk_network_service_bind(int handle, const struct sockaddr *address, uint32_t
     memcpy(&socket_state->address, address, address_length);
     socket_state->address_length = address_length;
     socket_state->bound = 1;
+
+    if (socket_state->domain == AF_INET &&
+        (mk_network_socket_is_inet_udp(socket_state) ||
+         mk_network_socket_is_inet_tcp(socket_state))) {
+        uint16_t port = mk_network_sockaddr_port(address, address_length);
+        if (port != 0u) {
+            socket_state->local_port = port;
+        }
+    }
     return 0;
 }
 
@@ -2297,6 +3420,116 @@ int mk_network_service_socket_connect(int handle, const struct sockaddr *address
             socket_state->icmp_identifier = (uint16_t)handle;
         }
         socket_state->icmp_next_sequence = 0u;
+        return 0;
+    }
+
+    if (mk_network_socket_is_inet_udp(socket_state)) {
+        uint32_t remote_ipv4 = mk_network_sockaddr_ipv4(address, address_length);
+        uint16_t remote_port = mk_network_sockaddr_port(address, address_length);
+
+        if (remote_ipv4 == 0u || remote_port == 0u) {
+            return -1;
+        }
+        socket_state->remote_ipv4 = remote_ipv4;
+        socket_state->remote_port = remote_port;
+        socket_state->connected = 1;
+        socket_state->peer_handle = -1;
+        if (socket_state->local_port == 0u) {
+            uint32_t udp_index;
+            uint16_t candidate = (uint16_t)(1024u + ((mk_network_current_pid() ^ (uint32_t)(uintptr_t)socket_state) & 0x3fffu));
+            for (udp_index = 0u; udp_index < 64u; ++udp_index) {
+                uint32_t s;
+                int conflict = 0;
+                for (s = 0u; s < MK_NETWORK_SOCKET_MAX; ++s) {
+                    struct mk_network_socket_state *other = &g_network_state.sockets[s];
+                    if (other->used && other != socket_state &&
+                        mk_network_socket_is_inet_udp(other) &&
+                        other->local_port == candidate) {
+                        conflict = 1;
+                        break;
+                    }
+                }
+                if (!conflict) {
+                    socket_state->local_port = candidate;
+                    break;
+                }
+                candidate = (uint16_t)(candidate + 1u);
+                if (candidate < 1024u) candidate = 1024u;
+            }
+            if (socket_state->local_port == 0u) {
+                return -1;
+            }
+        }
+        return 0;
+    }
+
+    if (mk_network_socket_is_inet_tcp(socket_state)) {
+        uint32_t remote_ipv4 = mk_network_sockaddr_ipv4(address, address_length);
+        uint16_t remote_port = mk_network_sockaddr_port(address, address_length);
+        uint8_t dest_mac[6];
+        uint32_t next_hop;
+
+        if (remote_ipv4 == 0u || remote_port == 0u) {
+            return -1;
+        }
+        socket_state->remote_ipv4 = remote_ipv4;
+        socket_state->remote_port = remote_port;
+        if (socket_state->local_port == 0u) {
+            uint16_t candidate = (uint16_t)(2048u + ((mk_network_current_pid() ^ (uint32_t)(uintptr_t)socket_state) & 0x3fffu));
+            uint32_t s;
+            int conflict = 0;
+            for (s = 0u; s < MK_NETWORK_SOCKET_MAX; ++s) {
+                struct mk_network_socket_state *other = &g_network_state.sockets[s];
+                if (other->used && other != socket_state &&
+                    mk_network_socket_is_inet_tcp(other) &&
+                    other->local_port == candidate) {
+                    conflict = 1;
+                    break;
+                }
+            }
+            if (!conflict) {
+                socket_state->local_port = candidate;
+            } else {
+                return -1;
+            }
+        }
+
+        mk_network_progress_state();
+        next_hop = mk_network_next_hop_ipv4(remote_ipv4);
+        if (next_hop == 0u) {
+            return -1;
+        }
+        if (mk_network_lookup_arp(next_hop, dest_mac) != 0) {
+            mk_network_virtio_send_arp_request(&g_network_state.pci_probe,
+                                               g_network_state.local_ipv4,
+                                               next_hop);
+            if (mk_network_wait_for_arp(next_hop, dest_mac, MK_NETWORK_ICMP_WAIT_TICKS) != 0) {
+                return -1;
+            }
+        }
+
+        socket_state->tcp_snd_nxt = kernel_timer_get_ticks() ^ (uint32_t)(uintptr_t)socket_state;
+        if (socket_state->tcp_snd_nxt == 0u) socket_state->tcp_snd_nxt = 1u;
+        socket_state->tcp_rcv_nxt = 0u;
+        socket_state->tcp_snd_una = socket_state->tcp_snd_nxt;
+        socket_state->tcp_retries = 0;
+        socket_state->tcp_retry_ticks = MK_TCP_RETRY_TICKS;
+        socket_state->connected = 2;
+        socket_state->peer_handle = -1;
+
+        if (mk_network_virtio_send_tcp_segment(&g_network_state.pci_probe,
+                                                dest_mac,
+                                                remote_ipv4,
+                                                g_network_state.local_ipv4,
+                                                remote_port,
+                                                socket_state->local_port,
+                                                socket_state->tcp_snd_nxt,
+                                                0u,
+                                                MK_TCP_FLAG_SYN,
+                                                0, 0u) != 0) {
+            return -1;
+        }
+        socket_state->tcp_snd_nxt += 1u;
         return 0;
     }
 
@@ -2395,6 +3628,74 @@ int mk_network_service_send(int handle, const void *data, uint32_t size) {
         }
         return (int)size;
     }
+
+    if (mk_network_socket_is_inet_udp(socket_state)) {
+        mk_network_progress_state();
+        next_hop = mk_network_next_hop_ipv4(socket_state->remote_ipv4);
+        if (next_hop == 0u) {
+            return -1;
+        }
+        if (mk_network_lookup_arp(next_hop, dest_mac) != 0) {
+            mk_network_virtio_send_arp_request(&g_network_state.pci_probe,
+                                               g_network_state.local_ipv4,
+                                               next_hop);
+            if (mk_network_wait_for_arp(next_hop, dest_mac, MK_NETWORK_ICMP_WAIT_TICKS) != 0) {
+                return -1;
+            }
+        }
+        if (mk_network_virtio_send_udp(&g_network_state.pci_probe,
+                                       dest_mac,
+                                       socket_state->remote_ipv4,
+                                       socket_state->remote_port,
+                                       g_network_state.local_ipv4,
+                                       socket_state->local_port,
+                                       (const uint8_t *)data,
+                                       size) != 0) {
+            return -1;
+        }
+        return (int)size;
+    }
+
+    if (mk_network_socket_is_inet_tcp(socket_state)) {
+        mk_network_progress_state();
+        if (socket_state->connected != 3) {
+            return -1;
+        }
+        next_hop = mk_network_next_hop_ipv4(socket_state->remote_ipv4);
+        if (next_hop == 0u) {
+            return -1;
+        }
+        if (mk_network_lookup_arp(next_hop, dest_mac) != 0) {
+            mk_network_virtio_send_arp_request(&g_network_state.pci_probe,
+                                               g_network_state.local_ipv4,
+                                               next_hop);
+            if (mk_network_wait_for_arp(next_hop, dest_mac, MK_NETWORK_ICMP_WAIT_TICKS) != 0) {
+                return -1;
+            }
+        }
+        if (mk_network_virtio_send_tcp_segment(&g_network_state.pci_probe,
+                                                dest_mac,
+                                                socket_state->remote_ipv4,
+                                                g_network_state.local_ipv4,
+                                                socket_state->remote_port,
+                                                socket_state->local_port,
+                                                socket_state->tcp_snd_nxt,
+                                                socket_state->tcp_rcv_nxt,
+                                                MK_TCP_FLAG_ACK | MK_TCP_FLAG_PSH,
+                                                (const uint8_t *)data,
+                                                size) != 0) {
+            return -1;
+        }
+        if (size > 0u && size <= MK_NETWORK_SOCKET_RX_CAPACITY) {
+            socket_state->tcp_tx_pending_len = size;
+            memcpy(socket_state->tcp_tx_pending_data, data, size);
+            socket_state->tcp_retries = 0;
+            socket_state->tcp_retry_ticks = MK_TCP_RETRY_TICKS;
+        }
+        socket_state->tcp_snd_nxt += size;
+        return (int)size;
+    }
+
     if (socket_state->peer_handle <= 0) {
         return -1;
     }
@@ -2422,6 +3723,123 @@ int mk_network_service_send(int handle, const void *data, uint32_t size) {
     return (int)size;
 }
 
+int mk_network_service_sendto(int handle, const void *data, uint32_t size,
+                              const struct sockaddr *dest_addr, uint32_t addrlen) {
+    struct mk_network_socket_state *socket_state;
+
+    if (data == 0 || size == 0u || size > MK_NETWORK_SOCKET_RX_CAPACITY) {
+        return -1;
+    }
+
+    socket_state = mk_network_socket_by_handle_for_current_pid(handle);
+    if (socket_state == 0) {
+        return -1;
+    }
+
+    /* If already connected, ignore dest_addr and behave like send */
+    if (socket_state->connected) {
+        return mk_network_service_send(handle, data, size);
+    }
+
+    /* For unconnected UDP, send directly to the given address */
+    if (mk_network_socket_is_inet_udp(socket_state) && dest_addr != 0 && addrlen >= sizeof(struct sockaddr_in)) {
+        uint32_t remote_ipv4 = mk_network_sockaddr_ipv4(dest_addr, addrlen);
+        uint16_t remote_port = mk_network_sockaddr_port(dest_addr, addrlen);
+        uint32_t next_hop;
+        uint8_t dest_mac[6];
+
+        if (remote_ipv4 == 0u || remote_port == 0u || socket_state->local_port == 0u) {
+            return -1;
+        }
+
+        if (g_network_state.local_ipv4 == 0u) {
+            return -1;
+        }
+
+        mk_network_progress_state();
+        next_hop = mk_network_next_hop_ipv4(remote_ipv4);
+        if (next_hop == 0u) {
+            return -1;
+        }
+        if (mk_network_lookup_arp(next_hop, dest_mac) != 0) {
+            mk_network_virtio_send_arp_request(&g_network_state.pci_probe,
+                                               g_network_state.local_ipv4,
+                                               next_hop);
+            if (mk_network_wait_for_arp(next_hop, dest_mac, MK_NETWORK_ICMP_WAIT_TICKS) != 0) {
+                return -1;
+            }
+        }
+        if (mk_network_virtio_send_udp(&g_network_state.pci_probe,
+                                       dest_mac,
+                                       remote_ipv4,
+                                       remote_port,
+                                       g_network_state.local_ipv4,
+                                       socket_state->local_port,
+                                       (const uint8_t *)data,
+                                       size) != 0) {
+            return -1;
+        }
+        return (int)size;
+    }
+
+    return -1;
+}
+
+int mk_network_service_recvfrom_addr(int handle, void *buffer, uint32_t size,
+                                      struct sockaddr *src_addr, uint32_t *addrlen) {
+    struct mk_network_socket_state *socket_state;
+    int dequeued;
+    uint32_t packet_length;
+
+    if (buffer == 0 || size == 0u) {
+        return -1;
+    }
+
+    socket_state = mk_network_socket_by_handle_for_current_pid(handle);
+    if (socket_state == 0) {
+        return -1;
+    }
+
+    if (mk_network_socket_is_inet_icmp(socket_state) || mk_network_socket_is_inet_udp(socket_state) || mk_network_socket_is_inet_tcp(socket_state)) {
+        mk_network_progress_state();
+    }
+
+    dequeued = network_queue_rx_dequeue((uint8_t *)buffer,
+                                        size,
+                                        handle,
+                                        &packet_length,
+                                        NULL);
+    if (dequeued < 0) {
+        return 0;
+    }
+
+    /* Fill source address if socket is connected and caller provided a buffer */
+    if (dequeued > 0 && src_addr != 0 && addrlen != 0 && *addrlen >= sizeof(struct sockaddr_in)) {
+        if (socket_state->connected) {
+            struct sockaddr_in *sin = (struct sockaddr_in *)src_addr;
+            uint32_t addr = socket_state->remote_ipv4;
+            uint16_t port = socket_state->remote_port;
+
+            sin->sin_family = (uint16_t)AF_INET;
+            sin->sin_port = (uint16_t)(((port & 0xffu) << 8) | ((port >> 8) & 0xffu));
+            sin->sin_addr.s_addr = (uint32_t)(((addr & 0xffu) << 24) |
+                                              ((addr & 0xff00u) << 8) |
+                                              ((addr & 0xff0000u) >> 8) |
+                                              ((addr & 0xff000000u) >> 24));
+            *addrlen = sizeof(struct sockaddr_in);
+        }
+    }
+
+    if (dequeued > 0) {
+        (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_RECV,
+                                       handle,
+                                       socket_state->peer_handle,
+                                       g_network_state.status.link_state,
+                                       (uint32_t)dequeued);
+    }
+    return dequeued;
+}
+
 int mk_network_service_recv(int handle, void *buffer, uint32_t size) {
     struct mk_network_socket_state *socket_state;
     int dequeued;
@@ -2435,7 +3853,7 @@ int mk_network_service_recv(int handle, void *buffer, uint32_t size) {
     if (socket_state == 0) {
         return -1;
     }
-    if (mk_network_socket_is_inet_icmp(socket_state)) {
+    if (mk_network_socket_is_inet_icmp(socket_state) || mk_network_socket_is_inet_udp(socket_state) || mk_network_socket_is_inet_tcp(socket_state)) {
         mk_network_progress_state();
     }
 
@@ -2467,6 +3885,25 @@ int mk_network_service_close(int handle) {
         return -1;
     }
 
+    if (mk_network_socket_is_inet_tcp(socket_state) && socket_state->connected == 3) {
+        uint32_t next_hop;
+        uint8_t dest_mac[6];
+        mk_network_progress_state();
+        next_hop = mk_network_next_hop_ipv4(socket_state->remote_ipv4);
+        if (next_hop != 0u && mk_network_lookup_arp(next_hop, dest_mac) == 0) {
+            mk_network_virtio_send_tcp_segment(&g_network_state.pci_probe,
+                                               dest_mac,
+                                               socket_state->remote_ipv4,
+                                               g_network_state.local_ipv4,
+                                               socket_state->remote_port,
+                                               socket_state->local_port,
+                                               socket_state->tcp_snd_nxt,
+                                               socket_state->tcp_rcv_nxt,
+                                               MK_TCP_FLAG_ACK | MK_TCP_FLAG_FIN,
+                                               0, 0u);
+        }
+    }
+
     peer_handle = socket_state->peer_handle;
 
     if (socket_state->pending_accept_handle > 0) {
@@ -2494,6 +3931,9 @@ int mk_network_service_listen(int handle, int backlog) {
 
     (void)backlog;
     if (socket_state == 0 || !socket_state->bound || socket_state->connected) {
+        return -1;
+    }
+    if (mk_network_socket_is_inet_tcp(socket_state) && socket_state->local_port == 0u) {
         return -1;
     }
     socket_state->listening = 1;

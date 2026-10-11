@@ -1183,7 +1183,7 @@ static int cmd_vidmodes(int argc, char **argv) {
         int rc;
 
         debug_line("vidmodes: try ", width, "x", height, "");
-        rc = sys_gfx_set_mode(width, height);
+        rc = sys_gfx_set_mode(width, height, 8);
         if (rc != 0) {
             fail_count += 1u;
             debug_line("vidmodes: mode failed ", width, "x", height, "");
@@ -1221,7 +1221,7 @@ static int cmd_vidmodes(int argc, char **argv) {
     }
 
     if (!restore_leave_graphics && original_width != 0u && original_height != 0u) {
-        (void)sys_gfx_set_mode(original_width, original_height);
+        (void)sys_gfx_set_mode(original_width, original_height, 8);
         sys_clear(0u);
         sys_present_full();
         if (sys_gfx_info(&mode) == 0 &&
@@ -1856,7 +1856,7 @@ static int cmd_vidstress(int argc, char **argv) {
             if (width == original_mode.width && height == original_mode.height) {
                 continue;
             }
-            if (sys_gfx_set_mode(width, height) != 0) {
+            if (sys_gfx_set_mode(width, height, 8) != 0) {
                 continue;
             }
             if (palette_switched) {
@@ -1877,7 +1877,7 @@ static int cmd_vidstress(int argc, char **argv) {
     }
 
     if (have_original_mode) {
-        (void)sys_gfx_set_mode(original_mode.width, original_mode.height);
+        (void)sys_gfx_set_mode(original_mode.width, original_mode.height, 8);
         (void)sys_gfx_info(&active_mode);
     }
     if (palette_saved && palette_switched) {
@@ -3933,7 +3933,7 @@ static int cmd_vidsweep(int argc, char **argv) {
             if (width == 0u || height == 0u) {
                 continue;
             }
-            if (sys_gfx_set_mode(width, height) != 0) {
+            if (sys_gfx_set_mode(width, height, 8) != 0) {
                 continue;
             }
             if (sys_gfx_info(&active_mode) != 0) {
@@ -3992,7 +3992,7 @@ static int cmd_vidsweep(int argc, char **argv) {
     }
 
     if (have_original_mode) {
-        (void)sys_gfx_set_mode(original_mode.width, original_mode.height);
+        (void)sys_gfx_set_mode(original_mode.width, original_mode.height, 8);
     }
     (void)sys_gfx_set_present_copy_override(VIDEO_PRESENT_COPY_OVERRIDE_AUTO);
     (void)sys_gfx_set_present_policy(VIDEO_PRESENT_POLICY_DESKTOP);

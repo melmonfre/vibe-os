@@ -83,6 +83,9 @@ struct mk_network_info {
     uint32_t socket_rx_capacity;
     uint32_t event_queue_depth;
     uint32_t listen_backlog_max;
+    uint16_t wifi_vendor_id;
+    uint16_t wifi_device_id;
+    char wifi_chip_name[48];
 };
 
 struct mk_network_status {

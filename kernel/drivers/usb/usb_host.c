@@ -1,9 +1,13 @@
 #include <kernel/drivers/usb/usb_host.h>
+#include <kernel/pci_bus.h>
 
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/input/input.h>
 #include <kernel/drivers/pci/pci.h>
 #include <kernel/drivers/timer/timer.h>
+
+/* BSD USB driver - defers hardware init to avoid hangs */
+extern void bsd_usb_init(void);
 #include <kernel/drivers/video/video.h>
 #include <kernel/hal/io.h>
 #include <kernel/kernel_string.h>
@@ -728,7 +732,7 @@ static void kernel_usb_host_register_root_device(struct kernel_usb_host_state *s
     }
 }
 
-static void kernel_usb_host_build_probe_snapshots(struct kernel_usb_host_state *state) {
+__attribute__((unused)) static void kernel_usb_host_build_probe_snapshots(struct kernel_usb_host_state *state) {
     if (state == 0) {
         return;
     }
@@ -2971,6 +2975,7 @@ static int kernel_usb_host_probe_execute_ohci_descriptor(const struct kernel_usb
     return 0;
 }
 
+__attribute__((unused))
 static void kernel_usb_host_enable_pci_device(const struct kernel_pci_device_info *info) {
     uint32_t command_status;
 
@@ -3424,6 +3429,7 @@ static void kernel_usb_host_store_controller(struct kernel_usb_host_state *state
     state->controllers++;
 }
 
+__attribute__((unused))
 static int kernel_usb_host_probe_cb(const struct kernel_pci_device_info *info, void *ctx_ptr) {
     struct kernel_usb_host_state *state = (struct kernel_usb_host_state *)ctx_ptr;
 
@@ -3439,7 +3445,7 @@ static int kernel_usb_host_probe_cb(const struct kernel_pci_device_info *info, v
     return 0;
 }
 
-static void kernel_usb_host_execute_all_pending(void) {
+__attribute__((unused)) static void kernel_usb_host_execute_all_pending(void) {
     struct kernel_usb_probe_execution execution;
 
     while (kernel_usb_probe_execute_next(0u, &execution) == 0) {
@@ -3452,190 +3458,35 @@ static void kernel_usb_host_execute_all_pending(void) {
 }
 
 void kernel_usb_host_init(void) {
-    memset(&g_kernel_usb_host_state, 0, sizeof(g_kernel_usb_host_state));
-    (void)kernel_pci_enumerate(kernel_usb_host_probe_cb, &g_kernel_usb_host_state);
-    kernel_usb_host_build_probe_snapshots(&g_kernel_usb_host_state);
-    kernel_usb_host_execute_all_pending();
-    kernel_debug_printf("usb-host: summary controllers=%u uhci=%u ohci=%u ehci=%u xhci=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.controllers,
-                        (unsigned int)g_kernel_usb_host_state.uhci,
-                        (unsigned int)g_kernel_usb_host_state.ohci,
-                        (unsigned int)g_kernel_usb_host_state.ehci,
-                        (unsigned int)g_kernel_usb_host_state.xhci);
-    kernel_debug_printf("usb-host: connected-ports=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.connected_ports);
-    kernel_debug_printf("usb-host: connected-high=%u connected-super=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.connected_high_speed_ports,
-                        (unsigned int)g_kernel_usb_host_state.connected_super_speed_ports);
-    kernel_debug_printf("usb-host: root-devices=%u audio-candidates=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.root_devices,
-                        (unsigned int)g_kernel_usb_host_state.audio_candidates);
-    kernel_debug_printf("usb-host: devices=%u ready-for-enum=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.devices,
-                        (unsigned int)g_kernel_usb_host_state.devices_ready_for_enum);
-    kernel_debug_printf("usb-host: control-ready=%u needs-companion=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.devices_control_ready,
-                        (unsigned int)g_kernel_usb_host_state.devices_needing_companion);
-    kernel_debug_printf("usb-host: companion-present=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.devices_with_companion_present);
-    kernel_debug_printf("usb-host: handoff-ready=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.devices_handoff_ready);
-    kernel_debug_printf("usb-host: control-path-ready=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.devices_control_path_ready);
-    kernel_debug_printf("usb-host: probe-targets=%u audio-probe-targets=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.device_probe_targets,
-                        (unsigned int)g_kernel_usb_host_state.audio_probe_targets);
-    kernel_debug_printf("usb-host: probe-snapshots=%u audio-probe-snapshots=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.probe_snapshots,
-                        (unsigned int)g_kernel_usb_host_state.audio_probe_snapshots);
-    kernel_debug_printf("usb-host: probe-dispatch-ready=%u audio-probe-dispatch-ready=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.probe_dispatch_ready,
-                        (unsigned int)g_kernel_usb_host_state.audio_probe_dispatch_ready);
-    kernel_debug_printf("usb-host: probe-exec-ready=%u audio-probe-exec-ready=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.probe_exec_ready,
-                        (unsigned int)g_kernel_usb_host_state.audio_probe_exec_ready);
-    kernel_debug_printf("usb-host: probe-descriptor-ready=%u audio-probe-descriptor-ready=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.probe_descriptor_ready,
-                        (unsigned int)g_kernel_usb_host_state.audio_probe_descriptor_ready);
-    kernel_debug_printf("usb-host: probe-configured-ready=%u audio-probe-configured-ready=%u\n",
-                        (unsigned int)g_kernel_usb_host_state.probe_configured_ready,
-                        (unsigned int)g_kernel_usb_host_state.audio_probe_configured_ready);
-    {
-        uint32_t hid_boot_candidates = 0u;
-        uint32_t hid_boot_keyboards = 0u;
-        uint32_t hid_boot_mice = 0u;
+    int total = pci_device_count();
+    uint32_t found = 0u;
 
-        for (uint32_t i = 0u; i < g_kernel_usb_host_state.probe_snapshots; ++i) {
-            const struct kernel_usb_probe_snapshot *snapshot = &g_kernel_usb_host_state.probe_snapshot_entries[i];
+    kernel_debug_printf("usb: scanning %d PCI devices for USB controllers\n", total);
 
-            if (snapshot->hid_boot_keyboard_detected == 0u &&
-                snapshot->hid_boot_mouse_detected == 0u) {
-                continue;
-            }
-            hid_boot_candidates++;
-            if (snapshot->hid_boot_keyboard_detected != 0u) {
-                hid_boot_keyboards++;
-            }
-            if (snapshot->hid_boot_mouse_detected != 0u) {
-                hid_boot_mice++;
-            }
-        }
-        kernel_debug_printf("usb-host: hid-boot candidates=%u keyboards=%u mice=%u\n",
-                            (unsigned int)hid_boot_candidates,
-                            (unsigned int)hid_boot_keyboards,
-                            (unsigned int)hid_boot_mice);
-    }
-    for (uint32_t i = 0u; i < g_kernel_usb_host_state.devices; ++i) {
-        const struct kernel_usb_device_info *device = &g_kernel_usb_host_state.device_entries[i];
-
-        kernel_debug_printf("usb-host: device addr=%u controller=%u port=%u kind=%s effective=%u/%s companion=%u/%s speed=%s state=%u flags=%x\n",
-                            (unsigned int)device->address,
-                            (unsigned int)device->controller_index,
-                            (unsigned int)device->port_index,
-                            kernel_usb_host_kind_name(device->controller_kind),
-                            device->effective_controller_index == 0xffu ?
-                                0xffffffffu :
-                                (unsigned int)device->effective_controller_index,
-                            kernel_usb_host_kind_name(device->effective_controller_kind),
-                            device->companion_controller_index == 0xffu ?
-                                0xffffffffu :
-                                (unsigned int)device->companion_controller_index,
-                            kernel_usb_host_kind_name(device->companion_controller_kind),
-                            kernel_usb_host_speed_name(device->speed),
-                            (unsigned int)device->state,
-                            (unsigned int)device->flags);
-    }
-    for (uint32_t i = 0u; i < g_kernel_usb_host_state.probe_snapshots; ++i) {
-        const struct kernel_usb_probe_snapshot *snapshot = &g_kernel_usb_host_state.probe_snapshot_entries[i];
-
-        kernel_debug_printf("usb-host: probe index=%u device=%u audio=%u req=%x type=%x value=%x indexv=%x len=%u status=%u\n",
-                            (unsigned int)i,
-                            (unsigned int)snapshot->device_index,
-                            (unsigned int)snapshot->audio_candidate,
-                            (unsigned int)snapshot->plan.request,
-                            (unsigned int)snapshot->plan.request_type,
-                            (unsigned int)snapshot->plan.value,
-                            (unsigned int)snapshot->plan.index,
-                            (unsigned int)snapshot->plan.length,
-                            (unsigned int)snapshot->status);
-        if (snapshot->hid_boot_keyboard_detected != 0u ||
-            snapshot->hid_boot_mouse_detected != 0u) {
-            kernel_debug_printf("usb-host: hid snapshot=%u device=%u addr=%u controller=%u port=%u if=%u proto=%u keyboard=%u mouse=%u status=%u\n",
-                                (unsigned int)i,
-                                (unsigned int)snapshot->device_index,
-                                (unsigned int)snapshot->assigned_address,
-                                snapshot->plan.device.effective_controller_index == 0xffu ?
-                                    0xffffffffu :
-                                    (unsigned int)snapshot->plan.device.effective_controller_index,
-                                (unsigned int)snapshot->plan.device.port_index,
-                                snapshot->hid_interface_number == 0xffu ?
-                                    0xffffffffu :
-                                    (unsigned int)snapshot->hid_interface_number,
-                                (unsigned int)snapshot->hid_interface_protocol,
-                                (unsigned int)snapshot->hid_boot_keyboard_detected,
-                                (unsigned int)snapshot->hid_boot_mouse_detected,
-                                (unsigned int)snapshot->status);
-        }
-        if (snapshot->descriptor_valid) {
-            kernel_debug_printf("usb-host: probe descriptor device=%u addr=%u mps0=%u prefix=%x:%x:%x:%x:%x:%x:%x:%x\n",
-                                (unsigned int)snapshot->device_index,
-                                (unsigned int)snapshot->assigned_address,
-                                (unsigned int)snapshot->max_packet_size0,
-                                (unsigned int)snapshot->descriptor_prefix[0],
-                                (unsigned int)snapshot->descriptor_prefix[1],
-                                (unsigned int)snapshot->descriptor_prefix[2],
-                                (unsigned int)snapshot->descriptor_prefix[3],
-                                (unsigned int)snapshot->descriptor_prefix[4],
-                                (unsigned int)snapshot->descriptor_prefix[5],
-                                (unsigned int)snapshot->descriptor_prefix[6],
-                                (unsigned int)snapshot->descriptor_prefix[7]);
-        }
-        if (snapshot->config_valid) {
-            kernel_debug_printf("usb-host: probe config device=%u cfg=%u total=%u ifaces=%u eps=%u audio=%u umass=%u umass_if=%u umass_sc=%u umass_proto=%u bulk_in=%u bulk_out=%u ac_if=%u as_if=%u as_count=%u as_alt=%u out_ep=%u attr=%x maxpkt=%u prefix=%x:%x:%x:%x:%x:%x:%x:%x:%x\n",
-                                (unsigned int)snapshot->device_index,
-                                (unsigned int)snapshot->configuration_value,
-                                (unsigned int)snapshot->config_total_length,
-                                (unsigned int)snapshot->interface_count,
-                                (unsigned int)snapshot->endpoint_count,
-                                (unsigned int)snapshot->audio_class_detected,
-                                (unsigned int)snapshot->mass_storage_detected,
-                                snapshot->mass_storage_interface_number == 0xffu ?
-                                    0xffffffffu :
-                                    (unsigned int)snapshot->mass_storage_interface_number,
-                                (unsigned int)snapshot->mass_storage_subclass,
-                                (unsigned int)snapshot->mass_storage_protocol,
-                                snapshot->mass_storage_bulk_in_endpoint_address == 0xffu ?
-                                    0xffffffffu :
-                                    (unsigned int)snapshot->mass_storage_bulk_in_endpoint_address,
-                                snapshot->mass_storage_bulk_out_endpoint_address == 0xffu ?
-                                    0xffffffffu :
-                                    (unsigned int)snapshot->mass_storage_bulk_out_endpoint_address,
-                                snapshot->audio_control_interface_number == 0xffu ?
-                                    0xffffffffu :
-                                    (unsigned int)snapshot->audio_control_interface_number,
-                                snapshot->audio_streaming_interface_number == 0xffu ?
-                                    0xffffffffu :
-                                    (unsigned int)snapshot->audio_streaming_interface_number,
-                                (unsigned int)snapshot->audio_streaming_interface_count,
-                                snapshot->audio_streaming_alt_setting == 0xffu ?
-                                    0xffffffffu :
-                                    (unsigned int)snapshot->audio_streaming_alt_setting,
-                                snapshot->audio_playback_endpoint_address == 0xffu ?
-                                    0xffffffffu :
-                                    (unsigned int)snapshot->audio_playback_endpoint_address,
-                                (unsigned int)snapshot->audio_playback_endpoint_attributes,
-                                (unsigned int)snapshot->audio_playback_endpoint_max_packet,
-                                (unsigned int)snapshot->config_descriptor_prefix[0],
-                                (unsigned int)snapshot->config_descriptor_prefix[1],
-                                (unsigned int)snapshot->config_descriptor_prefix[2],
-                                (unsigned int)snapshot->config_descriptor_prefix[3],
-                                (unsigned int)snapshot->config_descriptor_prefix[4],
-                                (unsigned int)snapshot->config_descriptor_prefix[5],
-                                (unsigned int)snapshot->config_descriptor_prefix[6],
-                                (unsigned int)snapshot->config_descriptor_prefix[7],
-                                (unsigned int)snapshot->config_descriptor_prefix[8]);
+    /* Safe: PCI config reads only - no hardware I/O */
+    for (int i = 0; i < total; i++) {
+        pci_device_t *dev = pci_device_get(i);
+        if (!dev) continue;
+        if (dev->class_code == 0x0C && dev->subclass == 0x03) {
+            found++;
+            kernel_debug_printf("usb: %s at %02x:%02x.%x (%04x:%04x)\n",
+                                dev->prog_if == 0x00 ? "UHCI" :
+                                dev->prog_if == 0x10 ? "OHCI" :
+                                dev->prog_if == 0x20 ? "EHCI" :
+                                dev->prog_if == 0x30 ? "xHCI" : "USB",
+                                dev->bus, dev->slot, dev->function,
+                                dev->vendor_id, dev->device_id);
         }
     }
+
+    kernel_debug_printf("usb: %u USB controller(s) found via PCI\n", (unsigned int)found);
+
+    if (found > 0u) {
+        kernel_debug_puts("usb: starting BSD UHCI driver (deferred)\n");
+        bsd_usb_init();
+    }
+
+    kernel_text_puts("usb: OK\n");
 }
 
 uint32_t kernel_usb_host_controller_count(void) {

@@ -195,6 +195,10 @@ int mk_network_service_bind(int handle, const struct sockaddr *address, uint32_t
 int mk_network_service_socket_connect(int handle, const struct sockaddr *address, uint32_t address_length);
 int mk_network_service_send(int handle, const void *data, uint32_t size);
 int mk_network_service_recv(int handle, void *buffer, uint32_t size);
+int mk_network_service_sendto(int handle, const void *data, uint32_t size,
+                              const struct sockaddr *dest_addr, uint32_t addrlen);
+int mk_network_service_recvfrom_addr(int handle, void *buffer, uint32_t size,
+                                     struct sockaddr *src_addr, uint32_t *addrlen);
 int mk_network_service_close(int handle);
 int mk_network_service_listen(int handle, int backlog);
 int mk_network_service_accept(int handle);

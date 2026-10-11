@@ -36,7 +36,42 @@ static uint32_t process_normalize_stack_size(uint32_t stack_size) {
     return (stack_size + 15u) & ~15u;
 }
 
-static int g_next_pid = 1;
+int g_next_pid = 1;
+
+static int process_entry_in_range(uintptr_t entry, uintptr_t base, uint32_t size) {
+    return entry >= base && entry < (base + (uintptr_t)size);
+}
+
+int process_entry_supports_user_mode(uintptr_t entry) {
+    return process_entry_in_range(entry, VIBE_APP_LOAD_ADDR, VIBE_APP_ARENA_SIZE) ||
+           process_entry_in_range(entry, VIBE_APP_COMPAT_LOAD_ADDR_20260325, VIBE_APP_ARENA_SIZE) ||
+           process_entry_in_range(entry, VIBE_APP_DESKTOP_LOAD_ADDR, VIBE_APP_DESKTOP_ARENA_SIZE) ||
+           process_entry_in_range(entry, VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325, VIBE_APP_DESKTOP_ARENA_SIZE) ||
+           process_entry_in_range(entry, VIBE_APP_BOOT_LOAD_ADDR, VIBE_APP_BOOT_ARENA_SIZE) ||
+           process_entry_in_range(entry, VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325, VIBE_APP_BOOT_ARENA_SIZE);
+}
+
+uintptr_t process_user_stack_top_for_entry(uintptr_t entry) {
+    if (process_entry_in_range(entry, VIBE_APP_LOAD_ADDR, VIBE_APP_ARENA_SIZE)) {
+        return VIBE_APP_STACK_TOP;
+    }
+    if (process_entry_in_range(entry, VIBE_APP_COMPAT_LOAD_ADDR_20260325, VIBE_APP_ARENA_SIZE)) {
+        return VIBE_APP_COMPAT_LOAD_ADDR_20260325 + VIBE_APP_ARENA_SIZE;
+    }
+    if (process_entry_in_range(entry, VIBE_APP_DESKTOP_LOAD_ADDR, VIBE_APP_DESKTOP_ARENA_SIZE)) {
+        return VIBE_APP_DESKTOP_STACK_TOP;
+    }
+    if (process_entry_in_range(entry, VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325, VIBE_APP_DESKTOP_ARENA_SIZE)) {
+        return VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 + VIBE_APP_DESKTOP_ARENA_SIZE;
+    }
+    if (process_entry_in_range(entry, VIBE_APP_BOOT_LOAD_ADDR, VIBE_APP_BOOT_ARENA_SIZE)) {
+        return VIBE_APP_BOOT_STACK_TOP;
+    }
+    if (process_entry_in_range(entry, VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325, VIBE_APP_BOOT_ARENA_SIZE)) {
+        return VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325 + VIBE_APP_BOOT_ARENA_SIZE;
+    }
+    return 0u;
+}
 
 static int process_entry_in_range(uintptr_t entry, uintptr_t base, uint32_t size) {
     return entry >= base && entry < (base + (uintptr_t)size);
@@ -274,10 +309,6 @@ void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t s
     process_setup_initial_context_arg(proc, entry, stack_top, 0u);
 }
 
-void process_setup_initial_context(process_t *proc, uintptr_t entry, uintptr_t stack_top) {
-    process_setup_initial_context_arg(proc, entry, stack_top, 0u);
-}
-
 process_t *process_create(void (*entry)(void)) {
     return process_create_with_stack(entry,
                                      PROCESS_KIND_USER,
@@ -317,7 +348,10 @@ process_t *process_create_with_stack(void (*entry)(void),
     memset(p, 0, sizeof(*p));
 
     p->pid = g_next_pid++;
+    p->pgid = p->pid;
+    p->sid = p->pid;
     p->current_cpu = -1;
+    { int i; for (i = 0; i < RLIMIT_NLIMITS; ++i) { p->rlimits[i].rlim_cur = -1; p->rlimits[i].rlim_max = -1; } }
     p->preferred_cpu = -1;
     p->last_cpu = -1;
     p->state = PROCESS_READY;

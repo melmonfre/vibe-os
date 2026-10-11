@@ -276,6 +276,8 @@ static int host_decode_launch_argv(const struct userland_launch_info *info,
     return (int)argc;
 }
 
+void userland_shell_session_entry(void);
+
 void userland_app_runtime_entry(void) {
     struct userland_launch_info info;
     char argv_storage[USERLAND_LAUNCH_ARGV_BYTES];
@@ -320,8 +322,12 @@ void userland_app_runtime_entry(void) {
 
     if (background_helper) {
         console_set_output_handler(0);
+        host_debug("app: runtime launch failed ", name);
+        return;
     }
-    host_debug("app: runtime launch failed ", name);
+
+    host_debug("app: runtime launch failed, falling back to builtin shell ", name);
+    userland_shell_session_entry();
 }
 
 void userland_app_host_entry(void) {

@@ -26,32 +26,13 @@ void craft_gl_debug_frame_reset(void);
 void craft_gl_debug_frame_report(void);
 void craft_thread_pump(int max_jobs);
 void craft_thread_reset(void);
+void craft_thread_set_parallel_workers(int workers);
+int craft_runtime_chunk_preload_budget(void);
 
 static unsigned int g_craft_runner_rng_state = 1u;
 
 static void craft_debug_stage(const char *message) {
     static int g_craft_debug_budget = 128;
-
-    if (!message || !message[0] || g_craft_debug_budget <= 0) {
-        return;
-    }
-    g_craft_debug_budget -= 1;
-    sys_write_debug(message);
-    sys_write_debug("\n");
-}
-
-static void craft_debug_metrics(const char *label,
-                                int a, int b, int c, int d) {
-    static int g_craft_metrics_budget = 24;
-    char line[128];
-
-    if (!label || g_craft_metrics_budget <= 0) {
-        return;
-    }
-    g_craft_metrics_budget -= 1;
-    doom_snprintf(line, sizeof(line), "%s %d %d %d %d\n", label, a, b, c, d);
-    sys_write_debug(line);
-}
 
     if (!message || !message[0] || g_craft_debug_budget <= 0) {
         return;
@@ -159,7 +140,13 @@ struct craft_runtime_state {
     int target_render_radius;
     int target_delete_radius;
     int target_sign_radius;
+    int target_preload_budget;
+    int target_worker_limit;
     int warmup_frames;
+    int memory_poll_frames;
+    uint32_t memory_pressure_level;
+    uint32_t memory_working_set_bytes;
+    uint32_t memory_opportunistic_bytes;
     GLuint sky_buffer;
     FPS fps;
     float player_buffer_x;
@@ -188,6 +175,81 @@ static void craft_sync_quality_profile(void);
 
 static float craft_runner_absf(float value) {
     return value < 0.0f ? -value : value;
+}
+
+static int craft_runner_min_int(int a, int b) {
+    return a < b ? a : b;
+}
+
+static int craft_runner_max_int(int a, int b) {
+    return a > b ? a : b;
+}
+
+static void craft_refresh_memory_budget(int force) {
+    struct mk_memory_status status;
+    struct mk_memory_budget budget;
+    int preload_budget = 5;
+    int worker_limit = 2;
+    int delete_radius = 1;
+
+    if (!force && g_runtime.memory_poll_frames > 0) {
+        g_runtime.memory_poll_frames -= 1;
+        return;
+    }
+
+    memset(&status, 0, sizeof(status));
+    memset(&budget, 0, sizeof(budget));
+    if (sys_memory_status(&status) < 0 || sys_memory_budget(&budget) < 0 ||
+        status.abi_version != MK_MEMORY_STATUS_ABI_VERSION ||
+        budget.abi_version != MK_MEMORY_BUDGET_ABI_VERSION) {
+        g_runtime.target_preload_budget = 5;
+        g_runtime.target_worker_limit = 2;
+        g_runtime.memory_pressure_level = MK_MEMORY_PRESSURE_NORMAL;
+        g_runtime.memory_working_set_bytes = 0;
+        g_runtime.memory_opportunistic_bytes = 0;
+        craft_thread_set_parallel_workers(g_runtime.target_worker_limit);
+        g_runtime.memory_poll_frames = 32;
+        return;
+    }
+
+    g_runtime.memory_pressure_level = budget.pressure_level;
+    g_runtime.memory_working_set_bytes = budget.working_set_target_bytes;
+    g_runtime.memory_opportunistic_bytes = budget.opportunistic_target_bytes;
+
+    if (budget.absolute_ceiling_bytes >= 0x03000000u &&
+        budget.pressure_level <= MK_MEMORY_PRESSURE_ELEVATED) {
+        preload_budget = 9;
+        worker_limit = 4;
+        delete_radius = 2;
+    }
+    else if (budget.absolute_ceiling_bytes >= 0x02000000u &&
+             budget.pressure_level <= MK_MEMORY_PRESSURE_HIGH) {
+        preload_budget = 7;
+        worker_limit = 3;
+        delete_radius = 2;
+    }
+    else if (budget.pressure_level >= MK_MEMORY_PRESSURE_HIGH) {
+        preload_budget = 3;
+        worker_limit = 1;
+        delete_radius = 1;
+    }
+
+    if (budget.concurrency_hint != 0u) {
+        worker_limit = craft_runner_min_int(worker_limit, (int)budget.concurrency_hint);
+    }
+    worker_limit = craft_runner_max_int(worker_limit, 1);
+    g_runtime.target_preload_budget = preload_budget;
+    g_runtime.target_worker_limit = worker_limit;
+    g_runtime.target_delete_radius = delete_radius;
+    craft_thread_set_parallel_workers(worker_limit);
+    g_runtime.memory_poll_frames = 32;
+}
+
+int craft_runtime_chunk_preload_budget(void) {
+    if (g_runtime.target_preload_budget > 0) {
+        return g_runtime.target_preload_budget;
+    }
+    return 5;
 }
 
 static int craft_runner_local_player_visible(void) {
@@ -236,6 +298,7 @@ static void craft_apply_runtime_visual_profile(int width, int height) {
     int area = width * height;
     int tier = 2;
 
+    craft_refresh_memory_budget(0);
     if (g_runtime.smoothed_frame_ms > 45.0) {
         tier = 0;
     } else if (g_runtime.smoothed_frame_ms > 30.0 || area > 480 * 360) {
@@ -252,12 +315,16 @@ static void craft_apply_runtime_visual_profile(int width, int height) {
     if (tier <= 0) {
         g_runtime.target_create_radius = 1;
         g_runtime.target_render_radius = 1;
-        g_runtime.target_delete_radius = 3;
+        if (g_runtime.memory_pressure_level >= MK_MEMORY_PRESSURE_HIGH) {
+            g_runtime.target_delete_radius = 1;
+        }
         g_runtime.target_sign_radius = 0;
     } else {
         g_runtime.target_create_radius = 1;
         g_runtime.target_render_radius = 1;
-        g_runtime.target_delete_radius = 3;
+        if (g_runtime.memory_pressure_level >= MK_MEMORY_PRESSURE_HIGH) {
+            g_runtime.target_delete_radius = 1;
+        }
         g_runtime.target_sign_radius = 0;
     }
     craft_sync_quality_profile();
@@ -285,7 +352,7 @@ static void craft_render_debug_cube(Player *player) {
     glUniform1i(g_block_attrib.sampler, 0);
     glUniform1i(g_block_attrib.extra1, 2);
     glUniform1f(g_block_attrib.extra2, get_daylight());
-    glUniform1f(g_block_attrib.extra3, g->render_radius * CHUNK_SIZE);
+    glUniform1f(g_block_attrib.extra3, chunk_fog_distance(g->render_radius));
     glUniform1i(g_block_attrib.extra4, g->ortho);
     glUniform1f(g_block_attrib.timer, time_of_day());
 
@@ -300,33 +367,19 @@ static void craft_render_debug_cube(Player *player) {
 }
 
 static void craft_sync_quality_profile(void) {
-    int create_radius = g_runtime.target_create_radius;
-    int render_radius = g_runtime.target_render_radius;
-    int delete_radius = g_runtime.target_delete_radius;
+    int create_radius = 1;
+    int render_radius = 1;
+    int delete_radius = g_runtime.target_delete_radius > 0 ? g_runtime.target_delete_radius : 1;
     int sign_radius = g_runtime.target_sign_radius;
 
     if (g_runtime.session_active) {
         if (g_runtime.warmup_frames <= 0) {
             sign_radius = 0;
         } else if (g_runtime.warmup_frames < 6) {
-            if (create_radius > 1) {
-                create_radius = 1;
-            }
-            if (render_radius > 1) {
-                render_radius = 1;
-            }
             sign_radius = 0;
-        } else if (g_runtime.warmup_frames < 12 && create_radius > 1) {
-            create_radius = 1;
         }
     }
 
-    if (render_radius < 1) {
-        render_radius = 1;
-    }
-    if (delete_radius <= render_radius) {
-        delete_radius = render_radius + 2;
-    }
     if (sign_radius > render_radius) {
         sign_radius = render_radius;
     }
@@ -338,31 +391,25 @@ static void craft_sync_quality_profile(void) {
 }
 
 static void craft_apply_quality_profile(int width, int height, int fullscreen) {
-    int area = width * height;
     int create_radius = 1;
     int render_radius = 1;
-    int delete_radius = 3;
+    int delete_radius = 1;
     int sign_radius = 0;
 
-    if (area <= 400 * 300) {
-        create_radius = 0;
-        render_radius = 1;
-    } else if (area <= 640 * 480) {
-        delete_radius = 2;
-    }
-    if (fullscreen && area >= 1280 * 720) {
-        delete_radius += 1;
-    }
-    if (delete_radius <= render_radius) {
-        delete_radius = render_radius + 2;
-    }
+    (void)width;
+    (void)height;
+    (void)fullscreen;
 
     g_runtime.target_create_radius = create_radius;
     g_runtime.target_render_radius = render_radius;
     g_runtime.target_delete_radius = delete_radius;
     g_runtime.target_sign_radius = sign_radius;
+    g_runtime.target_preload_budget = 5;
+    g_runtime.target_worker_limit = 2;
     g_runtime.smoothed_frame_ms = 33.0;
     g_runtime.player_buffer_valid = 0;
+    g_runtime.memory_poll_frames = 0;
+    craft_refresh_memory_budget(1);
     craft_sync_quality_profile();
     craft_apply_runtime_visual_profile(width, height);
 }
@@ -566,18 +613,18 @@ static int craft_upstream_begin_session(void) {
             s->ry = 0.0f;
         }
     }
-    force_chunks_radius(me, 2);
+    force_chunks_budget(me, 0, 1);
     spawn_y = highest_block(s->x, s->z) + 3;
     if (spawn_y < 3) {
-        force_chunks_radius(me, 3);
+        force_chunks_budget(me, 1, craft_runtime_chunk_preload_budget());
         spawn_y = highest_block(s->x, s->z) + 3;
     }
-    if (count_drawable_chunks(chunked(s->x), chunked(s->z), 2) == 0) {
-        force_chunks_radius(me, 3);
+    if (count_drawable_chunks(chunked(s->x), chunked(s->z), 1) == 0) {
+        force_chunks_budget(me, 1, craft_runtime_chunk_preload_budget());
     }
     craft_debug_metrics("craft: bootstrap",
                         g->chunk_count,
-                        count_drawable_chunks(chunked(s->x), chunked(s->z), 2),
+                        count_drawable_chunks(chunked(s->x), chunked(s->z), 1),
                         spawn_y,
                         craft_thread_parallel_workers());
     if (!loaded) {
@@ -660,7 +707,7 @@ int craft_upstream_frame(void) {
     }
     frame_begin = glfwGetTime();
     craft_debug_stage("craft: frame begin");
-    craft_thread_pump(g_runtime.warmup_frames < 6 ? 2 : 1);
+    craft_thread_pump(g_runtime.warmup_frames < 6 ? 4 : 2);
 
     me = g->players;
     s = &g->players->state;
