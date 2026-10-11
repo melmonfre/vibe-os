@@ -1277,8 +1277,8 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         }
     } else if (mode == GL_LINES) {
         for (GLsizei i = 0; i + 1 < count; i += 2) {
-            struct craft_vertex a;
-            struct craft_vertex b;
+            struct craft_vertex a = {0};
+            struct craft_vertex b = {0};
             if (!craft_fetch_vertex(first, i + 0, program, &a)) continue;
             if (!craft_fetch_vertex(first, i + 1, program, &b)) continue;
             craft_draw_line(&a, &b);

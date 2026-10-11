@@ -7,7 +7,7 @@ KSH_CFLAGS := -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie \
 	-fno-stack-protector -fno-builtin -nostdlib \
 	-Wall -Wextra -Werror \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-pointer-sign \
-	-Wno-implicit-fallthrough -Wno-clobbered \
+	-Wno-implicit-fallthrough -Wno-clobbered -Wno-unused-but-set-variable \
 	-include $(KSH_DIR)/ksh_compat.h \
 	-I$(KSH_DIR)/compat -I$(KSH_DIR) -I. \
 	-Icompat/include -Iheaders -Ilang/include \

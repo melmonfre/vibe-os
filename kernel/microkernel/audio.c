@@ -4246,7 +4246,6 @@ static void mk_audio_compat_update_output_progress(void) {
     uint8_t piv;
     uint16_t picb;
     uint16_t sts;
-    uint32_t completed = 0u;
 
     if (!g_audio_state.compat_output_running || g_audio_state.compat_aud_base == 0u) {
         return;
@@ -4268,7 +4267,6 @@ static void mk_audio_compat_update_output_progress(void) {
         g_audio_state.compat_output_pending--;
         g_audio_state.playback_bytes_consumed += g_audio_auich_pcmo_bytes[completed_slot];
         g_audio_auich_pcmo_bytes[completed_slot] = 0u;
-        completed++;
     }
 
     if (g_audio_state.compat_output_pending == 1u &&
@@ -4277,7 +4275,6 @@ static void mk_audio_compat_update_output_progress(void) {
         g_audio_state.playback_bytes_consumed += g_audio_auich_pcmo_bytes[civ];
         g_audio_auich_pcmo_bytes[civ] = 0u;
         g_audio_state.compat_output_pending = 0u;
-        completed++;
     }
 
     if ((sts & (AUICH_CELV | AUICH_LVBCI | AUICH_BCIS | AUICH_FIFOE)) != 0u) {

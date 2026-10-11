@@ -276,13 +276,9 @@ static int wpa2_verify_mic(const uint8_t *kck, const uint8_t *frame, uint16_t fr
     const struct eapol_key *key = (const struct eapol_key *)frame;
     uint8_t saved_mic[16];
     uint8_t computed_mic[20];
-    uint16_t hdr_len;
 
     memcpy(saved_mic, key->key_mic, 16);
     memset((uint8_t *)key->key_mic, 0, 16);
-
-    hdr_len = 4 + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint64_t) + 32 + 16 + 8 + 8;
-    hdr_len += key->key_data_length + 2;
 
     hmac_sha1(kck, 16, frame, frame_len, computed_mic);
 

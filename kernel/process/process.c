@@ -73,40 +73,6 @@ uintptr_t process_user_stack_top_for_entry(uintptr_t entry) {
     return 0u;
 }
 
-static int process_entry_in_range(uintptr_t entry, uintptr_t base, uint32_t size) {
-    return entry >= base && entry < (base + (uintptr_t)size);
-}
-
-int process_entry_supports_user_mode(uintptr_t entry) {
-    return process_entry_in_range(entry, VIBE_APP_LOAD_ADDR, VIBE_APP_ARENA_SIZE) ||
-           process_entry_in_range(entry, VIBE_APP_COMPAT_LOAD_ADDR_20260325, VIBE_APP_ARENA_SIZE) ||
-           process_entry_in_range(entry, VIBE_APP_DESKTOP_LOAD_ADDR, VIBE_APP_DESKTOP_ARENA_SIZE) ||
-           process_entry_in_range(entry, VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325, VIBE_APP_DESKTOP_ARENA_SIZE) ||
-           process_entry_in_range(entry, VIBE_APP_BOOT_LOAD_ADDR, VIBE_APP_BOOT_ARENA_SIZE) ||
-           process_entry_in_range(entry, VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325, VIBE_APP_BOOT_ARENA_SIZE);
-}
-
-uintptr_t process_user_stack_top_for_entry(uintptr_t entry) {
-    if (process_entry_in_range(entry, VIBE_APP_LOAD_ADDR, VIBE_APP_ARENA_SIZE)) {
-        return VIBE_APP_STACK_TOP;
-    }
-    if (process_entry_in_range(entry, VIBE_APP_COMPAT_LOAD_ADDR_20260325, VIBE_APP_ARENA_SIZE)) {
-        return VIBE_APP_COMPAT_LOAD_ADDR_20260325 + VIBE_APP_ARENA_SIZE;
-    }
-    if (process_entry_in_range(entry, VIBE_APP_DESKTOP_LOAD_ADDR, VIBE_APP_DESKTOP_ARENA_SIZE)) {
-        return VIBE_APP_DESKTOP_STACK_TOP;
-    }
-    if (process_entry_in_range(entry, VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325, VIBE_APP_DESKTOP_ARENA_SIZE)) {
-        return VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 + VIBE_APP_DESKTOP_ARENA_SIZE;
-    }
-    if (process_entry_in_range(entry, VIBE_APP_BOOT_LOAD_ADDR, VIBE_APP_BOOT_ARENA_SIZE)) {
-        return VIBE_APP_BOOT_STACK_TOP;
-    }
-    if (process_entry_in_range(entry, VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325, VIBE_APP_BOOT_ARENA_SIZE)) {
-        return VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325 + VIBE_APP_BOOT_ARENA_SIZE;
-    }
-    return 0u;
-}
 
 static uint32_t process_default_task_class_for(enum process_kind kind,
                                                uint32_t service_type,

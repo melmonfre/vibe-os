@@ -4,8 +4,6 @@
 #include <stdint.h>
 #include <stdarg.h>
 
-typedef unsigned long rlim_t;
-
 long ulimit(int cmd, ...) {
     va_list ap;
     long arg = 0;
