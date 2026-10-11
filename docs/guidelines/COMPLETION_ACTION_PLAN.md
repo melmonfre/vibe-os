@@ -1,0 +1,151 @@
+# Plano de Acao para Finalizar a Implementacao Completa do VibeOS
+
+last: consolidado pos-merge som-e-net (main 46958b18a); build verde; boot stall com causa localizada; auditoria completa de subsistemas feita
+doing: este documento e o plano ativo unificado
+next: Prioridade 1 (devolver boot ate init) e a porta de entrada de todo o resto
+location: docs/guidelines
+state: active
+
+Este plano substitui a leitura solta de `docs/ACTION_PLAN.md` e `docs/FINALIZATION_EXECUTION_PLAN.md` como fonte de prioridades. Acoes concluidas aqui devem ser marcadas nos dois e neste plano. Base: verificacao real do codigo (auditoria por subsistema, build completo, boot em QEMU com gdb), nao apenas alegacoes de docs.
+
+## Regras deste plano
+
+- Regra universal (universal-rule.md) acima de tudo: kernel nunca quebra userland; ABI so cresce (append-only, versionada ou com fallback).
+- Nada entra como "concluido" sem prova reproduzivel (`make validate-*`, relatorio em `build/`, log serial, ou sessao gdb).
+- Cada prioridade tem escopo coeso de uma lane; tarefas marcadas com `[!]` tocam ABI/boot contract e exigem decisao da mantenedora.
+
+## Estado real verificado (2026-10-11)
+
+| Subsistema | Estado | Evidencia |
+| --- | --- | --- |
+| Build | verde | `make` rc=0 apos fixes do merge (50387683a); gera boot.img completo |
+| Boot chain MBR->stage2->kernel | funciona ate `[8] memory` | serial QEMU; stall documentado abaixo |
+| Kernel bring-up | stall confirmado | gdb: EIP `0x251df001`/`0x25ab d001` dentro das arenas de app; bt: `kernel_entry -> kernel_video_refresh_backend+43 -> kernel_video_activate_backend` |
+| Armazenamento ATA/AHCI | drivers reais com waits bounded | ahci.c, ata.c; nunca alcancados (stall anterior) |
+| Rede virtio IPv4 (client) | funciona no papel e no codigo | network.c DHCP/ARP/ICMP/UDP/TCP reais; nunca alcancado em runtime hoje |
+| Rede e1000/rtl8139/wifi | drivers mortos ou fachada | zero callers; scans hardcoded; `ping localhost` fabricado |
+| Audio | backends reais, QEMU-validated | HDA/AC97/pcspkr/uaudio em audio.c; 0 linhas da matriz HW preenchidas |
+| Video/GPU | pipeline + BGA validados | i915/radeon/nouveau com stage/commit sem validacao em silicio real |
+| SMP | bring-up real, scheduler nunca liga | `smp_scheduler_enable()` zero callers; IOAPIC roteia tudo pro BSP |
+| Shell/ksh/terminal | funciona | ksh via fork/exec no terminal; busybox ~35 builtins |
+| Desktop/apps | funciona (monolito) | desktop.c 11k linhas; icon theme ~90% do plano |
+| Runtimes js/ruby/python | STUBS no build | placeholder banners; quickjs/mruby/micropython vendors desativados no Makefile |
+| craft/doom | rodam; craft partial | world.c upstream reduzido a 77 linhas; curl=501 |
+
+---
+
+## Prioridade 1: devolver o boot ate `init` (bloqueia tudo)
+
+Causa raiz ja localizada — nao e mais bisect cego:
+
+- [ ] Reproduzir o stall: `make run-headless-debug` serial para em `app arenas mapped` + budget de ticks (8 prints); `make debug` + `gdb build/kernel.elf` `target remote :1234`; `info symbol` nos enderecos de retorno prova `kernel_video_activate_backend` como saltador para dentro de VA de arena
+  - hipotese primaria (do diagnostico): heap do kernel escolhido por maior range livre de VA **sobrepoe as arenas 0x10000000-0x39000000**; tabela/ops do backend de video ou função ponteiro le de memoria que passou a apontar para fisica da arena; `mtrr: WC size must be power of 2` + `framebuffer wc unavailable` no mesmo ponto de corte pede auditar `mtrr_set_wc` sobre range nao-potencia-2
+- [ ] Decidir a invariante de memoria [!]: ou o heap do kernel exclui explicitamente o intervalo VA das arenas, ou as arenas ganham VA acima do heap — `headers/kernel/bootinfo.h` e `docs/memory_map.md` declaram o contrato; qualquer mudanca de layout e ABI de boot (mantenedora decide)
+- [ ] Consertar `kernel_video_refresh_backend` para nao ativar backend com estado nao mapeado (ou re-ordenar: refresh depois de storage/scheduler)
+- [ ] Devolver o canal debugcon perdido no merge: `kernel_early_post` perdeu `outb 0xE9` (entry.c ~95) — restaurar e documentar codigos de estagio
+- [ ] Transformar morte silenciosa em morte ruidosa: `kernel_panic` e o handler `#UD` kernel-mode devem emitir em serial antes do `hlt`-loop (panic.c, idt.c ~151-183)
+- [ ] `tools/validate_phase6.py` cobra marcadores mortos (`storage: using ata backend` nao existe mais no kernel); atualizar para os reais (`[step] storage: probing ata`, `ata: start=`, `memory: done`)
+- [ ] Prova de saida: `make validate-phase6-boot-smoke` 100% verde + serial ate `init: entered builtin entry` e `userland.app: shell start` em TCG
+
+## Prioridade 2: fechamento honesto do storage
+
+- [ ] Casar os dois drivers HDA/ata no mesmo contrato: `kernel/drivers/audio/hda.c` (paralelo morto, zero callers) — remover ou integrar; `kernel/drivers/network/virtio_net.c` duplica a virtio privada de network.c — decidir dono
+- [ ] `storage: ata OK` hoje so vai para a tela (storage.c ~21) — logar tambem em serial
+- [ ] Validar `make legacy-data-img` e persistencia no boot real (storage smoke test do init, que hoje nunca roda)
+
+## Prioridade 3: rede real completa
+
+Camada 1 — infraestrutura:
+
+- [ ] Definir NIC abstraction [!] (ja esbocada em e1000.c:573-610): `send_frame/attach_mac/link_status`; network.c deixa de ter virtio privada dentro do servico e passa a falar com drivers registrados
+- [ ] Ligar e1000 e rtl8139 de verdade: init a partir de entry.c, corrigir pressao VA==PA de DMA (e1000.c:274-283), consertar corrida do IRQ de RX (e1000.c:347-375 consome o proprio pacote)
+- [ ] RX orientado a IRQ (hoje 100 Hz polling, ring de 8 slots) e TX com fila (hoje 1 frame em voo)
+
+Camada 2 — stack:
+
+- [ ] ARP: cache multi-entrada + timeout + responder por ARP (hoje ninguem consegue alcancar o VibeOS)
+- [ ] ICMP: responder echo-request (be ping-able) + loopback real de IPv4 (hoje `ping localhost` imprime fabrica — ping.c:51-59)
+- [ ] TCP: backlog >1, sockets >8, timers corretos (RTT/RTO, retransmissao hoje e retry cego a cada 50 ticks)
+- [ ] DNS: resolver em netdb.c ler o servidor do DHCP (hoje hardcoded 10.0.2.3) + `/etc/resolv.conf`-equivalente
+- [ ] Capacidades honestas: `supported_families` nao anunciar AF_INET6 inexistente; `CAPS_REAL_PACKET_DATAPATH` ligado a NIC com datapath, nao a presenca de PCI class (network.c:3063-3074)
+
+Camada 3 — WiFi (deixar de ser fachada):
+
+- [ ] Panel/UI: ate 802.11 existir, scan/conectar reportam "nao disponivel" — hoje scans hardcoded (network.c:3096-3110) e connect escreve IP inventado (network.c:2813-2856); docs/hw_validation.md e NETWORK_AUDIO_PANEL_PLAN.md afirmam "WPA2 funcional" sem suporte no codigo
+- [ ] `wifi_data_plane.c` nao fala com nenhum chip real (barra fixa em bus:dev 0:0:0) — marcar como experimental e nao inicializar no boot de producao
+- [ ] Caminho real incremental: 802.11 auth/assoc + EAPOL com encapsulamento LLC/SNAP + RNG real nos nonces (wifi_wpa2.c hoje usa formulas deterministas) + instalar TK/GTK num caminho CCMP (nao existe criptografia de dados 802.11 no kernel)
+- [ ] Manter `wifi_wpa2.c` (criptografia PBKDF2/PTK/4-way genuine) plugada quando o plano de frames existir
+
+Camada 4 — ferramentas/apps:
+
+- [ ] ifconfig/route/netstat lendo tabela real; `host`/`dig` usando o resolver de verdade; curl/wget com HTTP via stack propria (links2 HTTP engine ja existe como base)
+- [ ] Validar com QEMU user-net: DHCP bound, ping gateway ida-e-volta, HTTP GET via links2; expandir `tools/validate_network_surface.py` alem dos checks de UI
+
+## Prioridade 4: SMP de verdade
+
+- [ ] Chamar `smp_scheduler_enable()` depois do bring-up dos APs (kernel/smp.c:464 — hoje zero callers; APs ficam em `sti; hlt` para sempre)
+- [ ] Timer por CPU: LAPIC timer no AP e no BSP, ou IPI-driven quantum; hoje so o BSP ve tick
+- [ ] Handler de IPI de reschedule (smp.c:484 hoje so faz EOI)
+- [ ] IOAPIC: rotear IRQs por afinidade em vez de tudo no BSP (ioapic.c:526)
+- [ ] Respeitar o gate existente: `BOOTINFO_FLAG_EXPERIMENTAL_SMP` existe e e toggle no stage2, mas **nenhum codigo do kernel o le** — implementar a leitura ou atualizar AGENTS.md/smp.md para a realidade [!]
+- [ ] Consertar `tools/validate_smp.py` (cobra strings que o kernel nao imprime); rodar `-smp 2` e `-smp 4` verdes em QEMU
+- [ ] Retornar `QEMU_RUN_SMP` default para 2 (Makefile:94, item aberto do FINALIZATION) e provar `make run` responsivo em 2 CPUs
+- [ ] Hardware real: documento de campanha T61/T400 com trampoline/SIPI rastreados (sem isso, README segue honesto em "SMP em estabilizacao")
+
+## Prioridade 5: audio fechamento hardware
+
+- [ ] HDA capture: azalia hoje so playback (ops sem read; caps sem CAPTURE) — implementar input stream + BDL de captura
+- [ ] IRQ compartilhado INTx em HDA/AC97 (audio.c:5363-5373 assume handler unico)
+- [ ] Preencher de fato a `AUDIO_HARDWARE_VALIDATION_MATRIX.md` (HW-01..HW-20) — hoje toda linha "nao testado"; ate la, docs/hw_validation.md nao pode dizer "Validated"
+- [ ] uaudio (USB audio) campaign de validacao em hardware
+
+## Prioridade 6: video/GPU fechamento
+
+- [ ] Decisao de default [!]: Makefile ja liga `INTEL_I915_EXPERIMENTAL_COMMIT=1` por default, VIDEO_BACKEND_REWRITE_PLAN.md prega "0 seguro" — um dos dois vence por decisao escrita
+- [ ] Campanha em silicio real: i915/radeon/nouveau com snapshot/rollback provado; portar 1 backend de hardware real sobre a estrutura (ultimo `[ ]` do plano de video)
+- [ ] Atualizar hw_validation.md e VIDEO_BACKEND_REWRITE_PLAN.md contra o codigo real (nouveau hoje comita PCRTC com rollback; doc fala "probe-only")
+
+## Prioridade 7: runtimes de linguagem deixam de ser stub
+
+- [ ] quickjs: reativar bloco comentado (Makefile:805-828) e `quickjs_wrapper.c`; app `js` real em vez do eco de placeholder
+- [ ] micropython e mruby: mesma coisa, um por vez, com heap/stack por classe de app respeitando MEMORY_ADAPTIVE_RAM_POLICY
+- [ ] Java: `java`/`javac` caseiros (VJ01) — registrar como experimental honesto ou apontar caminho de substituição; nao prometer JVM
+- [ ] Provar: `make validate-modular-apps` com hello/js/ruby/python/lua/sectorc rodando REPL/programa real
+
+## Prioridade 8: userland e apps acabativa
+
+- [ ] MicroUI: ou desktop passa a consumir (`desktop_new.c` nao esta no build) ou a lib sai do runtime — hoje compila e nao serve a ninguem
+- [ ] Ramo orphan remover/ligar: `shell_bsd.c` + `applications/ported/ksh` fora de todo source list
+- [ ] craft: restaurar `upstream/src/world.c` real (77 linhas hoje contra upstream completo) e streaming de chunks; curl http via stack propria apos P3; documentar que texturas hoje vem de assets empacotados
+- [ ] links2: entrar no catalogo/`config/app_catalog.tsv` e imagem, ou mover para fora da area de runtime do OS
+- [ ] vibe-browser: hoje e Otter Qt5 pristine sem integracao nem regra de build — status explicito "referencia vendored" ou engine proprio minimo (Qt nao e viavel aqui)
+- [ ] Icon theme: fechar o plano (SVG/XPM, heranca hicolor, cache em disco, cursor themes)
+- [ ] Fontes: stack de fonte escalavel ou multi-tamanho de bitmap (fonte atual: 1 bitmap 6x8 no shim do syscall) — trava legibilidade de toda a UI
+- [ ] ABI de app: header emitido carimba `VIBE_APP_ABI_VERSION 1` com struct de 44B (ABI2 no doc) — stamping e branching no loader; decisao [!] de versao
+
+## Prioridade 9: verdade documental (trava de confianca)
+
+- [ ] FINALIZATION_EXECUTION_PLAN.md:15-21 e hw_validation.md dizem "validado em hardware real" sem nenhuma linha preenchida na matriz — trocar por estado real com evidencia, mantendo o padrao "Limitacoes honestas" do README
+- [ ] NETWORK_AUDIO_PANEL_PLAN.md "rede wifi real funcional" e ACTION_PLAN/AGENTS.md "SMP gated por flag" — corrigir contra o codigo
+- [ ] docs/README.md: tabela Project Status atualizada com as linhas deste plano
+- [ ] `make` deve sair sem warnings: alvo `build/libksh.a` declarado duas vezes (Build.compat.mk:134 vs Build.ksh.mk:38) — dedup; varrer os 229 TODO/stub/n.i. do grep inicial e converter cada um em: feito, bug em KNOWN_BUGS.md, ou linha neste plano
+- [ ] `universal-rule.md` ganha um paragrafo novo so se nascer contratu — registrar decisoes em docs/guidelines como DECISIONS pontuais
+
+## Definicao Pratica de Acabou (implementacao completa)
+
+- [ ] `make` limpo, rc=0, sem warnings
+- [ ] `make run` (SMP=2) e todos os perfis `run-headless-*` chegam em desktop com ksh no terminal sem `hlt`-loop
+- [ ] `make validate-phase6` 100% verde (matriz CPU completa)
+- [ ] `make validate-abi-compat-surface` e `validate-abi-final` verdes com inventario batido
+- [ ] Rede: ping bidirecional, DHCP real, DNS do DHCP, HTTP via curl/links2 em QEMU user-net
+- [ ] Storage: AHCI e ATA em QEMU; persistencia smoke no init; matriz HW de audio/video preenchida onde o hardware existe
+- [ ] SMP: 2 CPUs com trabalho distribuido (taskmgr mostra 2 cores ativos) em QEMU e em 1 notebook real
+- [ ] Runtimes: js/ruby/python/lua/sectorc com benchmark hello-loop + programa nao-trivial cada
+- [ ] Docs: zero afirmacao de "funcional/validado" sem linha de evidencia no relatorio `build/` correspondente
+- [ ] README.md "Ainda em fechamento" vazio ou reduzido ao que e honestamente futuro (ex.: UEFI, IPv6, GPU accel 3D)
+
+## Ordem de execucao e dependencias
+
+P1 (boot) e o unico gate: P2/P3/P4/P5/P6 dependem de o kernel chegar em `init`. Dentro do pos-boot, a ordem recomendada e P2 (storage, pequeno e fecha o smoke do init) -> P3-camada1/2 (rede infra + stack) -> P4 (SMP) em paralelo com P5/P6 (audio/video campanhas) -> P7 (runtimes) -> P8 (userland acabamento) -> P9 roda continuo como trava de honestidade em cada PR.
+
+Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo commit, com caminho de prova (relatorio em `build/` ou comando reproduzivel).

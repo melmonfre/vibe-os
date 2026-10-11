@@ -54,6 +54,7 @@ If you want the code-guided architecture walkthrough, read these first:
 These are active project plans or validation-oriented documents that still make sense as top-level docs:
 
 - [FINALIZATION_EXECUTION_PLAN.md](FINALIZATION_EXECUTION_PLAN.md)
+- [guidelines/COMPLETION_ACTION_PLAN.md](guidelines/COMPLETION_ACTION_PLAN.md) — unified completion plan (audited 2026-10-11)
 - [NETWORK_AUDIO_PANEL_PLAN.md](NETWORK_AUDIO_PANEL_PLAN.md)
 - [VIDEO_BACKEND_REWRITE_PLAN.md](VIDEO_BACKEND_REWRITE_PLAN.md)
 - [ICON_THEME_IMPLEMENTATION_PLAN.md](ICON_THEME_IMPLEMENTATION_PLAN.md)
