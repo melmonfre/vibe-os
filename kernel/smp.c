@@ -272,13 +272,21 @@ void smp_ap_entry(void) {
     int idx;
 
     smp_persist_trace_mark('a');
+    /*
+     * Order matters: kernel_cpu_index() resolves via the LOCAL APIC ID.
+     * Running gdt_init() before local_apic_init() made the AP see
+     * cpu_index 0, ltr the BSP's TSS, and kernel_tss_set_kernel_stack(0)
+     * inside gdt_init() zeroed the BSP esp0. Both CPUs then shared one
+     * TSS esp0, so user->kernel transitions resumed onto the other CPU's
+     * stack (observed: #UD with eip=3/7 and CS holding a stack address).
+     */
+    kernel_cpu_enable_current_features();
+    local_apic_init();
+    smp_persist_trace_mark('l');
     gdt_init();
     smp_persist_trace_mark('g');
     kernel_idt_init();
     smp_persist_trace_mark('i');
-    kernel_cpu_enable_current_features();
-    local_apic_init();
-    smp_persist_trace_mark('l');
     apic_id = local_apic_id();
     for (uint32_t i = 0; i < kernel_cpu_count(); ++i) {
         const struct kernel_cpu_state *cpu = kernel_cpu_state(i);

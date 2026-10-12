@@ -94,7 +94,9 @@ Camada 4 — ferramentas/apps:
 
 ### P4 open (evidencia 2026-10-11)
 
-- [ ] smp2/smp4 com flag ON dao boot ate `init: entered builtin entry` + `smp: scheduler enabled cpus=N` mas param em `fs: sys_storage_load begin`. Evidencia gdb (pos-fix do hlt): CPU0 dentro de `find_next` segurando o lock, CPU1 em `spinlock_lock` — os dois CPUs estao vivos e ping-pongando o lock global; o storage worker (pid=2) nunca e despachado. Proximo passo: trazar a transicao READY do worker no caminho `mk_message`/storage request (provavelmente falta `smp_wake_sleeping_cpus()` em uma das rotas de wake, ou o worker esta BLOCKED num evento que so e sinalizado sem state-change)
+- [x] Causa raiz do #UD no AP corrigida (ordem do TSS): `smp_ap_entry` rodava `gdt_init()` antes de `local_apic_init()`, e `kernel_cpu_index()` (que le o APIC ID local) retornava 0 no AP -> AP fazia `ltr` do TSS do BSP e zerava o esp0 do BSP; os dois CPUs compartilhavam um TSS e as transicoes user->kernel corrompiam stacks (evidencia gdb: #UD com eip=3/7 e CS valendo endereco de stack). Apos inverter a ordem: nenhum #UD, todos os marcadores de bring-up do smp2 passam.
+- [ ] smp2 (2 CPUs online + scheduler enabled) ainda para na primeira request de storage: `fs: sys_storage_load begin` e o host do storage (pid=1, bloqueado em `sys_service_receive` owner=2) nunca processa o request; o PIT esta vivo (`timer: tick=500` sai logo depois). Hipoteses restantes: wake do host perdido no AP (IPI 0x82 vs hlt), `preferred_cpu` do host apontando para CPU que nao re-entra em schedule, ou ipc_send falhando silenciosamente. Proximo passo: trazar `ipc_send`/`kernel_waitable_signal` do lado do cliente e o retorno de `sys_service_receive` no host.
+- [ ] smp4: bring-up dos 3 APs nao fecha (`smp: online cpus=4/4` ausente) — o boot ainda assim avanca (degradado para os CPUs que online-aram) e chega no desktop (`desktop.app: launch startx`, tick=918). Provavel corrida no caminho INIT/SIPI com multiplos APs em paralelo (g_smp_boot_lock segura o BSP, mas `smp_wait_for_cpu` + retry resetam `g_smp_started_cpus = i` por indice). Precisa de trace do trampoline stage por AP.
 
 ## Prioridade 5: audio fechamento hardware
 
