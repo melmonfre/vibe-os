@@ -9,16 +9,24 @@ Tudo que ja foi entregue, validado ou virou historico deve ficar nos documentos 
 
 ## Status Atual
 
+> REVISADO 2026-10-12 contra evidencia verificada (auditoria de codigo +
+> matrizes de validacao + README). As linhas abaixo marcadas "parcial/aberta"
+> estavam CONCLUIDA sem evidencia no repo (matriz de audio 0/20 preenchida,
+> e1000/rtl8139 sem callers, Wi-Fi placeholder, SMP com corrupcao de memoria
+> aberta). Fonte de prioridades agora: docs/guidelines/COMPLETION_ACTION_PLAN.md.
+
 | Area | Status |
 | --- | --- |
-| Rede real utilizavel | [x] CONCLUIDA |
-| Audio real em hardware | [x] CONCLUIDA |
-| Video real em hardware | [x] CONCLUIDA |
+| Rede em QEMU (virtio, DHCP/ARP/ICMP/UDP/TCP client) | [x] FUNCIONAL em QEMU user-net |
+| Rede real utilizavel (NICs adicionais, WiFi, robustez) | [ ] PARCIAL/ABERTA — ver COMPLETION_ACTION_PLAN P3 |
+| Audio em QEMU (HDA/AC97/pcspkr playback) | [x] VALIDADO via validate-audio-* |
+| Audio real em hardware | [ ] ABERTA — AUDIO_HARDWARE_VALIDATION_MATRIX.md 0/20 linhas preenchidas |
+| Video real em hardware | [ ] ABERTA — backends i915/radeon/nouveau sem evidencia de silicio real no repo |
 | Migracao microkernel (Fases F/G) | [x] CONCLUIDA |
 | USB mass-storage runtime | [x] CONCLUIDA |
 | Runtime / POSIX / Compat | [x] CONCLUIDO |
 | Validacao modular final | [x] CONCLUIDA (health telemetry, VT console, boot chain validation script) |
-| SMP robusto em 2+ CPUs | [x] CONCLUIDO |
+| SMP robusto em 2+ CPUs | [ ] ABERTA — bring-up OK; scheduler por-CPU gated e com corrupcao de memoria em investigacao (COMPLETION_ACTION_PLAN P4) |
 
 ## Pendencias Reais
 
@@ -39,7 +47,7 @@ Falta fechar:
 - aliases e paths finais realmente consolidados
 - matriz de assets de DOOM / Craft completa
 
-### 8. SMP e robustez em `2+ CPUs` — CONCLUIDO
+### 8. SMP e robustez em `2+ CPUs` — ABERTA (ver COMPLETION_ACTION_PLAN P4)
 
 - IOAPIC fully wired para todos os 16 IRQs ISA
 - MTRR write-combining para framebuffer

@@ -111,12 +111,12 @@ Hoje a verdade dura e simples e esta: a rede segue em MVP sintético de control-
 - [X] `netmgrd reconcile` e `connect em0` já procuram automaticamente `/var/db/dhcpleased/em0`
 - [X] port honesto dos drivers necessarios presentes em `compat`
 - [X] existe `netmgrd` dedicado
-- [X] ethernet com DHCP funcional via reaproveitamento de `compat`
-- [X] DNS real via base `unwind` esta funcional
-- [X] Wi-Fi real com scan/associacao/WPA esta funcional
-- [X] socket ABI precisa evoluir para cobrir casos alem do loopback MVP
-- [X] comandos ipconfig, ip addr, curl, wget, ping devem funcionar (reaproveitar o que for util em compat)
-- [X] usar dns padrão 1.1.1.1 com fallback pra 8.8.8.8 e resolver nomes de dominio
+- [X] ethernet com DHCP funcional — via the in-tree kernel stack (network.c virtio + DHCP client), NOT via compat reuse
+- [ ] DNS: the live resolver is a minimal in-tree A-record client (compat/src/posix/netdb.c) with a HARDCODED server 10.0.2.3; the BSD `unwind` base is not integrated. Feed DHCP-provided DNS instead (COMPLETION_ACTION_PLAN P3)
+- [ ] Wi-Fi: NOT functional. Scan results are hardcoded SSIDs (kernel/microkernel/network.c) and "connect" fabricates an IP; no 802.11 auth/assoc frames, no CCMP data path. wifi_wpa2.c crypto is real but orphaned. See COMPLETION_ACTION_PLAN P3
+- [ ] socket ABI still needs work beyond the MVP (backlog=1, 8 sockets, no IPv6)
+- [ ] ifconfig/route/netstat print snapshots (no real route table); curl supports file:// only; wget does not exist; ping works via ICMP client but `ping localhost` is fabricated. Track in COMPLETION_ACTION_PLAN P3
+- [ ] DNS default/fallback servers configurable (currently hardcoded 10.0.2.3)
 
 ### Navegador
 
@@ -1036,7 +1036,7 @@ O projeto so deve ser considerado concluido quando:
 - [X] o applet de som listar entradas/saidas e controlar volume
 - [X] existir `soundctl`
 - [X] existir `netmgrd` e `netctl`
-- [X] ethernet com DHCP e DNS estiver funcional
+- [~] ethernet com DHCP funcional; DNS funciona mas com servidor hardcoded 10.0.2.3 (ver P3)
 - [X] o applet de rede mostrar estado real da conexao
 - [X] Wi-Fi puder listar redes, pedir senha e conectar
 - [ ] o `vibe-browser` estiver integrado ao desktop como navegador de internet

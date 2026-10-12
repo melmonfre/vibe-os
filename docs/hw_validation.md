@@ -16,8 +16,8 @@
 | Audio     | AC97 (`-audiodev pa,id=pa -device ac97,audiodev=pa`) | Validated |
 | Audio     | HDA (`-audiodev pa,id=pa -device hda-output,audiodev=pa`) | Validated |
 | Network   | VirtIO (`-netdev user,id=net0 -device virtio-net,netdev=net0`) | Validated |
-| Network   | e1000 (`-netdev user,id=net0 -device e1000,netdev=net0`) | Validated |
-| Network   | RTL8139 (`-netdev user,id=net0 -device rtl8139,netdev=net0`) | Validated |
+| Network   | e1000 (`-netdev user,id=net0 -device e1000,netdev=net0`) | NOT validated - driver exists but has zero callers; never wired into the live network stack (COMPLETION_ACTION_PLAN P3) |
+| Network   | RTL8139 (`-netdev user,id=net0 -device rtl8139,netdev=net0`) | NOT validated - driver exists but has zero callers; never wired into the live network stack (COMPLETION_ACTION_PLAN P3) |
 | USB       | UHCI (`-device piix3-usb-uhci`) | Validated |
 | USB       | OHCI (`-device pci-ohci`)  | Validated |
 | USB       | XHCI (`-device qemu-xhci`)  | Functional (control) |
@@ -48,11 +48,18 @@ python3 tools/validate-boot-chain.py --image build/boot.img --report /tmp/boot-r
 - XHCI USB 3.0: control transfers work, mass-storage BOT is functional but slower than UHCI/OHCI
 - Cirrus VGA: detection-only, no native modeset
 - QXL: detection-only (no native DRM backend yet)
-- SMP with >2 CPUs: functional but IOAPIC routing may degrade under heavy storage+network+audio load
-- RTL8139: RX checksum offload not implemented; works in basic passthrough
-- e1000: 82540EM emulation only; 82574L not tested
+- SMP: AP bring-up (INIT/SIPI) works, but the per-CPU scheduler is gated behind BOOTINFO_FLAG_EXPERIMENTAL_SMP (stage2 key M) and has an open SMP memory-corruption issue (COMPLETION_ACTION_PLAN P4); default boot is BSP-only
+- RTL8139 / e1000: drivers are dead code today (no init call sites, no stack attachment); the only live datapath is the private virtio-net in kernel/microkernel/network.c
 
 ## Real Hardware Profiles
+
+> STATUS EVIDENCE (2026-10-12 audit): the rows below are UNVERIFIED in this repository.
+> No serial logs, validation reports or filled matrix rows back them, and README.md
+> still lists real-hardware audio/video/SMP/network as open. Treat every
+> "Validated" here as a claim that needs re-proof: attach the boot serial log /
+> validate-* report per row (AUDIO_HARDWARE_VALIDATION_MATRIX.md pattern)
+> before relying on it. Wi-Fi is worse than unverified: scan/connect are UI
+> placeholders with hardcoded SSIDs and no 802.11 data plane at all.
 
 ### x86 Laptop (Intel)
 
@@ -64,7 +71,7 @@ python3 tools/validate-boot-chain.py --image build/boot.img --report /tmp/boot-r
 | Video     | Intel HD 4000 (i915) | Validated (native modeset) |
 | Audio     | HDA Realtek ALC269 | Validated |
 | Network   | Intel 82579LM (e1000) | Validated |
-| Network   | Intel Centrino 7260 (Wi-Fi) | Functional (WPA2) |
+| Network   | Intel Centrino 7260 (Wi-Fi) | NOT functional - scan list is hardcoded and "connect" fabricates an IP; no 802.11 auth/assoc/CCMP path exists (COMPLETION_ACTION_PLAN P3) |
 | USB       | EHCI + XHCI | Validated (keyboard, storage) |
 | Input     | PS/2 Synaptics touchpad | Validated |
 
@@ -86,4 +93,4 @@ python3 tools/validate-boot-chain.py --image build/boot.img --report /tmp/boot-r
 - Suspend/resume: not implemented
 - Hotplug (USB, PCIe): not implemented; all devices must be present at boot
 - Audio capture: not validated on real hardware
-- Wi-Fi: Intel 7260 only; no broadcom/atheros/realtek wireless support
+- Wi-Fi: no real wireless support at all (placeholder UI only); see COMPLETION_ACTION_PLAN P3
