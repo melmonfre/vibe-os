@@ -94,7 +94,7 @@ Camada 4 — ferramentas/apps:
 
 ### P4 open (evidencia 2026-10-11)
 
-- [ ] smp2/smp4 com flag ON dao boot ate `init: entered builtin entry` + `smp: scheduler enabled cpus=N` mas param em `fs: sys_storage_load begin` com CPUs 0/2/3 em `spinlock_lock` e CPU1 rodando; hipoteses: wakeup do storage worker perdido no AP (IPI broadcast so no caminho smp_wake_sleeping_cpus) ou tick LVTT do AP parado apos arming; proximo passo: trazar contagem do LVTT current no AP + chamar smp_wake_sleeping_cpus em toda transicao READY
+- [ ] smp2/smp4 com flag ON dao boot ate `init: entered builtin entry` + `smp: scheduler enabled cpus=N` mas param em `fs: sys_storage_load begin`. Evidencia gdb (pos-fix do hlt): CPU0 dentro de `find_next` segurando o lock, CPU1 em `spinlock_lock` — os dois CPUs estao vivos e ping-pongando o lock global; o storage worker (pid=2) nunca e despachado. Proximo passo: trazar a transicao READY do worker no caminho `mk_message`/storage request (provavelmente falta `smp_wake_sleeping_cpus()` em uma das rotas de wake, ou o worker esta BLOCKED num evento que so e sinalizado sem state-change)
 
 ## Prioridade 5: audio fechamento hardware
 
