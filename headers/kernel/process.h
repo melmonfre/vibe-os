@@ -216,6 +216,7 @@ int process_entry_supports_user_mode(uintptr_t entry);
 uintptr_t process_user_stack_top_for_entry(uintptr_t entry);
 
 extern int g_next_pid;
+int process_alloc_pid(void);
 
 static inline int process_frame_is_user_mode(const kernel_trap_frame_t *frame) {
     return frame != NULL && (frame->cs & 0x3u) == 0x3u;

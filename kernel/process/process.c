@@ -38,6 +38,22 @@ static uint32_t process_normalize_stack_size(uint32_t stack_size) {
 
 int g_next_pid = 1;
 
+/*
+ * SMP-safe pid allocation. Plain g_next_pid++ is a non-atomic RMW: two CPUs
+ * creating tasks concurrently could claim the same pid, and the whole
+ * pid-keyed infrastructure (ipc queues via owner_pid, launch records,
+ * scheduler_find_task_by_pid) would then bind to the wrong task.
+ * lock xaddl is i486+; the kernel is built i586.
+ */
+int process_alloc_pid(void) {
+    int pid;
+    __asm__ volatile("lock xaddl %0, %1"
+                     : "=&r"(pid), "+m"(g_next_pid)
+                     :
+                     : "memory", "cc");
+    return pid;
+}
+
 static int process_entry_in_range(uintptr_t entry, uintptr_t base, uint32_t size) {
     return entry >= base && entry < (base + (uintptr_t)size);
 }
@@ -313,7 +329,7 @@ process_t *process_create_with_stack(void (*entry)(void),
     }
     memset(p, 0, sizeof(*p));
 
-    p->pid = g_next_pid++;
+    p->pid = process_alloc_pid();
     p->pgid = p->pid;
     p->sid = p->pid;
     p->current_cpu = -1;

@@ -2051,7 +2051,7 @@ static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
         return (uint32_t)-1;
     }
 
-    child->pid = g_next_pid++;
+    child->pid = process_alloc_pid();
     child->current_cpu = -1;
     child->preferred_cpu = -1;
     child->last_cpu = -1;
@@ -3341,7 +3341,7 @@ static uint32_t sys_thread_create(uint32_t entry_ptr, uint32_t arg_ptr, uint32_t
         return (uint32_t)-1;
     }
     thread->stack_size = normalized_stack;
-    thread->pid = g_next_pid++;
+    thread->pid = process_alloc_pid();
     thread->current_cpu = -1;
     thread->preferred_cpu = -1;
     thread->last_cpu = -1;
