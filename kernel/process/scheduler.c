@@ -654,18 +654,29 @@ static int scheduler_node_sane(process_t *node) {
 
 static void scheduler_list_diag(const char *what, process_t *node, process_t *prev) {
     uint32_t cpu;
+    const uint32_t *hdr;
 
     if (g_sched_list_diag_budget == 0u) {
         return;
     }
     g_sched_list_diag_budget--;
     cpu = kernel_cpu_index();
-    kernel_debug_printf("sched-list: %s cpu=%u node=0x%x pid=%d kind=%d state=%d next=0x%x prev=0x%x\n",
+    /*
+     * Heap-header forensics: the 16 bytes before a payload carry
+     * {size, magic, next, alloc_pc}. If magic != 'ALLO' the "node" is not
+     * a live heap block at all (stale/wild pointer reached through a
+     * corrupt link). alloc_pc names the kernel_malloc site that owns the
+     * block, which resolves the culprit without fixed-address watchpoints.
+     */
+    hdr = (const uint32_t *)((const uint8_t *)node - 16u);
+    kernel_debug_printf("sched-list: %s cpu=%u node=0x%x hdr{size=0x%x magic=0x%x allocpc=0x%x} pid=%d kind=%d state=%d next=0x%x prev=0x%x prevpid=%d\n",
                         what, cpu,
                         (unsigned int)(uintptr_t)node,
+                        hdr[0], hdr[1], hdr[3],
                         node->pid, (int)node->kind, (int)node->state,
                         (unsigned int)(uintptr_t)node->next,
-                        (unsigned int)(uintptr_t)(prev != NULL ? prev : 0));
+                        (unsigned int)(uintptr_t)(prev != NULL ? prev : 0),
+                        prev != NULL ? prev->pid : -9999);
 }
 
 void scheduler_add_task(process_t *proc) {
@@ -746,9 +757,15 @@ static process_t *find_next(uint32_t cpu_index, process_t *current) {
     task = start;
     {
         uint32_t steps = 0u;
+        process_t *prev_task = NULL;
         do {
             if (!scheduler_node_sane(task)) {
-                scheduler_list_diag("BAD-NODE-IN-FIND", task, NULL);
+                /*
+                 * prev_task names the corrupted link's OWNER: if prev is
+                 * NULL the start pointer itself (g_cursor / g_head) is
+                 * stale; otherwise prev->next is the poisoned pointer.
+                 */
+                scheduler_list_diag("BAD-NODE-IN-FIND", task, prev_task);
                 break;
             }
             if (task->state == PROCESS_READY && task->current_cpu < 0) {
@@ -763,9 +780,10 @@ static process_t *find_next(uint32_t cpu_index, process_t *current) {
                 }
             }
 
+            prev_task = task;
             task = task->next != NULL ? task->next : g_head;
             if (++steps > SCHED_LIST_WALK_CAP) {
-                scheduler_list_diag("LIST-CYCLE-IN-FIND", task, NULL);
+                scheduler_list_diag("LIST-CYCLE-IN-FIND", task, prev_task);
                 break;
             }
         } while (task != NULL && task != start);

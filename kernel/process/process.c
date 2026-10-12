@@ -46,9 +46,17 @@ int g_next_pid = 1;
  * lock xaddl is i486+; the kernel is built i586.
  */
 int process_alloc_pid(void) {
-    int pid;
+    /*
+     * Fetch-and-add 1: the register MUST enter with the increment value.
+     * The previous form declared it output-only ("=&r"), so xaddl added
+     * whatever stale value the register happened to hold to g_next_pid
+     * (observed under SMP: pids advanced by 1628 per task, then by heap
+     * addresses — the root cause of the "phantom task node" corruption,
+     * where a node's pid equaled its own block address).
+     */
+    int pid = 1;
     __asm__ volatile("lock xaddl %0, %1"
-                     : "=&r"(pid), "+m"(g_next_pid)
+                     : "+r"(pid), "+m"(g_next_pid)
                      :
                      : "memory", "cc");
     return pid;

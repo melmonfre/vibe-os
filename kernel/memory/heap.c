@@ -97,6 +97,14 @@ void *kernel_malloc(size_t size) {
     struct free_block *prev, *curr, *best_prev, *best;
     size_t best_size, needed, align_sz;
     uint32_t flags;
+    /*
+     * Allocation-site shadow (COMPLETION_ACTION_PLAN P4): the caller PC is
+     * parked in the header's reserved word. The scheduler BAD-NODE trace
+     * dumps it, so a corrupt task-list node names the allocation that
+     * owns the block without relying on fixed-address watchpoints (heap
+     * addresses shift between runs even under -icount).
+     */
+    uintptr_t call_pc = (uintptr_t)__builtin_return_address(0);
 
     if (size == 0u)
         return NULL;
@@ -163,6 +171,7 @@ void *kernel_malloc(size_t size) {
 
     best->magic = HEAP_MAGIC_ALLOC;
     best->next = NULL;
+    best->reserved = call_pc;
     g_heap_used += best->size;
     spinlock_unlock_irqrestore(&g_heap_lock, flags);
     return (void *)((uint8_t *)best + HEAP_HEADER_SIZE);
