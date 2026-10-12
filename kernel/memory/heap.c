@@ -365,3 +365,39 @@ size_t kernel_heap_free(void) {
 int kernel_heap_is_initialized(void) {
     return g_heap_initialized != 0u;
 }
+
+/*
+ * Membership probe (COMPLETION_ACTION_PLAN P4). Returns 1 when ptr is the
+ * payload of a LIVE allocated block: inside the heap window, 8-aligned, and
+ * its 16-byte header carries HEAP_MAGIC_ALLOC with a sane size. Used by the
+ * scheduler walk to reject wild pointers (kernel TEXT addresses, interior
+ * pointers) BEFORE following them as task nodes. The lock is taken only to
+ * read the header consistently against a concurrent free on another CPU.
+ */
+int kernel_heap_is_block(const void *ptr) {
+    const struct free_block *block;
+    uintptr_t addr = (uintptr_t)ptr;
+    uint32_t flags;
+    int ok = 0;
+
+    if (g_heap_initialized == 0u || ptr == 0) {
+        return 0;
+    }
+    if (addr < g_heap_start + HEAP_HEADER_SIZE || addr >= g_heap_end) {
+        return 0;
+    }
+    if ((addr & (HEAP_ALIGN - 1u)) != 0u) {
+        return 0;
+    }
+
+    block = (const struct free_block *)(addr - HEAP_HEADER_SIZE);
+    flags = spinlock_lock_irqsave(&g_heap_lock);
+    if (block->magic == HEAP_MAGIC_ALLOC &&
+        block->size >= HEAP_MIN_BLOCK &&
+        (block->size & (HEAP_ALIGN - 1u)) == 0u &&
+        addr + block->size <= g_heap_end + HEAP_HEADER_SIZE) {
+        ok = 1;
+    }
+    spinlock_unlock_irqrestore(&g_heap_lock, flags);
+    return ok;
+}

@@ -12,10 +12,15 @@
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/drivers/video/video.h>
 #include <kernel/event.h>
+#include <kernel/memory/heap.h>
 #include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/service.h>
 
 /* simple singly‑linked list of processes */
+#define SCHED_LIST_DIAG_BUDGET 6u
+#define SCHED_LIST_WALK_CAP 512u
+static int scheduler_node_sane(process_t *node);
+static void scheduler_list_diag(const char *what, process_t *node, process_t *prev);
 static process_t *g_head = NULL;
 static process_t *g_current[32];
 static process_t *g_cursor[32];
@@ -191,8 +196,16 @@ static uint32_t scheduler_online_cpu_count(void) {
 static uint32_t scheduler_cpu_load(uint32_t cpu_index) {
     process_t *task;
     uint32_t load = 0u;
+    uint32_t steps = 0u;
 
     for (task = g_head; task != NULL; task = task->next) {
+        if (!scheduler_node_sane(task)) {
+            scheduler_list_diag("BAD-NODE-IN-LOAD", task, NULL);
+            break;
+        }
+        if (++steps > SCHED_LIST_WALK_CAP) {
+            break;
+        }
         if (task->state == PROCESS_TERMINATED) {
             continue;
         }
@@ -223,8 +236,16 @@ static int scheduler_pick_target_cpu(void) {
 
 static process_t *scheduler_first_runnable(void) {
     process_t *task;
+    uint32_t steps = 0u;
 
     for (task = g_head; task != NULL; task = task->next) {
+        if (!scheduler_node_sane(task)) {
+            scheduler_list_diag("BAD-NODE-IN-FIRST", task, NULL);
+            break;
+        }
+        if (++steps > SCHED_LIST_WALK_CAP) {
+            break;
+        }
         if (task->state == PROCESS_READY && task->current_cpu < 0) {
             return task;
         }
@@ -642,11 +663,19 @@ void scheduler_publish_lifecycle_event(uint32_t event_type, const process_t *tas
  * forever by a cyclic walk" into a named, budgeted serial trace that pinpoints
  * the offending node and its predecessor.
  */
-#define SCHED_LIST_DIAG_BUDGET 6u
-#define SCHED_LIST_WALK_CAP 512u
 static volatile uint32_t g_sched_list_diag_budget = SCHED_LIST_DIAG_BUDGET;
 
 static int scheduler_node_sane(process_t *node) {
+    /*
+     * Membership first: every task payload comes from kernel_malloc
+     * (process_create / elf_load / fork / thread), so a node that is not
+     * a live heap block is a WILD pointer (kernel TEXT, interior pointer,
+     * recycled block) — the refined SMP signature. Field-shape checks
+     * alone accepted these because a wild pointer can carry any bytes.
+     */
+    if (!kernel_heap_is_block(node)) {
+        return 0;
+    }
     return node->pid > 0 &&
            (int)node->kind <= (int)PROCESS_KIND_KERNEL_TASK &&
            (int)node->state <= (int)PROCESS_TERMINATED;
@@ -669,14 +698,45 @@ static void scheduler_list_diag(const char *what, process_t *node, process_t *pr
      * block, which resolves the culprit without fixed-address watchpoints.
      */
     hdr = (const uint32_t *)((const uint8_t *)node - 16u);
-    kernel_debug_printf("sched-list: %s cpu=%u node=0x%x hdr{size=0x%x magic=0x%x allocpc=0x%x} pid=%d kind=%d state=%d next=0x%x prev=0x%x prevpid=%d\n",
-                        what, cpu,
-                        (unsigned int)(uintptr_t)node,
-                        hdr[0], hdr[1], hdr[3],
-                        node->pid, (int)node->kind, (int)node->state,
-                        (unsigned int)(uintptr_t)node->next,
-                        (unsigned int)(uintptr_t)(prev != NULL ? prev : 0),
-                        prev != NULL ? prev->pid : -9999);
+    /*
+     * node may be a WILD pointer (that is the whole point of the trace):
+     * only dereference it when it is a live heap block, else dump the raw
+     * header window so the trace cannot crash the kernel it diagnoses.
+     * When a prev owner exists, dump ITS allocpc too: the poison lives in
+     * prev->next, so naming prev's allocation site identifies which task
+     * carried the corrupted link.
+     */
+    if (kernel_heap_is_block(node)) {
+        kernel_debug_printf("sched-list: %s cpu=%u node=0x%x hdr{size=0x%x magic=0x%x allocpc=0x%x} pid=%d kind=%d state=%d next=0x%x prev=0x%x prevpid=%d\n",
+                            what, cpu,
+                            (unsigned int)(uintptr_t)node,
+                            hdr[0], hdr[1], hdr[3],
+                            node->pid, (int)node->kind, (int)node->state,
+                            (unsigned int)(uintptr_t)node->next,
+                            (unsigned int)(uintptr_t)(prev != NULL ? prev : 0),
+                            prev != NULL ? prev->pid : -9999);
+    } else {
+        const uint32_t *phdr = (prev != NULL &&
+                                kernel_heap_is_block(prev))
+                               ? (const uint32_t *)((const uint8_t *)prev - 16u)
+                               : 0;
+        const uint32_t *raw = (const uint32_t *)((const uint8_t *)node - 48u);
+        kernel_debug_printf("sched-list: %s cpu=%u WILD node=0x%x hdr{size=0x%x magic=0x%x allocpc=0x%x} prev=0x%x prevpid=%d prevallocpc=0x%x\n",
+                            what, cpu,
+                            (unsigned int)(uintptr_t)node,
+                            hdr[0], hdr[1], hdr[3],
+                            (unsigned int)(uintptr_t)(prev != NULL ? prev : 0),
+                            prev != NULL ? prev->pid : -9999,
+                            phdr != NULL ? phdr[3] : 0u);
+        /*
+         * Neighbor forensics: the victim header holds non-heap values, the
+         * signature of a FORWARD overflow from the block allocated just
+         * before it. Dump the 32 bytes preceding the header (the neighbor's
+         * payload tail) to identify the overflowing structure.
+         */
+        kernel_debug_printf("sched-list:   prehdr{0x%x 0x%x 0x%x 0x%x}\n",
+                            raw[0], raw[1], raw[2], raw[3]);
+    }
 }
 
 void scheduler_add_task(process_t *proc) {
@@ -712,6 +772,14 @@ void scheduler_add_task(process_t *proc) {
         }
         if (p->next == NULL) {
             p->next = proc;
+        } else {
+            /*
+             * The walk stopped on a corrupt/cyclic node: appending is
+             * impossible without destroying the wild pointer (evidence).
+             * Name the event so the log correlates with "launch returned
+             * a pid whose task never entered the list".
+             */
+            scheduler_list_diag("ADD-ABORTED", p->next, p);
         }
     }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
@@ -743,7 +811,22 @@ static process_t *find_next(uint32_t cpu_index, process_t *current) {
         return NULL;
     }
 
+    /*
+     * Entry sanity: g_head/g_cursor are the only list pointers that do
+     * NOT originate from a task's next field — validate them before the
+     * walk so a wild cursor is repaired (cleared) instead of poisoning
+     * every subsequent dispatch on this CPU.
+     */
+    if (!scheduler_node_sane(g_head)) {
+        scheduler_list_diag("BAD-HEAD", g_head, NULL);
+        return NULL;
+    }
     start = g_cursor[cpu_index];
+    if (start != NULL && !scheduler_node_sane(start)) {
+        scheduler_list_diag("CURSOR-WILD", start, NULL);
+        g_cursor[cpu_index] = NULL;
+        start = NULL;
+    }
     if (start == NULL) {
         start = current != NULL && current->next != NULL ? current->next : g_head;
     }
@@ -994,6 +1077,13 @@ process_t *scheduler_find_task_by_pid(int pid) {
 
     flags = spinlock_lock_irqsave(&g_scheduler_lock);
     for (task = g_head; task != NULL; task = task->next) {
+        /* Guarded: the returned pointer is dereferenced by waiters
+         * (e.g. sys_thread_join on thread_join_waitable) — a wild match
+         * would hand out a non-task pointer to kernel code. */
+        if (!scheduler_node_sane(task)) {
+            scheduler_list_diag("BAD-NODE-IN-FINDPID", task, NULL);
+            break;
+        }
         if (task->pid == pid && task->state != PROCESS_TERMINATED) {
             spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
             return task;
@@ -1227,12 +1317,30 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
     uint8_t woke_inline[16];
     uint32_t woke_count = 0u;
     uint32_t wake_sleepers = 0u;
+    uint32_t steps = 0u;
     uint32_t flags;
 
     flags = spinlock_lock_irqsave(&g_scheduler_lock);
     for (task = g_head; task != NULL; task = task->next) {
         int inline_cpu;
         int inline_wake;
+
+        /*
+         * Guarded walk: this hook runs every tick and DEREFERENCES
+         * task->wait_channel to detach waiters. Following a wild pointer
+         * here would corrupt unrelated structures (the timeout hook was
+         * the first walker to observe the SMP phantom-node corruption in
+         * earlier rounds). Cap steps as well, since a cycle would hold
+         * the scheduler lock forever.
+         */
+        if (!scheduler_node_sane(task)) {
+            scheduler_list_diag("BAD-NODE-IN-TIMEOUT", task, NULL);
+            break;
+        }
+        if (++steps > SCHED_LIST_WALK_CAP) {
+            scheduler_list_diag("LIST-CYCLE-IN-TIMEOUT", task, NULL);
+            break;
+        }
 
         if (task->state != PROCESS_BLOCKED || task->wait_channel == 0 || task->wait_deadline == 0u) {
             continue;
@@ -1313,6 +1421,12 @@ uint32_t scheduler_snapshot(struct task_snapshot_entry *entries,
     flags = spinlock_lock_irqsave(&g_scheduler_lock);
     for (task = g_head; task != NULL; task = task->next) {
         uint32_t runtime_ticks = task->runtime_ticks;
+
+        /* Guarded: this summary walk dereferences task->wait_channel. */
+        if (!scheduler_node_sane(task)) {
+            scheduler_list_diag("BAD-NODE-IN-SUMMARY", task, NULL);
+            break;
+        }
 
         if (task->state == PROCESS_TERMINATED) {
             continue;

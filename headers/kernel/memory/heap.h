@@ -14,6 +14,10 @@ uintptr_t kernel_heap_end(void);
 size_t kernel_heap_used(void);
 size_t kernel_heap_free(void);
 int kernel_heap_is_initialized(void);
+/* Membership probe: 1 iff ptr is the payload of a LIVE allocated block
+ * (inside the heap window, 8-aligned, header magic ALLOC with sane size).
+ * Used by the scheduler walk to reject wild pointers before following them. */
+int kernel_heap_is_block(const void *ptr);
 
 /* public-facing API (aliases) */
 static inline void memory_init(uintptr_t start, size_t size) {
