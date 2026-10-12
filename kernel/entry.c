@@ -583,6 +583,15 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
         heap_start = 0x00500000u;
         heap_end = 0x00900000u;
     }
+    /*
+     * The heap's physical pages MUST be reserved in the page allocator.
+     * They were not: physmem happily handed the same frames to app arena
+     * pages / DMA-ish buffers under different VAs, so writes through those
+     * aliases silently destroyed kernel heap contents (the "phantom"
+     * task-list corruption: readers saw garbage at heap VAs that NO
+     * hardware watchpoint on those VAs ever caught being written).
+     */
+    physmem_reserve_range(heap_start, (size_t)(heap_end - heap_start));
     kernel_mm_init(heap_start, heap_end - heap_start);
     kernel_early_post(0xA0); kernel_video_refresh_backend(); kernel_early_post(0xA1);
     mk_transfer_init();
