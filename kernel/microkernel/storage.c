@@ -107,12 +107,17 @@ static int mk_storage_local_handler(const struct mk_message *request,
             payload = (const struct mk_storage_sectors_request *)request->payload;
             byte_count = payload->sector_count * KERNEL_PERSIST_SECTOR_SIZE;
             buffer = mk_transfer_data_write(payload->transfer_id);
-            if (buffer == 0 || mk_transfer_size(payload->transfer_id) < byte_count) {
+            if (buffer == 0) {
+                return -1;
+            }
+            if (mk_transfer_size(payload->transfer_id) < byte_count) {
+                mk_transfer_release(payload->transfer_id);
                 return -1;
             }
             rc = kernel_storage_read_sectors(payload->lba,
                                              buffer,
                                              payload->sector_count);
+            mk_transfer_release(payload->transfer_id);
             return mk_storage_reply_result(reply, rc);
         }
 
@@ -123,10 +128,15 @@ static int mk_storage_local_handler(const struct mk_message *request,
 
             payload = (const struct mk_storage_persist_request *)request->payload;
             buffer = mk_transfer_data_write(payload->transfer_id);
-            if (buffer == 0 || mk_transfer_size(payload->transfer_id) < payload->size) {
+            if (buffer == 0) {
+                return -1;
+            }
+            if (mk_transfer_size(payload->transfer_id) < payload->size) {
+                mk_transfer_release(payload->transfer_id);
                 return -1;
             }
             rc = kernel_storage_load(buffer, payload->size);
+            mk_transfer_release(payload->transfer_id);
             return mk_storage_reply_result(reply, rc);
         }
 
@@ -142,12 +152,17 @@ static int mk_storage_local_handler(const struct mk_message *request,
             payload = (const struct mk_storage_sectors_request *)request->payload;
             byte_count = payload->sector_count * KERNEL_PERSIST_SECTOR_SIZE;
             buffer = (void *)mk_transfer_data_read(payload->transfer_id);
-            if (buffer == 0 || mk_transfer_size(payload->transfer_id) < byte_count) {
+            if (buffer == 0) {
+                return -1;
+            }
+            if (mk_transfer_size(payload->transfer_id) < byte_count) {
+                mk_transfer_release(payload->transfer_id);
                 return -1;
             }
             rc = kernel_storage_write_sectors(payload->lba,
                                               buffer,
                                               payload->sector_count);
+            mk_transfer_release(payload->transfer_id);
             return mk_storage_reply_result(reply, rc);
         }
 
@@ -158,10 +173,15 @@ static int mk_storage_local_handler(const struct mk_message *request,
 
             persist = (const struct mk_storage_persist_request *)request->payload;
             buffer = (void *)mk_transfer_data_read(persist->transfer_id);
-            if (buffer == 0 || mk_transfer_size(persist->transfer_id) < persist->size) {
+            if (buffer == 0) {
+                return -1;
+            }
+            if (mk_transfer_size(persist->transfer_id) < persist->size) {
+                mk_transfer_release(persist->transfer_id);
                 return -1;
             }
             rc = kernel_storage_save(buffer, persist->size);
+            mk_transfer_release(persist->transfer_id);
             return mk_storage_reply_result(reply, rc);
         }
 

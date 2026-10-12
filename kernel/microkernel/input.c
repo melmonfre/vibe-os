@@ -88,10 +88,16 @@ static int mk_input_validate_string_transfer(uint32_t transfer_id,
         return -1;
     }
     text = (char *)mk_transfer_data_read(transfer_id);
-    if (text == 0 || mk_transfer_size(transfer_id) < length + 1u) {
+    if (text == 0) {
+        return -1;
+    }
+    /* data_read pinned the transfer; release on failure, caller owns on success. */
+    if (mk_transfer_size(transfer_id) < length + 1u) {
+        mk_transfer_release(transfer_id);
         return -1;
     }
     if (text[length] != '\0') {
+        mk_transfer_release(transfer_id);
         return -1;
     }
     *text_out = text;
@@ -232,7 +238,11 @@ static int mk_input_local_handler(const struct mk_message *request,
         if (mk_input_validate_string_transfer(payload->transfer_id, payload->name_length, &name) != 0) {
             return -1;
         }
-        return mk_input_reply_result(reply, kernel_keyboard_set_layout(name));
+        {
+            int rc = kernel_keyboard_set_layout(name);
+            mk_transfer_release(payload->transfer_id);
+            return mk_input_reply_result(reply, rc);
+        }
     }
     case MK_MSG_INPUT_GET_LAYOUT: {
         const struct mk_input_transfer_request *payload;
@@ -262,10 +272,15 @@ static int mk_input_local_handler(const struct mk_message *request,
         }
         payload = (const struct mk_input_transfer_request *)request->payload;
         buffer = (char *)mk_transfer_data_write(payload->transfer_id);
-        if (buffer == 0 || mk_transfer_size(payload->transfer_id) < payload->buffer_size) {
+        if (buffer == 0) {
+            return -1;
+        }
+        if (mk_transfer_size(payload->transfer_id) < payload->buffer_size) {
+            mk_transfer_release(payload->transfer_id);
             return -1;
         }
         kernel_keyboard_get_available_layouts(buffer, (int)payload->buffer_size);
+        mk_transfer_release(payload->transfer_id);
         return mk_input_reply_result(reply, 0);
     }
     default:

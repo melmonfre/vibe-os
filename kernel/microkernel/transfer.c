@@ -11,6 +11,19 @@ struct mk_transfer_slot {
     uint32_t shared_permissions;
     uint32_t size;
     void *data;
+    /*
+     * Reference count of raw pointers currently handed out via
+     * mk_transfer_data_read/write. A service handler holds one of those
+     * pointers across an unlocked (possibly slow, e.g. ATA PIO) write. If
+     * the owning client times out its request and destroys the transfer
+     * while that write is in flight on another CPU, freeing the buffer
+     * immediately is a use-after-free that lets the handler scribble on
+     * whatever the allocator hands out next (observed as process-list /
+     * scheduler-global corruption under SMP). While in_use > 0, destroy
+     * only marks the slot dying; the last release performs the free.
+     */
+    uint32_t in_use;
+    uint32_t dying;
 };
 
 static struct mk_transfer_slot g_transfer_slots[MK_TRANSFER_SLOTS];
@@ -132,6 +145,7 @@ const void *mk_transfer_data_read(uint32_t transfer_id) {
     slot = mk_transfer_find_slot_unlocked(transfer_id);
     if (mk_transfer_has_access(slot, mk_transfer_current_pid(), MK_TRANSFER_PERM_READ)) {
         data = slot->data;
+        slot->in_use += 1u;
     }
     spinlock_unlock_irqrestore(&g_transfer_lock, flags);
     return data;
@@ -146,9 +160,34 @@ void *mk_transfer_data_write(uint32_t transfer_id) {
     slot = mk_transfer_find_slot_unlocked(transfer_id);
     if (mk_transfer_has_access(slot, mk_transfer_current_pid(), MK_TRANSFER_PERM_WRITE)) {
         data = slot->data;
+        slot->in_use += 1u;
     }
     spinlock_unlock_irqrestore(&g_transfer_lock, flags);
     return data;
+}
+
+/*
+ * Release one reference taken by mk_transfer_data_read/write. If the slot
+ * was destroyed while this reference was held, the final release performs
+ * the deferred free. Callers MUST release exactly once per successful
+ * data_read/data_write before returning.
+ */
+void mk_transfer_release(uint32_t transfer_id) {
+    struct mk_transfer_slot *slot;
+    uint32_t flags;
+
+    flags = spinlock_lock_irqsave(&g_transfer_lock);
+    slot = mk_transfer_find_slot_unlocked(transfer_id);
+    if (slot != 0 && slot->in_use > 0u) {
+        slot->in_use -= 1u;
+        if (slot->dying != 0u && slot->in_use == 0u) {
+            if (slot->data != 0) {
+                kernel_free(slot->data);
+            }
+            memset(slot, 0, sizeof(*slot));
+        }
+    }
+    spinlock_unlock_irqrestore(&g_transfer_lock, flags);
 }
 
 uint32_t mk_transfer_size(uint32_t transfer_id) {
@@ -220,6 +259,18 @@ int mk_transfer_destroy(uint32_t transfer_id) {
     if (slot == 0 || (current_pid != 0u && current_pid != slot->owner_pid)) {
         spinlock_unlock_irqrestore(&g_transfer_lock, flags);
         return -1;
+    }
+
+    /*
+     * Defer the free while a service handler still holds a raw pointer
+     * (in_use > 0). Mark the slot dying; the last mk_transfer_release does
+     * the actual kernel_free + clear. This closes the client-timeout vs
+     * host-write use-after-free that corrupted the heap under SMP.
+     */
+    if (slot->in_use > 0u) {
+        slot->dying = 1u;
+        spinlock_unlock_irqrestore(&g_transfer_lock, flags);
+        return 0;
     }
 
     if (slot->data != 0) {
