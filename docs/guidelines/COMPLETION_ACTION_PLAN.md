@@ -1,8 +1,8 @@
 # Plano de Acao para Finalizar a Implementacao Completa do VibeOS
 
-last: consolidado pos-merge som-e-net (main 46958b18a); build verde; boot stall com causa localizada; auditoria completa de subsistemas feita
-doing: este documento e o plano ativo unificado
-next: Prioridade 1 (devolver boot ate init) e a porta de entrada de todo o resto
+last: P1 CONCLUIDA (commit b23ac3fc5): boot stall corrigido (stack de boot movida para 0x800000 + cmov/i586 + ioapic pin+2 + EOI de IRQ espoliador); validate-phase6-boot-smoke 6/6 PASS
+doing: P2/P4 parciais (ver checkboxes); open: SMP2/4 stall em 'fs: sys_storage_load' (race de wakeup no AP)
+next: P4 restante (wakeup AP) e P3 camada 1 (NIC abstraction)
 location: docs/guidelines
 state: active
 
@@ -38,19 +38,19 @@ Este plano substitui a leitura solta de `docs/ACTION_PLAN.md` e `docs/FINALIZATI
 
 Causa raiz ja localizada — nao e mais bisect cego:
 
-- [ ] Reproduzir o stall: `make run-headless-debug` serial para em `app arenas mapped` + budget de ticks (8 prints); `make debug` + `gdb build/kernel.elf` `target remote :1234`; `info symbol` nos enderecos de retorno prova `kernel_video_activate_backend` como saltador para dentro de VA de arena
+- [x] Reproduzir o stall: `make run-headless-debug` serial para em `app arenas mapped` + budget de ticks (8 prints); `make debug` + `gdb build/kernel.elf` `target remote :1234`; `info symbol` nos enderecos de retorno prova `kernel_video_activate_backend` como saltador para dentro de VA de arena
   - hipotese primaria (do diagnostico): heap do kernel escolhido por maior range livre de VA **sobrepoe as arenas 0x10000000-0x39000000**; tabela/ops do backend de video ou função ponteiro le de memoria que passou a apontar para fisica da arena; `mtrr: WC size must be power of 2` + `framebuffer wc unavailable` no mesmo ponto de corte pede auditar `mtrr_set_wc` sobre range nao-potencia-2
-- [ ] Decidir a invariante de memoria [!]: ou o heap do kernel exclui explicitamente o intervalo VA das arenas, ou as arenas ganham VA acima do heap — `headers/kernel/bootinfo.h` e `docs/memory_map.md` declaram o contrato; qualquer mudanca de layout e ABI de boot (mantenedora decide)
-- [ ] Consertar `kernel_video_refresh_backend` para nao ativar backend com estado nao mapeado (ou re-ordenar: refresh depois de storage/scheduler)
-- [ ] Devolver o canal debugcon perdido no merge: `kernel_early_post` perdeu `outb 0xE9` (entry.c ~95) — restaurar e documentar codigos de estagio
-- [ ] Transformar morte silenciosa em morte ruidosa: `kernel_panic` e o handler `#UD` kernel-mode devem emitir em serial antes do `hlt`-loop (panic.c, idt.c ~151-183)
-- [ ] `tools/validate_phase6.py` cobra marcadores mortos (`storage: using ata backend` nao existe mais no kernel); atualizar para os reais (`[step] storage: probing ata`, `ata: start=`, `memory: done`)
-- [ ] Prova de saida: `make validate-phase6-boot-smoke` 100% verde + serial ate `init: entered builtin entry` e `userland.app: shell start` em TCG
+- [x] Invariante resolvida sem mudar ABI: ou o heap do kernel exclui explicitamente o intervalo VA das arenas, ou as arenas ganham VA acima do heap — `headers/kernel/bootinfo.h` e `docs/memory_map.md` declaram o contrato; qualquer mudanca de layout e ABI de boot (mantenedora decide)
+- [x] `kernel_video_refresh_backend` para nao ativar backend com estado nao mapeado (ou re-ordenar: refresh depois de storage/scheduler)
+- [x] Canal debugcon devolvido perdido no merge: `kernel_early_post` perdeu `outb 0xE9` (entry.c ~95) — restaurar e documentar codigos de estagio
+- [x] Morte silenciosa -> ruidosa em morte ruidosa: `kernel_panic` e o handler `#UD` kernel-mode devem emitir em serial antes do `hlt`-loop (panic.c, idt.c ~151-183)
+- [x] `tools/validate_phase6.py` atualizado (`storage: using ata backend` nao existe mais no kernel); atualizar para os reais (`[step] storage: probing ata`, `ata: start=`, `memory: done`)
+- [x] Prova: `make validate-phase6-boot-smoke` 6/6 PASS (2026-10-11, TCG) + serial ate `init: entered builtin entry` e `userland.app: shell start` em TCG
 
 ## Prioridade 2: fechamento honesto do storage
 
-- [ ] Casar os dois drivers HDA/ata no mesmo contrato: `kernel/drivers/audio/hda.c` (paralelo morto, zero callers) — remover ou integrar; `kernel/drivers/network/virtio_net.c` duplica a virtio privada de network.c — decidir dono
-- [ ] `storage: ata OK` hoje so vai para a tela (storage.c ~21) — logar tambem em serial
+- [x] `kernel/drivers/audio/hda.c` removido (paralelo morto, zero callers). `kernel/drivers/network/virtio_net.c` ainda duplica a virtio privada de network.c — decisao adiada para P3 (NIC abstraction)
+- [x] `storage: ata OK`/`ahci OK`/`nvme OK`/`none` espelhados no serial (storage.c)
 - [ ] Validar `make legacy-data-img` e persistencia no boot real (storage smoke test do init, que hoje nunca roda)
 
 ## Prioridade 3: rede real completa
@@ -84,13 +84,17 @@ Camada 4 — ferramentas/apps:
 ## Prioridade 4: SMP de verdade
 
 - [ ] Chamar `smp_scheduler_enable()` depois do bring-up dos APs (kernel/smp.c:464 — hoje zero callers; APs ficam em `sti; hlt` para sempre)
-- [ ] Timer por CPU: LAPIC timer no AP e no BSP, ou IPI-driven quantum; hoje so o BSP ve tick
-- [ ] Handler de IPI de reschedule (smp.c:484 hoje so faz EOI)
+- [x] LAPIC timer por-CPU no AP (calibrado contra PIT, vetor 0x83, stub smp_timer_stub); AP dorme em hlt e preempcao vem do tick
+- [ ] Handler de IPI de reschedule (smp.c:484 so faz EOI; hlt+tick cobre, mas reschedule imediato ainda nao)
 - [ ] IOAPIC: rotear IRQs por afinidade em vez de tudo no BSP (ioapic.c:526)
 - [ ] Respeitar o gate existente: `BOOTINFO_FLAG_EXPERIMENTAL_SMP` existe e e toggle no stage2, mas **nenhum codigo do kernel o le** — implementar a leitura ou atualizar AGENTS.md/smp.md para a realidade [!]
-- [ ] Consertar `tools/validate_smp.py` (cobra strings que o kernel nao imprime); rodar `-smp 2` e `-smp 4` verdes em QEMU
+- [x] `tools/validate_smp.py` reescrito (marcadores reais, espera todos, timeout configuravel). fallback-no-toggle PASS; smp2/smp4: bring-up markers PASS, mas stall em `fs: sys_storage_load` (race de wakeup no AP — ver P4 open abaixo)
 - [ ] Retornar `QEMU_RUN_SMP` default para 2 (Makefile:94, item aberto do FINALIZATION) e provar `make run` responsivo em 2 CPUs
 - [ ] Hardware real: documento de campanha T61/T400 com trampoline/SIPI rastreados (sem isso, README segue honesto em "SMP em estabilizacao")
+
+### P4 open (evidencia 2026-10-11)
+
+- [ ] smp2/smp4 com flag ON dao boot ate `init: entered builtin entry` + `smp: scheduler enabled cpus=N` mas param em `fs: sys_storage_load begin` com CPUs 0/2/3 em `spinlock_lock` e CPU1 rodando; hipoteses: wakeup do storage worker perdido no AP (IPI broadcast so no caminho smp_wake_sleeping_cpus) ou tick LVTT do AP parado apos arming; proximo passo: trazar contagem do LVTT current no AP + chamar smp_wake_sleeping_cpus em toda transicao READY
 
 ## Prioridade 5: audio fechamento hardware
 
