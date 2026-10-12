@@ -1,6 +1,8 @@
 #include <kernel/lock.h>
 #include <kernel/interrupt.h>
 #include <kernel/kernel.h>
+#include <kernel/cpu/cpu.h>
+#include <kernel/drivers/debug/debug.h>
 #include <stdint.h>
 
 /* Deadlock budget: generous enough to never fire under QEMU TCG, but an
@@ -34,6 +36,9 @@ void spinlock_lock(spinlock_t *lock) {
             __asm__ volatile("pause");
             spins++;
             if (spins >= SPINLOCK_STUCK_LIMIT) {
+                kernel_debug_printf("spinlock: stuck lock=0x%x cpu=%d\n",
+                                    (unsigned int)(uintptr_t)lock,
+                                    (int)kernel_cpu_index());
                 kernel_panic("spinlock stuck (deadlock?)");
             }
         }

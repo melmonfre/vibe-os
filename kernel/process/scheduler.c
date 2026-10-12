@@ -992,6 +992,19 @@ int scheduler_block_current_ex(const void *wait_channel,
         return -1;
     }
 
+    if (current->wait_result == TASK_WAIT_RESULT_SIGNALED) {
+        /*
+         * A waitable signal landed between the waiter enqueuing itself on
+         * the waitable and this block transition (scheduler_complete_wait
+         * kept the task RUNNING via the inline-wake path). Blocking now
+         * would swallow the wake: the request stays queued forever (seen
+         * on SMP as the storage host pid=1 BLOCKED with its queue full).
+         * Abort the block; the wait loop consumes the pending signal.
+         */
+        spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+        return -1;
+    }
+
     current->state = PROCESS_BLOCKED;
     current->wait_channel = wait_channel;
     current->wait_deadline = wait_deadline;
@@ -1017,6 +1030,14 @@ int scheduler_block_current_ex(const void *wait_channel,
 }
 
 int scheduler_block_current(const void *wait_channel) {
+    process_t *current = scheduler_current();
+
+    /* Legacy block paths do not run the waitable loop's clear; drop a
+     * stale SIGNALED so the signal-race abort in _ex only fires for a
+     * wake that arrives during THIS block. */
+    if (current != NULL) {
+        current->wait_result = TASK_WAIT_RESULT_NONE;
+    }
     return scheduler_block_current_ex(wait_channel,
                                       0u,
                                       TASK_WAIT_EVENT_WAITABLE,

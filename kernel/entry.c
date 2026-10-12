@@ -332,7 +332,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     uintptr_t app_backing_start = 0u;
     uintptr_t app_backing_end = 0u;
     struct kernel_mem_range usable_range;
-    struct kernel_mem_range reserved_ranges[3];
+    struct kernel_mem_range reserved_ranges[4];
     struct kernel_mem_range heap_range;
     struct kernel_mem_range app_range;
     size_t reserved_count = 0u;
@@ -458,6 +458,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_mem_range_clear(&reserved_ranges[0]);
     kernel_mem_range_clear(&reserved_ranges[1]);
     kernel_mem_range_clear(&reserved_ranges[2]);
+    kernel_mem_range_clear(&reserved_ranges[3]);
 
     reserved_ranges[0].start = usable_range.start;
     reserved_ranges[0].end = low_reserved_end;
@@ -482,8 +483,23 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
 
     app_range = kernel_mem_find_largest_free_range(usable_range, reserved_ranges, reserved_count);
     if (kernel_mem_range_size(&app_range) >= APP_ARENA_TOTAL_BYTES + APP_BACKING_ALIGN) {
-        app_backing_end = align_down_uintptr(app_range.end, APP_BACKING_ALIGN);
-        app_backing_start = align_down_uintptr(app_backing_end - APP_ARENA_TOTAL_BYTES, APP_BACKING_ALIGN);
+        /*
+         * Prefer backing the arenas with the physical range that matches
+         * their own VA window [VIBE_APP_LOAD_ADDR, VIBE_APP_RESERVED_TOP).
+         * The previous "top of largest free" placement remapped those VAs
+         * to unrelated physical memory while the kernel heap still spanned
+         * them identity: heap blocks at those VAs silently aliased app
+         * arena memory (observed as corrupted process-list nodes under
+         * SMP timing). Backing == window keeps identity intact.
+         */
+        if (app_range.start <= (uintptr_t)VIBE_APP_LOAD_ADDR &&
+            app_range.end >= (uintptr_t)VIBE_APP_RESERVED_TOP) {
+            app_backing_start = (uintptr_t)VIBE_APP_LOAD_ADDR;
+            app_backing_end = (uintptr_t)VIBE_APP_RESERVED_TOP;
+        } else {
+            app_backing_end = align_down_uintptr(app_range.end, APP_BACKING_ALIGN);
+            app_backing_start = align_down_uintptr(app_backing_end - APP_ARENA_TOTAL_BYTES, APP_BACKING_ALIGN);
+        }
         if (app_backing_start >= app_range.start && app_backing_end > app_backing_start) {
             reserved_ranges[2].start = app_backing_start;
             reserved_ranges[2].end = app_backing_end;
@@ -524,6 +540,28 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
                                 (uint32_t)(app_phys + APP_USER_ARENA_BYTES + APP_DESKTOP_ARENA_BYTES));
             reserved_count = 3u;
             mapped = 1;
+            if (app_phys != (uintptr_t)VIBE_APP_LOAD_ADDR) {
+                /*
+                 * Fallback placement: the arena remap shadowed the
+                 * identity VAs [VIBE_APP_LOAD_ADDR, VIBE_APP_RESERVED_TOP).
+                 * Those VAs must never back kernel heap blocks, so reserve
+                 * the window (clipped to usable) from heap selection too.
+                 */
+                uintptr_t shadow_start = (uintptr_t)VIBE_APP_LOAD_ADDR;
+                uintptr_t shadow_end = (uintptr_t)VIBE_APP_RESERVED_TOP;
+                if (shadow_start < usable_range.start) {
+                    shadow_start = usable_range.start;
+                }
+                if (shadow_end > usable_range.end) {
+                    shadow_end = usable_range.end;
+                }
+                reserved_ranges[3].start = shadow_start;
+                reserved_ranges[3].end = shadow_end;
+                kernel_mem_range_normalize(&reserved_ranges[3]);
+                if (kernel_mem_range_size(&reserved_ranges[3]) != 0u) {
+                    reserved_count = 4u;
+                }
+            }
         } else {
             kernel_debug_printf("[%u] memory: app arena remap failed, identity fallback\n", (unsigned int)boot_seq);
             (void)paging_restore_large_region(VIBE_APP_LOAD_ADDR,

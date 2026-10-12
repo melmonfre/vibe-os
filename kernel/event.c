@@ -130,6 +130,15 @@ int kernel_waitable_wait_timeout(kernel_waitable_t *waitable, uint32_t timeout_t
         deadline = kernel_timer_get_ticks() + timeout_ticks;
     }
 
+    /*
+     * wait_result is sticky from the previous completed wait (the consume
+     * path leaves it SIGNALED). Clear it once here so the block-abort check
+     * in scheduler_block_current_ex() only reacts to a signal racing THIS
+     * wait, and legacy callers that block without clearing cannot livelock
+     * on a stale SIGNALED.
+     */
+    current->wait_result = TASK_WAIT_RESULT_NONE;
+
     for (;;) {
         flags = spinlock_lock_irqsave(&waitable->lock);
         if (waitable->pending_signals != 0u) {
@@ -151,6 +160,14 @@ int kernel_waitable_wait_timeout(kernel_waitable_t *waitable, uint32_t timeout_t
                                        waitable->event_kind,
                                        waitable->event_class,
                                        waitable->owner_service) != 0) {
+            if (current->wait_result == TASK_WAIT_RESULT_SIGNALED) {
+                /*
+                 * The block aborted because a signal raced the enqueue->block
+                 * window. The waitable still holds the pending count, so the
+                 * next pass consumes it and returns SIGNALED.
+                 */
+                continue;
+            }
             return -1;
         }
 
