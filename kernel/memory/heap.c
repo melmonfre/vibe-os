@@ -1,15 +1,55 @@
 #include <kernel/memory/heap.h>
 #include <kernel/lock.h>
 #include <kernel/kernel_string.h>
+#include <kernel/drivers/debug/debug.h>
 
+/*
+ * Block layout: 16-byte header {size, magic, next, reserved} followed by an
+ * 8-byte-aligned payload. `next` is only meaningful while a block is free.
+ *
+ * The magic turns heap-ownership bugs into named O(1) events:
+ *  - malloc taking a block already marked ALLOC  => DOUBLE-ALLOC trace
+ *    (leading hypothesis for the SMP task-list corruption);
+ *  - free of a block not marked ALLOC            => FREE-UNTRACKED trace,
+ *    and the free is skipped so one bad pointer cannot poison the list.
+ *
+ * The previous 4-byte header aliased its free-list `next` link over the
+ * payload's first word, so "block->next = NULL" during free silently zeroed
+ * the owner's first field (observed under SMP as the storage host's pid
+ * becoming 0 while kind/state stayed intact).
+ */
 struct free_block {
     size_t size;
+    size_t magic;
     struct free_block *next;
+    size_t reserved;
 };
 
 #define HEAP_ALIGN 8u
 #define HEAP_MIN_SPLIT 32u
 #define ALIGNED_FLAG ((size_t)0x80000000u)
+#define HEAP_MAGIC_FREE  ((size_t)0x46524545u) /* "FREE" */
+#define HEAP_MAGIC_ALLOC ((size_t)0x414C4C4Fu) /* "ALLO" */
+#define HEAP_HEADER_SIZE ((size_t)16u)
+#define HEAP_MIN_BLOCK   (HEAP_HEADER_SIZE + HEAP_ALIGN)
+
+/*
+ * Free-list integrity diagnostics (COMPLETION_ACTION_PLAN P4). Budgeted so
+ * a systemic bug cannot flood the serial line.
+ */
+#define HEAP_DIAG_BUDGET 6u
+#define HEAP_FREELIST_WALK_CAP 4096u
+static volatile uint32_t g_heap_diag_budget = HEAP_DIAG_BUDGET;
+
+static void heap_diag(const char *what, uintptr_t block, size_t size, uintptr_t other) {
+    if (g_heap_diag_budget == 0u) {
+        return;
+    }
+    g_heap_diag_budget--;
+    kernel_debug_printf("heap: %s block=0x%x size=0x%x other=0x%x\n",
+                        what, (unsigned int)block, (unsigned int)size,
+                        (unsigned int)other);
+}
 
 static uintptr_t g_heap_start = 0u;
 static uintptr_t g_heap_end = 0u;
@@ -28,10 +68,14 @@ static size_t heap_align_up(size_t size) {
 static size_t heap_total_free(void) {
     size_t total = 0u;
     struct free_block *curr = g_free_list;
+    uint32_t steps = 0u;
 
     while (curr) {
         total += curr->size;
         curr = curr->next;
+        if (++steps > HEAP_FREELIST_WALK_CAP) {
+            break;
+        }
     }
     return total;
 }
@@ -43,7 +87,9 @@ void kernel_mm_init(uintptr_t heap_start, size_t heap_size) {
     g_heap_used = 0u;
     g_free_list = (struct free_block *)(uintptr_t)heap_start;
     g_free_list->size = heap_size;
+    g_free_list->magic = HEAP_MAGIC_FREE;
     g_free_list->next = NULL;
+    g_free_list->reserved = 0u;
     g_heap_initialized = 1u;
 }
 
@@ -59,9 +105,9 @@ void *kernel_malloc(size_t size) {
         return NULL;
 
     align_sz = heap_align_up(size);
-    needed = sizeof(size_t) + align_sz;
-    if (needed < sizeof(struct free_block))
-        needed = sizeof(struct free_block);
+    needed = HEAP_HEADER_SIZE + align_sz;
+    if (needed < HEAP_MIN_BLOCK)
+        needed = HEAP_MIN_BLOCK;
 
     flags = spinlock_lock_irqsave(&g_heap_lock);
 
@@ -72,6 +118,10 @@ void *kernel_malloc(size_t size) {
     curr = g_free_list;
 
     while (curr) {
+        if (curr->magic != HEAP_MAGIC_FREE) {
+            heap_diag("BAD-FREE-BLOCK", (uintptr_t)curr, curr->size, curr->magic);
+            break;
+        }
         if (curr->size >= needed && curr->size < best_size) {
             best = curr;
             best_prev = prev;
@@ -88,11 +138,17 @@ void *kernel_malloc(size_t size) {
         return NULL;
     }
 
+    if (best->magic == HEAP_MAGIC_ALLOC) {
+        heap_diag("DOUBLE-ALLOC", (uintptr_t)best, best->size, 0u);
+    }
+
     if (best->size - needed > HEAP_MIN_SPLIT) {
         struct free_block *rem = (struct free_block *)((uint8_t *)best + needed);
 
         rem->size = best->size - needed;
+        rem->magic = HEAP_MAGIC_FREE;
         rem->next = best->next;
+        rem->reserved = 0u;
         best->size = needed;
         if (best_prev)
             best_prev->next = rem;
@@ -105,9 +161,11 @@ void *kernel_malloc(size_t size) {
             g_free_list = best->next;
     }
 
+    best->magic = HEAP_MAGIC_ALLOC;
+    best->next = NULL;
     g_heap_used += best->size;
     spinlock_unlock_irqrestore(&g_heap_lock, flags);
-    return (void *)((uint8_t *)best + sizeof(size_t));
+    return (void *)((uint8_t *)best + HEAP_HEADER_SIZE);
 }
 
 void *kernel_malloc_aligned(size_t size, size_t align) {
@@ -121,15 +179,26 @@ void *kernel_malloc_aligned(size_t size, size_t align) {
         align = 8u;
     if ((align & (align - 1u)) != 0u)
         return NULL;
-    if (size & 0x7u)
-        size += 8u - (size & 0x7u);
+    if (size & (HEAP_ALIGN - 1u))
+        size += HEAP_ALIGN - (size & (HEAP_ALIGN - 1u));
 
-    raw = kernel_malloc(size + align + sizeof(size_t));
+    /*
+     * Reserve two alignment windows: if raw happens to already be aligned
+     * we must still shift by one `align` so the link word written at
+     * aligned_addr - sizeof(size_t) can never alias the block's own size
+     * header (the old code clobbered the header with ALIGNED_FLAG when
+     * shift==0, and the later free then treated a 0x80000000-byte block as
+     * free space).
+     */
+    raw = kernel_malloc(size + 2u * align + sizeof(size_t));
     if (!raw)
         return NULL;
 
     raw_addr = (uintptr_t)raw;
     aligned_addr = (raw_addr + align - 1u) & ~(align - 1u);
+    if (aligned_addr == raw_addr) {
+        aligned_addr += align;
+    }
     shift = aligned_addr - raw_addr;
 
     *(size_t *)(aligned_addr - sizeof(size_t)) = shift | ALIGNED_FLAG;
@@ -148,11 +217,11 @@ void *kernel_realloc(void *ptr, size_t size) {
         return NULL;
     }
 
-    block = (struct free_block *)((uint8_t *)ptr - sizeof(size_t));
-    old_size = block->size - sizeof(size_t);
+    block = (struct free_block *)((uint8_t *)ptr - HEAP_HEADER_SIZE);
+    old_size = block->size - HEAP_HEADER_SIZE;
 
-    if (size & 0x7u)
-        size += 8u - (size & 0x7u);
+    if (size & (HEAP_ALIGN - 1u))
+        size += HEAP_ALIGN - (size & (HEAP_ALIGN - 1u));
 
     new_ptr = kernel_malloc(size);
     if (!new_ptr)
@@ -178,19 +247,56 @@ void kernel_free(void *ptr) {
 
     if (stored & ALIGNED_FLAG) {
         size_t shift = stored & ~ALIGNED_FLAG;
-        block = (struct free_block *)((uint8_t *)ptr - shift - sizeof(size_t));
+        block = (struct free_block *)((uint8_t *)ptr - shift - HEAP_HEADER_SIZE);
     } else {
-        block = (struct free_block *)((uint8_t *)ptr - sizeof(size_t));
+        block = (struct free_block *)((uint8_t *)ptr - HEAP_HEADER_SIZE);
     }
 
     free_size = block->size;
     flags = spinlock_lock_irqsave(&g_heap_lock);
 
+    if (block->magic != HEAP_MAGIC_ALLOC) {
+        heap_diag("FREE-UNTRACKED", (uintptr_t)block, free_size, block->magic);
+        spinlock_unlock_irqrestore(&g_heap_lock, flags);
+        return;
+    }
+
+    if ((uintptr_t)block < g_heap_start ||
+        (uintptr_t)block + free_size > g_heap_end ||
+        free_size < HEAP_MIN_BLOCK ||
+        (free_size & (HEAP_ALIGN - 1u)) != 0u) {
+        heap_diag("BAD-BLOCK", (uintptr_t)block, free_size, g_heap_start);
+        spinlock_unlock_irqrestore(&g_heap_lock, flags);
+        return;
+    }
+
+    block->magic = HEAP_MAGIC_FREE;
+    block->reserved = 0u;
+
     prev = NULL;
     curr = g_free_list;
-    while (curr && (uintptr_t)curr < (uintptr_t)block) {
-        prev = curr;
-        curr = curr->next;
+    {
+        uint32_t steps = 0u;
+        while (curr && (uintptr_t)curr < (uintptr_t)block) {
+            if (curr == block) {
+                heap_diag("DOUBLE-FREE", (uintptr_t)block, free_size, 0u);
+                spinlock_unlock_irqrestore(&g_heap_lock, flags);
+                return;
+            }
+            if (++steps > HEAP_FREELIST_WALK_CAP) {
+                heap_diag("LIST-CYCLE", (uintptr_t)block, free_size, (uintptr_t)curr);
+                break;
+            }
+            prev = curr;
+            curr = curr->next;
+        }
+    }
+
+    if (prev && (uint8_t *)prev + prev->size > (uint8_t *)block) {
+        heap_diag("OVERLAP-PREV", (uintptr_t)block, free_size, (uintptr_t)prev);
+    }
+    if (curr && (uint8_t *)block + free_size > (uint8_t *)curr) {
+        heap_diag("OVERLAP-NEXT", (uintptr_t)block, free_size, (uintptr_t)curr);
     }
 
     block->next = curr;
@@ -199,12 +305,14 @@ void kernel_free(void *ptr) {
     else
         g_free_list = block;
 
-    if (curr && (uint8_t *)block + block->size == (uint8_t *)curr) {
+    if (curr && (uint8_t *)block + block->size == (uint8_t *)curr &&
+        curr->magic == HEAP_MAGIC_FREE) {
         block->size += curr->size;
         block->next = curr->next;
     }
 
-    if (prev && (uint8_t *)prev + prev->size == (uint8_t *)block) {
+    if (prev && (uint8_t *)prev + prev->size == (uint8_t *)block &&
+        prev->magic == HEAP_MAGIC_FREE) {
         prev->size += block->size;
         prev->next = block->next;
     }

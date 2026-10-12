@@ -635,6 +635,39 @@ void scheduler_publish_lifecycle_event(uint32_t event_type, const process_t *tas
     scheduler_publish_task_event(event_type, task);
 }
 
+/*
+ * Task-list integrity diagnostics (COMPLETION_ACTION_PLAN P4). The SMP
+ * corruption shows phantom nodes (invalid kind, pids at ~sizeof(process_t)
+ * stride). These guards convert a corrupt list from "scheduler lock held
+ * forever by a cyclic walk" into a named, budgeted serial trace that pinpoints
+ * the offending node and its predecessor.
+ */
+#define SCHED_LIST_DIAG_BUDGET 6u
+#define SCHED_LIST_WALK_CAP 512u
+static volatile uint32_t g_sched_list_diag_budget = SCHED_LIST_DIAG_BUDGET;
+
+static int scheduler_node_sane(process_t *node) {
+    return node->pid > 0 &&
+           (int)node->kind <= (int)PROCESS_KIND_KERNEL_TASK &&
+           (int)node->state <= (int)PROCESS_TERMINATED;
+}
+
+static void scheduler_list_diag(const char *what, process_t *node, process_t *prev) {
+    uint32_t cpu;
+
+    if (g_sched_list_diag_budget == 0u) {
+        return;
+    }
+    g_sched_list_diag_budget--;
+    cpu = kernel_cpu_index();
+    kernel_debug_printf("sched-list: %s cpu=%u node=0x%x pid=%d kind=%d state=%d next=0x%x prev=0x%x\n",
+                        what, cpu,
+                        (unsigned int)(uintptr_t)node,
+                        node->pid, (int)node->kind, (int)node->state,
+                        (unsigned int)(uintptr_t)node->next,
+                        (unsigned int)(uintptr_t)(prev != NULL ? prev : 0));
+}
+
 void scheduler_add_task(process_t *proc) {
     uint32_t flags;
 
@@ -654,10 +687,21 @@ void scheduler_add_task(process_t *proc) {
         g_cursor[proc->preferred_cpu >= 0 ? (uint32_t)proc->preferred_cpu : 0u] = proc;
     } else {
         process_t *p = g_head;
+        uint32_t steps = 0u;
         while (p->next) {
+            if (!scheduler_node_sane(p->next)) {
+                scheduler_list_diag("BAD-NODE-AT-ADD", p->next, p);
+                break;
+            }
             p = p->next;
+            if (++steps > SCHED_LIST_WALK_CAP) {
+                scheduler_list_diag("LIST-CYCLE-AT-ADD", p, NULL);
+                break;
+            }
         }
-        p->next = proc;
+        if (p->next == NULL) {
+            p->next = proc;
+        }
     }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
     if (!g_audio_task_added_trace_emitted &&
@@ -700,21 +744,32 @@ static process_t *find_next(uint32_t cpu_index, process_t *current) {
     }
 
     task = start;
-    do {
-        if (task->state == PROCESS_READY && task->current_cpu < 0) {
-            int score = scheduler_task_score(task, cpu_index);
+    {
+        uint32_t steps = 0u;
+        do {
+            if (!scheduler_node_sane(task)) {
+                scheduler_list_diag("BAD-NODE-IN-FIND", task, NULL);
+                break;
+            }
+            if (task->state == PROCESS_READY && task->current_cpu < 0) {
+                int score = scheduler_task_score(task, cpu_index);
 
-            if (best == NULL || score < best_score) {
-                best = task;
-                best_score = score;
-                if (score == 0) {
-                    break;
+                if (best == NULL || score < best_score) {
+                    best = task;
+                    best_score = score;
+                    if (score == 0) {
+                        break;
+                    }
                 }
             }
-        }
 
-        task = task->next != NULL ? task->next : g_head;
-    } while (task != NULL && task != start);
+            task = task->next != NULL ? task->next : g_head;
+            if (++steps > SCHED_LIST_WALK_CAP) {
+                scheduler_list_diag("LIST-CYCLE-IN-FIND", task, NULL);
+                break;
+            }
+        } while (task != NULL && task != start);
+    }
 
     return best;
 }
