@@ -1,5 +1,12 @@
 #include <kernel/lock.h>
 #include <kernel/interrupt.h>
+#include <kernel/kernel.h>
+#include <stdint.h>
+
+/* Deadlock budget: generous enough to never fire under QEMU TCG, but an
+ * infinite lock spin must become a loud panic instead of a silent hlt-loop
+ * (see COMPLETION_ACTION_PLAN P1 "morte silenciosa -> morte ruidosa"). */
+#define SPINLOCK_STUCK_LIMIT 200000000ull
 
 static inline uint32_t spinlock_xchg(volatile uint32_t *ptr, uint32_t value) {
     __asm__ volatile("xchgl %0, %1"
@@ -17,12 +24,18 @@ void spinlock_init(spinlock_t *lock) {
 }
 
 void spinlock_lock(spinlock_t *lock) {
+    uint64_t spins = 0ull;
+
     if (!lock) {
         return;
     }
     while (spinlock_xchg(&lock->value, 1u) != 0u) {
         while (lock->value != 0u) {
             __asm__ volatile("pause");
+            spins++;
+            if (spins >= SPINLOCK_STUCK_LIMIT) {
+                kernel_panic("spinlock stuck (deadlock?)");
+            }
         }
     }
 }

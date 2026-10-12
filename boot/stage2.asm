@@ -4106,7 +4106,14 @@ pmode_kernel_resume:
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov esp, 0x70000
+    ; Kernel boot stack. 0x70000 is NOT safe anymore: the loaded kernel
+    ; image (.text/.rodata/.data) grows past it and the boot stack trashed
+    ; kernel .rodata (observed: the arena PDE snapshot spilled over
+    ; g_backend_fast_lfb_ops -> ops->activate garbage -> jump into the app
+    ; arena). 0x800000 stays inside boot/core reserved [0x100000,0x807000),
+    ; above kernel .bss end, below the heap start. linker/kernel.ld asserts
+    ; __bss_end never reaches this stack region.
+    mov esp, 0x800000
     cld
     jmp CODE_SEG:0x10000
 

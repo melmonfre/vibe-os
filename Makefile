@@ -85,6 +85,8 @@ ifeq ($(strip $(QEMU)),)
 QEMU := qemu-system-i386
 endif
 QEMU_MEMORY_MB ?= 3072
+# per-scenario timeout for QEMU validation matrices; slow/TCG-only hosts can raise it:
+PHASE6_TIMEOUT ?= 20
 QEMU_SERIAL_LOG ?= build/qemu-serial.log
 QEMU_AUDIO_CAPTURE_WAV ?= build/qemu-audio.wav
 QEMU_IMAGE_OPTS ?= format=raw,file=$(IMAGE),snapshot=on
@@ -1341,7 +1343,9 @@ $(BUILD_DIR)/userland/applications/games/craft:
 	@true
 $(BUILD_DIR)/userland/applications/games/DOOM:
 	@true
-$(BUILD_DIR)/kernel/drivers/video/video.o: KERNEL_CFLAGS += -msse2
+# NOTE: video.o must stay at the i586 baseline. The only SSE2 code is
+# kernel_video_copy_row_movntdq (per-function target attribute); a whole-TU
+# -msse2 made GCC emit CMOVcc into boot-path functions and broke Pentium.
 
 $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -2117,7 +2121,7 @@ run-headless-virtio-net-debug: $(IMAGE)
 	fi
 
 validate-phase6: $(IMAGE)
-	$(PYTHON) tools/validate_phase6.py --image $(IMAGE) --report $(PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+	$(PYTHON) tools/validate_phase6.py --image $(IMAGE) --report $(PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --timeout $(PHASE6_TIMEOUT)
 
 validate-smp: $(IMAGE)
 	$(PYTHON) tools/validate_smp.py --image $(IMAGE) --report $(SMP_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
@@ -2147,7 +2151,7 @@ run-headless-boot-smoke-debug: boot-smoke-image
 	fi
 
 validate-phase6-boot-smoke: boot-smoke-image
-	$(PYTHON) tools/validate_phase6.py --image $(BOOT_SMOKE_IMAGE) --report $(BOOT_SMOKE_PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+	$(PYTHON) tools/validate_phase6.py --image $(BOOT_SMOKE_IMAGE) --report $(BOOT_SMOKE_PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --timeout $(PHASE6_TIMEOUT)
 
 validate-modular-apps: $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
@@ -2444,5 +2448,3 @@ ported-links2-clean:
 
 -include $(shell test -d $(BUILD_DIR) && find $(BUILD_DIR) -name '*.d' ! -name '* *' -print)
 
--include compat/bin/ksh/Build.ksh.mk
--include compat/bin/ksh/Build.ksh.mk

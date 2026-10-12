@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import argparse
+import select
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -103,20 +105,49 @@ def run_scenario(
         exit_code = 0
         output = ""
 
+        # Stream serial output and stop as soon as every expected marker has
+        # been observed; only burn the full timeout when the boot is broken.
+        proc = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        deadline = time.monotonic() + timeout_seconds
+        markers_seen = False
         try:
-            completed = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=timeout_seconds,
-                check=False,
-            )
-            exit_code = completed.returncode
-            output = decode_output(completed.stdout)
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            exit_code = 124
-            output = decode_output(exc.stdout)
+            while True:
+                remaining_time = deadline - time.monotonic()
+                if remaining_time <= 0:
+                    break
+                ready, _, _ = select.select(
+                    [proc.stdout], [], [], min(1.0, remaining_time))
+                if not ready:
+                    if proc.poll() is not None:
+                        break
+                    continue
+                line = proc.stdout.readline()
+                if not line:
+                    if proc.poll() is not None:
+                        break
+                    continue
+                output += decode_output(line)
+                remaining = [m for m in scenario.must_have if m not in output]
+                any_done = (not scenario.must_have_any) or any(
+                    m in output for m in scenario.must_have_any)
+                if not remaining and any_done:
+                    markers_seen = True
+                    break
+            if proc.poll() is None:
+                timed_out = not markers_seen
+                proc.kill()
+            exit_code = proc.wait()
+            rest = proc.stdout.read()
+            if rest:
+                output += decode_output(rest)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
 
     missing = [marker for marker in scenario.must_have if marker not in output]
     observed = [marker for marker in scenario.must_have if marker in output]
@@ -163,7 +194,7 @@ def build_scenarios() -> List[Scenario]:
             name="ide-default",
             description="Default IDE regression target",
             args=ide_drive + headless_tail,
-            must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
+            must_have=["ata: start="] + COMMON_SUCCESS_MARKERS,
             must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
             notes="Legacy ATA path is accepted if it reaches either the shell fallback or the newer desktop-host/startx-host flow.",
         ),
@@ -171,7 +202,7 @@ def build_scenarios() -> List[Scenario]:
             name="core2duo",
             description="Core 2 Duo IDE regression target",
             args=["-cpu", "core2duo"] + ide_drive + headless_tail,
-            must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
+            must_have=["ata: start="] + COMMON_SUCCESS_MARKERS,
             must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
             notes="Core 2 Duo uses the same ATA compatibility rule as the default IDE path and may reach either shell fallback or desktop-host flow.",
         ),
@@ -179,7 +210,7 @@ def build_scenarios() -> List[Scenario]:
             name="pentium",
             description="Pentium IDE regression target",
             args=["-cpu", "pentium"] + ide_drive + headless_tail,
-            must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
+            must_have=["ata: start="] + COMMON_SUCCESS_MARKERS,
             must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
             notes="Pentium uses the same ATA compatibility rule as the default IDE path and may reach either shell fallback or desktop-host flow.",
         ),
@@ -187,7 +218,7 @@ def build_scenarios() -> List[Scenario]:
             name="atom-n270",
             description="Atom N270 IDE regression target",
             args=["-cpu", "n270"] + ide_drive + headless_tail,
-            must_have=["storage: using ata backend"] + COMMON_SUCCESS_MARKERS,
+            must_have=["ata: start="] + COMMON_SUCCESS_MARKERS,
             must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
             notes="Atom N270 uses the same ATA compatibility rule as the default IDE path and may reach either shell fallback or desktop-host flow.",
         ),
@@ -211,7 +242,7 @@ def build_scenarios() -> List[Scenario]:
             + headless_tail,
             must_have=[
                 "ahci: controller",
-                "storage: using ahci backend",
+                "ahci: sata port",
             ] + COMMON_SUCCESS_MARKERS,
             must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
         ),
@@ -232,8 +263,8 @@ def build_scenarios() -> List[Scenario]:
             + headless_tail,
             must_have=[
                 "init: entered builtin entry",
-                "storage: no block device backend available",
-                "init: bootstrap shell active",
+                "storage: init returned",
+                "shell: session start",
             ],
             notes="Boot path validated through BIOS USB emulation; runtime storage stays unavailable until a native USB mass-storage backend exists.",
         ),

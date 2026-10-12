@@ -423,16 +423,35 @@ uint32_t ioapic_max_redirect_entries(void) {
     return g_ioapic_max_redir;
 }
 
+/*
+ * ISA IRQ n is wired to IOAPIC redirection entry n+2 on PIIX3-class
+ * chipsets and QEMU's 'pc' machine (entries 0/1 are not ISA). Programming
+ * entry n for ISA IRQ n leaves the PIT (ISA 0 -> entry 2) on its reset
+ * masked entry: the timer never fires once the LAPIC/IOAPIC path is active,
+ * which froze kernel_timer_get_ticks() and wedged the SMP bring-up waits.
+ */
+#define IOAPIC_ISA_ENTRY_OFFSET 2u
+
+static int ioapic_isa_entry(uint32_t irq, uint32_t *entry_out) {
+    uint32_t entry = irq + IOAPIC_ISA_ENTRY_OFFSET;
+
+    if (!g_ioapic_found || entry > g_ioapic_max_redir) {
+        return -1;
+    }
+    *entry_out = entry;
+    return 0;
+}
+
 int ioapic_set_irq_redirect(uint32_t irq, uint32_t apic_id, uint8_t vector,
                             uint8_t delivery_mode, uint16_t flags) {
     uint32_t reg_index;
+    uint32_t entry;
     uint32_t low;
     uint32_t high;
 
-    if (!g_ioapic_found) return -1;
-    if (irq > g_ioapic_max_redir) return -1;
+    if (ioapic_isa_entry(irq, &entry) != 0) return -1;
 
-    reg_index = IOAPIC_REG_REDIR_BASE + (uint32_t)(irq * 2u);
+    reg_index = IOAPIC_REG_REDIR_BASE + (entry * 2u);
 
     low = (uint32_t)vector;
     low |= ((uint32_t)(delivery_mode & 0x7u)) << IOAPIC_REDIR_DELIVERY_SHIFT;
@@ -442,8 +461,9 @@ int ioapic_set_irq_redirect(uint32_t irq, uint32_t apic_id, uint8_t vector,
     ioapic_reg_write(reg_index, low);
     ioapic_reg_write(reg_index + 1u, high);
 
-    kernel_debug_printf("ioapic: irq %u -> apic %u vector %u del %u flags %x [%x:%x]\n",
+    kernel_debug_printf("ioapic: irq %u -> entry %u apic %u vector %u del %u flags %x [%x:%x]\n",
                         (unsigned int)irq,
+                        (unsigned int)entry,
                         (unsigned int)apic_id,
                         (unsigned int)vector,
                         (unsigned int)delivery_mode,
@@ -455,12 +475,12 @@ int ioapic_set_irq_redirect(uint32_t irq, uint32_t apic_id, uint8_t vector,
 
 int ioapic_mask_irq(uint32_t irq) {
     uint32_t reg_index;
+    uint32_t entry;
     uint32_t low;
 
-    if (!g_ioapic_found) return -1;
-    if (irq > g_ioapic_max_redir) return -1;
+    if (ioapic_isa_entry(irq, &entry) != 0) return -1;
 
-    reg_index = IOAPIC_REG_REDIR_BASE + (uint32_t)(irq * 2u);
+    reg_index = IOAPIC_REG_REDIR_BASE + (entry * 2u);
     low = ioapic_reg_read(reg_index);
     low |= IOAPIC_REDIR_MASK;
     ioapic_reg_write(reg_index, low);
@@ -469,12 +489,12 @@ int ioapic_mask_irq(uint32_t irq) {
 
 int ioapic_unmask_irq(uint32_t irq) {
     uint32_t reg_index;
+    uint32_t entry;
     uint32_t low;
 
-    if (!g_ioapic_found) return -1;
-    if (irq > g_ioapic_max_redir) return -1;
+    if (ioapic_isa_entry(irq, &entry) != 0) return -1;
 
-    reg_index = IOAPIC_REG_REDIR_BASE + (uint32_t)(irq * 2u);
+    reg_index = IOAPIC_REG_REDIR_BASE + (entry * 2u);
     low = ioapic_reg_read(reg_index);
     low &= ~IOAPIC_REDIR_MASK;
     ioapic_reg_write(reg_index, low);

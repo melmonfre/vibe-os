@@ -11,6 +11,7 @@
 #define SYSCALL_VECTOR 0x80
 #define YIELD_VECTOR 0x81
 #define SMP_WAKE_VECTOR 0x82
+#define SMP_TIMER_VECTOR 0x83
 
 /* These symbols are provided by the assembly stubs in kernel_asm/isr.asm. */
 extern void irq0_stub(void);
@@ -32,6 +33,7 @@ extern void irq15_stub(void);
 extern void syscall_stub(void);
 extern void yield_stub(void);
 extern void smp_wakeup_stub(void);
+extern void smp_timer_stub(void);
 
 extern void divide_error_stub(void);
 extern void invalid_opcode_stub(void);
@@ -105,6 +107,7 @@ void kernel_idt_init(void) {
     idt_set_gate(SYSCALL_VECTOR,   (uint32_t)syscall_stub, 0xEF);
     idt_set_gate(YIELD_VECTOR,     (uint32_t)yield_stub, 0x8E);
     idt_set_gate(SMP_WAKE_VECTOR,  (uint32_t)smp_wakeup_stub, 0x8E);
+    idt_set_gate(SMP_TIMER_VECTOR, (uint32_t)smp_timer_stub, 0x8E);
 
     g_idt_ptr.limit = (uint16_t)(sizeof(g_idt) - 1u);
     g_idt_ptr.base = (uint32_t)(uintptr_t)&g_idt[0];
@@ -172,6 +175,10 @@ void invalid_opcode_handler(uint32_t eip, uint32_t cs) {
     FMT32((uint32_t)b0, buf[2]);
     FMT32((uint32_t)b1, buf[3]);
 
+    /* Serial too: a screen-only death is invisible in headless QEMU runs. */
+    kernel_debug_printf("exception: #UD kernel-mode eip=%x cs=%x b0=%x b1=%x (halting)\n",
+                        (unsigned int)eip, (unsigned int)cs,
+                        (unsigned int)b0, (unsigned int)b1);
     kernel_text_puts("\n#UD EIP="); kernel_text_puts(buf[0]);
     kernel_text_puts(" CS=");       kernel_text_puts(buf[1]);
     kernel_text_puts(" B0=");       kernel_text_puts(buf[2]);

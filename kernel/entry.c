@@ -93,7 +93,10 @@ static void kernel_bootdebug_mark_stable(void) {
 }
 
 static inline void kernel_early_post(uint8_t code) {
+    /* 0x80 = dummy POST; 0xE9 = QEMU debugcon (-debugcon file:...
+     * -global isa-debugcon.iobase=0xE9). Silently ignored elsewhere. */
     __asm__ volatile("outb %0, $0x80" : : "a"(code));
+    __asm__ volatile("outb %0, $0xE9" : : "a"(code));
 }
 
 static void kernel_early_fill_rect(uint8_t color, uint16_t x0, uint16_t y0, uint16_t width, uint16_t height) {
@@ -642,32 +645,44 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
 
     boot_seq++;
     kernel_early_post(boot_seq);
-    if (kernel_cpu_is_smp_capable() &&
-        (kernel_cpu_topology()->mp_table_present ||
-         kernel_cpu_topology()->acpi_madt_present) &&
-        local_apic_enabled()) {
-        kernel_debug_printf("[%u] smp: bring-up starting\n", (unsigned int)boot_seq);
-        kernel_text_puts("smp: bring-up...\n");
-        smp_persist_trace_arm();
-        smp_persist_trace_mark('B');
-        smp_init();
-        smp_persist_trace_mark('R');
-        if (smp_started_cpu_count() > 1u) {
-            kernel_debug_printf("[%u] smp: done, %u cpus online\n",
-                                (unsigned int)boot_seq,
-                                (unsigned int)smp_started_cpu_count());
-            kernel_text_puts("smp: OK\n");
-            smp_persist_trace_disarm();
+    {
+        const volatile struct bootinfo *bi =
+            (const volatile struct bootinfo *)(uintptr_t)BOOTINFO_ADDR;
+        int smp_experiment =
+            (bi->flags & BOOTINFO_FLAG_EXPERIMENTAL_SMP) != 0u;
+
+        if (smp_experiment &&
+            kernel_cpu_is_smp_capable() &&
+            (kernel_cpu_topology()->mp_table_present ||
+             kernel_cpu_topology()->acpi_madt_present) &&
+            local_apic_enabled()) {
+            kernel_debug_printf("[%u] smp: bring-up starting\n", (unsigned int)boot_seq);
+            kernel_text_puts("smp: bring-up...\n");
+            smp_persist_trace_arm();
+            smp_persist_trace_mark('B');
+            smp_init();
+            smp_persist_trace_mark('R');
+            if (smp_started_cpu_count() > 1u) {
+                kernel_debug_printf("[%u] smp: done, %u cpus online\n",
+                                    (unsigned int)boot_seq,
+                                    (unsigned int)smp_started_cpu_count());
+                kernel_text_puts("smp: OK\n");
+                smp_persist_trace_disarm();
+            } else {
+                kernel_debug_printf("[%u] smp: partial (%u/%u)\n",
+                                    (unsigned int)boot_seq,
+                                    (unsigned int)smp_started_cpu_count(),
+                                    (unsigned int)kernel_cpu_count());
+                kernel_text_puts("smp: partial\n");
+            }
+        } else if (!smp_experiment) {
+            kernel_debug_printf("[%u] smp: skipped (experimental flag off)\n",
+                                (unsigned int)boot_seq);
+            kernel_text_puts("smp: skipped\n");
         } else {
-            kernel_debug_printf("[%u] smp: partial (%u/%u)\n",
-                                (unsigned int)boot_seq,
-                                (unsigned int)smp_started_cpu_count(),
-                                (unsigned int)kernel_cpu_count());
-            kernel_text_puts("smp: partial\n");
+            kernel_debug_printf("[%u] smp: skipped (%s)\n", (unsigned int)boot_seq, kernel_smp_skip_reason());
+            kernel_text_puts("smp: skipped\n");
         }
-    } else {
-        kernel_debug_printf("[%u] smp: skipped (%s)\n", (unsigned int)boot_seq, kernel_smp_skip_reason());
-        kernel_text_puts("smp: skipped\n");
     }
 
     boot_seq++;
@@ -719,6 +734,17 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
 
     boot_seq++;
     kernel_early_post(boot_seq);
+    {
+        const volatile struct bootinfo *bi =
+            (const volatile struct bootinfo *)(uintptr_t)BOOTINFO_ADDR;
+
+        if ((bi->flags & BOOTINFO_FLAG_EXPERIMENTAL_SMP) != 0u &&
+            smp_started_cpu_count() > 1u) {
+            kernel_debug_printf("[%u] smp: arming per-cpu scheduler\n",
+                                (unsigned int)boot_seq);
+            smp_scheduler_enable();
+        }
+    }
     kernel_debug_printf("[%u] userland: launching init\n", (unsigned int)boot_seq);
     kernel_text_puts("userland: launching...\n");
     userland_run();

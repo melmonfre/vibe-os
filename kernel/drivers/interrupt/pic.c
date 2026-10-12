@@ -109,9 +109,14 @@ void kernel_irq_dispatch(uint8_t irq_line) {
         return;
     }
 
-    if (!ioapic_active()) {
-        kernel_pic_send_eoi(irq_line);
-    }
+    /*
+     * Unhandled/spurious IRQs must still be EOI'd in BOTH modes. The old
+     * PIC-only EOI left the local APIC ISR bit set forever under IOAPIC
+     * (e.g. a spurious ISA IRQ10 edge), which pinned the PPR and silently
+     * blocked every lower-priority vector - including the PIT timer at
+     * 0x20 - freezing kernel_timer_get_ticks() and wedging SMP bring-up.
+     */
+    kernel_irq_complete(irq_line);
 }
 
 void kernel_irq_enable(void) {

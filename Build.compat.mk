@@ -129,8 +129,11 @@ build/compat/%.o: compat/%.c | build
 	@mkdir -p $(dir $@)
 	$(CC) $(COMPAT_CFLAGS) -c $< -o $@
 
-# Archive compat library
-$(COMPAT_LIB): $(COMPAT_OBJS)
+# Archive compat library. NOTE: $(COMPAT_LIB) lists build/libksh.a too, but
+# libksh.a has its own rule in compat/bin/ksh/Build.ksh.mk (own objects/flags).
+# A rule here keyed on $(COMPAT_LIB) would archive the wrong objects into
+# libksh.a AND conflict with Build.ksh.mk (make "overriding commands" warning).
+build/libcompat.a: $(COMPAT_OBJS)
 	@mkdir -p $(dir $@)
 	$(AR) rcs $@ $(COMPAT_OBJS)
 	$(RANLIB) $@

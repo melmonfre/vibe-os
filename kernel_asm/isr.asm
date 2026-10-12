@@ -24,6 +24,7 @@ global irq15_stub
 global syscall_stub
 global yield_stub
 global smp_wakeup_stub
+global smp_timer_stub
 
 global divide_error_stub
 global invalid_opcode_stub
@@ -41,6 +42,7 @@ extern kernel_irq_dispatch
 extern scheduler_schedule_frame
 extern syscall_dispatch_internal
 extern smp_wakeup_ipi_handler
+extern smp_timer_irq_handler
 
 extern divide_error_handler
 extern invalid_opcode_handler
@@ -152,6 +154,22 @@ smp_wakeup_stub:
     cld
     LOAD_KERNEL_DATA_SEGMENTS
     call smp_wakeup_ipi_handler
+    LOAD_RETURN_DATA_SEGMENTS
+    popa
+    iretd
+
+; Per-CPU LAPIC periodic timer (AP preemption tick): same frame-swap pattern
+; as irq0_stub, but EOI is local-APIC side and the tick does not advance the
+; global PIT tick counter.
+smp_timer_stub:
+    pusha
+    cld
+    LOAD_KERNEL_DATA_SEGMENTS
+    mov eax, esp
+    push eax
+    call smp_timer_irq_handler
+    add esp, 4
+    mov esp, eax
     LOAD_RETURN_DATA_SEGMENTS
     popa
     iretd

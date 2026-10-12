@@ -129,7 +129,10 @@ static void serial_vprintf_raw(const char *fmt, va_list args) {
                     buf[len++] = '0';
                 } else {
                     unsigned int v = value;
-                    for (int w = v; w > 0; w /= 16) {
+                    /* w must stay unsigned: int w >= 0x80000000 is negative
+                     * and the sizing loop never runs -> empty output for
+                     * high addresses (hid real app-arena/framebuffer bases). */
+                    for (unsigned int w = v; w > 0; w /= 16) {
                         ++len;
                     }
                     for (int i = len - 1; i >= 0; --i) {

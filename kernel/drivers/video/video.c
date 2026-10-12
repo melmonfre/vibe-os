@@ -316,6 +316,14 @@ static void kernel_video_copy_row_rep_movsd(uint8_t *dst, const volatile uint8_t
     }
 }
 
+/*
+ * SSE2 stream copy is only reached behind runtime CPUID gates, so the xmm
+ * target is enabled per-function here. It must NOT be a whole-TU -msse2:
+ * that lets the compiler emit CMOVcc (a P6 instruction) into i586-safe
+ * boot-path functions, and real Pentium (no CMOV, no SSE) triple-faults
+ * during kernel_video_init -> silent boot hang before the IDT exists.
+ */
+__attribute__((target("sse2")))
 static void kernel_video_copy_row_movntdq(volatile uint8_t *dst_volatile,
                                           const uint8_t *src,
                                           size_t bytes) {

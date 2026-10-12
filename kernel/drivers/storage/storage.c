@@ -18,6 +18,7 @@ void kernel_storage_init(void) {
 
     /* Try ATA first (most common for IDE mode) */
     if (kernel_ata_init() == 0) {
+        kernel_debug_puts("storage: ata OK\n");
         kernel_text_puts("storage: ata OK\n");
         return;
     }
@@ -25,11 +26,13 @@ void kernel_storage_init(void) {
     /* Try AHCI (SATA, common on laptops like T61) */
     kernel_debug_puts("storage: probing ahci...\n");
     if (kernel_ahci_init() == 0) {
+        kernel_debug_puts("storage: ahci OK\n");
         kernel_text_puts("storage: ahci OK\n");
         return;
     }
 
-    kernel_text_puts("storage: none\n");
+    kernel_debug_puts("storage: none\n");
+        kernel_text_puts("storage: none\n");
 }
 
 /* Called after USB init to probe USB/NVMe/AHCI storage */
@@ -40,12 +43,14 @@ void kernel_storage_probe_extra(void) {
 
     kernel_debug_puts("storage: probing nvme...\n");
     if (kernel_nvme_init() == 0) {
+        kernel_debug_puts("storage: nvme OK\n");
         kernel_text_puts("storage: nvme OK\n");
         return;
     }
 
     kernel_debug_puts("storage: probing ahci...\n");
     if (kernel_ahci_init() == 0) {
+        kernel_debug_puts("storage: ahci OK\n");
         kernel_text_puts("storage: ahci OK\n");
         return;
     }

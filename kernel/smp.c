@@ -20,6 +20,9 @@
 #define BOOTDEBUG_TRACE_MAX 48u
 #define AP_TRAMPOLINE_PHYS_ADDR 0x7000u
 #define SMP_WAKE_VECTOR 0x82u
+/* Per-CPU LAPIC periodic timer vector; doubles as the scheduler reschedule
+ * IPI (headers/kernel/smp.h SMP_IPI_SCHED_VECTOR). */
+#define SMP_TIMER_VECTOR 0x83u
 #define AP_TRAMPOLINE_VECTOR (AP_TRAMPOLINE_PHYS_ADDR >> 12)
 #define AP_TRAMPOLINE_GDT_START_OFFSET 0x80u
 #define AP_TRAMPOLINE_GDT_DESC_OFFSET 0x98u
@@ -303,16 +306,31 @@ void smp_ap_entry(void) {
                         idx,
                         (int)kernel_cpu_index());
 
+    if (local_apic_timer_start_tick_rate(SMP_TIMER_VECTOR) == 0) {
+        kernel_debug_printf("smp: ap lapic timer armed apic=%x vector=%x\n",
+                            apic_id,
+                            (unsigned int)SMP_TIMER_VECTOR);
+    } else {
+        kernel_debug_printf("smp: ap lapic timer calibration FAILED apic=%x\n",
+                            apic_id);
+    }
+
     if (idx >= 0 && (uint32_t)idx < 32u) {
         g_smp_cpu_stage[idx] = SMP_CPU_STAGE_AP_SCHED;
     }
     for (;;) {
+        /*
+         * Sleep between ticks. The AP's LAPIC timer (armed above) fires at
+         * 100 Hz and drives preemption through smp_timer_irq_handler; the
+         * wake IPI breaks the hlt when new work is queued. Hot-spinning
+         * schedule() here livelocked the global scheduler spinlock: three
+         * APs hammering xchg starved the BSP (observed: boot stuck at
+         * "fs: sys_storage_load" with CPUs 0/2/3 in spinlock_lock).
+         */
+        __asm__ volatile("sti; hlt" : : : "memory");
         if (g_smp_scheduler_enabled != 0u) {
             schedule();
-        } else {
-            __asm__ volatile("sti; hlt" : : : "memory");
         }
-        __asm__ volatile("pause");
     }
 }
 
@@ -463,6 +481,8 @@ uint32_t smp_started_cpu_count(void) {
 
 void smp_scheduler_enable(void) {
     g_smp_scheduler_enabled = 1u;
+    kernel_debug_printf("smp: scheduler enabled cpus=%u\n",
+                        (unsigned int)g_smp_started_cpus);
     if (g_smp_started_cpus > 1u && local_apic_enabled()) {
         (void)local_apic_broadcast_ipi((uint8_t)SMP_WAKE_VECTOR);
     }
@@ -483,6 +503,19 @@ void smp_wake_sleeping_cpus(void) {
 
 void smp_wakeup_ipi_handler(void) {
     local_apic_eoi();
+}
+
+/*
+ * Per-CPU timer / reschedule vector (0x83). While the SMP scheduler is
+ * disabled this just acks the interrupt; once enabled it becomes the
+ * preemption tick for every CPU that armed its LAPIC timer.
+ */
+kernel_trap_frame_t *smp_timer_irq_handler(kernel_trap_frame_t *frame) {
+    local_apic_eoi();
+    if (g_smp_scheduler_enabled == 0u) {
+        return frame;
+    }
+    return scheduler_schedule_frame(frame, 1);
 }
 
 uint32_t smp_cpu_stage(uint32_t cpu_index) {
