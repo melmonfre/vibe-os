@@ -81,6 +81,18 @@ Camada 4 — ferramentas/apps:
 - [ ] ifconfig/route/netstat lendo tabela real; `host`/`dig` usando o resolver de verdade; curl/wget com HTTP via stack propria (links2 HTTP engine ja existe como base)
 - [ ] Validar com QEMU user-net: DHCP bound, ping gateway ida-e-volta, HTTP GET via links2; expandir `tools/validate_network_surface.py` alem dos checks de UI
 
+## Prioridade 0: HARDWARE-FIRST (decisão da mantenedora, 2026-10-13)
+
+Aceitação mudou: **boot, usb, video, audio, rede e posix precisam funcionar em máquina real (T61/T400), não só no QEMU.** QEMU continua gate necessário, mas nunca mais é suficiente. Fila hardware-first:
+
+- [x] Cadeia de boot em BIOS real: auditoria feita (docs/hw_validation.md "Real-Hardware Boot Chain Audit"). **Bug fatal encontrado e corrigido**: sondas de A20 em boot/stage2.asm eram código morto (`xor ax,ax` setando ZF antes do `je`) — em BIOS IBM sem int 15h 2401h/2402h o loader pararia em `a20_error` mesmo com A20 habilitado via port-92/KBC. Prova: trace do loader lido vivo do guest (HMP xp 0xa02f) — `2FAVBaQ...` (sai na 1a checagem) vs `2FAVBabcdq...` (antes). validate-phase6-boot-smoke em execução com stage2 corrigido (relatório build/phase6-validation-boot-smoke.md).
+- [ ] Limitação honesta da cadeia: stage1 não checa AH=41h antes de AH=42h (MBR checa; pré-EDD BIOS halt). Aceito para T61/T400; documentado.
+- [ ] USB storage runtime no kernel: backend nativo de massa-storage USB não existe (notas do phase6); boot USB via emulação BIOS funciona, mas "usb funcionando em hw real" exige driver real (EHCI/xHCI + BOT) — campanha com hardware físico (bloqueado: precisa máquina real + logs).
+- [ ] Vídeo hw real: i915 experimental gateado; campanha T61 (GM965)/T400 (4-series) exige máquina física — checklist em docs/hw_validation.md; sem ela, README/hw docs ficam honestos como estão.
+- [ ] Áudio hw real: HDA validado só em QEMU; matriz AUDIO_HARDWARE_VALIDATION_MATRIX.md precisa das linhas físicas (codec verbs, power states, link training) — bloqueado: hardware.
+- [ ] Rede hw real: e1000/rtl8139 são dead code honesto (P3); NICs reais T61/T400 (Intel PCIe/82567) não têm backend — P3 abre com abstração NIC; driver real é decisão de escopo da mantenedora.
+- [ ] POSIX em hw real: superfície syscall é time/timing-dependente de PIT/HPET reais; validar depois do boot físico.
+
 ## Prioridade 4: SMP de verdade
 
 - [ ] Chamar `smp_scheduler_enable()` depois do bring-up dos APs (kernel/smp.c:464 — hoje zero callers; APs ficam em `sti; hlt` para sempre)

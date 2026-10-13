@@ -1,5 +1,20 @@
 # Hardware Boot Validation
 
+> **Acceptance bar (maintainer decision 2026-10-13): real hardware, not QEMU.**
+> Boot, USB, video, audio, network and the POSIX surface are all required to
+> work on physical T61/T400-class machines. QEMU matrices below are necessary
+> but explicitly NOT sufficient. See COMPLETION_ACTION_PLAN "P0 hardware-first".
+
+## Real-Hardware Boot Chain Audit (2026-10-13)
+
+| Item | Mechanism | QEMU behavior | Real-BIOS risk | Status |
+|------|-----------|---------------|----------------|--------|
+| A20 confirmation | `boot/stage2.asm` memory aliasing probes | masked: SeaBIOS implements int 15h AX=2402h fallback that made boot pass | **fatal**: both probes were dead code — `xor ax,ax` (sets ZF=1) ran before `je`, so the probes could NEVER report A20 enabled; on BIOSes without 2401h/2402h (common on IBM ThinkPads) the loader halted on `a20_error` even when port-92/KBC had just enabled A20 | **FIXED** — flags latched via `setne` while ZF from `cmp` is still live; proof: loader trace now exits enable_a20 at the first probe check (`2FAVBaQ...`) instead of running every method plus the 2402h fallback (`2FAVBabcdq...`); trace read live from the guest via HMP at 0xa02f |
+| A20 enable methods | int 15h AX=2401h → port 92 → 8042 KBC (0xD0/0xD1/0xAE), all bounded with timeouts | fine | fine; KBC path handles ThinkPad controllers | OK |
+| LBA disk reads | MBR checks int 13h AH=41h extension signature before AH=42h; VBR/stage2 read via DAP with 3x reset-retry | fine | stage1's own first read (stage2) does NOT check AH=41h — pre-EDD BIOS fails `disk_error` halt; T61/T400 era BIOSes all have EDD | KNOWN LIMITATION (documented, no false claim) |
+| Memory map | E820 (ECX=24) → E801 → int 15h AH=88h fallback chain | fine | fine; legacy-BIOS quirks covered by fallback chain | OK |
+| Boot stack vs kernel image | kernel loads at 0x10000 (403 KB today), menu stack at 0x70000 used only BEFORE kernel load; kernel handoff stack 0x800000 with linker ASSERT | fine | verified: no region overlap at any phase (0x10000+0x62AB0 = 0x72AB0 is reached only after the menu is done) | OK (re-checked after kernel growth) |
+
 ## Known-Working Configurations
 
 ### QEMU (Primary Test Target)

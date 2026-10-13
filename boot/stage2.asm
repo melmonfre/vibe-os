@@ -1547,14 +1547,19 @@ a20_is_enabled:
     mov byte [es:di], 0xFF
 
     cmp byte [ds:si], 0xFF
-
     pop ax
     mov [es:di], ah
     mov [ds:si], al
+    ; The comparison result MUST be latched before touching ax: the old
+    ; form did `xor ax, ax` (which sets ZF=1!) before `je`, so this probe
+    ; could never report A20 enabled and boot silently degraded to the
+    ; int 15h/2402h BIOS fallback — which real BIOSes often do not
+    ; implement, hard-stopping the loader on a20_error while A20 was fine.
+    ; pop and mov do not modify flags, so ZF from the cmp is still live.
+    mov ah, 0
+    setne al
 
-    xor ax, ax
-    je .done
-    mov ax, 1
+    jmp .done
 
 .done:
     pop di
@@ -1592,9 +1597,12 @@ a20_is_enabled_alt:
     mov [es:di], ah
     mov [ds:si], al
 
-    xor ax, ax
-    je .done
-    mov ax, 1
+    ; Same latching discipline as the primary probe: `xor ax, ax` before
+    ; `je` clobbered the flags and made this probe unable to confirm A20.
+    mov ah, 0
+    setne al
+
+    jmp .done
 
 .done:
     pop di
