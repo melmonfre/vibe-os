@@ -439,6 +439,40 @@ uintptr_t paging_get_phys_addr(uintptr_t virt) {
            (virt & 0xFFFu);
 }
 
+/*
+ * Page-level predicate for syscall user-pointer validation
+ * (COMPLETION_ACTION_PLAN P4). True only when the page backing @virt is
+ * present AND carries the U/S bit. NOTE: the identity-mapped low 4MB
+ * (kernel text/data/heap) also has U set on current boots, so callers
+ * must additionally require the VA to sit in a user window — the
+ * predicate alone is necessary, not sufficient.
+ */
+int paging_va_user_accessible(uintptr_t virt) {
+    uint32_t pde_index = PAGING_PDE_INDEX(virt);
+    uint32_t pte_index = PAGING_PTE_INDEX(virt);
+    uint32_t pde;
+    uint32_t pte;
+
+    if (!g_paging_enabled) {
+        return 0;
+    }
+    if (pde_index >= PAGING_PAGE_DIR_ENTRIES) {
+        return 0;
+    }
+    pde = g_kernel_page_directory[pde_index];
+    if ((pde & PAGING_PDE_PRESENT) == 0u || (pde & PAGING_PDE_USER) == 0u) {
+        return 0;
+    }
+    if (pde & PAGING_PDE_PAGE_SIZE) {
+        return 1;
+    }
+    pte = ((const uint32_t *)(uintptr_t)(pde & 0xFFFFF000u))[pte_index];
+    if ((pte & PAGING_PTE_PRESENT) == 0u || (pte & PAGING_PTE_USER) == 0u) {
+        return 0;
+    }
+    return 1;
+}
+
 int paging_set_page_flags(uintptr_t virt, uint32_t flags) {
     uint32_t pde_index = PAGING_PDE_INDEX(virt);
     uint32_t pte_index = PAGING_PTE_INDEX(virt);

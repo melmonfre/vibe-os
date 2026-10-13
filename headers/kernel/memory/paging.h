@@ -16,6 +16,7 @@ int paging_set_framebuffer_wc(uintptr_t fb_addr, size_t size);
 int paging_map_page(uintptr_t virt, uintptr_t phys, uint32_t flags);
 int paging_unmap_page(uintptr_t virt);
 uintptr_t paging_get_phys_addr(uintptr_t virt);
+int paging_va_user_accessible(uintptr_t virt);
 int paging_set_page_flags(uintptr_t virt, uint32_t flags);
 int paging_page_present(uintptr_t virt);
 

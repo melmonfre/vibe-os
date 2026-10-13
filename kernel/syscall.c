@@ -53,6 +53,146 @@ typedef struct {
 static shm_object_t g_shm_objects[MAX_SHM_OBJECTS];
 static uint32_t g_shm_count = 0u;
 
+/*
+ * User-pointer validation (COMPLETION_ACTION_PLAN P4, real-time smp2 #GP).
+ * Root cause proven by live-guest forensics: the syscall layer passed
+ * app-supplied pointers straight into kernel copy paths (ATA inw loops,
+ * memcpy of replies), so a buggy desktop app handing a garbage buffer
+ * pointer made the KERNEL write disk bytes into its own .text (kernel
+ * symbol bytes at 0x30bb3 found overwritten with file-shaped data while
+ * icons loaded) and into task trap frames on the kernel heap — random
+ * #GP/#UD/deadlocks downstream. Fault containment (AGENTS.md): an app
+ * bug must cost the app, never the kernel.
+ *
+ * Policy: ring0 service tasks are trusted (they pass kernel heap
+ * pointers legitimately — zero regression for services); ring3 tasks get
+ * every pointer checked against (a) the user VA windows and (b) the
+ * per-page U/S+present bits. The identity-mapped low 4MB has U set, so
+ * windows alone are not enough; conversely mmap at 0x40000000+ is legal
+ * user memory (pages mapped 0x007 = P|RW|U) and must pass.
+ */
+#define SYS_EFAULT_TRACE_BUDGET 8u
+static uint32_t g_sys_efault_trace_budget = SYS_EFAULT_TRACE_BUDGET;
+
+static int sys_va_in_user_window(uintptr_t va) {
+    if (va >= (uintptr_t)VIBE_APP_LOAD_ADDR &&
+        va < (uintptr_t)VIBE_APP_RESERVED_TOP) {
+        return 1;
+    }
+    if (va >= 0x40000000u) {
+        return 1; /* sys_mmap region */
+    }
+    if (va >= (uintptr_t)VIBE_APP_COMPAT_LOAD_ADDR_20260325 &&
+        va < (uintptr_t)VIBE_APP_COMPAT_LOAD_ADDR_20260325 +
+             (uintptr_t)VIBE_APP_ARENA_SIZE) {
+        return 1;
+    }
+    if (va >= (uintptr_t)VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 &&
+        va < (uintptr_t)VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 +
+             (uintptr_t)VIBE_APP_DESKTOP_ARENA_SIZE) {
+        return 1;
+    }
+    if (va >= (uintptr_t)VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325 &&
+        va < (uintptr_t)VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325 +
+             (uintptr_t)VIBE_APP_BOOT_ARENA_SIZE) {
+        return 1;
+    }
+    return 0;
+}
+
+static int sys_user_ptr_ok(uintptr_t ptr, size_t len) {
+    process_t *current;
+    uintptr_t page;
+
+    current = scheduler_current();
+    if (current == 0 || current->runs_in_user_mode == 0u) {
+        return 1; /* kernel/boot context: trusted */
+    }
+    if (len == 0u) {
+        return 1;
+    }
+    if (ptr + len < ptr) {
+        return 0;
+    }
+    if (!sys_va_in_user_window(ptr) || !sys_va_in_user_window(ptr + len - 1u)) {
+        goto bad;
+    }
+    page = ptr & ~0xFFFu;
+    for (;;) {
+        if (!paging_va_user_accessible(page)) {
+            goto bad;
+        }
+        if (page + 0x1000u >= ptr + len) {
+            break;
+        }
+        page += 0x1000u;
+    }
+    return 1;
+bad:
+    if (g_sys_efault_trace_budget != 0u) {
+        g_sys_efault_trace_budget--;
+        kernel_debug_printf("syscall: EFAULT ptr=0x%x len=%u pid=%d\n",
+                            (unsigned int)ptr, (unsigned int)len, current->pid);
+    }
+    return 0;
+}
+
+static int sys_user_str_ok(uintptr_t ptr, size_t maxlen) {
+    process_t *current;
+    uintptr_t addr = ptr;
+    size_t n = 0u;
+
+    current = scheduler_current();
+    if (current == 0 || current->runs_in_user_mode == 0u) {
+        return 1;
+    }
+    if (!sys_va_in_user_window(addr)) {
+        goto bad;
+    }
+    while (n < maxlen) {
+        if (!paging_va_user_accessible(addr & ~0xFFFu)) {
+            goto bad;
+        }
+        if (*(const char *)addr == '\0') {
+            return 1;
+        }
+        addr++;
+        n++;
+    }
+bad:
+    if (g_sys_efault_trace_budget != 0u) {
+        g_sys_efault_trace_budget--;
+        kernel_debug_printf("syscall: EFAULT-str ptr=0x%x pid=%d\n",
+                            (unsigned int)ptr, current ? current->pid : -1);
+    }
+    return 0;
+}
+
+/* Whole-page range check for mm syscalls: every page must be mapped
+ * user-accessible (munmap/madvise act on already-mapped memory). */
+static int sys_user_range_mapped_ok(uintptr_t addr, size_t len) {
+    uintptr_t page;
+
+    if (len == 0u) {
+        return 1;
+    }
+    if (addr + len < addr) {
+        return 0;
+    }
+    if (!sys_va_in_user_window(addr) ||
+        !sys_va_in_user_window(addr + len - 1u)) {
+        return 0;
+    }
+    page = addr;
+    while (page < addr + len) {
+        if (!paging_va_user_accessible(page)) {
+            return 0;
+        }
+        page += 0x1000u;
+    }
+    return 1;
+}
+
 extern void userland_shell_host_entry(void);
 extern void userland_shell_session_entry(void);
 extern void userland_desktop_host_entry(void);
@@ -280,6 +420,9 @@ static uint32_t sys_gfx_text(uint32_t x, uint32_t y, uint32_t text_ptr,
     if (text_ptr == 0u) {
         return (uint32_t)-1;
     }
+    if (!sys_user_str_ok((uintptr_t)text_ptr, 256u)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_video_service_text((int)x,
                                            (int)y,
                                            (uint8_t)(color & 0xFFu),
@@ -394,6 +537,9 @@ static uint32_t sys_gfx_set_palette(uint32_t ptr, uint32_t b, uint32_t c,
     if (ptr == 0u) {
         return (uint32_t)-1;
     }
+    if (!sys_user_ptr_ok((uintptr_t)ptr, MK_VIDEO_PALETTE_BYTES)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_video_service_set_palette((const uint8_t *)(uintptr_t)ptr);
 }
 
@@ -401,6 +547,9 @@ static uint32_t sys_gfx_get_palette(uint32_t ptr, uint32_t b, uint32_t c,
                                     uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
     if (ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)ptr, MK_VIDEO_PALETTE_BYTES)) {
         return (uint32_t)-1;
     }
     return (uint32_t)mk_video_service_get_palette((uint8_t *)(uintptr_t)ptr);
@@ -413,24 +562,36 @@ static uint32_t sys_storage_load(uint32_t ptr, uint32_t size, uint32_t c,
         g_audio_boot_trace_storage_load = 1u;
         kernel_text_puts("audiosvc: syscall storage_load\n");
     }
+    if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)size)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_storage_service_load((void *)(uintptr_t)ptr, size);
 }
 
 static uint32_t sys_storage_save(uint32_t ptr, uint32_t size, uint32_t c,
                                  uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
+    if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)size)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_storage_service_save((const void *)(uintptr_t)ptr, size);
 }
 
 static uint32_t sys_storage_read_sectors(uint32_t lba, uint32_t ptr, uint32_t sector_count,
                                          uint32_t d, uint32_t e) {
     (void)d; (void)e;
+    if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)sector_count * 512u)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_storage_service_read_sectors(lba, (void *)(uintptr_t)ptr, sector_count);
 }
 
 static uint32_t sys_storage_write_sectors(uint32_t lba, uint32_t ptr, uint32_t sector_count,
                                           uint32_t d, uint32_t e) {
     (void)d; (void)e;
+    if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)sector_count * 512u)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_storage_service_write_sectors(lba, (const void *)(uintptr_t)ptr, sector_count);
 }
 
@@ -452,6 +613,9 @@ static uint32_t sys_storage_backend_load(uint32_t ptr, uint32_t size, uint32_t c
     if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
         return (uint32_t)-1;
     }
+    if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)size)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)kernel_storage_load((void *)(uintptr_t)ptr, size);
 }
 
@@ -459,6 +623,9 @@ static uint32_t sys_storage_backend_save(uint32_t ptr, uint32_t size, uint32_t c
                                          uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
     if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)size)) {
         return (uint32_t)-1;
     }
     return (uint32_t)kernel_storage_save((const void *)(uintptr_t)ptr, size);
@@ -470,6 +637,9 @@ static uint32_t sys_storage_backend_read_sectors(uint32_t lba, uint32_t ptr, uin
     if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
         return (uint32_t)-1;
     }
+    if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)sector_count * 512u)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)kernel_storage_read_sectors(lba, (void *)(uintptr_t)ptr, sector_count);
 }
 
@@ -477,6 +647,9 @@ static uint32_t sys_storage_backend_write_sectors(uint32_t lba, uint32_t ptr, ui
                                                   uint32_t d, uint32_t e) {
     (void)d; (void)e;
     if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)sector_count * 512u)) {
         return (uint32_t)-1;
     }
     return (uint32_t)kernel_storage_write_sectors(lba, (const void *)(uintptr_t)ptr, sector_count);
@@ -503,18 +676,27 @@ static uint32_t sys_storage_backend_partition_start_lba(uint32_t a, uint32_t b, 
 static uint32_t sys_fs_open(uint32_t path_ptr, uint32_t flags, uint32_t c,
                             uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
+    if (!sys_user_str_ok((uintptr_t)path_ptr, 256u)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_filesystem_service_open((const char *)(uintptr_t)path_ptr, (int)flags);
 }
 
 static uint32_t sys_fs_read(uint32_t fd, uint32_t buf_ptr, uint32_t count,
                             uint32_t d, uint32_t e) {
     (void)d; (void)e;
+    if (!sys_user_ptr_ok((uintptr_t)buf_ptr, (size_t)count)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_filesystem_service_read((int)fd, (void *)(uintptr_t)buf_ptr, count);
 }
 
 static uint32_t sys_fs_write(uint32_t fd, uint32_t buf_ptr, uint32_t count,
                              uint32_t d, uint32_t e) {
     (void)d; (void)e;
+    if (!sys_user_ptr_ok((uintptr_t)buf_ptr, (size_t)count)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_filesystem_service_write((int)fd, (const void *)(uintptr_t)buf_ptr, count);
 }
 
@@ -533,6 +715,10 @@ static uint32_t sys_fs_lseek(uint32_t fd, uint32_t offset, uint32_t whence,
 static uint32_t sys_fs_stat(uint32_t path_ptr, uint32_t stat_ptr, uint32_t c,
                             uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
+    if (!sys_user_str_ok((uintptr_t)path_ptr, 256u) ||
+        !sys_user_ptr_ok((uintptr_t)stat_ptr, sizeof(struct stat))) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_filesystem_service_stat((const char *)(uintptr_t)path_ptr,
                                                 (struct stat *)(uintptr_t)stat_ptr);
 }
@@ -540,6 +726,9 @@ static uint32_t sys_fs_stat(uint32_t path_ptr, uint32_t stat_ptr, uint32_t c,
 static uint32_t sys_fs_fstat(uint32_t fd, uint32_t stat_ptr, uint32_t c,
                              uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
+    if (!sys_user_ptr_ok((uintptr_t)stat_ptr, sizeof(struct stat))) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_filesystem_service_fstat((int)fd,
                                                  (struct stat *)(uintptr_t)stat_ptr);
 }
@@ -548,6 +737,9 @@ static uint32_t sys_fs_backend_open(uint32_t path_ptr, uint32_t flags, uint32_t 
                                     uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
     if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_str_ok((uintptr_t)path_ptr, 256u)) {
         return (uint32_t)-1;
     }
     return (uint32_t)open((const char *)(uintptr_t)path_ptr, (int)flags);
@@ -559,6 +751,9 @@ static uint32_t sys_fs_backend_read(uint32_t fd, uint32_t buf_ptr, uint32_t coun
     if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
         return (uint32_t)-1;
     }
+    if (!sys_user_ptr_ok((uintptr_t)buf_ptr, (size_t)count)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)read((int)fd, (void *)(uintptr_t)buf_ptr, count);
 }
 
@@ -566,6 +761,9 @@ static uint32_t sys_fs_backend_write(uint32_t fd, uint32_t buf_ptr, uint32_t cou
                                      uint32_t d, uint32_t e) {
     (void)d; (void)e;
     if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)buf_ptr, (size_t)count)) {
         return (uint32_t)-1;
     }
     return (uint32_t)write((int)fd, (const void *)(uintptr_t)buf_ptr, count);
@@ -593,6 +791,10 @@ static uint32_t sys_fs_backend_stat(uint32_t path_ptr, uint32_t stat_ptr, uint32
                                     uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
     if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_FILESYSTEM)) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_str_ok((uintptr_t)path_ptr, 256u) ||
+        !sys_user_ptr_ok((uintptr_t)stat_ptr, sizeof(struct stat))) {
         return (uint32_t)-1;
     }
     return (uint32_t)stat((const char *)(uintptr_t)path_ptr,
@@ -695,6 +897,9 @@ static uint32_t sys_write_debug(uint32_t a, uint32_t b, uint32_t c,
         g_audio_boot_trace_write_debug = 1u;
         kernel_text_puts("audiosvc: syscall write_debug\n");
     }
+    if (!sys_user_str_ok((uintptr_t)a, 4096u)) {
+        return (uint32_t)-1;
+    }
     kernel_debug_puts((const char *)(uintptr_t)a);
     return 0;
 }
@@ -733,6 +938,9 @@ static uint32_t sys_text_write(uint32_t a, uint32_t b, uint32_t c,
     const char *src = (const char *)(uintptr_t)a;
 
     (void)b; (void)c; (void)d; (void)e;
+    if (!sys_user_str_ok((uintptr_t)a, sizeof(buf))) {
+        return (uint32_t)-1;
+    }
     for (i = 0; i < (int)sizeof(buf) - 1 && src[i] != '\0'; ++i) {
         buf[i] = src[i];
     }
@@ -835,6 +1043,9 @@ static uint32_t sys_audio_write(uint32_t data_ptr, uint32_t size, uint32_t c,
     if (data_ptr == 0u || size == 0u) {
         return (uint32_t)-1;
     }
+    if (!sys_user_ptr_ok((uintptr_t)data_ptr, (size_t)size)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_audio_service_write((const void *)(uintptr_t)data_ptr, size);
 }
 
@@ -842,6 +1053,9 @@ static uint32_t sys_audio_write_async(uint32_t data_ptr, uint32_t size, uint32_t
                                       uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
     if (data_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)data_ptr, (size_t)size)) {
         return (uint32_t)-1;
     }
     return (uint32_t)mk_audio_service_write_async((const void *)(uintptr_t)data_ptr, size);
@@ -879,6 +1093,9 @@ static uint32_t sys_audio_read(uint32_t data_ptr, uint32_t size, uint32_t c,
                                uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
     if (data_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)data_ptr, (size_t)size)) {
         return (uint32_t)-1;
     }
     return (uint32_t)mk_audio_service_read((void *)(uintptr_t)data_ptr, size);
@@ -956,6 +1173,9 @@ static uint32_t sys_network_disconnect(uint32_t if_name_ptr, uint32_t b, uint32_
     if (if_name_ptr == 0u) {
         return (uint32_t)-1;
     }
+    if (!sys_user_str_ok((uintptr_t)if_name_ptr, 64u)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_network_service_disconnect((const char *)(uintptr_t)if_name_ptr);
 }
 
@@ -963,6 +1183,9 @@ static uint32_t sys_network_connect_ethernet(uint32_t if_name_ptr, uint32_t b, u
                                              uint32_t d, uint32_t e) {
     (void)b; (void)c; (void)d; (void)e;
     if (if_name_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_str_ok((uintptr_t)if_name_ptr, 64u)) {
         return (uint32_t)-1;
     }
     return (uint32_t)mk_network_service_connect_ethernet((const char *)(uintptr_t)if_name_ptr);
@@ -1012,6 +1235,9 @@ static uint32_t sys_network_send(uint32_t handle, uint32_t data_ptr, uint32_t si
     if (data_ptr == 0u || size == 0u) {
         return (uint32_t)-1;
     }
+    if (!sys_user_ptr_ok((uintptr_t)data_ptr, (size_t)size)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_network_service_send((int)handle,
                                              (const void *)(uintptr_t)data_ptr,
                                              size);
@@ -1021,6 +1247,9 @@ static uint32_t sys_network_recv(uint32_t handle, uint32_t buffer_ptr, uint32_t 
                                  uint32_t d, uint32_t e) {
     (void)d; (void)e;
     if (buffer_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)buffer_ptr, (size_t)size)) {
         return (uint32_t)-1;
     }
     return (uint32_t)mk_network_service_recv((int)handle,
@@ -1039,6 +1268,10 @@ static uint32_t sys_network_sendto(uint32_t handle, uint32_t data_ptr, uint32_t 
     if (data_ptr == 0u || size == 0u) {
         return (uint32_t)-1;
     }
+    if (!sys_user_ptr_ok((uintptr_t)data_ptr, (size_t)size) ||
+        (addr_ptr != 0u && !sys_user_ptr_ok((uintptr_t)addr_ptr, 128u))) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_network_service_sendto((int)handle,
                                                (const void *)(uintptr_t)data_ptr,
                                                size,
@@ -1052,6 +1285,11 @@ static uint32_t sys_network_recvfrom(uint32_t handle, uint32_t buffer_ptr, uint3
     int result;
 
     if (buffer_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)buffer_ptr, (size_t)size) ||
+        (addr_ptr != 0u && !sys_user_ptr_ok((uintptr_t)addr_ptr, 128u)) ||
+        (addrlen_ptr != 0u && !sys_user_ptr_ok((uintptr_t)addrlen_ptr, sizeof(uint32_t)))) {
         return (uint32_t)-1;
     }
     result = mk_network_service_recvfrom_addr((int)handle,
@@ -1092,6 +1330,9 @@ static uint32_t sys_transfer_read(uint32_t transfer_id, uint32_t dst_ptr, uint32
     if (dst_ptr == 0u || size == 0u) {
         return (uint32_t)-1;
     }
+    if (!sys_user_ptr_ok((uintptr_t)dst_ptr, (size_t)size)) {
+        return (uint32_t)-1;
+    }
     return mk_transfer_copy_to(transfer_id, (void *)(uintptr_t)dst_ptr, size) == 0 ? 0u : (uint32_t)-1;
 }
 
@@ -1099,6 +1340,9 @@ static uint32_t sys_transfer_write(uint32_t transfer_id, uint32_t src_ptr, uint3
                                    uint32_t d, uint32_t e) {
     (void)d; (void)e;
     if (src_ptr == 0u || size == 0u) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)src_ptr, (size_t)size)) {
         return (uint32_t)-1;
     }
     return mk_transfer_copy_from(transfer_id, (const void *)(uintptr_t)src_ptr, size) == 0 ? 0u : (uint32_t)-1;
@@ -1136,6 +1380,9 @@ static uint32_t sys_service_receive(uint32_t message_ptr, uint32_t b, uint32_t c
         return (uint32_t)-1;
     }
 
+    if (!sys_user_ptr_ok((uintptr_t)message_ptr, sizeof(struct mk_message))) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)ipc_receive_wait(current,
                                       (void *)(uintptr_t)message_ptr,
                                       sizeof(struct mk_message));
@@ -1214,6 +1461,9 @@ static uint32_t sys_message_receive(uint32_t message_ptr, uint32_t timeout_ticks
         return (uint32_t)-1;
     }
 
+    if (!sys_user_ptr_ok((uintptr_t)message_ptr, sizeof(struct mk_async_message))) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)ipc_receive_wait_timeout(current,
                                               (void *)(uintptr_t)message_ptr,
                                               sizeof(struct mk_async_message),
@@ -1247,6 +1497,9 @@ static uint32_t sys_service_event_receive(uint32_t service_type, uint32_t event_
         return (uint32_t)-1;
     }
 
+    if (!sys_user_ptr_ok((uintptr_t)event_ptr, sizeof(struct mk_service_event))) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_service_event_receive(service_type,
                                               current,
                                               (struct mk_service_event *)(uintptr_t)event_ptr,
@@ -1287,6 +1540,9 @@ static uint32_t sys_service_health(uint32_t health_ptr, uint32_t service_type,
     if (health_ptr == 0u) {
         return (uint32_t)-1;
     }
+    if (!sys_user_ptr_ok((uintptr_t)health_ptr, sizeof(struct mk_service_health_stats))) {
+        return (uint32_t)-1;
+    }
     user_health = (struct mk_service_health_stats *)(uintptr_t)health_ptr;
     if (mk_service_query_health(service_type, &health) != 0) {
         return (uint32_t)-1;
@@ -1322,6 +1578,9 @@ static uint32_t sys_audio_event_receive(uint32_t event_ptr, uint32_t timeout_tic
         return (uint32_t)-1;
     }
 
+    if (!sys_user_ptr_ok((uintptr_t)event_ptr, sizeof(struct mk_audio_event))) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)mk_audio_service_event_receive(current,
                                                     (struct mk_audio_event *)(uintptr_t)event_ptr,
                                                     timeout_ticks);
@@ -1338,6 +1597,12 @@ static uint32_t sys_task_snapshot(uint32_t summary_ptr, uint32_t entries_ptr, ui
         return (uint32_t)-1;
     }
 
+    if (!sys_user_ptr_ok((uintptr_t)summary_ptr, sizeof(struct task_snapshot_summary)) ||
+        (entries_ptr != 0u && max_entries > 0u &&
+         !sys_user_ptr_ok((uintptr_t)entries_ptr,
+                          (size_t)max_entries * sizeof(struct task_snapshot_entry)))) {
+        return (uint32_t)-1;
+    }
     summary = (struct task_snapshot_summary *)(uintptr_t)summary_ptr;
     entries = entries_ptr != 0u ? (struct task_snapshot_entry *)(uintptr_t)entries_ptr : 0;
     if (max_entries > TASK_SNAPSHOT_MAX) {
@@ -1392,6 +1657,9 @@ static uint32_t sys_memory_status(uint32_t status_ptr, uint32_t b, uint32_t c,
     arena_bytes = sys_memory_current_arena_bytes(current, context);
     stack_reserve_bytes = sys_memory_current_stack_reserve_bytes(current, context);
     reserved_bytes = VIBE_APP_ARENA_SIZE + VIBE_APP_DESKTOP_ARENA_SIZE + VIBE_APP_BOOT_ARENA_SIZE;
+    if (!sys_user_ptr_ok((uintptr_t)status_ptr, sizeof(struct mk_memory_status))) {
+        return (uint32_t)-1;
+    }
     status = (struct mk_memory_status *)(uintptr_t)status_ptr;
     memset(status, 0, sizeof(*status));
     status->abi_version = MK_MEMORY_STATUS_ABI_VERSION;
@@ -1515,6 +1783,9 @@ static uint32_t sys_memory_budget(uint32_t budget_ptr, uint32_t b, uint32_t c,
         opportunistic_bytes = working_bytes;
     }
 
+    if (!sys_user_ptr_ok((uintptr_t)budget_ptr, sizeof(struct mk_memory_budget))) {
+        return (uint32_t)-1;
+    }
     budget = (struct mk_memory_budget *)(uintptr_t)budget_ptr;
     memset(budget, 0, sizeof(*budget));
     budget->abi_version = MK_MEMORY_BUDGET_ABI_VERSION;
@@ -1849,10 +2120,16 @@ static uint32_t sys_launch_app(uint32_t name_ptr, uint32_t b, uint32_t c,
     descriptor.flags = MK_LAUNCH_FLAG_USER_APP;
     descriptor.task_class = MK_TASK_CLASS_APP_RUNTIME;
     if (b == 0u) {
+        if (!sys_user_str_ok((uintptr_t)name_ptr, 64u)) {
+            return (uint32_t)-1;
+        }
         if (sys_launch_app_copy_name((const char *)(uintptr_t)name_ptr, &descriptor) != 0) {
             return (uint32_t)-1;
         }
     } else {
+        if (!sys_user_ptr_ok((uintptr_t)name_ptr, (size_t)b * sizeof(uintptr_t))) {
+            return (uint32_t)-1;
+        }
         if (sys_launch_app_copy_argv((const char *const *)(uintptr_t)name_ptr, b, &descriptor) != 0) {
             return (uint32_t)-1;
         }
@@ -1889,6 +2166,9 @@ static uint32_t sys_task_event_receive(uint32_t event_ptr, uint32_t timeout_tick
         return (uint32_t)-1;
     }
 
+    if (!sys_user_ptr_ok((uintptr_t)event_ptr, sizeof(struct mk_task_event))) {
+        return (uint32_t)-1;
+    }
     event = (struct mk_task_event *)(uintptr_t)event_ptr;
     return (uint32_t)(scheduler_task_event_receive(current, event, timeout_ticks) == 0 ? 0 : (uint32_t)-1);
 }
@@ -1924,6 +2204,9 @@ static uint32_t sys_video_event_receive(uint32_t event_ptr, uint32_t timeout_tic
                                        timeout_ticks) != 0) {
         return (uint32_t)-1;
     }
+    if (!sys_user_ptr_ok((uintptr_t)event_ptr, sizeof(event))) {
+        return (uint32_t)-1;
+    }
     memcpy((void *)(uintptr_t)event_ptr, &event, sizeof(event));
     return 0u;
 }
@@ -1936,6 +2219,10 @@ static uint32_t sys_video_present_submit(uint32_t mode, uint32_t sequence_ptr,
     (void)d;
     (void)e;
     if (mk_video_service_present_submit(mode, &sequence) != 0) {
+        return (uint32_t)-1;
+    }
+    if (sequence_ptr != 0u &&
+        !sys_user_ptr_ok((uintptr_t)sequence_ptr, sizeof(uint32_t))) {
         return (uint32_t)-1;
     }
     if (sequence_ptr != 0u) {
@@ -1971,6 +2258,9 @@ static uint32_t sys_network_event_receive(uint32_t event_ptr, uint32_t timeout_t
         return (uint32_t)-1;
     }
     if (mk_network_service_event_receive(current, &event, timeout_ticks) != 0) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)event_ptr, sizeof(event))) {
         return (uint32_t)-1;
     }
     memcpy((void *)(uintptr_t)event_ptr, &event, sizeof(event));
@@ -2161,6 +2451,9 @@ static uint32_t sys_execve(uint32_t path_ptr, uint32_t argv_ptr,
         return (uint32_t)-1;
     }
 
+    if (!sys_user_str_ok((uintptr_t)path_ptr, 256u)) {
+        return (uint32_t)-1;
+    }
     fd = open((const char *)(uintptr_t)path_ptr, 0);
     if (fd < 0) {
         kernel_debug_printf("sys_execve: open failed %s\n",
@@ -2312,6 +2605,9 @@ static uint32_t sys_waitpid(uint32_t pid, uint32_t status_ptr,
             current->child_exit_pid = 0;
             current->child_exit_status = 0;
             if (status_ptr != 0u) {
+                if (!sys_user_ptr_ok((uintptr_t)status_ptr, sizeof(int))) {
+                    return (uint32_t)-1;
+                }
                 *(int *)(uintptr_t)status_ptr = cstatus;
             }
             return (uint32_t)cpid;
@@ -2333,6 +2629,9 @@ static uint32_t sys_waitpid(uint32_t pid, uint32_t status_ptr,
             current->child_exit_pid = 0;
             current->child_exit_status = 0;
             if (status_ptr != 0u) {
+                if (!sys_user_ptr_ok((uintptr_t)status_ptr, sizeof(int))) {
+                    return (uint32_t)-1;
+                }
                 *(int *)(uintptr_t)status_ptr = cstatus;
             }
             return (uint32_t)cpid;
@@ -2507,6 +2806,9 @@ static uint32_t sys_munmap(uint32_t addr, uint32_t length, uint32_t c,
     aligned_len = (length + 0xFFFu) & ~0xFFFu;
     num_pages = aligned_len / 0x1000u;
 
+    if (!sys_user_range_mapped_ok(aligned_virt, aligned_len)) {
+        return (uint32_t)-1;
+    }
     for (uint32_t i = 0u; i < num_pages; ++i) {
         uintptr_t virt = aligned_virt + (uintptr_t)(i * 0x1000u);
         uintptr_t phys = paging_get_phys_addr(virt);
@@ -2655,6 +2957,9 @@ static uint32_t sys_getcwd(uint32_t buf_ptr, uint32_t size, uint32_t c,
         return (uint32_t)-1;
     }
 
+    if (!sys_user_ptr_ok((uintptr_t)buf_ptr, (size_t)size)) {
+        return (uint32_t)-1;
+    }
     if (current->cwd[0] == '\0') {
         memcpy((void *)(uintptr_t)buf_ptr, "/", 2u);
         return 1u;
@@ -2682,6 +2987,9 @@ static uint32_t sys_chdir(uint32_t path_ptr, uint32_t b, uint32_t c,
         return (uint32_t)-1;
     }
 
+    if (!sys_user_str_ok((uintptr_t)path_ptr, sizeof(current->cwd))) {
+        return (uint32_t)-1;
+    }
     path = (const char *)(uintptr_t)path_ptr;
     len = strlen(path);
     if (len == 0u || len >= sizeof(current->cwd)) {
@@ -2699,6 +3007,9 @@ static uint32_t sys_opendir(uint32_t path_ptr, uint32_t b, uint32_t c,
     if (path_ptr == 0u) {
         return (uint32_t)-1;
     }
+    if (!sys_user_str_ok((uintptr_t)path_ptr, 256u)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)opendir_fd((const char *)(uintptr_t)path_ptr);
 }
 
@@ -2706,6 +3017,9 @@ static uint32_t sys_readdir(uint32_t dirfd, uint32_t entry_ptr, uint32_t c,
                             uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
     if (entry_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_ptr_ok((uintptr_t)entry_ptr, sizeof(struct vfs_dirent))) {
         return (uint32_t)-1;
     }
     return (uint32_t)readdir_fd((int)dirfd,
@@ -2722,6 +3036,9 @@ static uint32_t sys_mkdir(uint32_t path_ptr, uint32_t mode, uint32_t c,
                           uint32_t d, uint32_t e) {
     (void)c; (void)d; (void)e;
     if (path_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_str_ok((uintptr_t)path_ptr, 256u)) {
         return (uint32_t)-1;
     }
     return (uint32_t)mkdir((const char *)(uintptr_t)path_ptr, (mode_t)mode);
@@ -2808,6 +3125,9 @@ static uint32_t sys_madvise(uint32_t addr, uint32_t length, uint32_t advice,
     start = addr & ~0xFFFu;
     end = ((addr + length + 0xFFFu) & ~0xFFFu);
 
+    if (!sys_user_range_mapped_ok(start, (size_t)(end - start))) {
+        return (uint32_t)-1;
+    }
     if (advice == 4u) {
         for (uintptr_t v = start; v < end; v += 0x1000u) {
             uintptr_t phys = paging_get_phys_addr(v);
@@ -2834,6 +3154,9 @@ static uint32_t sys_shm_open(uint32_t name_ptr, uint32_t oflag, uint32_t c,
         return (uint32_t)-1;
     }
 
+    if (!sys_user_str_ok((uintptr_t)name_ptr, SHM_NAME_MAX)) {
+        return (uint32_t)-1;
+    }
     name = (const char *)(uintptr_t)name_ptr;
     name_len = 0u;
     while (name_len < SHM_NAME_MAX && name[name_len] != '\0') {
@@ -2879,6 +3202,9 @@ static uint32_t sys_shm_unlink(uint32_t name_ptr, uint32_t b, uint32_t c,
         return (uint32_t)-1;
     }
 
+    if (!sys_user_str_ok((uintptr_t)name_ptr, SHM_NAME_MAX)) {
+        return (uint32_t)-1;
+    }
     name = (const char *)(uintptr_t)name_ptr;
     name_len = 0u;
     while (name_len < SHM_NAME_MAX && name[name_len] != '\0') {
@@ -2974,6 +3300,10 @@ static uint32_t sys_readlink(uint32_t path_ptr, uint32_t buf_ptr, uint32_t bufsz
     if (path_ptr == 0u || buf_ptr == 0u || bufsz == 0u) {
         return (uint32_t)-1;
     }
+    if (!sys_user_str_ok((uintptr_t)path_ptr, 256u) ||
+        !sys_user_ptr_ok((uintptr_t)buf_ptr, (size_t)bufsz)) {
+        return (uint32_t)-1;
+    }
     return (uint32_t)readlink_path((const char *)(uintptr_t)path_ptr,
                                     (char *)(uintptr_t)buf_ptr,
                                     (size_t)bufsz);
@@ -2987,6 +3317,10 @@ static uint32_t sys_utimensat(uint32_t dirfd, uint32_t path_ptr, uint32_t times_
     }
     (void)flags;
     if (path_ptr == 0u) {
+        return (uint32_t)-1;
+    }
+    if (!sys_user_str_ok((uintptr_t)path_ptr, 256u) ||
+        (times_ptr != 0u && !sys_user_ptr_ok((uintptr_t)times_ptr, sizeof(struct timespec)))) {
         return (uint32_t)-1;
     }
     return (uint32_t)utimens_path((const char *)(uintptr_t)path_ptr,
