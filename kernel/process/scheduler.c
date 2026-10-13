@@ -840,8 +840,11 @@ static void scheduler_dispatch_forensics(uint32_t cpu_index,
     uintptr_t faddr;
     uintptr_t ebp;
     uintptr_t esp_dummy;
+    uintptr_t eip;
     int frame_in_window;
     int regs_in_window;
+    int eip_sane;
+    int cs_sane;
     uint32_t clean = 0u;
 
     if (g_sched_dispatch_forensics_budget == 0u ||
@@ -876,7 +879,28 @@ static void scheduler_dispatch_forensics(uint32_t cpu_index,
     regs_in_window = (ebp == 0u || (ebp >= stack && ebp < stack_end)) &&
                      (esp_dummy >= stack && esp_dummy < stack_end);
 
-    if (frame_in_window && regs_in_window) {
+    /*
+     * eip/cs sanity (second blind spot removed, class #4): the c4a run
+     * showed a frame whose ebp/esp still looked in-window but whose TAIL
+     * words held {eip=5, cs=2, eflags=1} — the sanitize guard caught it
+     * only because it repairs cs/eflags, and my window check missed the
+     * eip word entirely. A legitimate resume eip is either kernel text
+     * [< ~8MB, below the app arenas] or inside a user arena window; a
+     * legitimate resume cs is KERNEL_CS or USER_CS. Anything else is a
+     * trashed frame regardless of the window.
+     */
+    /*
+     * Legitimate resume eip: kernel text [0x10000, 0x800000) or any user
+     * window >= 0x02000000 (arenas + mmap region). The gap [0x800000,
+     * 0x2000000) is heap/boot-reserved — never executable. Below 0x10000
+     * is the real-mode page — never a protected-mode resume target.
+     */
+    eip = (uintptr_t)frame->eip;
+    eip_sane = (eip >= 0x00010000u &&
+                (eip < 0x00800000u || eip >= 0x02000000u));
+    cs_sane = (frame->cs == KERNEL_CS_SELECTOR || frame->cs == USER_CS_SELECTOR);
+
+    if (frame_in_window && regs_in_window && eip_sane && cs_sane) {
         return;
     }
 

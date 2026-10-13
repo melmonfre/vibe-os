@@ -1962,10 +1962,45 @@ static uint32_t sys_task_create(uint32_t entry_ptr, uint32_t arg_ptr, uint32_t s
                                                user_stack_top,
                                                (uintptr_t)arg_ptr);
     } else {
+        /*
+         * Privilege guard (COMPLETION_ACTION_PLAN P4, class #4). The child's
+         * mode used to be DERIVED from the entry address alone: a ring3 host
+         * calling with an entry outside every arena window (e.g. a garbage
+         * app header from a partial SMP read — observed: EIP sliding through
+         * 0x025dabb8, the gap between the compat arenas, at CPL=0 CS=0x08
+         * with ESP=0xb) silently produced a RING0 task executing untrusted
+         * bytes at kernel privilege — every kernel-structure guard stays
+         * silent because nothing kernel-side is touched, only the task's
+         * own state. A ring3 caller must NEVER mint a ring0 task. Ring0
+         * callers (services, init) keep the derived behavior unchanged.
+         */
+        if (current->runs_in_user_mode != 0u) {
+            static uint32_t priv_reject_budget = 8u;
+            if (priv_reject_budget != 0u) {
+                priv_reject_budget--;
+                kernel_debug_printf("syscall: TASK-CREATE-PRIV-REJECT entry=0x%x caller_pid=%d\n",
+                                    (unsigned int)entry_ptr, current->pid);
+            }
+            kernel_free(child->stack);
+            kernel_free(child);
+            return (uint32_t)-1;
+        }
         process_setup_initial_context_arg(child,
                                           (uintptr_t)entry_ptr,
                                           (uintptr_t)child->stack + child->stack_size,
                                           (uintptr_t)arg_ptr);
+    }
+    {
+        static uint32_t create_trace_budget = 32u;
+        if (create_trace_budget != 0u) {
+            create_trace_budget--;
+            kernel_debug_printf("syscall: TASK-CREATE pid=%d entry=0x%x mode=%s caller_ring3=%d\n",
+                                child->pid, (unsigned int)entry_ptr,
+                                (user_stack_top != 0u &&
+                                 process_entry_supports_user_mode((uintptr_t)entry_ptr))
+                                    ? "ring3" : "ring0",
+                                (int)(current->runs_in_user_mode != 0u));
+        }
     }
     process_set_abi_metadata(child,
                              current->abi_kind,
