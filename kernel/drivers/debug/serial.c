@@ -2,6 +2,8 @@
 #include <kernel/hal/io.h>
 #include <kernel/driver_manager.h>  /* available via -Ikernel/include */
 #include <kernel/lock.h>
+#include <kernel/interrupt.h>
+#include <kernel/cpu/cpu.h>
 #include <stdarg.h>
 #include <stddef.h>
 
@@ -10,6 +12,61 @@
 
 static spinlock_t g_serial_lock;
 static int g_serial_lock_ready = 0;
+
+/*
+ * Contention-safe serial output (COMPLETION_ACTION_PLAN P4, real-time smp2
+ * freeze, round 2). Evidence: the owner-stamp nesting guard still deadlocked
+ * (stuck report fired at g_serial_lock again: lock=1, stamp=NONE, holder
+ * gone) — the panic path's kernel_debug_printf re-enters the blocking
+ * acquisition, and a holder that vanishes mid-print leaks the lock forever.
+ * A debug channel must NEVER be the thing that kills the system it is
+ * diagnosing: acquisition is now a trylock with IRQs saved; on contention
+ * the caller writes raw (interleaving garbles characters, blocking loses
+ * the whole boot). Raw paths already exist for the stuck report
+ * (kernel/lock.c) and kernel_panic.
+ */
+static void serial_putc_raw(char c);
+static void serial_write_raw(const char *s);
+
+/* Enter the serial output region. Returns 1 when the caller acquired
+ * (must pair with serial_leave with the saved flags), 0 when output must
+ * go raw: lock not ready, or contended — never block. */
+static int serial_enter(uint32_t *flags_out) {
+    uint32_t flags;
+
+    *flags_out = 0u;
+    if (!g_serial_lock_ready) {
+        return 0;
+    }
+    flags = kernel_irq_save();
+    if (spinlock_trylock(&g_serial_lock) == 0) {
+        kernel_irq_restore(flags);
+        return 0;
+    }
+    *flags_out = flags;
+    return 1;
+}
+
+static void serial_leave(int locked, uint32_t flags) {
+    if (!locked) {
+        return;
+    }
+    spinlock_unlock(&g_serial_lock);
+    kernel_irq_restore(flags);
+}
+
+/* Lock-free raw path for the stuck detector in lock.c: when a spinlock is
+ * deadlocked (possibly g_serial_lock itself), the report must still go
+ * out. Interleaving with a concurrent print garbles characters; losing
+ * the deadlock report loses the bug. */
+void kernel_serial_puts_raw(const char *s) {
+    if (s == 0) {
+        return;
+    }
+    while (*s != '\0') {
+        serial_putc_raw(*s++);
+    }
+}
 
 void kernel_debug_init(void) {
     static int registered = 0;
@@ -175,47 +232,37 @@ static void serial_vprintf_raw(const char *fmt, va_list args) {
 
 void kernel_debug_putc(char c) {
     uint32_t flags = 0u;
+    int locked = serial_enter(&flags);
 
-    if (g_serial_lock_ready) {
-        flags = spinlock_lock_irqsave(&g_serial_lock);
-    }
     serial_putc_raw(c);
-    if (g_serial_lock_ready) {
-        spinlock_unlock_irqrestore(&g_serial_lock, flags);
-    }
+    serial_leave(locked, flags);
 }
 
 void kernel_debug_puts(const char *str) {
     uint32_t flags = 0u;
+    int locked;
 
     if (str == NULL) {
         return;
     }
-    if (g_serial_lock_ready) {
-        flags = spinlock_lock_irqsave(&g_serial_lock);
-    }
+    locked = serial_enter(&flags);
     serial_write_raw(str);
-    if (g_serial_lock_ready) {
-        spinlock_unlock_irqrestore(&g_serial_lock, flags);
-    }
+    serial_leave(locked, flags);
 }
 
 void kernel_debug_printf(const char *fmt, ...) {
     uint32_t flags = 0u;
     va_list args;
+    int locked;
 
     if (fmt == NULL) {
         return;
     }
-    if (g_serial_lock_ready) {
-        flags = spinlock_lock_irqsave(&g_serial_lock);
-    }
+    locked = serial_enter(&flags);
 
     va_start(args, fmt);
     serial_vprintf_raw(fmt, args);
     va_end(args);
 
-    if (g_serial_lock_ready) {
-        spinlock_unlock_irqrestore(&g_serial_lock, flags);
-    }
+    serial_leave(locked, flags);
 }
