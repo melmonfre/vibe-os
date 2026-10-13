@@ -806,6 +806,97 @@ static void scheduler_list_diag(const char *what, process_t *node, process_t *pr
     }
 }
 
+/*
+ * DISPATCH-BAD-FORENSICS (COMPLETION_ACTION_PLAN P4, class #3).
+ * Real-time smp2 showed pid=1 resuming with EBP/ESP pointing INSIDE its
+ * own process_t block: the first kernel_debug_printf pushed {ret,
+ * saved_ebp} over kind/service_type (directed 8-byte write; block header
+ * stayed intact). Open question the probe pins down: WHEN did the saved
+ * frame go bad — (a) initial frame corrupted before first dispatch,
+ * (b) context pointer redirected into the task's own payload, or
+ * (c) frame saved during a block/yield with registers already bad.
+ *
+ * Invariant: the resume frame always lives on the task's own kernel
+ * stack (process_setup_initial_context[_arg] places it at the stack
+ * top; IRQ stubs push frames at current esp on the kernel stack), and
+ * the frame's ebp/esp_dummy point inside that same window. Violations
+ * dump the full frame + stack watermark: frame outside the window with
+ * a sane stack pointer => (b); first dispatch (sw==1) => (a); frame in
+ * window but registers wild => (c).
+ */
+#define SCHED_DISPATCH_FORENSICS_BUDGET 6u
+static volatile uint32_t g_sched_dispatch_forensics_budget =
+    SCHED_DISPATCH_FORENSICS_BUDGET;
+
+#define SCHED_CANARY_SWEEP_PERIOD_TICKS 8u
+#define SCHED_CANARY_SWEEP_BUDGET 2000u
+static volatile uint32_t g_sched_canary_sweep_budget = SCHED_CANARY_SWEEP_BUDGET;
+
+static void scheduler_dispatch_forensics(uint32_t cpu_index,
+                                         const process_t *task,
+                                         const kernel_trap_frame_t *frame) {
+    uintptr_t stack;
+    uintptr_t stack_end;
+    uintptr_t faddr;
+    uintptr_t ebp;
+    uintptr_t esp_dummy;
+    int frame_in_window;
+    int regs_in_window;
+    uint32_t clean = 0u;
+
+    if (g_sched_dispatch_forensics_budget == 0u ||
+        task == NULL || frame == NULL) {
+        return;
+    }
+    stack = (uintptr_t)task->stack;
+    if (stack == 0u || task->stack_size < 64u || task->stack_size > (1u << 20)) {
+        /*
+         * Blind spot removed: EVERY legitimate task gets its stack from
+         * process_create_with_stack (failure returns NULL, never a
+         * stackless task). A dispatched task without a sane stack window
+         * IS the anomaly — print it instead of skipping silently.
+         */
+        if (g_sched_dispatch_forensics_budget != 0u) {
+            g_sched_dispatch_forensics_budget--;
+            kernel_debug_printf("sched-dispatch: BAD-FORENSICS-NOSTACK cpu=%u pid=%d sw=%u ctx=0x%x stack=0x%x size=%u\n",
+                                cpu_index, task->pid, task->context_switches,
+                                (unsigned int)(uintptr_t)frame,
+                                (unsigned int)stack,
+                                (unsigned int)task->stack_size);
+        }
+        return;
+    }
+    stack_end = stack + (uintptr_t)task->stack_size;
+    faddr = (uintptr_t)frame;
+
+    frame_in_window = (faddr >= stack &&
+                       faddr + sizeof(kernel_trap_frame_t) <= stack_end);
+    ebp = (uintptr_t)frame->ebp;
+    esp_dummy = (uintptr_t)frame->esp_dummy;
+    regs_in_window = (ebp == 0u || (ebp >= stack && ebp < stack_end)) &&
+                     (esp_dummy >= stack && esp_dummy < stack_end);
+
+    if (frame_in_window && regs_in_window) {
+        return;
+    }
+
+    g_sched_dispatch_forensics_budget--;
+    {
+        const uint8_t *base = (const uint8_t *)stack;
+        while (clean < task->stack_size && base[clean] == 0xA5u) {
+            clean++;
+        }
+    }
+    kernel_debug_printf("sched-dispatch: BAD-FORENSICS cpu=%u pid=%d sw=%u ctx=0x%x stack=0x%x size=%u frame{ebp=0x%x esp=0x%x eip=0x%x cs=0x%x efl=0x%x} in_win=%d regs_in_win=%d clean_bottom=%u\n",
+                        cpu_index, task->pid, task->context_switches,
+                        (unsigned int)faddr, (unsigned int)stack,
+                        (unsigned int)task->stack_size,
+                        (unsigned int)ebp, (unsigned int)esp_dummy,
+                        (unsigned int)frame->eip, (unsigned int)frame->cs,
+                        (unsigned int)frame->eflags,
+                        frame_in_window, regs_in_window, clean);
+}
+
 void scheduler_add_task(process_t *proc) {
     uint32_t flags;
 
@@ -1062,6 +1153,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
             kernel_debug_printf("scheduler: select missing context pid=%d next_context=NULL\n",
                                 next->pid);
         }
+        scheduler_dispatch_forensics((uint32_t)cpu_index, next, resume_frame);
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         if (!g_audio_first_dispatch_trace_emitted &&
             next->service_type == MK_SERVICE_AUDIO) {
@@ -1395,6 +1487,56 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
     uint32_t flags;
 
     flags = spinlock_lock_irqsave(&g_scheduler_lock);
+
+    /*
+     * Budgeted canary sweep (COMPLETION_ACTION_PLAN P4, class #3). The
+     * dispatch probe proved frames are INTACT at dispatch time, so the
+     * trashing lands during execution — by the time a walk trips over a
+     * BAD-NODE the writer is long gone. Sweep every LINKED task's edge
+     * canary on a slow cadence: the FIRST violation names the victim pid
+     * while its block is still alive, and the physical-predecessor probe
+     * (class #2 tooling) attributes the writer. Lock order scheduler->
+     * heap is already established by scheduler_node_sane().
+     */
+    if (g_sched_canary_sweep_budget != 0u &&
+        (tick % SCHED_CANARY_SWEEP_PERIOD_TICKS) == 0u) {
+        process_t *scan;
+        uint32_t scan_steps = 0u;
+
+        g_sched_canary_sweep_budget--;
+        for (scan = g_head; scan != NULL; scan = scan->next) {
+            uintptr_t pred_start = 0u;
+            size_t pred_size = 0u;
+            uintptr_t pred_allocpc = 0u;
+            int pred_cnry = -1;
+
+            if (!scheduler_node_sane(scan)) {
+                break;
+            }
+            if (kernel_heap_block_canary_ok(scan)) {
+                if (++scan_steps > SCHED_LIST_WALK_CAP) {
+                    break;
+                }
+                continue;
+            }
+            kernel_debug_printf("sched-scan: BAD-CANARY pid=%d node=0x%x allocpc=0x%x state=%d svc=%d\n",
+                                scan->pid,
+                                (unsigned int)(uintptr_t)scan,
+                                (unsigned int)kernel_heap_block_alloc_pc(scan),
+                                (int)scan->state, (int)scan->service_type);
+            if (kernel_heap_block_predecessor(scan, &pred_start, &pred_size,
+                                              &pred_allocpc, &pred_cnry)) {
+                kernel_debug_printf("sched-scan:   writer-candidate pred{start=0x%x size=%u allocpc=0x%x cnry=%d}\n",
+                                    (unsigned int)pred_start,
+                                    (unsigned int)pred_size,
+                                    (unsigned int)pred_allocpc, pred_cnry);
+            }
+            /* First violation is the smoking gun; later ones are noise
+             * from the same writer. Stop sweeping. */
+            g_sched_canary_sweep_budget = 0u;
+            break;
+        }
+    }
     for (task = g_head; task != NULL; task = task->next) {
         int inline_cpu;
         int inline_wake;

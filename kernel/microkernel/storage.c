@@ -1,5 +1,6 @@
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/drivers/storage/block_device.h>
+#include <kernel/drivers/debug/debug.h>
 #include <kernel/kernel_string.h>
 #include <kernel/microkernel/launch.h>
 #include <kernel/microkernel/message.h>
@@ -12,6 +13,35 @@
 static struct mk_message g_last_storage_request;
 static struct mk_message g_last_storage_reply;
 #define MK_STORAGE_PERSIST_IO_CHUNK_SECTORS 64u
+
+/*
+ * Sector-count ceiling (COMPLETION_ACTION_PLAN P4, class #3). Message
+ * payloads carry an UNTRUSTED uint32 sector_count; byte_count is
+ * sector_count * 512 in uint32 arithmetic, so sector_count >= 0x800000
+ * wraps the product toward 0 and can sail through the
+ * "mk_transfer_size(...) < byte_count" checks — the ATA loop then
+ * streams gigabytes of disk data into a small heap buffer, overwriting
+ * whatever follows (observed real-time smp2 signature: task frames
+ * holding data-byte registers, e.g. cs=0x454430 / eip=0x213 — ASCII
+ * bytes as selector/eip — and DISPATCH-BAD-FORENSICS proving the frame
+ * was intact AT dispatch, i.e. the write lands DURING execution).
+ * 65536 sectors = 32 MiB per request: far above any legitimate path
+ * (persist I/O chunks at 64 sectors; assets load in small pieces) and
+ * small enough that sector_count * 512 can never wrap a 32-bit product.
+ */
+#define MK_STORAGE_MAX_SECTORS_PER_REQUEST 65536u
+
+static uint32_t g_storage_sector_ceiling_trace_budget = 8u;
+
+static void mk_storage_reject_ceiling(const char *what, uint32_t sector_count) {
+    if (g_storage_sector_ceiling_trace_budget == 0u) {
+        return;
+    }
+    g_storage_sector_ceiling_trace_budget--;
+    kernel_debug_printf("storage: REJECT %s sector_count=%u > ceiling %u\n",
+                        what, (unsigned int)sector_count,
+                        (unsigned int)MK_STORAGE_MAX_SECTORS_PER_REQUEST);
+}
 
 static uint32_t mk_storage_current_pid(void) {
     return scheduler_current_pid();
@@ -105,6 +135,11 @@ static int mk_storage_local_handler(const struct mk_message *request,
             int rc;
 
             payload = (const struct mk_storage_sectors_request *)request->payload;
+            if (payload->sector_count == 0u ||
+                payload->sector_count > MK_STORAGE_MAX_SECTORS_PER_REQUEST) {
+                mk_storage_reject_ceiling("BLOCK_READ", payload->sector_count);
+                return -1;
+            }
             byte_count = payload->sector_count * KERNEL_PERSIST_SECTOR_SIZE;
             buffer = mk_transfer_data_write(payload->transfer_id);
             if (buffer == 0) {
@@ -150,6 +185,11 @@ static int mk_storage_local_handler(const struct mk_message *request,
             int rc;
 
             payload = (const struct mk_storage_sectors_request *)request->payload;
+            if (payload->sector_count == 0u ||
+                payload->sector_count > MK_STORAGE_MAX_SECTORS_PER_REQUEST) {
+                mk_storage_reject_ceiling("BLOCK_WRITE", payload->sector_count);
+                return -1;
+            }
             byte_count = payload->sector_count * KERNEL_PERSIST_SECTOR_SIZE;
             buffer = (void *)mk_transfer_data_read(payload->transfer_id);
             if (buffer == 0) {
@@ -253,6 +293,10 @@ int mk_storage_service_read_sectors(uint32_t lba, void *dst, uint32_t sector_cou
         return kernel_storage_read_sectors(lba, dst, sector_count);
     }
 
+    if (sector_count > MK_STORAGE_MAX_SECTORS_PER_REQUEST) {
+        mk_storage_reject_ceiling("client_read", sector_count);
+        return -1;
+    }
     byte_count = sector_count * KERNEL_PERSIST_SECTOR_SIZE;
     if (mk_transfer_create(mk_storage_current_pid(), byte_count, &transfer_id) != 0) {
         return -1;
@@ -300,6 +344,10 @@ int mk_storage_service_write_sectors(uint32_t lba, const void *src, uint32_t sec
         return kernel_storage_write_sectors(lba, src, sector_count);
     }
 
+    if (sector_count > MK_STORAGE_MAX_SECTORS_PER_REQUEST) {
+        mk_storage_reject_ceiling("client_write", sector_count);
+        return -1;
+    }
     byte_count = sector_count * KERNEL_PERSIST_SECTOR_SIZE;
     if (mk_transfer_create(mk_storage_current_pid(), byte_count, &transfer_id) != 0) {
         return -1;

@@ -580,6 +580,9 @@ static uint32_t sys_storage_save(uint32_t ptr, uint32_t size, uint32_t c,
 static uint32_t sys_storage_read_sectors(uint32_t lba, uint32_t ptr, uint32_t sector_count,
                                          uint32_t d, uint32_t e) {
     (void)d; (void)e;
+    if (sector_count == 0u || sector_count > 65536u) {
+        return (uint32_t)-1;
+    }
     if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)sector_count * 512u)) {
         return (uint32_t)-1;
     }
@@ -589,6 +592,9 @@ static uint32_t sys_storage_read_sectors(uint32_t lba, uint32_t ptr, uint32_t se
 static uint32_t sys_storage_write_sectors(uint32_t lba, uint32_t ptr, uint32_t sector_count,
                                           uint32_t d, uint32_t e) {
     (void)d; (void)e;
+    if (sector_count == 0u || sector_count > 65536u) {
+        return (uint32_t)-1;
+    }
     if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)sector_count * 512u)) {
         return (uint32_t)-1;
     }
@@ -637,6 +643,11 @@ static uint32_t sys_storage_backend_read_sectors(uint32_t lba, uint32_t ptr, uin
     if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
         return (uint32_t)-1;
     }
+    /* Ceiling BEFORE the *512 product: sector_count>=0x800000 wraps it to
+     * 0 in 32-bit and sys_user_ptr_ok(len=0) passes anything (class #3). */
+    if (sector_count == 0u || sector_count > 65536u) {
+        return (uint32_t)-1;
+    }
     if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)sector_count * 512u)) {
         return (uint32_t)-1;
     }
@@ -647,6 +658,9 @@ static uint32_t sys_storage_backend_write_sectors(uint32_t lba, uint32_t ptr, ui
                                                   uint32_t d, uint32_t e) {
     (void)d; (void)e;
     if (!mk_service_backend_bridge_allowed_current(MK_SERVICE_STORAGE)) {
+        return (uint32_t)-1;
+    }
+    if (sector_count == 0u || sector_count > 65536u) {
         return (uint32_t)-1;
     }
     if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)sector_count * 512u)) {
