@@ -385,6 +385,18 @@ process_t *process_create_with_stack(void (*entry)(void),
         kernel_free(p);
         return NULL;
     }
+    /*
+     * Stack watermark fill (COMPLETION_ACTION_PLAN P4). The refined SMP
+     * signature (a live task block whose canary is trashed FIRST, then its
+     * payload/header filled with return-address-shaped values, with NO
+     * heap-API guard firing) is exactly what a kernel-stack exhaustion
+     * looks like: the stack block is allocated immediately AFTER the
+     * process_t block, and stacks grow down, so an overflow walks the
+     * process_t canary -> payload -> header. Fill the stack with a pattern
+     * before the initial frame is placed so the deepest used byte can be
+     * measured later. Must happen BEFORE process_setup_initial_context.
+     */
+    memset(p->stack, 0xA5, normalized_stack_size);
 
     process_setup_initial_context(p,
                                   (uintptr_t)entry,

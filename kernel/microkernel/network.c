@@ -3035,7 +3035,7 @@ static int mk_network_service_launch_deferred(void) {
                                   mk_network_local_handler,
                                   0,
                                   userland_network_service_entry,
-                                  8192u,
+                                  32768u,
                                   MK_LAUNCH_FLAG_BOOTSTRAP |
                                   MK_LAUNCH_FLAG_BUILTIN);
 }

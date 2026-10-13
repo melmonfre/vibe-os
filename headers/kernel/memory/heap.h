@@ -18,6 +18,18 @@ int kernel_heap_is_initialized(void);
  * (inside the heap window, 8-aligned, header magic ALLOC with sane size).
  * Used by the scheduler walk to reject wild pointers before following them. */
 int kernel_heap_is_block(const void *ptr);
+/* Allocation-site PC recorded in a live block's header (0 if unknown/not a
+ * live block). Lets callers register watch PCs without exposing the header. */
+uintptr_t kernel_heap_block_alloc_pc(const void *ptr);
+/* Live canary probe: 1 iff ptr is a live block whose trailing canary is
+ * intact. A LINKED task whose canary is trashed is direct evidence of a
+ * live forward-overflow adjacent to it (free-time canary checks miss this
+ * because the block is never freed). */
+int kernel_heap_block_canary_ok(const void *ptr);
+/* Register an allocation-site PC to watch: any kernel_free of a block whose
+ * allocpc matches emits a WATCHED-FREE trace naming the freeing caller.
+ * Used to detect a task-owned block being released while still linked. */
+void kernel_heap_watch_pc(uintptr_t pc);
 
 /* public-facing API (aliases) */
 static inline void memory_init(uintptr_t start, size_t size) {

@@ -9800,7 +9800,7 @@ static int mk_audio_service_launch_deferred(void) {
                                mk_audio_local_handler,
                                0,
                                userland_audio_service_entry,
-                               8192u,
+                               32768u,
                                MK_LAUNCH_FLAG_BOOTSTRAP |
                                MK_LAUNCH_FLAG_BUILTIN) != 0) {
         kernel_text_puts("    audio: launch failed\n");

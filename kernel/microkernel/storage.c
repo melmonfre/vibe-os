@@ -226,7 +226,7 @@ void mk_storage_service_init(void) {
                                      mk_storage_local_handler,
                                      0,
                                      userland_storage_service_entry,
-                                     8192u,
+                                     32768u,
                                      MK_LAUNCH_FLAG_BOOTSTRAP |
                                      MK_LAUNCH_FLAG_BUILTIN |
                                      MK_LAUNCH_FLAG_CRITICAL);

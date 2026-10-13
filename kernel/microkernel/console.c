@@ -169,7 +169,7 @@ static int mk_console_service_launch_deferred(void) {
                                   mk_console_local_handler,
                                   0,
                                   userland_console_service_entry,
-                                  8192u,
+                                  32768u,
                                   MK_LAUNCH_FLAG_BOOTSTRAP |
                                   MK_LAUNCH_FLAG_BUILTIN |
                                   MK_LAUNCH_FLAG_CRITICAL);

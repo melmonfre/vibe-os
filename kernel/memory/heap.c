@@ -31,7 +31,9 @@ struct free_block {
 #define HEAP_MAGIC_FREE  ((size_t)0x46524545u) /* "FREE" */
 #define HEAP_MAGIC_ALLOC ((size_t)0x414C4C4Fu) /* "ALLO" */
 #define HEAP_HEADER_SIZE ((size_t)16u)
-#define HEAP_MIN_BLOCK   (HEAP_HEADER_SIZE + HEAP_ALIGN)
+#define HEAP_CANARY_SIZE ((size_t)16u)
+#define HEAP_CANARY_WORD ((size_t)0xDEADC0DEu)
+#define HEAP_MIN_BLOCK   (HEAP_HEADER_SIZE + HEAP_ALIGN + HEAP_CANARY_SIZE)
 
 /*
  * Free-list integrity diagnostics (COMPLETION_ACTION_PLAN P4). Budgeted so
@@ -57,6 +59,75 @@ static struct free_block *g_free_list = NULL;
 static size_t g_heap_used = 0u;
 static spinlock_t g_heap_lock;
 static volatile uint32_t g_heap_initialized = 0u;
+
+/*
+ * Edge canary: the last HEAP_CANARY_SIZE bytes of every allocated block are
+ * a fixed pattern written at malloc and verified at free. A FORWARD overflow
+ * from a block's payload (the refined SMP signature: neighbour headers filled
+ * with return addresses / printed-address fragments) destroys the canary of
+ * the block it overflows INTO only if that block is later freed — but it
+ * ALWAYS destroys the tail of the overflowing block's own region first when
+ * the write runs past the requested size. Verified before coalescing.
+ */
+static void heap_canary_write(struct free_block *block) {
+    size_t *canary = (size_t *)((uint8_t *)block + block->size - HEAP_CANARY_SIZE);
+    canary[0] = HEAP_CANARY_WORD;
+    canary[1] = HEAP_CANARY_WORD;
+    canary[2] = HEAP_CANARY_WORD;
+    canary[3] = HEAP_CANARY_WORD;
+}
+
+static int heap_canary_ok(const struct free_block *block) {
+    const size_t *canary = (const size_t *)((const uint8_t *)block + block->size - HEAP_CANARY_SIZE);
+    return canary[0] == HEAP_CANARY_WORD && canary[1] == HEAP_CANARY_WORD &&
+           canary[2] == HEAP_CANARY_WORD && canary[3] == HEAP_CANARY_WORD;
+}
+
+/*
+ * Watch-PC registry (tests the leading SMP hypothesis directly): the refined
+ * signature (victim header filled with SELF-REFERENTIAL heap pointers into
+ * its own interior) is exactly what a block looks like after it is FREED and
+ * REALLOCATED to a different structure while the scheduler list still links
+ * the old address — the guards stay silent because the free/realloc are
+ * legitimate API calls. Registering the allocation-site PC of task blocks
+ * makes kernel_free trace any free of such a block, NAMING the caller that
+ * freed it (freepc) — the smoking gun if a linked task is ever released.
+ */
+#define HEAP_WATCH_MAX 8u
+static uintptr_t g_heap_watch_pcs[HEAP_WATCH_MAX];
+static uint32_t g_heap_watch_count;
+static volatile uint32_t g_heap_watch_budget = 12u;
+
+void kernel_heap_watch_pc(uintptr_t pc) {
+    uint32_t i;
+    uint32_t flags;
+
+    if (pc == 0u) {
+        return;
+    }
+    flags = spinlock_lock_irqsave(&g_heap_lock);
+    for (i = 0u; i < g_heap_watch_count; ++i) {
+        if (g_heap_watch_pcs[i] == pc) {
+            spinlock_unlock_irqrestore(&g_heap_lock, flags);
+            return;
+        }
+    }
+    if (g_heap_watch_count < HEAP_WATCH_MAX) {
+        g_heap_watch_pcs[g_heap_watch_count++] = pc;
+    }
+    spinlock_unlock_irqrestore(&g_heap_lock, flags);
+}
+
+static int heap_pc_watched(uintptr_t pc) {
+    uint32_t i;
+
+    for (i = 0u; i < g_heap_watch_count; ++i) {
+        if (g_heap_watch_pcs[i] == pc) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static size_t heap_align_up(size_t size) {
     if (size & (HEAP_ALIGN - 1u)) {
@@ -113,7 +184,7 @@ void *kernel_malloc(size_t size) {
         return NULL;
 
     align_sz = heap_align_up(size);
-    needed = HEAP_HEADER_SIZE + align_sz;
+    needed = HEAP_HEADER_SIZE + align_sz + HEAP_CANARY_SIZE;
     if (needed < HEAP_MIN_BLOCK)
         needed = HEAP_MIN_BLOCK;
 
@@ -172,6 +243,7 @@ void *kernel_malloc(size_t size) {
     best->magic = HEAP_MAGIC_ALLOC;
     best->next = NULL;
     best->reserved = call_pc;
+    heap_canary_write(best);
     g_heap_used += best->size;
     spinlock_unlock_irqrestore(&g_heap_lock, flags);
     return (void *)((uint8_t *)best + HEAP_HEADER_SIZE);
@@ -227,7 +299,8 @@ void *kernel_realloc(void *ptr, size_t size) {
     }
 
     block = (struct free_block *)((uint8_t *)ptr - HEAP_HEADER_SIZE);
-    old_size = block->size - HEAP_HEADER_SIZE;
+    /* Usable payload excludes both the header and the trailing canary. */
+    old_size = block->size - HEAP_HEADER_SIZE - HEAP_CANARY_SIZE;
 
     if (size & (HEAP_ALIGN - 1u))
         size += HEAP_ALIGN - (size & (HEAP_ALIGN - 1u));
@@ -277,6 +350,30 @@ void kernel_free(void *ptr) {
         heap_diag("BAD-BLOCK", (uintptr_t)block, free_size, g_heap_start);
         spinlock_unlock_irqrestore(&g_heap_lock, flags);
         return;
+    }
+
+    /*
+     * Canary + watch checks run BEFORE coalescing mutates block->size.
+     * A trashed canary names the overflowing block's allocation site; a
+     * watched allocpc names the caller that freed a task-owned block (the
+     * leading SMP hypothesis: a linked task block released and reused).
+     */
+    if (!heap_canary_ok(block)) {
+        if (g_heap_diag_budget != 0u) {
+            g_heap_diag_budget--;
+            kernel_debug_printf("heap: CANARY block=0x%x size=0x%x allocpc=0x%x\n",
+                                (unsigned int)(uintptr_t)block,
+                                (unsigned int)free_size,
+                                (unsigned int)block->reserved);
+        }
+    }
+    if (heap_pc_watched(block->reserved) && g_heap_watch_budget != 0u) {
+        g_heap_watch_budget--;
+        kernel_debug_printf("heap: WATCHED-FREE block=0x%x size=0x%x allocpc=0x%x freepc=0x%x\n",
+                            (unsigned int)(uintptr_t)block,
+                            (unsigned int)free_size,
+                            (unsigned int)block->reserved,
+                            (unsigned int)(uintptr_t)__builtin_return_address(0));
     }
 
     block->magic = HEAP_MAGIC_FREE;
@@ -397,6 +494,59 @@ int kernel_heap_is_block(const void *ptr) {
         (block->size & (HEAP_ALIGN - 1u)) == 0u &&
         addr + block->size <= g_heap_end + HEAP_HEADER_SIZE) {
         ok = 1;
+    }
+    spinlock_unlock_irqrestore(&g_heap_lock, flags);
+    return ok;
+}
+
+uintptr_t kernel_heap_block_alloc_pc(const void *ptr) {
+    const struct free_block *block;
+    uintptr_t addr = (uintptr_t)ptr;
+    uintptr_t pc = 0u;
+    uint32_t flags;
+
+    if (g_heap_initialized == 0u || ptr == 0) {
+        return 0u;
+    }
+    if (addr < g_heap_start + HEAP_HEADER_SIZE || addr >= g_heap_end) {
+        return 0u;
+    }
+    if ((addr & (HEAP_ALIGN - 1u)) != 0u) {
+        return 0u;
+    }
+
+    block = (const struct free_block *)(addr - HEAP_HEADER_SIZE);
+    flags = spinlock_lock_irqsave(&g_heap_lock);
+    if (block->magic == HEAP_MAGIC_ALLOC) {
+        pc = block->reserved;
+    }
+    spinlock_unlock_irqrestore(&g_heap_lock, flags);
+    return pc;
+}
+
+int kernel_heap_block_canary_ok(const void *ptr) {
+    const struct free_block *block;
+    uintptr_t addr = (uintptr_t)ptr;
+    uint32_t flags;
+    int ok = 0;
+
+    if (g_heap_initialized == 0u || ptr == 0) {
+        return 0;
+    }
+    if (addr < g_heap_start + HEAP_HEADER_SIZE || addr >= g_heap_end) {
+        return 0;
+    }
+    if ((addr & (HEAP_ALIGN - 1u)) != 0u) {
+        return 0;
+    }
+
+    block = (const struct free_block *)(addr - HEAP_HEADER_SIZE);
+    flags = spinlock_lock_irqsave(&g_heap_lock);
+    if (block->magic == HEAP_MAGIC_ALLOC &&
+        block->size >= HEAP_MIN_BLOCK &&
+        (block->size & (HEAP_ALIGN - 1u)) == 0u &&
+        (uintptr_t)block + block->size <= g_heap_end) {
+        ok = heap_canary_ok(block);
     }
     spinlock_unlock_irqrestore(&g_heap_lock, flags);
     return ok;

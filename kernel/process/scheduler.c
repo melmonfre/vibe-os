@@ -691,6 +691,37 @@ static void scheduler_list_diag(const char *what, process_t *node, process_t *pr
     g_sched_list_diag_budget--;
     cpu = kernel_cpu_index();
     /*
+     * Stack watermark: process stacks are filled with 0xA5 before the
+     * initial frame is placed (process_create_with_stack) and grow DOWN,
+     * so a stack block allocated right after a process_t block that
+     * exhausts its stack walks backward through the process_t canary,
+     * payload and header — the exact SMP signature (canary trashed first,
+     * then return-address-shaped payload values, no heap-API guard fired).
+     * clean_bottom=0 means the deepest used byte reached the block floor.
+     */
+    if (prev != NULL && kernel_heap_is_block(prev)) {
+        uintptr_t st = (uintptr_t)prev->stack;
+        uint32_t size = prev->stack_size;
+
+        if (st != 0u && size >= 256u && size <= (1u << 20) &&
+            (size & 15u) == 0u &&
+            st + size <= kernel_heap_end() &&
+            kernel_heap_is_block((const void *)st)) {
+            const uint8_t *base = (const uint8_t *)st;
+            uint32_t clean = 0u;
+
+            while (clean < size && base[clean] == 0xA5u) {
+                clean++;
+            }
+            kernel_debug_printf("sched-list:   watermark prev{st=0x%x size=%u clean_bottom=%u svc=%d}\n",
+                                (unsigned int)st, size, clean,
+                                (int)prev->service_type);
+        } else {
+            kernel_debug_printf("sched-list:   watermark prev{st=0x%x size=%u UNAVAILABLE}\n",
+                                (unsigned int)st, size);
+        }
+    }
+    /*
      * Heap-header forensics: the 16 bytes before a payload carry
      * {size, magic, next, alloc_pc}. If magic != 'ALLO' the "node" is not
      * a live heap block at all (stale/wild pointer reached through a
@@ -721,18 +752,22 @@ static void scheduler_list_diag(const char *what, process_t *node, process_t *pr
                                ? (const uint32_t *)((const uint8_t *)prev - 16u)
                                : 0;
         const uint32_t *raw = (const uint32_t *)((const uint8_t *)node - 48u);
-        kernel_debug_printf("sched-list: %s cpu=%u WILD node=0x%x hdr{size=0x%x magic=0x%x allocpc=0x%x} prev=0x%x prevpid=%d prevallocpc=0x%x\n",
+        int prev_canary = (prev != NULL && kernel_heap_is_block(prev))
+                          ? kernel_heap_block_canary_ok(prev) : -1;
+        kernel_debug_printf("sched-list: %s cpu=%u WILD node=0x%x hdr{size=0x%x magic=0x%x allocpc=0x%x} prev=0x%x prevpid=%d prevallocpc=0x%x prevcnry=%d\n",
                             what, cpu,
                             (unsigned int)(uintptr_t)node,
                             hdr[0], hdr[1], hdr[3],
                             (unsigned int)(uintptr_t)(prev != NULL ? prev : 0),
                             prev != NULL ? prev->pid : -9999,
-                            phdr != NULL ? phdr[3] : 0u);
+                            phdr != NULL ? phdr[3] : 0u,
+                            prev_canary);
         /*
          * Neighbor forensics: the victim header holds non-heap values, the
          * signature of a FORWARD overflow from the block allocated just
-         * before it. Dump the 32 bytes preceding the header (the neighbor's
-         * payload tail) to identify the overflowing structure.
+         * before it. prevcnry=0 confirms the poisoned-link OWNER's block was
+         * overflowed through (live forward-overflow); prehdr dumps the 32
+         * bytes preceding the victim header (the neighbor's payload tail).
          */
         kernel_debug_printf("sched-list:   prehdr{0x%x 0x%x 0x%x 0x%x}\n",
                             raw[0], raw[1], raw[2], raw[3]);
@@ -745,6 +780,13 @@ void scheduler_add_task(process_t *proc) {
     if (proc == NULL) {
         return;
     }
+    /*
+     * Watch this task block's allocation site: any later kernel_free of a
+     * block allocated at the same site emits WATCHED-FREE naming the
+     * freeing caller. Directly tests the leading SMP hypothesis (a linked
+     * task block released and reused while still on the list).
+     */
+    kernel_heap_watch_pc(kernel_heap_block_alloc_pc(proc));
     flags = spinlock_lock_irqsave(&g_scheduler_lock);
     proc->next = NULL;
     proc->state = PROCESS_READY;
