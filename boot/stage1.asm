@@ -33,14 +33,10 @@ boot_start:
     call bootdebug_prepare
     mov al, 'S'
     call bootdebug_append
-    mov al, 'S'
-    out 0xE9, al
 
     call load_stage2
     jc disk_error
 
-    mov al, 'L'
-    out 0xE9, al
     mov dl, [boot_drive]
     jmp STAGE2_SEG:STAGE2_OFF
 
@@ -57,23 +53,40 @@ load_stage2:
     mov dword [disk_address_packet.lba_low], eax
     mov dword [disk_address_packet.lba_high], 0
 
-    mov si, disk_address_packet
+    ; Real-hardware robustness (COMPLETION_ACTION_PLAN P0): the first
+    ; AH=42h read after power-on often returns transient CF on real
+    ; media (drive spin-up, PLL not settled, USB bridge busy); QEMU
+    ; never reports it, so a single-shot read is a hardware-only
+    ; failure. Bounded retry with a media reset between attempts —
+    ; same discipline as stage2's read_sector_lba. INT 13h preserves
+    ; DL per spec, so the drive is loaded once for the whole loop.
+    mov bx, 3
     mov dl, [boot_drive]
+.retry:
+    mov si, disk_address_packet
     mov ah, 0x42
     int 0x13
-    jc .fail
+    jnc .read_ok
 
-    mov al, 'L'
-    call bootdebug_append
-    popa
-    clc
-    ret
+    push bx
+    xor ah, ah
+    int 0x13
+    pop bx
+    dec bx
+    jnz .retry
 
 .fail:
     mov al, 'E'
     call bootdebug_append
     popa
     stc
+    ret
+
+.read_ok:
+    mov al, 'L'
+    call bootdebug_append
+    popa
+    clc
     ret
 
 disk_error:
