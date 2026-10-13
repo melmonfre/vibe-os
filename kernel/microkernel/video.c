@@ -341,7 +341,7 @@ static int mk_video_ensure_present_worker(void) {
                        MK_LAUNCH_FLAG_BUILTIN |
                        MK_LAUNCH_FLAG_CRITICAL;
     descriptor.task_class = MK_TASK_CLASS_VIDEO_PRESENT;
-    descriptor.stack_size = 8192u;
+    descriptor.stack_size = 32768u;
     strncpy(descriptor.name, "video-present", MK_LAUNCH_NAME_MAX - 1u);
     descriptor.name[MK_LAUNCH_NAME_MAX - 1u] = '\0';
     descriptor.entry = mk_video_present_worker_entry;
@@ -475,7 +475,7 @@ static int mk_video_ensure_control_worker(void) {
                        MK_LAUNCH_FLAG_BUILTIN |
                        MK_LAUNCH_FLAG_CRITICAL;
     descriptor.task_class = MK_TASK_CLASS_VIDEO_CONTROL;
-    descriptor.stack_size = 8192u;
+    descriptor.stack_size = 32768u;
     strncpy(descriptor.name, "video-control", MK_LAUNCH_NAME_MAX - 1u);
     descriptor.name[MK_LAUNCH_NAME_MAX - 1u] = '\0';
     descriptor.entry = mk_video_control_worker_entry;

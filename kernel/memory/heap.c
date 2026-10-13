@@ -499,6 +499,99 @@ int kernel_heap_is_block(const void *ptr) {
     return ok;
 }
 
+/*
+ * Physical-predecessor attribution probe (COMPLETION_ACTION_PLAN P4, class
+ * #2: a live task block's edge canary is destroyed while the block is still
+ * ALLOCATED — not a free/realloc race, not a user pointer (zero EFAULT
+ * proves it)). Blocks in this first-fit heap are physically contiguous:
+ * each 16-byte header's `size` spans header+payload+canary, so walking from
+ * g_heap_start by `size` enumerates every block in address order. Given a
+ * victim payload pointer, return the block IMMEDIATELY BELOW it in memory —
+ * the only forward-overflow candidate. The caller dumps the predecessor's
+ * allocpc + size to name the writer's allocation site.
+ *
+ * Returns 1 on success (pred_* filled), 0 when the victim is the first
+ * block, not a block, or the walk desynchronized (corrupted size mid-walk).
+ * Runs entirely under g_heap_lock so the walk is consistent against
+ * concurrent alloc/free on the other CPU.
+ */
+int kernel_heap_block_predecessor(const void *ptr,
+                                  uintptr_t *pred_start_out,
+                                  size_t *pred_size_out,
+                                  uintptr_t *pred_allocpc_out,
+                                  int *pred_canary_ok_out) {
+    const struct free_block *prev_blk;
+    uintptr_t addr = (uintptr_t)ptr;
+    uintptr_t victim_hdr;
+    uintptr_t cursor;
+    uint32_t flags;
+    uint32_t steps = 0u;
+
+    if (g_heap_initialized == 0u || ptr == 0) {
+        return 0;
+    }
+    if (addr < g_heap_start + HEAP_HEADER_SIZE || addr >= g_heap_end) {
+        return 0;
+    }
+    if ((addr & (HEAP_ALIGN - 1u)) != 0u) {
+        return 0;
+    }
+    victim_hdr = addr - HEAP_HEADER_SIZE;
+
+    flags = spinlock_lock_irqsave(&g_heap_lock);
+
+    /*
+     * The victim's OWN header is deliberately NOT validated: a forward
+     * overflow that reaches its canary has usually already trashed its
+     * size/magic too (observed: pid=3 victim header magic=0x16 allocpc=0x1),
+     * so trusting it would reject exactly the case we are diagnosing. The
+     * walk advances by the PREDECESSORS' sizes and stops when it lands on
+     * victim_hdr; it never reads the victim's own header.
+     */
+    prev_blk = NULL;
+    cursor = g_heap_start;
+    while (cursor < victim_hdr) {
+        const struct free_block *cur = (const struct free_block *)cursor;
+
+        if (cur->magic != HEAP_MAGIC_ALLOC && cur->magic != HEAP_MAGIC_FREE) {
+            /* Walk desynced: a header mid-chain is trashed. */
+            spinlock_unlock_irqrestore(&g_heap_lock, flags);
+            return 0;
+        }
+        if (cur->size < HEAP_MIN_BLOCK || (cur->size & (HEAP_ALIGN - 1u)) != 0u ||
+            cursor + cur->size > g_heap_end) {
+            spinlock_unlock_irqrestore(&g_heap_lock, flags);
+            return 0;
+        }
+        prev_blk = cur;
+        cursor += cur->size;
+        if (++steps > 65536u) {
+            spinlock_unlock_irqrestore(&g_heap_lock, flags);
+            return 0;
+        }
+    }
+
+    if (prev_blk == NULL || cursor != victim_hdr) {
+        spinlock_unlock_irqrestore(&g_heap_lock, flags);
+        return 0;
+    }
+
+    if (pred_start_out) {
+        *pred_start_out = (uintptr_t)prev_blk;
+    }
+    if (pred_size_out) {
+        *pred_size_out = prev_blk->size;
+    }
+    if (pred_allocpc_out) {
+        *pred_allocpc_out = (prev_blk->magic == HEAP_MAGIC_ALLOC) ? prev_blk->reserved : 0u;
+    }
+    if (pred_canary_ok_out) {
+        *pred_canary_ok_out = (prev_blk->magic == HEAP_MAGIC_ALLOC) ? heap_canary_ok(prev_blk) : -1;
+    }
+    spinlock_unlock_irqrestore(&g_heap_lock, flags);
+    return 1;
+}
+
 uintptr_t kernel_heap_block_alloc_pc(const void *ptr) {
     const struct free_block *block;
     uintptr_t addr = (uintptr_t)ptr;

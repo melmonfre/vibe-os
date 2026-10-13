@@ -771,6 +771,38 @@ static void scheduler_list_diag(const char *what, process_t *node, process_t *pr
          */
         kernel_debug_printf("sched-list:   prehdr{0x%x 0x%x 0x%x 0x%x}\n",
                             raw[0], raw[1], raw[2], raw[3]);
+
+        /*
+         * Class #2 attribution (COMPLETION_ACTION_PLAN). prevcnry=0 means
+         * prev's OWN block was overflowed while still allocated. Dump the
+         * PHYSICAL NEIGHBOR below the victim (allocpc + size): together
+         * with the watermark line above it identifies the size class of
+         * the buffers around the victim. PROVEN USE (2026-10-13): pred
+         * {size=8224, allocpc=process_create_with_stack} + watermark
+         * {size=8192} pinpointed the last two 8192-stack workers
+         * (video-present/video-control); their stacks exhausted DOWNWARD
+         * through the victim's own block (stack block sits ABOVE its
+         * owner's process_t; growth is downward), so the writer was the
+         * stack ABOVE the victim, not the neighbor below — the neighbor's
+         * trashed canary was the tail of the same write path.
+         */
+        if (prev_canary == 0 && prev != NULL) {
+            uintptr_t pred_start = 0u;
+            size_t pred_size = 0u;
+            uintptr_t pred_allocpc = 0u;
+            int pred_cnry = -1;
+
+            if (kernel_heap_block_predecessor(prev, &pred_start, &pred_size,
+                                              &pred_allocpc, &pred_cnry)) {
+                kernel_debug_printf("sched-list:   OVERFLOW-WRITER pred{start=0x%x size=%u allocpc=0x%x cnry=%d}\n",
+                                    (unsigned int)pred_start,
+                                    (unsigned int)pred_size,
+                                    (unsigned int)pred_allocpc,
+                                    pred_cnry);
+            } else {
+                kernel_debug_printf("sched-list:   OVERFLOW-WRITER pred{UNREACHABLE}\n");
+            }
+        }
     }
 }
 

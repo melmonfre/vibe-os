@@ -30,6 +30,17 @@ int kernel_heap_block_canary_ok(const void *ptr);
  * allocpc matches emits a WATCHED-FREE trace naming the freeing caller.
  * Used to detect a task-owned block being released while still linked. */
 void kernel_heap_watch_pc(uintptr_t pc);
+/* Physical-predecessor attribution probe (class #2): walk the physically
+ * contiguous heap to find the block immediately BELOW a victim block, the
+ * only forward-overflow candidate. Returns 1 when pred_* are filled (the
+ * victim is a well-formed block with a reachable predecessor); 0 when the
+ * victim is first/not-a-block/the walk desynced. Caller dumps the
+ * predecessor's allocpc+size to name the writer's allocation site. */
+int kernel_heap_block_predecessor(const void *ptr,
+                                  uintptr_t *pred_start_out,
+                                  size_t *pred_size_out,
+                                  uintptr_t *pred_allocpc_out,
+                                  int *pred_canary_ok_out);
 
 /* public-facing API (aliases) */
 static inline void memory_init(uintptr_t start, size_t size) {
