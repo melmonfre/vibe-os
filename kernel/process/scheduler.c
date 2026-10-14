@@ -834,6 +834,8 @@ static volatile uint32_t g_sched_canary_sweep_budget = SCHED_CANARY_SWEEP_BUDGET
 
 static volatile uint32_t g_sched_double_dispatch_budget = 16u;
 static volatile uint32_t g_sched_tr_mismatch_budget = 16u;
+static volatile uint32_t g_sched_stack_prov_budget = 32u;
+static volatile uint32_t g_sched_sweep_detail_budget = 12u;
 
 static void scheduler_dispatch_forensics(uint32_t cpu_index,
                                          const process_t *task,
@@ -937,6 +939,29 @@ void scheduler_add_task(process_t *proc) {
      * task block released and reused while still on the list).
      */
     kernel_heap_watch_pc(kernel_heap_block_alloc_pc(proc));
+    /*
+     * Stack-field provenance (COMPLETION_ACTION_PLAN P4, class #5). The
+     * sweep finds pid=1 with stack=UNAVAILABLE and a trashed canary, but
+     * cannot tell WHEN the stack field stopped pointing at a valid block:
+     * corrupted at creation vs corrupted while linked/running. Record the
+     * state at LINK time — if a task is ever linked with an already-invalid
+     * stack, that is a creation-path bug; if it is valid here but invalid
+     * at dispatch, it was corrupted after linking.
+     */
+    if (g_sched_stack_prov_budget != 0u) {
+        uintptr_t st = (uintptr_t)proc->stack;
+        uint32_t ssize = proc->stack_size;
+        int ok = (st != 0u && ssize >= 256u && ssize <= (1u << 20) &&
+                  (ssize & 15u) == 0u &&
+                  st + ssize <= kernel_heap_end() &&
+                  kernel_heap_is_block((const void *)st));
+        if (!ok) {
+            g_sched_stack_prov_budget--;
+            kernel_debug_printf("sched-add: STACK-INVALID-AT-LINK pid=%d st=0x%x size=%u kind=%d svc=%d\n",
+                                proc->pid, (unsigned int)st, (unsigned int)ssize,
+                                (int)proc->kind, (int)proc->service_type);
+        }
+    }
     flags = spinlock_lock_irqsave(&g_scheduler_lock);
     proc->next = NULL;
     proc->state = PROCESS_READY;
@@ -1569,65 +1594,75 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
         uint32_t scan_steps = 0u;
 
         g_sched_canary_sweep_budget--;
-        for (scan = g_head; scan != NULL; scan = scan->next) {
-            uintptr_t pred_start = 0u;
-            size_t pred_size = 0u;
-            uintptr_t pred_allocpc = 0u;
-            int pred_cnry = -1;
+        {
+            uint32_t bad_count = 0u;
+            uint32_t total = 0u;
 
-            if (!scheduler_node_sane(scan)) {
-                break;
-            }
-            if (kernel_heap_block_canary_ok(scan)) {
+            for (scan = g_head; scan != NULL; scan = scan->next) {
+                uintptr_t pred_start = 0u;
+                size_t pred_size = 0u;
+                uintptr_t pred_allocpc = 0u;
+                int pred_cnry = -1;
+
+                if (!scheduler_node_sane(scan)) {
+                    break;
+                }
                 if (++scan_steps > SCHED_LIST_WALK_CAP) {
                     break;
                 }
-                continue;
-            }
-            kernel_debug_printf("sched-scan: BAD-CANARY pid=%d node=0x%x allocpc=0x%x state=%d svc=%d\n",
-                                scan->pid,
-                                (unsigned int)(uintptr_t)scan,
-                                (unsigned int)kernel_heap_block_alloc_pc(scan),
-                                (int)scan->state, (int)scan->service_type);
-            /*
-             * Discriminator: ordered top-down progression (canary first,
-             * header later) through a task block is the geometry of the
-             * task's OWN stack exhausting downward. clean_bottom counts
-             * pristine 0xA5 fill bytes from the stack block floor: ~0 means
-             * usage reached the floor (exhaustion confirmed); == size
-             * means the stack never went deep (wild write instead).
-             */
-            {
-                uintptr_t st = (uintptr_t)scan->stack;
-                uint32_t ssize = scan->stack_size;
-                uint32_t clean = 0u;
+                total++;
+                if (kernel_heap_block_canary_ok(scan)) {
+                    continue;
+                }
+                bad_count++;
+                /*
+                 * Report EVERY corrupted task block (not just the first):
+                 * the COUNT distinguishes a targeted write (one victim) from
+                 * a broad overwrite (many). Per-victim detail is budgeted so
+                 * a wide overwrite does not flood the serial log.
+                 */
+                if (g_sched_sweep_detail_budget != 0u) {
+                    uintptr_t st;
+                    uint32_t ssize;
+                    uint32_t clean = 0u;
 
-                if (st != 0u && ssize >= 256u && ssize <= (1u << 20) &&
-                    (ssize & 15u) == 0u &&
-                    st + ssize <= kernel_heap_end() &&
-                    kernel_heap_is_block((const void *)st)) {
-                    const uint8_t *base = (const uint8_t *)st;
-                    while (clean < ssize && base[clean] == 0xA5u) {
-                        clean++;
+                    g_sched_sweep_detail_budget--;
+                    st = (uintptr_t)scan->stack;
+                    ssize = scan->stack_size;
+                    kernel_debug_printf("sched-scan: BAD-CANARY pid=%d node=0x%x allocpc=0x%x state=%d svc=%d\n",
+                                        scan->pid,
+                                        (unsigned int)(uintptr_t)scan,
+                                        (unsigned int)kernel_heap_block_alloc_pc(scan),
+                                        (int)scan->state, (int)scan->service_type);
+                    if (st != 0u && ssize >= 256u && ssize <= (1u << 20) &&
+                        (ssize & 15u) == 0u &&
+                        st + ssize <= kernel_heap_end() &&
+                        kernel_heap_is_block((const void *)st)) {
+                        const uint8_t *base = (const uint8_t *)st;
+
+                        while (clean < ssize && base[clean] == 0xA5u) {
+                            clean++;
+                        }
+                        kernel_debug_printf("sched-scan:   stack{st=0x%x size=%u clean_bottom=%u}\n",
+                                            (unsigned int)st, ssize, clean);
+                    } else {
+                        kernel_debug_printf("sched-scan:   stack{st=0x%x size=%u UNAVAILABLE}\n",
+                                            (unsigned int)st, ssize);
                     }
-                    kernel_debug_printf("sched-scan:   stack{st=0x%x size=%u clean_bottom=%u}\n",
-                                        (unsigned int)st, ssize, clean);
-                } else {
-                    kernel_debug_printf("sched-scan:   stack{st=0x%x size=%u UNAVAILABLE}\n",
-                                        (unsigned int)st, ssize);
+                    if (kernel_heap_block_predecessor(scan, &pred_start, &pred_size,
+                                                      &pred_allocpc, &pred_cnry)) {
+                        kernel_debug_printf("sched-scan:   writer-candidate pred{start=0x%x size=%u allocpc=0x%x cnry=%d}\n",
+                                            (unsigned int)pred_start,
+                                            (unsigned int)pred_size,
+                                            (unsigned int)pred_allocpc, pred_cnry);
+                    }
                 }
             }
-            if (kernel_heap_block_predecessor(scan, &pred_start, &pred_size,
-                                              &pred_allocpc, &pred_cnry)) {
-                kernel_debug_printf("sched-scan:   writer-candidate pred{start=0x%x size=%u allocpc=0x%x cnry=%d}\n",
-                                    (unsigned int)pred_start,
-                                    (unsigned int)pred_size,
-                                    (unsigned int)pred_allocpc, pred_cnry);
+            kernel_debug_printf("sched-scan: EXTENT bad=%u total=%u\n",
+                                bad_count, total);
+            if (bad_count != 0u) {
+                g_sched_canary_sweep_budget = 0u;
             }
-            /* First violation is the smoking gun; later ones are noise
-             * from the same writer. Stop sweeping. */
-            g_sched_canary_sweep_budget = 0u;
-            break;
         }
     }
     for (task = g_head; task != NULL; task = task->next) {

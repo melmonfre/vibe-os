@@ -4,6 +4,7 @@
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/video/video.h>
 #include <kernel/scheduler.h>
+#include <kernel/cpu/cpu.h>
 
 #define IDT_ENTRIES 256
 #define IRQ0_VECTOR 0x20
@@ -175,8 +176,11 @@ void invalid_opcode_handler(uint32_t eip, uint32_t cs) {
     FMT32((uint32_t)b0, buf[2]);
     FMT32((uint32_t)b1, buf[3]);
 
-    /* Serial too: a screen-only death is invisible in headless QEMU runs. */
-    kernel_debug_printf("exception: #UD kernel-mode eip=%x cs=%x b0=%x b1=%x (halting)\n",
+    /* Serial too: a screen-only death is invisible in headless QEMU runs.
+     * cpu= names WHICH core faulted (class #5 is real-time smp2 only; a
+     * kernel-mode #UD on the AP vs the BSP points at different code). */
+    kernel_debug_printf("exception: #UD kernel-mode cpu=%u eip=%x cs=%x b0=%x b1=%x (halting)\n",
+                        (unsigned int)kernel_cpu_index(),
                         (unsigned int)eip, (unsigned int)cs,
                         (unsigned int)b0, (unsigned int)b1);
     kernel_text_puts("\n#UD EIP="); kernel_text_puts(buf[0]);
