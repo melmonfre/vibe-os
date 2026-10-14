@@ -926,6 +926,23 @@ void kernel_tss_set_kernel_stack(uintptr_t stack_top) {
     g_cpu_tss[cpu_index].ss0 = KERNEL_DS_SELECTOR;
 }
 
+/*
+ * TSS/TR diagnostic (COMPLETION_ACTION_PLAN P4, class #5). kernel_cpu_index()
+ * picks WHICH g_cpu_tss[] we write; the CPU's actual TR picks which one the
+ * hardware loads esp0 from. If those disagree (e.g. kernel_cpu_index()==0 on
+ * an AP whose TR already points at the AP TSS), every ring3->ring0 entry
+ * would use the WRONG esp0 and push the interrupt frame onto another CPU's
+ * stack — which is exactly the class #5 shape (a frame whose cs/eip words
+ * hold kernel-data addresses like &g_scheduler_lock). Return the live TR
+ * selector so the scheduler can assert it matches the expected CPU TSS.
+ */
+uint16_t kernel_current_tr(void) {
+    uint16_t tr;
+
+    __asm__ volatile("str %0" : "=rm"(tr));
+    return tr;
+}
+
 const struct kernel_cpu_topology *kernel_cpu_topology(void) {
     return &g_cpu_topology;
 }

@@ -832,6 +832,9 @@ static volatile uint32_t g_sched_dispatch_forensics_budget =
 #define SCHED_CANARY_SWEEP_BUDGET 2000u
 static volatile uint32_t g_sched_canary_sweep_budget = SCHED_CANARY_SWEEP_BUDGET;
 
+static volatile uint32_t g_sched_double_dispatch_budget = 16u;
+static volatile uint32_t g_sched_tr_mismatch_budget = 16u;
+
 static void scheduler_dispatch_forensics(uint32_t cpu_index,
                                          const process_t *task,
                                          const kernel_trap_frame_t *frame) {
@@ -1165,6 +1168,44 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
     old_task = current;
 
     if (next != current) {
+        /*
+         * Anti-double-dispatch assertion (COMPLETION_ACTION_PLAN P4, class
+         * #5). find_next only returns state==READY && current_cpu<0 tasks,
+         * and this whole block runs under g_scheduler_lock, so a task can
+         * never be owned by two CPUs at once — IF the invariant holds.
+         * The class #5 crash (real-time smp2: first storage exchange, #UD
+         * at eip=3/7/0x213 = small integers = data-as-pointer, dispatch
+         * frames valid) looks exactly like two CPUs resuming the SAME
+         * frame: whichever loses the race finds its saved regs overwritten
+         * by the winner. Assert the invariant here so a violation is named
+         * loudly instead of corrupting a frame silently.
+         */
+        if (next->current_cpu >= 0 || next->state == PROCESS_RUNNING) {
+            if (g_sched_double_dispatch_budget != 0u) {
+                g_sched_double_dispatch_budget--;
+                kernel_debug_printf("sched-dispatch: DOUBLE-DISPATCH cpu=%u pid=%d owner_cpu=%d state=%d sw=%u\n",
+                                    cpu_index, next->pid, next->current_cpu,
+                                    (int)next->state, next->context_switches);
+            }
+        }
+        /*
+         * TSS/TR assertion (class #5): the CPU's live TR must be the TSS
+         * the scheduler sets esp0 on for THIS cpu_index, else ring3->ring0
+         * entries load esp0 from another CPU's TSS and push frames onto the
+         * wrong stack. kernel_cpu_tss_selector(cpu_index) is what
+         * gdt_init() ltr'd on this CPU; a mismatch means kernel_cpu_index()
+         * and the hardware TR disagree.
+         */
+        {
+            uint16_t want_tr = kernel_cpu_tss_selector(cpu_index);
+            uint16_t have_tr = kernel_current_tr();
+            if (want_tr != have_tr && g_sched_tr_mismatch_budget != 0u) {
+                g_sched_tr_mismatch_budget--;
+                kernel_debug_printf("sched-dispatch: TR-MISMATCH cpu=%u pid=%d have_tr=0x%x want_tr=0x%x\n",
+                                    cpu_index, next->pid,
+                                    (unsigned)have_tr, (unsigned)want_tr);
+            }
+        }
         next->state = PROCESS_RUNNING;
         next->current_cpu = (int)cpu_index;
         next->last_cpu = (int)cpu_index;
