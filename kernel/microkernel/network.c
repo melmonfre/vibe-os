@@ -1744,8 +1744,19 @@ static int mk_network_virtio_submit_frame(struct mk_network_pci_probe_state *pro
     }
 
     memset(&g_network_virtio_tx_hdr, 0, sizeof(g_network_virtio_tx_hdr));
-    memset(g_network_virtio_tx_frame, 0, sizeof(g_network_virtio_tx_frame));
-    memcpy(g_network_virtio_tx_frame, frame, frame_len);
+    /*
+     * Every TX builder (arp/icmp/udp/reply) fills g_network_virtio_tx_frame
+     * directly and passes that same pointer here. Wiping the staging buffer
+     * before the copy would erase the frame, and the self-copy would then DMA
+     * 42/594 all-zero bytes to the device — which is exactly what happened:
+     * the host saw frames with dest MAC 00:00:00:00:00:00 and dropped every
+     * one, so it never answered ARP or DHCP and RX stayed silent. Only stage
+     * the frame when the caller handed us a distinct buffer.
+     */
+    if (frame != g_network_virtio_tx_frame) {
+        memset(g_network_virtio_tx_frame, 0, sizeof(g_network_virtio_tx_frame));
+        memcpy(g_network_virtio_tx_frame, frame, frame_len);
+    }
 
     queue_state->desc[0].addr = (uint64_t)(uintptr_t)&g_network_virtio_tx_hdr;
     queue_state->desc[0].len = MK_NETWORK_VIRTIO_HDR_SIZE;
