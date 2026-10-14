@@ -2181,6 +2181,9 @@ validate-phase-c: $(IMAGE)
 validate-network-surface: $(IMAGE)
 	$(PYTHON) tools/validate_network_surface.py --image $(IMAGE) --report build/network-surface-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
+validate-network-datapath: $(IMAGE)
+	$(PYTHON) tools/validate_network_datapath.py --image $(IMAGE) --report build/network-datapath-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+
 validate-network-terminal-surface: $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report build/network-terminal-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) \
 		--scenario network-terminal-surface

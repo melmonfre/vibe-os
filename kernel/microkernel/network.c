@@ -210,6 +210,8 @@ struct mk_network_virtio_link_state {
     int tx_smoke_logged;
     int rx_activity_logged;
     int rx_arp_reply_logged;
+    int arp_reply_logged;
+    int echo_reply_logged;
     int dhcp_offer_logged;
     int dhcp_ack_logged;
     uint32_t tx_frames_submitted;
@@ -341,6 +343,7 @@ static uint32_t mk_network_publish_event(uint32_t event_type,
 static void mk_network_publish_status_event(void);
 static void mk_network_refresh_socket_telemetry(void);
 static void mk_network_progress_state(void);
+static void mk_network_loopback_smoke(void);
 static int mk_network_virtio_submit_frame(struct mk_network_pci_probe_state *probe,
                                            const uint8_t *frame,
                                            uint32_t frame_len);
@@ -679,20 +682,28 @@ static void mk_network_publish_status_event(void) {
                                    0u);
 }
 
-static void mk_network_queue_ready_callback(int32_t socket_handle, uint32_t readiness_flags) {
+static void mk_network_queue_ready_callback(int32_t socket_handle,
+                                            uint32_t readiness_flags,
+                                            uint32_t rx_depth,
+                                            uint32_t tx_depth) {
+    /*
+     * Invoked with g_network_queue_lock held (network_queue.c). Must not call
+     * any locking network_queue API — depths arrive by value for exactly that
+     * reason; get_rx_depth()/get_tx_depth() self-deadlocked the service.
+     */
     if (readiness_flags & NETWORK_SOCKET_READY_RECV) {
         (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_RECV,
                                        socket_handle,
                                        0,
                                        g_network_state.status.link_state,
-                                       network_queue_get_rx_depth(socket_handle));
+                                       rx_depth);
     }
     if (readiness_flags & NETWORK_SOCKET_READY_SEND) {
         (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_SEND,
                                        socket_handle,
                                        0,
                                        g_network_state.status.link_state,
-                                       network_queue_get_tx_depth(socket_handle));
+                                       tx_depth);
     }
     if (readiness_flags & NETWORK_SOCKET_READY_ACCEPT) {
         (void)mk_network_publish_event(MK_NETWORK_EVENT_SOCKET_ACCEPT,
@@ -941,6 +952,42 @@ static void mk_network_virtio_send_arp_request(struct mk_network_pci_probe_state
     (void)mk_network_virtio_submit_frame(probe, frame, 42u);
 }
 
+/*
+ * ARP responder. Without it nothing on the wire can ever reach VibeOS:
+ * peers ARP for our IPv4, get no answer, and drop. Only answers requests
+ * whose target IPv4 is exactly our bound address (never proxy, never
+ * gratuitous).
+ */
+static int mk_network_virtio_send_arp_reply(struct mk_network_pci_probe_state *probe,
+                                            const uint8_t *target_mac,
+                                            uint32_t target_ipv4) {
+    uint8_t *frame = g_network_virtio_tx_frame;
+    const uint8_t *source_mac;
+
+    if (probe == 0 || !probe->virtio_queue_ready || target_mac == 0 ||
+        target_ipv4 == 0u || g_network_state.local_ipv4 == 0u) {
+        return -1;
+    }
+    source_mac = probe->mac_valid ? probe->mac : g_network_virtio_fallback_mac;
+
+    memcpy(frame, target_mac, 6u);
+    memcpy(frame + 6u, source_mac, 6u);
+    frame[12] = 0x08u;
+    frame[13] = 0x06u;
+    frame[14] = 0x00u;
+    frame[15] = 0x01u;
+    frame[16] = 0x08u;
+    frame[17] = 0x00u;
+    frame[18] = 0x06u;
+    frame[19] = 0x04u;
+    mk_network_be16_store(frame + 20u, MK_NETWORK_ARP_OP_REPLY);
+    memcpy(frame + 22u, source_mac, 6u);
+    mk_network_be32_store(frame + 28u, g_network_state.local_ipv4);
+    memcpy(frame + 32u, target_mac, 6u);
+    mk_network_be32_store(frame + 38u, target_ipv4);
+    return mk_network_virtio_submit_frame(probe, frame, 42u);
+}
+
 static int mk_network_virtio_send_icmp_echo(struct mk_network_pci_probe_state *probe,
                                             const uint8_t *dest_mac,
                                             uint32_t destination_ipv4,
@@ -994,6 +1041,166 @@ static int mk_network_virtio_send_icmp_echo(struct mk_network_pci_probe_state *p
     memcpy(icmp_header + 8u, payload, payload_len);
     mk_network_be16_store(icmp_header + 2u, mk_network_checksum16(icmp_header, 8u + payload_len));
     return mk_network_virtio_submit_frame(probe, frame, frame_len);
+}
+
+/*
+ * ICMP echo responder: mirrors the request message (identifier + sequence
+ * + payload) into an echo-reply. Built from the received message bytes so
+ * the reply is byte-identical to what RFC 792 requires us to reflect.
+ */
+static int mk_network_virtio_send_icmp_echo_reply(struct mk_network_pci_probe_state *probe,
+                                                  const uint8_t *dest_mac,
+                                                  uint32_t destination_ipv4,
+                                                  const uint8_t *icmp_message,
+                                                  uint32_t icmp_len) {
+    uint8_t *frame = g_network_virtio_tx_frame;
+    const uint8_t *source_mac;
+    uint32_t frame_len;
+    uint32_t ip_total_length;
+    uint8_t *ip_header;
+    uint8_t *icmp_header;
+
+    if (probe == 0 || dest_mac == 0 || icmp_message == 0 || !probe->virtio_queue_ready) {
+        return -1;
+    }
+    if (g_network_state.local_ipv4 == 0u || destination_ipv4 == 0u) {
+        return -1;
+    }
+    if (icmp_len < 8u || icmp_len > (MK_NETWORK_VIRTIO_TX_FRAME_BYTES - 14u - 20u)) {
+        return -1;
+    }
+
+    source_mac = probe->mac_valid ? probe->mac : g_network_virtio_fallback_mac;
+    ip_total_length = 20u + icmp_len;
+    frame_len = 14u + ip_total_length;
+    memset(frame, 0, frame_len);
+    memcpy(frame, dest_mac, 6u);
+    memcpy(frame + 6u, source_mac, 6u);
+    mk_network_be16_store(frame + 12u, MK_NETWORK_ETHERTYPE_IPV4);
+
+    ip_header = frame + 14u;
+    ip_header[0] = 0x45u;
+    mk_network_be16_store(ip_header + 2u, (uint16_t)ip_total_length);
+    g_network_state.ipv4_packet_id = (uint16_t)(g_network_state.ipv4_packet_id + 1u);
+    mk_network_be16_store(ip_header + 4u, g_network_state.ipv4_packet_id);
+    mk_network_be16_store(ip_header + 6u, 0x4000u);
+    ip_header[8] = 64u;
+    ip_header[9] = (uint8_t)MK_NETWORK_IPPROTO_ICMP;
+    mk_network_be32_store(ip_header + 12u, g_network_state.local_ipv4);
+    mk_network_be32_store(ip_header + 16u, destination_ipv4);
+    mk_network_be16_store(ip_header + 10u, mk_network_checksum16(ip_header, 20u));
+
+    icmp_header = ip_header + 20u;
+    memcpy(icmp_header, icmp_message, icmp_len);
+    icmp_header[0] = 0u;
+    icmp_header[1] = 0u;
+    mk_network_be16_store(icmp_header + 2u, 0u);
+    mk_network_be16_store(icmp_header + 2u, mk_network_checksum16(icmp_header, icmp_len));
+    return mk_network_virtio_submit_frame(probe, frame, frame_len);
+}
+
+/*
+ * Gateway ICMP roundtrip smoke: a one-shot, non-blocking state machine that
+ * pings the DHCP-supplied gateway after binding and prints exactly one
+ * `network: icmp gateway roundtrip ok|timeout` line. It exists so the
+ * datapath (TX + RX + ARP + ICMP in both directions) can be gated by a
+ * serial marker without interactive shells — the same reason the init
+ * storage smoke exists for P2. Budgeted: <= MK_NETWORK_ICMP_PROBE_TRIES
+ * echoes, then it stops forever (per interface bring-up).
+ */
+#define MK_NETWORK_ICMP_PROBE_IDENT 0x564Fu
+#define MK_NETWORK_ICMP_PROBE_TRIES 3u
+#define MK_NETWORK_ICMP_PROBE_WAIT_TICKS 100u
+#define MK_NETWORK_ICMP_PROBE_START_DELAY 20u
+
+struct mk_network_icmp_probe_state {
+    int started;
+    int finished;
+    uint32_t tries;
+    uint16_t sequence;
+    uint32_t first_try_tick;
+    uint32_t next_try_tick;
+};
+
+static struct mk_network_icmp_probe_state g_icmp_probe;
+
+static int mk_network_icmp_probe_consume(uint32_t source_ipv4,
+                                         const uint8_t *icmp_header,
+                                         uint32_t icmp_len) {
+    uint16_t identifier;
+    uint16_t sequence;
+
+    if (!g_icmp_probe.started || g_icmp_probe.finished || icmp_len < 8u) {
+        return 0;
+    }
+    if (source_ipv4 != g_network_state.gateway_ipv4) {
+        return 0;
+    }
+    identifier = mk_network_be16_load(icmp_header + 4u);
+    sequence = mk_network_be16_load(icmp_header + 6u);
+    if (identifier != MK_NETWORK_ICMP_PROBE_IDENT || sequence != g_icmp_probe.sequence) {
+        return 0;
+    }
+    g_icmp_probe.finished = 1;
+    kernel_debug_printf("network: icmp gateway roundtrip ok rtt_ticks=%u gw=%d.%d.%d.%d\n",
+                        (unsigned int)(kernel_timer_get_ticks() - g_icmp_probe.first_try_tick),
+                        (unsigned int)((g_network_state.gateway_ipv4 >> 24) & 0xFFu),
+                        (unsigned int)((g_network_state.gateway_ipv4 >> 16) & 0xFFu),
+                        (unsigned int)((g_network_state.gateway_ipv4 >> 8) & 0xFFu),
+                        (unsigned int)(g_network_state.gateway_ipv4 & 0xFFu));
+    return 1;
+}
+
+static void mk_network_icmp_probe_tick(void) {
+    uint32_t now;
+    uint8_t dest_mac[6];
+
+    if (!g_network_state.pci_probe.virtio_queue_ready ||
+        g_icmp_probe.finished) {
+        return;
+    }
+    if (g_network_state.local_ipv4 == 0u || g_network_state.gateway_ipv4 == 0u) {
+        return;
+    }
+    now = kernel_timer_get_ticks();
+    if (!g_icmp_probe.started) {
+        g_icmp_probe.started = 1;
+        g_icmp_probe.next_try_tick = now + MK_NETWORK_ICMP_PROBE_START_DELAY;
+        return;
+    }
+    if ((int32_t)(now - g_icmp_probe.next_try_tick) < 0) {
+        return;
+    }
+    if (g_icmp_probe.tries >= MK_NETWORK_ICMP_PROBE_TRIES) {
+        g_icmp_probe.finished = 1;
+        kernel_debug_printf("network: icmp gateway roundtrip timeout gw=%d.%d.%d.%d\n",
+                            (unsigned int)((g_network_state.gateway_ipv4 >> 24) & 0xFFu),
+                            (unsigned int)((g_network_state.gateway_ipv4 >> 16) & 0xFFu),
+                            (unsigned int)((g_network_state.gateway_ipv4 >> 8) & 0xFFu),
+                            (unsigned int)(g_network_state.gateway_ipv4 & 0xFFu));
+        return;
+    }
+    if (mk_network_lookup_arp(g_network_state.gateway_ipv4, dest_mac) != 0) {
+        /* No gateway MAC yet: ask, and retry the same try later (untried). */
+        mk_network_virtio_send_arp_request(&g_network_state.pci_probe,
+                                           g_network_state.local_ipv4,
+                                           g_network_state.gateway_ipv4);
+        g_icmp_probe.next_try_tick = now + MK_NETWORK_ICMP_PROBE_WAIT_TICKS;
+        return;
+    }
+    g_icmp_probe.tries += 1u;
+    g_icmp_probe.sequence += 1u;
+    if (g_icmp_probe.tries == 1u) {
+        g_icmp_probe.first_try_tick = now;
+    }
+    (void)mk_network_virtio_send_icmp_echo(&g_network_state.pci_probe,
+                                           dest_mac,
+                                           g_network_state.gateway_ipv4,
+                                           MK_NETWORK_ICMP_PROBE_IDENT,
+                                           g_icmp_probe.sequence,
+                                           (const uint8_t *)"vibeos-smoke-payload-012345678",
+                                           30u);
+    g_icmp_probe.next_try_tick = now + MK_NETWORK_ICMP_PROBE_WAIT_TICKS;
 }
 
 static int mk_network_virtio_send_udp(struct mk_network_pci_probe_state *probe,
@@ -1226,7 +1433,37 @@ static void mk_network_backend_ingest_ipv4(const uint8_t *frame, uint32_t payloa
     if (ip_header[9] == (uint8_t)MK_NETWORK_IPPROTO_ICMP) {
         icmp_header = ip_header + ip_header_len;
         icmp_len = ip_total_len - ip_header_len;
-        if (icmp_header[0] != 0u || icmp_header[1] != 0u || icmp_len < 8u) {
+        if (icmp_len < 8u) {
+            return;
+        }
+
+        /* Echo request addressed to us -> answer (be ping-able). */
+        if (icmp_header[0] == 8u && icmp_header[1] == 0u) {
+            if (destination_ipv4 == g_network_state.local_ipv4 &&
+                g_network_state.local_ipv4 != 0u) {
+                int submitted = mk_network_virtio_send_icmp_echo_reply(&g_network_state.pci_probe,
+                                                                       frame + 6u,
+                                                                       source_ipv4,
+                                                                       icmp_header,
+                                                                       icmp_len);
+                if (submitted == 0 && !g_network_virtio_link.echo_reply_logged) {
+                    g_network_virtio_link.echo_reply_logged = 1;
+                    kernel_debug_printf("network: icmp echo-reply sent to %d.%d.%d.%d\n",
+                                        (unsigned int)((source_ipv4 >> 24) & 0xFFu),
+                                        (unsigned int)((source_ipv4 >> 16) & 0xFFu),
+                                        (unsigned int)((source_ipv4 >> 8) & 0xFFu),
+                                        (unsigned int)(source_ipv4 & 0xFFu));
+                }
+            }
+            return;
+        }
+
+        if (icmp_header[0] != 0u || icmp_header[1] != 0u) {
+            return;
+        }
+
+        /* Gateway roundtrip smoke claims its own replies first. */
+        if (mk_network_icmp_probe_consume(source_ipv4, icmp_header, icmp_len)) {
             return;
         }
 
@@ -1653,6 +1890,7 @@ static void mk_network_backend_ingest_ipv4(const uint8_t *frame, uint32_t payloa
 static void mk_network_backend_ingest_arp(const uint8_t *frame, uint32_t payload_len) {
     uint16_t opcode;
     uint32_t sender_ipv4;
+    uint32_t target_ipv4;
 
     if (frame == 0 || payload_len < 42u) {
         return;
@@ -1661,6 +1899,22 @@ static void mk_network_backend_ingest_arp(const uint8_t *frame, uint32_t payload
     sender_ipv4 = mk_network_be32_load(frame + 28u);
     if (opcode == MK_NETWORK_ARP_OP_REPLY || opcode == MK_NETWORK_ARP_OP_REQUEST) {
         mk_network_cache_arp(sender_ipv4, frame + 22u);
+    }
+    if (opcode == MK_NETWORK_ARP_OP_REQUEST) {
+        target_ipv4 = mk_network_be32_load(frame + 38u);
+        if (g_network_state.local_ipv4 != 0u && target_ipv4 == g_network_state.local_ipv4) {
+            int submitted = mk_network_virtio_send_arp_reply(&g_network_state.pci_probe,
+                                                             frame + 6u,
+                                                             sender_ipv4);
+            if (submitted == 0 && !g_network_virtio_link.arp_reply_logged) {
+                g_network_virtio_link.arp_reply_logged = 1;
+                kernel_debug_printf("network: arp request answered for %d.%d.%d.%d\n",
+                                    (unsigned int)((g_network_state.local_ipv4 >> 24) & 0xFFu),
+                                    (unsigned int)((g_network_state.local_ipv4 >> 16) & 0xFFu),
+                                    (unsigned int)((g_network_state.local_ipv4 >> 8) & 0xFFu),
+                                    (unsigned int)(g_network_state.local_ipv4 & 0xFFu));
+            }
+        }
     }
 }
 
@@ -2747,11 +3001,105 @@ static void mk_network_tcp_retry(void) {
     }
 }
 
+/*
+ * Inbound-responder self-test, restricted to the QEMU user-net.
+ *
+ * slirp never ARPs for nor pings the guest, so the reachability responders
+ * (ARP reply + ICMP echo reply in mk_network_backend_ingest_arp/_ipv4) get no
+ * traffic to prove themselves on QEMU user-net. We therefore synthesize one
+ * inbound ARP request and one inbound ICMP echo request, push them through
+ * the exact same ingest functions the NIC RX path calls, and let the replies
+ * leave through the real TX ring — visible in a filter-dump capture. Gated on
+ * a DHCP lease whose server is the QEMU slirp DEFAULT_GATEWAY (10.0.2.2) so a
+ * physical machine never emits these frames.
+ */
+#define MK_NETWORK_SELFTEST_PEER_IP 0x0A00024Du /* 10.0.2.77 */
+
+static int g_network_responder_selftest_step = -1;
+
+static void mk_network_responder_selftest(void) {
+    static const uint8_t peer_mac[6] = { 0x52u, 0x54u, 0x00u, 0xAAu, 0xBBu, 0xCCu };
+    uint8_t frame[128];
+    const uint8_t *our_mac;
+    uint8_t *ip_header;
+    uint8_t *icmp_header;
+    uint32_t icmp_len;
+
+    if (g_network_responder_selftest_step == 2 ||
+        !g_network_state.pci_probe.virtio_queue_ready ||
+        !g_icmp_probe.finished ||
+        g_dhcp_state != DHCP_STATE_BOUND ||
+        g_dhcp_server_ipv4 != MK_NETWORK_IPV4_DEFAULT_GATEWAY ||
+        g_network_state.local_ipv4 == 0u) {
+        return;
+    }
+    our_mac = g_network_state.pci_probe.mac_valid ? g_network_state.pci_probe.mac
+                                                  : g_network_virtio_fallback_mac;
+
+    if (g_network_responder_selftest_step == -1) {
+        /* (1) inbound ARP request: who-has <us> tell <peer>. */
+        memset(frame, 0, 42u);
+        memcpy(frame, our_mac, 6u);
+        memcpy(frame + 6u, peer_mac, 6u);
+        frame[12] = 0x08u;
+        frame[13] = 0x06u;
+        frame[14] = 0x00u;
+        frame[15] = 0x01u;
+        frame[16] = 0x08u;
+        frame[17] = 0x00u;
+        frame[18] = 0x06u;
+        frame[19] = 0x04u;
+        mk_network_be16_store(frame + 20u, MK_NETWORK_ARP_OP_REQUEST);
+        memcpy(frame + 22u, peer_mac, 6u);
+        mk_network_be32_store(frame + 28u, MK_NETWORK_SELFTEST_PEER_IP);
+        mk_network_be32_store(frame + 38u, g_network_state.local_ipv4);
+        mk_network_backend_ingest_frame(frame, 42u);
+        g_network_responder_selftest_step = 0;
+        return;
+    }
+
+    /* step 0: wait for the (1-deep) TX slot to free before the second frame. */
+    if (g_network_virtio_link.tx_busy) {
+        return;
+    }
+
+    /* (2) inbound ICMP echo request: <peer> -> <us>. */
+    memset(frame, 0, 98u);
+    memcpy(frame, our_mac, 6u);
+    memcpy(frame + 6u, peer_mac, 6u);
+    mk_network_be16_store(frame + 12u, MK_NETWORK_ETHERTYPE_IPV4);
+    ip_header = frame + 14u;
+    ip_header[0] = 0x45u;
+    mk_network_be16_store(ip_header + 2u, (uint16_t)(20u + 8u + 32u));
+    mk_network_be16_store(ip_header + 4u, 0x4242u);
+    mk_network_be16_store(ip_header + 6u, 0x4000u);
+    ip_header[8] = 64u;
+    ip_header[9] = (uint8_t)MK_NETWORK_IPPROTO_ICMP;
+    mk_network_be32_store(ip_header + 12u, MK_NETWORK_SELFTEST_PEER_IP);
+    mk_network_be32_store(ip_header + 16u, g_network_state.local_ipv4);
+    mk_network_be16_store(ip_header + 10u, mk_network_checksum16(ip_header, 20u));
+    icmp_header = ip_header + 20u;
+    icmp_header[0] = 8u;
+    icmp_header[1] = 0u;
+    mk_network_be16_store(icmp_header + 4u, 0x1357u);
+    mk_network_be16_store(icmp_header + 6u, 0x0001u);
+    memset(icmp_header + 8u, 0x41u, 32u);
+    icmp_len = 8u + 32u;
+    mk_network_be16_store(icmp_header + 2u, mk_network_checksum16(icmp_header, icmp_len));
+    mk_network_backend_ingest_frame(frame, 14u + 20u + icmp_len);
+
+    g_network_responder_selftest_step = 2;
+    kernel_debug_puts("network: responder self-test sent\n");
+}
+
 static void mk_network_progress_state(void) {
     mk_network_virtio_maybe_activate_runtime(&g_network_state.pci_probe);
     mk_network_virtio_poll_queues(&g_network_state.pci_probe);
     mk_dhcp_tick();
     mk_dhcp_apply_lease_if_bound();
+    mk_network_loopback_smoke();
+    mk_network_icmp_probe_tick();
+    mk_network_responder_selftest();
     mk_network_tcp_retry();
     if (!g_network_state.ethernet_pending) {
         return;
@@ -3624,6 +3972,107 @@ int mk_network_service_socket_connect(int handle, const struct sockaddr *address
     return -1;
 }
 
+/*
+ * IPv4 loopback (127/8) echo answer. The echo never touches a NIC: we build
+ * the RFC-792 echo-reply inside the stack and deliver it through the real
+ * socket RX queue, so userland sees genuine reply bytes (echo-reply header +
+ * echoed payload) through the same recv path as a wire reply. This replaces
+ * the fabricated `ping localhost` output the app used to print.
+ */
+static int mk_network_icmp_loopback_reply(struct mk_network_socket_state *socket_state,
+                                          int32_t handle,
+                                          const void *data,
+                                          uint32_t size) {
+    uint8_t lo_reply[8u + MK_NETWORK_SOCKET_RX_CAPACITY];
+
+    if (socket_state == 0 || data == 0 || size == 0u ||
+        size > MK_NETWORK_SOCKET_RX_CAPACITY) {
+        return -1;
+    }
+    socket_state->icmp_next_sequence = (uint16_t)(socket_state->icmp_next_sequence + 1u);
+    lo_reply[0] = 0u;
+    lo_reply[1] = 0u;
+    lo_reply[2] = 0u;
+    lo_reply[3] = 0u;
+    mk_network_be16_store(lo_reply + 4u, socket_state->icmp_identifier);
+    mk_network_be16_store(lo_reply + 6u, socket_state->icmp_next_sequence);
+    memcpy(lo_reply + 8u, data, size);
+    mk_network_be16_store(lo_reply + 2u,
+                          mk_network_checksum16(lo_reply, 8u + size));
+    if (network_queue_rx_enqueue(lo_reply, 8u + size, handle) != 0) {
+        return -1;
+    }
+    return (int)size;
+}
+
+/*
+ * One-shot kernel loopback smoke, run from the service progress tick.
+ * Exercises the exact answer + enqueue + dequeue path `ping localhost`
+ * relies on, non-interactively and independent of NIC/boot mode — the
+ * sendkey rescue-shell harness is timing-flaky, so the socket loopback gets
+ * a boot-time marker instead: `network: loopback smoke ok` (or FAILED).
+ */
+static int g_network_loopback_smoke_done = 0;
+
+static void mk_network_loopback_smoke(void) {
+    static const uint8_t probe_payload[13] = {
+        'v', 'i', 'b', 'e', '-', 'l', 'o', 'o', 'p', 'b', 'a', 'c', 'k'
+    };
+    uint8_t reply[32];
+    uint32_t reply_len = 0u;
+    struct mk_network_socket_state *socket_state;
+    int handle = -1;
+    int sent;
+    int dequeued;
+
+    if (g_network_loopback_smoke_done) {
+        return;
+    }
+    g_network_loopback_smoke_done = 1;
+
+    socket_state = mk_network_socket_allocate(0u,
+                                              AF_INET,
+                                              SOCK_DGRAM,
+                                              MK_NETWORK_IPPROTO_ICMP,
+                                              &handle);
+    if (socket_state == 0 || handle <= 0) {
+        kernel_debug_puts("network: loopback smoke FAILED (socket allocate)\n");
+        return;
+    }
+    socket_state->connected = 1;
+    socket_state->remote_ipv4 = 0x7F000001u;
+    socket_state->icmp_identifier = 0x4C42u; /* "LB" */
+    socket_state->icmp_next_sequence = 0u;
+
+    sent = mk_network_icmp_loopback_reply(socket_state,
+                                          (int32_t)handle,
+                                          probe_payload,
+                                          (uint32_t)sizeof(probe_payload));
+    if (sent != (int)sizeof(probe_payload)) {
+        kernel_debug_printf("network: loopback smoke FAILED (send rc=%d)\n", sent);
+    } else {
+        dequeued = network_queue_rx_dequeue(reply,
+                                            (uint32_t)sizeof(reply),
+                                            (int32_t)handle,
+                                            &reply_len,
+                                            NULL);
+        if (dequeued == (int)(8u + sizeof(probe_payload)) &&
+            reply_len == (uint32_t)dequeued &&
+            reply[0] == 0u && reply[1] == 0u &&
+            mk_network_be16_load(reply + 4u) == 0x4C42u &&
+            mk_network_be16_load(reply + 6u) == 1u &&
+            memcmp(reply + 8u, probe_payload, sizeof(probe_payload)) == 0) {
+            kernel_debug_printf("network: loopback smoke ok bytes=%d\n", dequeued);
+        } else {
+            kernel_debug_printf("network: loopback smoke FAILED (reply rc=%d len=%u)\n",
+                                dequeued,
+                                (unsigned int)reply_len);
+        }
+    }
+    (void)network_queue_unregister_socket((int32_t)handle);
+    memset(socket_state, 0, sizeof(*socket_state));
+}
+
 int mk_network_service_send(int handle, const void *data, uint32_t size) {
     struct mk_network_socket_state *socket_state;
     struct mk_network_socket_state *peer;
@@ -3640,6 +4089,16 @@ int mk_network_service_send(int handle, const void *data, uint32_t size) {
         return -1;
     }
     if (mk_network_socket_is_inet_icmp(socket_state)) {
+        /*
+         * IPv4 loopback (127/8): answered inside the stack, never touches a
+         * NIC. See mk_network_icmp_loopback_reply.
+         */
+        if (((socket_state->remote_ipv4 >> 24) & 0xFFu) == 127u) {
+            return mk_network_icmp_loopback_reply(socket_state,
+                                                  (int32_t)handle,
+                                                  data,
+                                                  size);
+        }
         mk_network_progress_state();
         next_hop = mk_network_next_hop_ipv4(socket_state->remote_ipv4);
         if (next_hop == 0u) {
