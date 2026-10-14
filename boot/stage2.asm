@@ -175,6 +175,13 @@ stage2_entry:
     lgdt [gdt_descriptor]
     mov eax, cr0
     or eax, 1
+    and eax, 0x9FFFFFFF    ; PE=1, CD=0 NW=0: enable caches entering PM.
+                           ; Paging is still OFF here, so this is the
+                           ; textbook safe cache-enable (no WBINVD needed,
+                           ; no paging boundary crossed). Hardware-real:
+                           ; if BIOS left CR0.CD=1 the loader menu would
+                           ; draw the VESA framebuffer at bus speed —
+                           ; invisible under QEMU/TCG (ignores these bits).
     mov cr0, eax
     jmp CODE_SEG:pmode
 

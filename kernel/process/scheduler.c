@@ -1548,6 +1548,34 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
                                 (unsigned int)(uintptr_t)scan,
                                 (unsigned int)kernel_heap_block_alloc_pc(scan),
                                 (int)scan->state, (int)scan->service_type);
+            /*
+             * Discriminator: ordered top-down progression (canary first,
+             * header later) through a task block is the geometry of the
+             * task's OWN stack exhausting downward. clean_bottom counts
+             * pristine 0xA5 fill bytes from the stack block floor: ~0 means
+             * usage reached the floor (exhaustion confirmed); == size
+             * means the stack never went deep (wild write instead).
+             */
+            {
+                uintptr_t st = (uintptr_t)scan->stack;
+                uint32_t ssize = scan->stack_size;
+                uint32_t clean = 0u;
+
+                if (st != 0u && ssize >= 256u && ssize <= (1u << 20) &&
+                    (ssize & 15u) == 0u &&
+                    st + ssize <= kernel_heap_end() &&
+                    kernel_heap_is_block((const void *)st)) {
+                    const uint8_t *base = (const uint8_t *)st;
+                    while (clean < ssize && base[clean] == 0xA5u) {
+                        clean++;
+                    }
+                    kernel_debug_printf("sched-scan:   stack{st=0x%x size=%u clean_bottom=%u}\n",
+                                        (unsigned int)st, ssize, clean);
+                } else {
+                    kernel_debug_printf("sched-scan:   stack{st=0x%x size=%u UNAVAILABLE}\n",
+                                        (unsigned int)st, ssize);
+                }
+            }
             if (kernel_heap_block_predecessor(scan, &pred_start, &pred_size,
                                               &pred_allocpc, &pred_cnry)) {
                 kernel_debug_printf("sched-scan:   writer-candidate pred{start=0x%x size=%u allocpc=0x%x cnry=%d}\n",

@@ -24,13 +24,24 @@
  * IPI (headers/kernel/smp.h SMP_IPI_SCHED_VECTOR). */
 #define SMP_TIMER_VECTOR 0x83u
 #define AP_TRAMPOLINE_VECTOR (AP_TRAMPOLINE_PHYS_ADDR >> 12)
-#define AP_TRAMPOLINE_GDT_START_OFFSET 0x80u
-#define AP_TRAMPOLINE_GDT_DESC_OFFSET 0x98u
-#define AP_TRAMPOLINE_PMODE_PTR_OFFSET 0x9Eu
-#define AP_TRAMPOLINE_ENTRY_PTR_OFFSET 0xA4u
-#define AP_TRAMPOLINE_STACK_PTR_OFFSET 0xA8u
-#define AP_TRAMPOLINE_PAGE_DIR_PTR_OFFSET 0xACu
+/*
+ * Data-section offsets inside the AP trampoline, now FIXED by the ASM
+ * (`times 0x100 - ($-$$) db 0` anchors gdt_start at 0x100 regardless of
+ * code size). Do NOT re-derive from a listing: they are contractual and
+ * the build asserts code < 0x100. smp_prepare_trampoline read-backs
+ * entry_ptr to catch any drift on real hardware.
+ */
+#define AP_TRAMPOLINE_GDT_START_OFFSET 0x100u
+#define AP_TRAMPOLINE_GDT_DESC_OFFSET 0x118u
+#define AP_TRAMPOLINE_PMODE_PTR_OFFSET 0x11eu
+#define AP_TRAMPOLINE_ENTRY_PTR_OFFSET 0x124u
+#define AP_TRAMPOLINE_STACK_PTR_OFFSET 0x128u
+#define AP_TRAMPOLINE_PAGE_DIR_PTR_OFFSET 0x12cu
 #define AP_TRAMPOLINE_PMODE_OFFSET 0x33u
+/* Highest byte the kernel patches +4 (page_dir_ptr dd) — trampoline must
+ * be at least this long, and code must stay below gdt_start (0x100). */
+#define AP_TRAMPOLINE_DATA_END_OFFSET 0x130u
+#define AP_TRAMPOLINE_CODE_LIMIT 0x100u
 #define AP_TRAMPOLINE_DEBUG_STAGE_ADDR 0x7FF0u
 #define AP_STACK_SIZE 4096u
 #define AP_START_TIMEOUT_TICKS 500u
@@ -50,7 +61,8 @@ enum {
     SMP_CPU_STAGE_AP_ENTER = 5u,
     SMP_CPU_STAGE_AP_LAPIC = 6u,
     SMP_CPU_STAGE_AP_MARKED = 7u,
-    SMP_CPU_STAGE_AP_SCHED = 8u
+    SMP_CPU_STAGE_AP_SCHED = 8u,
+    SMP_CPU_STAGE_FAILED = 9u /* trampoline prepare rejected (diagnostic emitted) */
 };
 
 extern const uint8_t _binary_build_ap_trampoline_bin_start[];
@@ -146,7 +158,49 @@ static void smp_assert_trampoline_reserved(void) {
                         (uint32_t)tramp_end);
 }
 
-static void smp_prepare_trampoline(uint32_t entry, uint32_t stack_top) {
+/*
+ * Data-field magics embedded by boot/ap_trampoline.asm. The data section
+ * is anchored at a FIXED 0x100 offset (times padding), and these words
+ * make any residual drift (stale C constant, truncated image, corrupted
+ * page) detectable BEFORE the AP is released: a wrong-offset patch used
+ * to hang the AP silently (observed: sipi1 stall after a 5-byte code
+ * edit shifted every data field by 8). Verification failure is a loud,
+ * honest diagnostic — never a fake boot.
+ */
+#define AP_TRAMPOLINE_MAGIC_GDT_DESC 0x47445431u /* "GDT1" */
+#define AP_TRAMPOLINE_MAGIC_PMODE_PTR 0x504D4F44u /* "PMOD" */
+#define AP_TRAMPOLINE_MAGIC_ENTRY_PTR 0x454E5452u /* "ENTR" */
+#define AP_TRAMPOLINE_MAGIC_STACK_PTR 0x53544B52u /* "STKR" */
+#define AP_TRAMPOLINE_MAGIC_PAGE_DIR 0x50444952u /* "PDIR" */
+
+static int smp_trampoline_magics_ok(void) {
+    static const struct {
+        uint32_t offset;
+        uint32_t magic;
+        const char *name;
+    } expect[] = {
+        {AP_TRAMPOLINE_GDT_DESC_OFFSET + 2u, AP_TRAMPOLINE_MAGIC_GDT_DESC, "gdtdesc"},
+        {AP_TRAMPOLINE_PMODE_PTR_OFFSET, AP_TRAMPOLINE_MAGIC_PMODE_PTR, "pmodeptr"},
+        {AP_TRAMPOLINE_ENTRY_PTR_OFFSET, AP_TRAMPOLINE_MAGIC_ENTRY_PTR, "entryptr"},
+        {AP_TRAMPOLINE_STACK_PTR_OFFSET, AP_TRAMPOLINE_MAGIC_STACK_PTR, "stackptr"},
+        {AP_TRAMPOLINE_PAGE_DIR_PTR_OFFSET, AP_TRAMPOLINE_MAGIC_PAGE_DIR, "pagedir"},
+    };
+    uint32_t i;
+
+    for (i = 0u; i < sizeof(expect) / sizeof(expect[0]); ++i) {
+        uint32_t seen = *(const uint32_t *)(const void *)(uintptr_t)
+                            (AP_TRAMPOLINE_PHYS_ADDR + expect[i].offset);
+        if (seen != expect[i].magic) {
+            kernel_debug_printf("smp: trampoline MAGIC-DRIFT %s off=0x%x seen=%x want=%x\n",
+                                expect[i].name, (unsigned int)expect[i].offset,
+                                (unsigned int)seen, (unsigned int)expect[i].magic);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int smp_prepare_trampoline(uint32_t entry, uint32_t stack_top) {
     uint8_t *dst = (uint8_t *)(uintptr_t)AP_TRAMPOLINE_PHYS_ADDR;
     uint32_t gdt_base = AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_GDT_START_OFFSET;
     uint32_t pmode_entry = AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_PMODE_OFFSET;
@@ -155,11 +209,36 @@ static void smp_prepare_trampoline(uint32_t entry, uint32_t stack_top) {
 
     memcpy(dst, _binary_build_ap_trampoline_bin_start, size);
     *(volatile uint8_t *)(uintptr_t)AP_TRAMPOLINE_DEBUG_STAGE_ADDR = 0u;
+
+    /* DATA_END_OFFSET (0x130) is one PAST the last patched byte, so the
+     * minimum valid size is exactly 0x130 (this guard caught its own
+     * off-by-one on first live fire: 304-byte image is valid). */
+    if (size < AP_TRAMPOLINE_DATA_END_OFFSET) {
+        kernel_debug_printf("smp: trampoline TOO SMALL size=%u want>=%u\n",
+                            (unsigned int)size,
+                            (unsigned int)AP_TRAMPOLINE_DATA_END_OFFSET);
+        return -1;
+    }
+    if (!smp_trampoline_magics_ok()) {
+        return -1;
+    }
+
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_GDT_DESC_OFFSET + 2u) = gdt_base;
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_PMODE_PTR_OFFSET) = pmode_entry;
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_ENTRY_PTR_OFFSET) = entry;
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_STACK_PTR_OFFSET) = stack_top;
     *(uint32_t *)(void *)(uintptr_t)(AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_PAGE_DIR_PTR_OFFSET) = page_dir;
+
+    /* Read-back: the patched entry must be visible at the offset the AP
+     * will actually load. Catches self-consistent-but-wrong layouts
+     * (magic ok, patch landing elsewhere). */
+    if (*(volatile uint32_t *)(void *)(uintptr_t)
+            (AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_ENTRY_PTR_OFFSET) != entry) {
+        kernel_debug_printf("smp: trampoline ENTRY-READBACK-FAIL off=0x%x\n",
+                            (unsigned int)AP_TRAMPOLINE_ENTRY_PTR_OFFSET);
+        return -1;
+    }
+    return 0;
 }
 
 static int smp_wait_for_cpu(uint32_t expected_count) {
@@ -408,7 +487,14 @@ void smp_init(void) {
                 smp_persist_trace_mark('P');
                 kernel_text_puts("SMP: prepare ap\n");
                 smp_text_put_apic_line("SMP: target apic ", cpu->apic_id);
-                smp_prepare_trampoline((uint32_t)(uintptr_t)smp_ap_entry, stack_top);
+                if (smp_prepare_trampoline((uint32_t)(uintptr_t)smp_ap_entry,
+                                           stack_top) != 0) {
+                    /* Diagnostic already emitted; never release an AP onto
+                     * a mis-patched trampoline (silent sipi1 hang). */
+                    kernel_free(stack);
+                    g_smp_cpu_stage[i] = SMP_CPU_STAGE_FAILED;
+                    break;
+                }
                 g_smp_cpu_stage[i] = SMP_CPU_STAGE_PREPARED;
                 kernel_debug_printf("smp: starting ap idx=%d apic=%x stack=%x (attempt %d)\n",
                                     (int)i,

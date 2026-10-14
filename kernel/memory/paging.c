@@ -159,7 +159,22 @@ void paging_init(void) {
 
     __asm__ volatile("mov %0, %%cr3" : : "r"((uint32_t)(uintptr_t)g_kernel_page_directory) : "memory");
 
+    /*
+     * Hardware-real boot fix (COMPLETION_ACTION_PLAN P0). Enable caching
+     * BEFORE turning on paging, per Intel SDM vol3 "Introduction to Paging"
+     * / "Disabling and Enabling Paging": with CR0.CD=1 (or NW=1) paging
+     * enabled forces the ENTIRE map to uncacheable regardless of PCD/PAT/
+     * MTRR — on a T61/T400 that makes the write-combining framebuffer and
+     * the kernel heap run at bus speed (observed symptom class: video
+     * livelock / 10-100x slow boot that NEVER reproduces under QEMU/TCG,
+     * which ignores these bits). Sequence: clear CD+NW while paging is
+     * still off (safe window), WBINVD to drop any lines filled while
+     * caches were disabled, then set PG.
+     */
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~0x60000000u; /* clear CR0.CD (bit 30) and CR0.NW (bit 29) */
+    __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+    __asm__ volatile("wbinvd" : : : "memory");
     cr0 |= PAGING_CR0_PG;
     __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
 
