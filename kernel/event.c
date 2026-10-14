@@ -6,11 +6,64 @@
 #include <kernel/scheduler.h>
 #include <kernel/smp.h>
 #include <kernel/drivers/timer/timer.h>
+#include <kernel/memory/heap.h>
+#include <kernel/drivers/debug/debug.h>
+
+/*
+ * Waitable-chain hardening (COMPLETION_ACTION_PLAN P4, class #5). The
+ * scheduler task list was hardened this way (node-sane + step cap +
+ * budgeted diag) and that eliminated its corruption class; the waitable
+ * wait_next chain is walked/written in four places with NO cap and NO
+ * node validation. A single stale/garbage wait_next (from a task ending
+ * up on two chains, or a recycled block) makes enqueue write
+ * `tail->wait_next = task` into a FOREIGN heap block — the observed
+ * class #5 signature of heap pointers landing in task pid/kind/state
+ * fields. These guards are additive: a well-formed chain behaves exactly
+ * as before (is_block true, count small); only a corrupted chain trips
+ * them, where they stop the runaway write and name the victim instead of
+ * silently corrupting memory.
+ */
+#define KERNEL_WAITABLE_WALK_CAP 512u
+
+static volatile uint32_t g_waitable_chain_budget = 8u;
+
+static int kernel_waitable_task_node_ok(const process_t *task) {
+    return task != 0 && task != (const process_t *)~0u &&
+           kernel_heap_is_block((const void *)task);
+}
+
+static void kernel_waitable_chain_diag(const char *what,
+                                       const kernel_waitable_t *waitable,
+                                       const process_t *node) {
+    if (g_waitable_chain_budget == 0u) {
+        return;
+    }
+    g_waitable_chain_budget--;
+    kernel_debug_printf("waitable: CHAIN-BAD %s waitable=0x%x head=0x%x node=0x%x nodepid=%d\n",
+                        what, (unsigned int)(uintptr_t)waitable,
+                        waitable ? (unsigned int)(uintptr_t)waitable->wait_head : 0u,
+                        (unsigned int)(uintptr_t)node,
+                        (node != 0 && kernel_waitable_task_node_ok(node)) ? node->pid : -9999);
+}
 
 static void kernel_waitable_enqueue(kernel_waitable_t *waitable, process_t *task) {
     process_t *tail;
+    uint32_t steps = 0u;
 
     if (waitable == 0 || task == 0) {
+        return;
+    }
+    if (!kernel_waitable_task_node_ok(task)) {
+        kernel_waitable_chain_diag("enqueue-bad-task", waitable, task);
+        return;
+    }
+    if (task->wait_next != 0) {
+        /* Already linked into a chain (possibly another waitable's).
+         * Relinking would silently splice it out of the old chain and hand
+         * it to this one — cross-chain corruption. The wait_channel guard in
+         * the caller should make this unreachable; if it fires, it names a
+         * real bug instead of corrupting memory. */
+        kernel_waitable_chain_diag("enqueue-already-linked", waitable, task);
         return;
     }
 
@@ -22,6 +75,14 @@ static void kernel_waitable_enqueue(kernel_waitable_t *waitable, process_t *task
 
     tail = waitable->wait_head;
     while (tail->wait_next != 0) {
+        if (++steps > KERNEL_WAITABLE_WALK_CAP ||
+            !kernel_waitable_task_node_ok(tail->wait_next)) {
+            /* Do NOT write through a garbage tail->wait_next: truncating the
+             * chain here is strictly safer than appending into a foreign
+             * block. */
+            kernel_waitable_chain_diag("enqueue-walk", waitable, tail->wait_next);
+            return;
+        }
         tail = tail->wait_next;
     }
     tail->wait_next = task;
@@ -44,6 +105,7 @@ void kernel_waitable_detach_task(kernel_waitable_t *waitable, process_t *task) {
     process_t *prev = 0;
     process_t *cursor;
     uint32_t flags;
+    uint32_t steps = 0u;
 
     if (waitable == 0 || task == 0) {
         return;
@@ -52,6 +114,10 @@ void kernel_waitable_detach_task(kernel_waitable_t *waitable, process_t *task) {
     flags = spinlock_lock_irqsave(&waitable->lock);
     cursor = waitable->wait_head;
     while (cursor != 0) {
+        if (!kernel_waitable_task_node_ok(cursor)) {
+            kernel_waitable_chain_diag("detach-walk", waitable, cursor);
+            break;
+        }
         if (cursor == task) {
             if (prev == 0) {
                 waitable->wait_head = cursor->wait_next;
@@ -63,6 +129,10 @@ void kernel_waitable_detach_task(kernel_waitable_t *waitable, process_t *task) {
             return;
         }
         prev = cursor;
+        if (++steps > KERNEL_WAITABLE_WALK_CAP) {
+            kernel_waitable_chain_diag("detach-cap", waitable, cursor->wait_next);
+            break;
+        }
         cursor = cursor->wait_next;
     }
     spinlock_unlock_irqrestore(&waitable->lock, flags);
