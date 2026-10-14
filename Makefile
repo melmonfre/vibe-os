@@ -2153,6 +2153,17 @@ run-headless-boot-smoke-debug: boot-smoke-image
 validate-phase6-boot-smoke: boot-smoke-image
 	$(PYTHON) tools/validate_phase6.py --image $(BOOT_SMOKE_IMAGE) --report $(BOOT_SMOKE_PHASE6_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --timeout $(PHASE6_TIMEOUT)
 
+# Cross-boot filesystem persistence gate (COMPLETION_ACTION_PLAN P2). Boots
+# the SAME image twice WITHOUT snapshot and checks that boot 2 reads back the
+# image boot 1 wrote ("fs: persistent image valid", no rebuild). Every other
+# QEMU target uses snapshot=on, which discards writes, so this is the only
+# automated proof of the disk write path + durability. QEMU is the necessary
+# gate; real-media durability still needs physical hardware (P0).
+STORAGE_PERSIST_REPORT ?= $(BUILD_DIR)/storage-persist-validation.md
+STORAGE_PERSIST_TIMEOUT ?= 130
+validate-storage-persist: $(IMAGE)
+	$(PYTHON) tools/validate_storage_persist.py --image $(IMAGE) --report $(STORAGE_PERSIST_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) --timeout $(STORAGE_PERSIST_TIMEOUT)
+
 validate-modular-apps: $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report $(MODULAR_APPS_REPORT) --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
