@@ -3063,15 +3063,32 @@ void mk_network_service_init(void) {
                                  MK_NETWORK_CAPS_LOCAL_FALLBACK_RESCUE_ONLY |
                                  MK_NETWORK_CAPS_KERNEL_DATAPATH_EXECUTOR;
     if (g_network_state.pci_probe.present) {
-        g_network_state.info.flags |= MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING |
-                                      MK_NETWORK_CAPS_REAL_PACKET_DATAPATH;
+        g_network_state.info.flags |= MK_NETWORK_CAPS_DRIVER_EXTRACTION_PENDING;
+        /*
+         * REAL_PACKET_DATAPATH requires an ACTUAL packet datapath — a ready
+         * virtio queue — not merely a PCI network-class device being present
+         * (COMPLETION_ACTION_PLAN P3, "capabilities honestas"). A NIC we
+         * recognise but have no driver for (Intel 8086:100e labelled
+         * "compat-em", an RTL8139, ...) must NOT advertise a real datapath:
+         * that was a false positive. The e1000/rtl8139 drivers are dead code
+         * (zero callers), so only virtio can legitimately set this.
+         */
+        if (g_network_state.pci_probe.virtio_queue_ready) {
+            g_network_state.info.flags |= MK_NETWORK_CAPS_REAL_PACKET_DATAPATH;
+        }
     } else {
         g_network_state.info.flags |= MK_NETWORK_CAPS_QUERY_ONLY |
                                       MK_NETWORK_CAPS_SOCKET_LOCAL_ONLY;
     }
+    /*
+     * supported_families must list only families the stack can actually
+     * serve. AF_INET6 is NOT implemented anywhere (no IPv6 header parsing,
+     * no ND, no address configuration) — advertising it made taskmgr and any
+     * capability probe claim IPv6 support that does not exist. Honest set:
+     * AF_UNIX + AF_INET (COMPLETION_ACTION_PLAN P3, P9).
+     */
     g_network_state.info.supported_families = MK_NETWORK_FAMILY_UNIX |
-                                              MK_NETWORK_FAMILY_INET |
-                                              MK_NETWORK_FAMILY_INET6;
+                                              MK_NETWORK_FAMILY_INET;
     g_network_state.info.supported_socket_types = MK_NETWORK_SOCKET_STREAM |
                                                   MK_NETWORK_SOCKET_DGRAM;
     g_network_state.info.max_sockets = MK_NETWORK_SOCKET_MAX;
@@ -3079,6 +3096,15 @@ void mk_network_service_init(void) {
     g_network_state.info.socket_rx_capacity = MK_NETWORK_SOCKET_RX_CAPACITY;
     g_network_state.info.event_queue_depth = MK_NETWORK_EVENT_QUEUE_SIZE;
     g_network_state.info.listen_backlog_max = 1u;
+
+    /* Capability audit line: lets a hardware campaign (and serial-only runs)
+     * see exactly what the stack claims vs. what it can do — the honest
+     * families/flags, without a GUI. datapath=1 means a real packet path
+     * (virtio queue ready), not just a PCI network device being present. */
+    kernel_debug_printf("network: caps flags=%x families=%x datapath=%d\n",
+                        (unsigned int)g_network_state.info.flags,
+                        (unsigned int)g_network_state.info.supported_families,
+                        (g_network_state.info.flags & MK_NETWORK_CAPS_REAL_PACKET_DATAPATH) ? 1 : 0);
 
     /* Populate WiFi hardware info if WiFi device detected */
     if (g_network_state.pci_probe.is_wifi) {

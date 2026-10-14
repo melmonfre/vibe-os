@@ -1658,9 +1658,16 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
                     }
                 }
             }
-            kernel_debug_printf("sched-scan: EXTENT bad=%u total=%u\n",
-                                bad_count, total);
+            /*
+             * Only report when something is actually wrong. The all-clean
+             * case fires every SCHED_CANARY_SWEEP_PERIOD_TICKS and used to
+             * print unconditionally, flooding the serial log with thousands
+             * of identical "bad=0" lines (and drowning the markers the QEMU
+             * validation harnesses grep for). A clean sweep is silent.
+             */
             if (bad_count != 0u) {
+                kernel_debug_printf("sched-scan: EXTENT bad=%u total=%u\n",
+                                    bad_count, total);
                 g_sched_canary_sweep_budget = 0u;
             }
         }
