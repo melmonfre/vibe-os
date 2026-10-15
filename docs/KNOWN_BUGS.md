@@ -169,7 +169,42 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   mailbox enche. Logo a mailbox de um assinante que acumula eventos pode descartar
   o TERMINATED do filho em silencio; o host fica preso em kernel_mailbox_wait
   (timeout=4, kind=2 QUEUE, deadline re-armando) exatamente como o census mediu.
-  0.6 permanece ABERTO; nada claimado corrigido.
+  RETRACAO DA ATRIBUICAO CAUSAL (15/10 parte 10 — a parte 9 over-claimed e esta
+  nota corrige o registro; "concluido = provado, nao pretendido"). Lendo o codigo
+  do caminho de wake do host, a hipotese "a mailbox de task-event derrubou o
+  TERMINATED do filho -> o host nunca acorda" NAO SE SUSTENTA:
+  (a) o host assina APENAS TERMINATED (host_subscribe_task_exit ->
+      sys_task_event_subscribe_mask(MK_TASK_EVENT_MASK_TERMINATED,...)); eventos
+      de LAUNCHED (o burst que enche a fila) NAO vao para a mailbox do host, logo
+      ela nao 'inundava' de ruido — volume baixo;
+  (b) a mailbox que mostrou drop=181 (q=32) e a CLASSE-STREAM
+      (g_task_class_streams), que e ESCREVE-APENAS: nao existe NENHUM
+      try_receive/mailbox_wait nela (grep: stream->mailbox so aparece em init,
+      count e dropped; SYSCALL_TASK_EVENT_RECV/89 le a SUBSCRIPTION, nao a classe
+      stream). Ela NUNCA e drenada, entao class_pending_depth satura em 32 e
+      class_dropped_events sobe sem limite — o drop=181 e um artefato de um buffer
+      sem consumidor (CODIGO MORTO que produz telemetria enganosa), NAO prova de
+      perda de entrega;
+  (c) o fallback de LIVENESS do host (host_wait_for_task_exit ->
+      host_task_pid_alive -> sys_task_snapshot) cobre a perda de evento: a varredura
+      da snapshot FAZ `continue` em PROCESS_TERMINATED (scheduler.c:2047, antes do
+      bloco de resumo E do bloco de entradas), entao o pid de um filho encerrado
+      NAO APARECE na snapshot -> alive() falso -> host ACORDA mesmo com o evento
+      perdido. alive=1 persistente significa que o FILHO esta de fato vivo (nunca
+      chegou a TERMINATED), nao que o evento sumiu.
+  (d) Alem disso, o boot medido na parte 8/9 NERA o stall: o probe nao alcancou o
+      rescue shell ('rescue selected: False') — os 'host-wait: stalled pid=10/11
+      alive=1' amostrados eram supervisores do DESKTOP normal esperando apps de
+      longa duracao (comportamento ESPERADO, vivo=correto), não o stall de 0.6.
+      As refutacoes (inanicao, flood, lista truncada) continuam validas pois sao
+      medidas estruturais do scheduler/eventos; mas a observacao do stall EM SI
+      exige reproduzir o modo rescue com o comando preso.
+  => 0.6 NAO e problema de entrega de evento. O que fica vivo como alvo, do ramo
+  rescue da parte 7: a shell presa num kernel_waitable_wait_timeout de 4 ticks
+  que NUNCA dispara, sem nem re-pollar. Acao: registrar a classe-stream consumida-zero como
+  limitacao honesta (wire um consumidor OU remover — DECISAO de arquitetura da
+  mantenedora, nao mexo sem ela); a busca do 0.6 real volta para o caminho
+  exit/reap do filho e o waitable-wait da shell. 0.6 permanece ABERTO.
   PROXIMO PASSO (nao feito aqui): medir o lado do HOST de filesystem
   no momento do stall (estado/agendabilidade do task fs e do storage que ele
   encadeia) — o peek atual so cobre o caminho que ESToura timeout, preciso de um
