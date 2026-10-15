@@ -132,8 +132,39 @@ static void host_play_wav_and_wait(const char *path, const char *tag) {
     (void)audio_play_wav_best_effort(path, tag);
 }
 
+static void host_append_u32(char *buffer, int size, unsigned int value) {
+    char tmp[12];
+    int pos = 0;
+    int i;
+    char one[2];
+
+    if (buffer == 0 || size <= 0) {
+        return;
+    }
+    if (value == 0u) {
+        tmp[pos++] = '0';
+    } else {
+        while (value > 0u && pos < (int)sizeof(tmp)) {
+            tmp[pos++] = (char)('0' + (value % 10u));
+            value /= 10u;
+        }
+    }
+    one[1] = '\0';
+    for (i = pos - 1; i >= 0; --i) {
+        one[0] = tmp[i];
+        str_append(buffer, one, size);
+    }
+}
+
 static int host_wait_for_task_exit(uint32_t pid) {
     struct mk_task_event event;
+    /*
+     * Diagnostic for KNOWN_BUGS "Sessao interativa trava no meio" (plano
+     * item 0.6): distinguishes "still polling, but alive() lies" from
+     * "receive never returns". Budgeted to three prints, so it can never
+     * flood the serial.
+     */
+    unsigned int poll_timeouts = 0u;
 
     if (pid == 0u) {
         return -1;
@@ -144,6 +175,22 @@ static int host_wait_for_task_exit(uint32_t pid) {
 
     for (;;) {
         if (sys_task_event_receive(&event, HOST_TASK_EXIT_POLL_TICKS) != 0) {
+            poll_timeouts += 1u;
+            if (poll_timeouts == 256u || poll_timeouts == 4096u ||
+                poll_timeouts == 65536u) {
+                char msg[96];
+
+                msg[0] = '\0';
+                str_append(msg, "host-wait: stalled pid=", (int)sizeof(msg));
+                host_append_u32(msg, (int)sizeof(msg), pid);
+                str_append(msg, " polls=", (int)sizeof(msg));
+                host_append_u32(msg, (int)sizeof(msg), poll_timeouts);
+                str_append(msg, " alive=", (int)sizeof(msg));
+                host_append_u32(msg, (int)sizeof(msg),
+                                (unsigned int)(host_task_pid_alive(pid) != 0 ? 1 : 0));
+                sys_write_debug(msg);
+                sys_write_debug("\n");
+            }
             if (!host_task_pid_alive(pid)) {
                 return 0;
             }

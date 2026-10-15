@@ -72,6 +72,21 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   app ring3 saudavel (o fix de 15/10 cobriu ebp/esp, mas nao o check de
   frame/ctx quando o contexto salva na janela da stack de usuario) — trace e
   ruido a calibrar em passada propria.
+  DECISAO DE RAMO MEDIDA (15/10 parte 6 — trace 'host-wait: stalled'
+  adicionado em userland/bootstrap_hosts.c host_wait_for_task_exit): no stall
+  re-produzido com o binario novo, a shell (pid=10) NAO esta no loop de polling
+  (nenhum 'host-wait: stalled' em ~10s, quando 256 polls o imprimiriam) e NAO
+  retorna do wait; antes do launch os waits de 4 ticks do pid=10 venciam
+  corretamente (deadlines 8522→8562 avancando). => o modo (ii) esta PRESO
+  DENTRO de um unico kernel_waitable_wait_timeout com deadline curto que NUNCA
+  dispara. OBSERVAR: o budget do trace 'scheduler: block' e 24 e esgotou ANTES
+  do launch, entao a ausencia de block-traces apos js nao e prova por si so.
+  RAMOS A DESCARTAR COM O PROXIMO INSTRUMENTO ('sched-watch: overdue-wake' no
+  proprio sweep, budgetado): (A) o sweep nao visita o no da shell (lista
+  truncada/orfao — mesma familia das assinaturas LIST-CYCLE/BAD-NODE das
+  classes SMP) — se o overdue disparar p/ pid=10 no stall, 0.6 CONVERGE para a
+  causa da classe #5; (B) a task nao esta BLOCKED (stuck noutro lado do
+  receive) — se nao disparar, instrumentar scheduler_task_event_receive.
   PROXIMO PASSO (nao feito aqui): medir o lado do HOST de filesystem
   no momento do stall (estado/agendabilidade do task fs e do storage que ele
   encadeia) — o peek atual so cobre o caminho que ESToura timeout, preciso de um
