@@ -137,6 +137,39 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   0.6 permanece ABERTO; nada aqui foi claimado como corrigido. Nota: os
   'sched-dispatch: BAD-FORENSICS' reapareceram para pid=12 (frame ring3 com
   regs_in_win=0) — mesma familia do bug #10, ruidoso mas nao fatal.
+  WAIT NOMEADO + TASK-EVENT DROP (15/10 parte 9 — o mecanismo do stall ficou
+  nomeado). Estendido o census com dois campos por no:
+  wait_event_kind (0=NONE 1=WAITABLE 2=QUEUE 3=SIGNAL 4=COMPLETION) e
+  wait_owner_service (MK_SERVICE_*: 2=STORAGE 4=VIDEO 5=INPUT 6=CONSOLE
+  7=NETWORK), formato pid:state:cpu:deadline:kind:owner. Medido no boot normal
+  (t=35025..40000): os servicos 1..8 aparecem BLOCKED em wait de QUEUE (kind=2)
+  com deadline=0 (wait infinito de fila ociosa — SAUDAVEL, cada um no seu
+  owner: 1→2 STORAGE, 2/3→4 VIDEO, 6→5 INPUT, 7→6 CONSOLE, 8→7 NETWORK). Ja os
+  pids 9 e 10 aparecem BLOCKED em kind=2 (QUEUE) com o deadline RE-ARMANDO para
+  ~agora a cada amostra (ex.: 35027 quando t=35025) e owner=0 — que e exatamente
+  o loop de host_wait_for_task_exit (bootstrap_hosts.c) chamando
+  sys_task_event_receive com HOST_TASK_EXIT_POLL_TICKS=4: espera temporizada de
+  fila que vence, re-arma, vence, re-arma. E o serial do mesmo boot traz
+  'host-wait: stalled pid=10/11 polls=4096 alive=1' + o traco do init:
+  'init: task-event launched pid=12 ... q=32 drop=181 tick=663' (pid=11: q=32
+  drop=25). drop= e event->class_dropped_events = kernel_mailbox_dropped() da
+  mailbox da CLASSE (scheduler.c:876/875; q= class_pending_depth = mailbox_count)
+  => a mailbox de eventos de task por CLASSE ENCHEU (q=32, saturada) e DERRUBOU
+  eventos. Mecanismo do 0.6 nomeado: um host aguarda o evento TERMINATED do
+  filho, o evento foi DERRUBADO pela mailbox cheia, entao o host nunca ve o EXIT
+  e gira para sempre no poll de 4 ticks — a sessao interativa trava no meio.
+  NAO e escalonamento (falsificado, parte 8) nem lista truncada. PROXIMO PASSO
+  (nao feito): achar POR QUE a mailbox de classe satura/derruba no boot (taxa de
+  emissao vs drenagem dos assinantes; possivel leak de assinante que nao drena)
+  e garantir que TERMINATED de filho de host NUNCA seja derrubado (fila dedicada
+  ou entrega garantida / flush). CAMINHO CONFIRMADO no codigo: o receptor
+  scheduler_task_event_receive (scheduler.c:1812) le a mailbox PROPRIA da
+  assinatura (subscription->mailbox), e scheduler_publish_task_event a alimenta
+  com kernel_mailbox_try_send (scheduler.c:879) — try_send DERRUBA quando a
+  mailbox enche. Logo a mailbox de um assinante que acumula eventos pode descartar
+  o TERMINATED do filho em silencio; o host fica preso em kernel_mailbox_wait
+  (timeout=4, kind=2 QUEUE, deadline re-armando) exatamente como o census mediu.
+  0.6 permanece ABERTO; nada claimado corrigido.
   PROXIMO PASSO (nao feito aqui): medir o lado do HOST de filesystem
   no momento do stall (estado/agendabilidade do task fs e do storage que ele
   encadeia) — o peek atual so cobre o caminho que ESToura timeout, preciso de um

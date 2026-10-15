@@ -126,7 +126,7 @@ static void sched_cat_u32(char *dst, int cap, int *pos, unsigned int v) {
 static void scheduler_census(uint32_t tick) {
     process_t *scan;
     uint32_t steps = 0u;
-    char line[384];
+    char line[512];
     int pos;
 
     if (g_sched_census_budget == 0u) {
@@ -172,6 +172,13 @@ static void scheduler_census(uint32_t tick) {
                       (unsigned int)(scan->current_cpu >= 0 ? (unsigned int)scan->current_cpu : 9u));
         sched_cat(line, (int)sizeof(line), &pos, ":");
         sched_cat_u32(line, (int)sizeof(line), &pos, scan->wait_deadline);
+        /* wait_event_kind and wait_owner_service name WHAT a BLOCKED task is
+         * waiting on (item 0.6: the child re-arms a timed wait that never
+         * resolves; the census must show which channel/kind/owner). */
+        sched_cat(line, (int)sizeof(line), &pos, ":");
+        sched_cat_u32(line, (int)sizeof(line), &pos, scan->wait_event_kind);
+        sched_cat(line, (int)sizeof(line), &pos, ":");
+        sched_cat_u32(line, (int)sizeof(line), &pos, scan->wait_owner_service);
         if (++steps >= 40u) {
             break;
         }
