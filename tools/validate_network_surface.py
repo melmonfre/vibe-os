@@ -25,12 +25,20 @@ class QemuSession:
     def __init__(self, qemu_binary: str, image_path: Path, memory_mb: int, workspace: Path):
         self.serial_log = workspace / "serial.log"
         self.monitor_socket = workspace / "monitor.sock"
+        self.qemu_binary = qemu_binary
+        self.image_path = image_path
+        self.memory_mb = memory_mb
+        self.proc = None
+        self._spawn()
+        self._wait_for_monitor()
+
+    def _spawn(self) -> None:
         self.proc = subprocess.Popen(
             [
-                qemu_binary,
+                self.qemu_binary,
                 *QEMU_OPTS,
-                "-m", str(memory_mb),
-                "-drive", f"format=raw,file={image_path}",
+                "-m", str(self.memory_mb),
+                "-drive", f"format=raw,file={self.image_path}",
                 "-netdev", "user,id=net0",
                 "-device", "virtio-net-pci,netdev=net0",
                 "-boot", "c",
@@ -43,6 +51,18 @@ class QemuSession:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    def restart(self) -> None:
+        """Cold-restart the guest: with -no-reboot, HMP system_reset would exit
+        the process, and the stage2 boot menu is the only place the rescue
+        selection can be made. Relaunch a fresh QEMU and truncate the serial
+        log so the caller's marker checks only observe the new boot."""
+        self.close()
+        try:
+            self.serial_log.unlink()
+        except FileNotFoundError:
+            pass
+        self._spawn()
         self._wait_for_monitor()
 
     def _wait_for_monitor(self) -> None:
@@ -158,35 +178,70 @@ def wait_for_all_since(session: QemuSession, markers: List[str], timeout: float,
     raise RuntimeError("Timed out waiting for markers: " + ", ".join(pending))
 
 
-def scenario_boot_rescue_shell(session: QemuSession) -> None:
-    log = session.read_log()
-    if "boot mode: rescue shell" in log and "shell: ready" in log:
-        return
+def scenario_boot_rescue_shell(session: QemuSession, attempts: int = 4, window_s: float = 25.0) -> None:
+    """Drive the stage2 boot menu to RESCUE SHELL with closed-loop feedback.
 
-    def send_rescue_selection() -> None:
-        session.send_key("s", pause=0.12)
-        session.send_key("s", pause=0.12)
-        session.send_key("ret", pause=0.2)
-
-    for delay in (1.0, 0.8, 0.8):
-        time.sleep(delay)
-        send_rescue_selection()
+    The old selector fired `s,s,ret` three times on blind fixed delays and
+    then waited 60s for markers that could never arrive if all attempts
+    landed outside the menu window (the flake that made this harness — and
+    audio/abi-compat — unreliable as gates). Now: keep pulsing the selection
+    until the KERNEL confirms the choice in the serial log (`boot mode:
+    rescue shell`); if the boot instead confirms a WRONG mode (`boot mode:
+    safe mode`, or the autoboot desktop launching), cold-restart QEMU for a
+    fresh menu window and try again. Each burst is `s,s,<ret>` because the
+    menu maps the S-key scancode to move-down and RESCUE is two rows below
+    the default entry (see boot/stage2.asm classify path).
+    """
+    for attempt in range(attempts):
         log = session.read_log()
-        if "boot mode: rescue shell" in log or \
-           "init: rescue shell requested, skipping desktop launch" in log or \
-           "host: shell start" in log:
-            break
+        if "boot mode: rescue shell" in log and "shell: ready" in log:
+            return
+        deadline = time.time() + window_s
+        while time.time() < deadline:
+            session.send_key("s", pause=0.12)
+            session.send_key("s", pause=0.12)
+            session.send_key("ret", pause=0.25)
+            log = session.read_log()
+            if "boot mode: rescue shell" in log:
+                break
+            if ("boot mode: safe mode" in log or
+                    "desktop.app: launch startx" in log or
+                    "host: argv startx" in log):
+                break  # wrong entry confirmed; restart for a fresh menu
+            time.sleep(1.0)
+        log = session.read_log()
+        if "boot mode: rescue shell" in log:
+            session.wait_for_all(["shell: ready"], timeout=240.0)
+            return
+        session.restart()
+    raise RuntimeError(
+        "Timed out selecting rescue shell: 'boot mode: rescue shell' never "
+        f"appeared after {attempts} menu attempts (with cold restarts)")
 
-    session.wait_for_all(["boot mode: rescue shell", "shell: ready"], timeout=60.0)
 
+def run_command_expect(session: QemuSession, command: str, markers: List[str], timeout: float = 60.0) -> None:
+    """Typed command + COMPLETION gate.
 
-def run_command_expect(session: QemuSession, command: str, markers: List[str], timeout: float = 8.0) -> None:
+    Two bugs fixed here. (1) The old gate waited for `shell: ready`, which
+    the shell prints at the TOP of every loop iteration — before it even
+    reads the line — so a command that never returned still passed as soon
+    as its echo marker appeared. (2) The shell EXITS its loop on any rc!=0
+    (userland/modules/shell.c), so a failing command silently ends all later
+    markers. The gate now requires the shell's own exit marker
+    (`shell: command exit <cmd> rc=0`), which proves the command actually
+    ran to completion with success, and only then the prompt return. And
+    60s is honest patience: launching the app host behind netmgrd/netctl
+    (task create + AppFS load + service round-trips) is slow under TCG.
+    """
     start = len(session.read_log())
     command_marker = command.split(" ", 1)[0]
     session.type_text(command)
     session.send_key("ret", pause=0.15)
     wait_for_all_since(session,
-                       [f"shell: command {command_marker}", "shell: ready", *markers],
+                       [f"shell: command {command_marker}",
+                        f"shell: command exit {command_marker} rc=0",
+                        "shell: ready",
+                        *markers],
                        timeout=timeout,
                        start_offset=start)
 

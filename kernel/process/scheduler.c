@@ -4,6 +4,7 @@
 
 #include <kernel/scheduler.h>
 #include <kernel/process.h>
+#include <lang/include/vibe_app.h>  /* VIBE_APP_STACK_SIZE: user-stack window for ring3 frame checks */
 #include <kernel/kernel.h>    /* for panic, if needed */
 #include <kernel/lock.h>
 #include <kernel/cpu/cpu.h>
@@ -881,8 +882,33 @@ static void scheduler_dispatch_forensics(uint32_t cpu_index,
                        faddr + sizeof(kernel_trap_frame_t) <= stack_end);
     ebp = (uintptr_t)frame->ebp;
     esp_dummy = (uintptr_t)frame->esp_dummy;
-    regs_in_window = (ebp == 0u || (ebp >= stack && ebp < stack_end)) &&
+    if (frame->cs == USER_CS_SELECTOR) {
+        /*
+         * ring3 resume frames carry USER registers (this is the frame the
+         * kernel iret's back to user mode with), so ebp legitimately points
+         * into the task's user stack — [user_stack_top - VIBE_APP_STACK_SIZE,
+         * user_stack_top) — NOT into the kernel stack window. Validating it
+         * against the kernel stack made this probe fire BAD-FORENSICS on
+         * EVERY dispatch of a user task with a non-zero user ebp, flooding
+         * the serial log and drowning validator markers (measured: an app
+         * host dispatch repeated it every tick). A user frame is accepted
+         * when ebp is 0, in the user window, or in the kernel window
+         * (constructed frames hold either), and esp_dummy is in either
+         * window; eip/cs sanity below keeps the real teeth.
+         */
+        uintptr_t ustack_top = (uintptr_t)task->user_stack_top;
+        uintptr_t ustack_low = (ustack_top > VIBE_APP_STACK_SIZE)
+                                   ? (ustack_top - VIBE_APP_STACK_SIZE) : 0u;
+        int ebp_ok = (ebp == 0u) ||
+                     (ustack_top != 0u && ebp >= ustack_low && ebp < ustack_top) ||
+                     (ebp >= stack && ebp < stack_end);
+        int esp_ok = (ustack_top != 0u && esp_dummy >= ustack_low && esp_dummy < ustack_top) ||
                      (esp_dummy >= stack && esp_dummy < stack_end);
+        regs_in_window = ebp_ok && esp_ok;
+    } else {
+        regs_in_window = (ebp == 0u || (ebp >= stack && ebp < stack_end)) &&
+                         (esp_dummy >= stack && esp_dummy < stack_end);
+    }
 
     /*
      * eip/cs sanity (second blind spot removed, class #4): the c4a run

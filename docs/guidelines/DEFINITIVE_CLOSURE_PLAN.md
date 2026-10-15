@@ -93,10 +93,13 @@ depurando coisa conhecida).
 | 0.2 | `make` sem warns: dedup `build/libksh.a` + varredura de 229 TODO/stub/n.i. | `libksh.a` ja deduplicado (Build.compat.mk:132–135); TODO sweep pendente | cada TODO convertido em: feito / bug em KNOWN_BUGS / item neste plano | `make` rc=0 sem warning | — |
 | 0.3 | Telemetria: `g_timer_trace_budget` fixo em 8 prints | dificulta diagnostico de boot lento | knob de quiet/verbose | doc + default | — |
 | 0.4 | Consolidacao de planos: marcar os absorvidos como "consolidado em DEFINITIVE_CLOSURE_PLAN.md" | 15+ planos com drift entre si | cada plano antigo ganha header de pointer; `docs/README.md` atualizado | grep | — |
-| 0.5 | Gate base: `make` + `validate-phase6-boot-smoke` + os 3 harnesses de sendkey endurecidos | sendkey/rescue-shell falha no seletor (boot vai p/ desktop) | seletor de rescue espera o menu publicar antes de digitar | `validate-network-surface`/`abi-compat-surface`/`audio-stack` verdes de forma repetivel | — |
+| 0.5 | Gate base: seletor rescue + gates dos harnesses interativos | **PARCIAL (15/10)** — seletor rescue agora e closed-loop com cold-restart (para de usar timing cego), gate de comando exige o exit-marker real (`shell: command exit X rc=0`, antes aceitava o `shell: ready` impresso ANTES de ler a linha) e timeouts honestos; com isso `validate-network-surface` passou a ALCANCAR o shell e executar comandos (antes nem chegava) | — | falta o item 0.6 |
+| 0.6 | **Sessao interativa trava no meio: console/entrada param de escoar** (novo, achado 15/10) | probe manual (fora de harness): rescue -> `shell: ready` em 3s -> digitar `netmgrd status` -> echo PARA no meio (`... netmgrd st`) e nada mais e ecoado, com ticks seguindo (guest vivo); no harness o app imprime 13 linhas do status e para no meio. E a CAUSA RAIZ das flakes de `validate-network-surface`/`abi-compat-surface`/`audio-stack` | contadores de enfileirado/entregue/descartado na fila de console (host) e na de teclado (`mk_input_service_read_key`) apontando o lado que para; causa raiz corrigida; gates verdes repetidos | KNOWN_BUGS "Sessao interativa trava no meio" | — |
+| 0.7 | Bug de diagnostico corrigido: `sched-dispatch: BAD-FORENSICS` disparava em falso p/ todo frame ring3 (inundava o serial e soterrou a saida dos apps) | [x] FEITO 15/10 — `ebp` de frame de usuario validado contra a janela de stack de USUARIO, nao a de kernel | — | log de boot com ZERO `BAD-FORENSICS`; `validate-network-datapath` PASS; `phase6-boot-smoke` 6/6 | — |
 
-> 0.5 e o destravador silencioso de varias ondas: tres validadores hoje nao
-> valem como gate por causa do mesmo seletor de rescue.
+> 0.5/0.6 sao o destravador silencioso de varias ondas: tres validadores nao
+> valem como gate por causa do mesmo caminho de sessao interativa. O 0.7 ja
+> caiu no caminho (bug real, nao hipotese).
 
 ---
 
