@@ -27,7 +27,7 @@
 | CPU       | `qemu64`, `host`, `max` (1-4 cores) | Validated |
 | Memory    | 256 MB - 2 GB | Validated |
 | Storage   | AHCI on PIIX4 or ICH9 (`-drive file=...,if=none,format=raw -device ahci,id=ahci -device ide-hd,drive=drive0,bus=ahci.0`) | Validated |
-| Storage   | USB mass-storage via UHCI (`-drive file=...,if=none,format=raw -device usb-storage,drive=drive0`) | Validated |
+| Storage   | USB mass-storage via UHCI (`-drive file=...,if=none,format=raw -device usb-storage,drive=drive0`) | Validated as a BIOS-boot medium (`validate-phase6-boot-smoke` usb-bios-boot); the native runtime mass-storage backend (EHCI/xHCI+BOT) is unverified — see COMPLETION_ACTION_PLAN P0 |
 | Video     | QXL, VGA, Bochs VBE (`-vga std`, `-vga virtio`, `-device bochs-display`) | Validated (BGA) |
 | Video     | Cirrus (`-vga cirrus`) | Detection only |
 | Audio     | AC97 (`-audiodev pa,id=pa -device ac97,audiodev=pa`) | Validated |

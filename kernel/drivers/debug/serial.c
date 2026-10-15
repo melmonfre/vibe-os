@@ -121,86 +121,153 @@ static void serial_write_raw(const char *str) {
     }
 }
 
+/*
+ * Emit a formatted field with optional width / zero-padding.
+ *
+ * The old formatter did `++p; switch (*p)` with NO width parsing, so every
+ * `%02x` / `%04x` / `%08x` in the kernel printed the specifier LITERALLY
+ * ("usb: UHCI at %02x:%02x.0", MAC/hex diagnostics gibberish) — 34+ call
+ * sites across the boot path. Width/flags are now parsed; `%0N` zero-pads,
+ * otherwise spaces pad; a leading '-' left-justifies.
+ */
+static void serial_emit_field(const char *buf, int len, int width, int zero_pad,
+                              int left, char sign) {
+    int pad = width > len ? width - len : 0;
+    int i;
+
+    if (left) {
+        if (sign != '\0') {
+            serial_putc_raw(sign);
+        }
+        for (i = 0; i < len; ++i) {
+            serial_putc_raw(buf[i]);
+        }
+        for (i = 0; i < pad; ++i) {
+            serial_putc_raw(' ');
+        }
+        return;
+    }
+    if (zero_pad) {
+        if (sign != '\0') {
+            serial_putc_raw(sign);
+        }
+        for (i = 0; i < pad; ++i) {
+            serial_putc_raw('0');
+        }
+    } else {
+        for (i = 0; i < pad; ++i) {
+            serial_putc_raw(' ');
+        }
+        if (sign != '\0') {
+            serial_putc_raw(sign);
+        }
+    }
+    for (i = 0; i < len; ++i) {
+        serial_putc_raw(buf[i]);
+    }
+}
+
 static void serial_vprintf_raw(const char *fmt, va_list args) {
     const char *p;
 
     for (p = fmt; *p != '\0'; ++p) {
         if (*p == '%') {
+            int zero_pad = 0;
+            int left = 0;
+            int width = 0;
+
             ++p;
             if (*p == '\0') {
                 break;
             }
-            
+            if (*p == '-') {
+                left = 1;
+                ++p;
+            }
+            if (*p == '0') {
+                zero_pad = 1;
+                ++p;
+            }
+            while (*p >= '0' && *p <= '9') {
+                width = (width * 10) + (int)(*p - '0');
+                ++p;
+            }
+            if (*p == '\0') {
+                break;
+            }
+
             switch (*p) {
             case 'd': {
                 int value = va_arg(args, int);
-                if (value < 0) {
-                    serial_putc_raw('-');
-                    value = -value;
-                }
                 char buf[16];
+                char sign = '\0';
+                unsigned int mag;
                 int len = 0;
-                if (value == 0) {
+
+                if (value < 0) {
+                    sign = '-';
+                    /* -(INT_MIN) overflows int: negate in unsigned space. */
+                    mag = (unsigned int)(-(value + 1)) + 1u;
+                } else {
+                    mag = (unsigned int)value;
+                }
+                if (mag == 0u) {
                     buf[len++] = '0';
                 } else {
-                    int v = value;
-                    for (int w = v; w > 0; w /= 10) {
+                    unsigned int v = mag;
+                    for (unsigned int w = v; w > 0u; w /= 10u) {
                         ++len;
                     }
                     for (int i = len - 1; i >= 0; --i) {
-                        buf[i] = (char)('0' + (value % 10));
-                        value /= 10;
+                        buf[i] = (char)('0' + (mag % 10u));
+                        mag /= 10u;
                     }
                 }
-                for (int i = 0; i < len; ++i) {
-                    serial_putc_raw(buf[i]);
-                }
+                serial_emit_field(buf, len, width, zero_pad, left, sign);
                 break;
             }
             case 'u': {
                 unsigned int value = va_arg(args, unsigned int);
                 char buf[16];
                 int len = 0;
-                if (value == 0) {
+
+                if (value == 0u) {
                     buf[len++] = '0';
                 } else {
                     unsigned int v = value;
-                    for (unsigned int w = v; w > 0; w /= 10) {
+                    for (unsigned int w = v; w > 0u; w /= 10u) {
                         ++len;
                     }
                     for (int i = len - 1; i >= 0; --i) {
-                        buf[i] = (char)('0' + (value % 10));
-                        value /= 10;
+                        buf[i] = (char)('0' + (value % 10u));
+                        value /= 10u;
                     }
                 }
-                for (int i = 0; i < len; ++i) {
-                    serial_putc_raw(buf[i]);
-                }
+                serial_emit_field(buf, len, width, zero_pad, left, '\0');
                 break;
             }
             case 'x': {
                 unsigned int value = va_arg(args, unsigned int);
                 char buf[16];
                 int len = 0;
-                if (value == 0) {
+
+                if (value == 0u) {
                     buf[len++] = '0';
                 } else {
                     unsigned int v = value;
                     /* w must stay unsigned: int w >= 0x80000000 is negative
                      * and the sizing loop never runs -> empty output for
                      * high addresses (hid real app-arena/framebuffer bases). */
-                    for (unsigned int w = v; w > 0; w /= 16) {
+                    for (unsigned int w = v; w > 0u; w /= 16u) {
                         ++len;
                     }
                     for (int i = len - 1; i >= 0; --i) {
-                        unsigned int digit = value % 16;
-                        buf[i] = (digit < 10) ? (char)('0' + digit) : (char)('a' + (digit - 10));
-                        value /= 16;
+                        unsigned int digit = value % 16u;
+                        buf[i] = (digit < 10u) ? (char)('0' + digit) : (char)('a' + (digit - 10u));
+                        value /= 16u;
                     }
                 }
-                for (int i = 0; i < len; ++i) {
-                    serial_putc_raw(buf[i]);
-                }
+                serial_emit_field(buf, len, width, zero_pad, left, '\0');
                 break;
             }
             case 'c': {
@@ -210,7 +277,14 @@ static void serial_vprintf_raw(const char *fmt, va_list args) {
             }
             case 's': {
                 const char *str = va_arg(args, const char *);
-                serial_write_raw(str);
+                int len = 0;
+
+                if (str != NULL) {
+                    while (str[len] != '\0') {
+                        ++len;
+                    }
+                }
+                serial_emit_field(str != NULL ? str : "(null)", len, width, 0, left, '\0');
                 break;
             }
             case '%':

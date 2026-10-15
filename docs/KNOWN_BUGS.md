@@ -1,18 +1,41 @@
-# Known Bugs (All Fixed)
+# Known Bugs
 
-Todos os bugs conhecidos foram corrigidos. Este documento é mantido como registro histórico.
+Registro de bugs corrigidos **e** dos que seguem abertos. "Corrigido" aqui
+exige evidencia executada; o estado corrente da fila de trabalho vive em
+`docs/guidelines/COMPLETION_ACTION_PLAN.md`.
+
+## Abertos
+
+- **Classe #5 (SMP real-time, nao-gating)**: em `smp2` com o flag experimental
+  ON e sem `-icount`, o kernel corrompe periodicamente estado de tarefa/lista
+  de escalonamento e o boot nao chega ao shell (`BAD-HEAD`/`WILD`/`#UD` com
+  inteiros pequenos ou ponteiros de heap gravados em campos de `process_t`).
+  Todos os guards de heap/scheduler/waitable ficam silentes, `gdb -s` suprime a
+  corrida e anexar watchpoint e contraproducente. Boot de hardware real e UP e
+  nao e afetado; `smp2`/`smp4` sao flag experimental off por padrao. Probes
+  negativos e proximas abordagens registrados em COMPLETION_ACTION_PLAN P4.
+- **USB host: contagem inconsistente**: `kernel_usb_host_init()` encontra e
+  inicializa o UHCI (`usb: UHCI at 00:01.2 (8086:7020)`, `usb: OK`) mas
+  `kernel_usb_host_controller_count()` retorna 0 logo em seguida
+  (`usb: no controllers found`) — o log de boot se contradiz.
 
 ## Status geral
 
 - Migração para microkernel: concluída
-- Vídeo: estável — DRM nativo (BGA, i915, radeon, nouveau) + VESA/LFB com fallback
-- Áudio: corrigido — driver HDA nativo, AC97, USB Audio, PCSPKR fallback
-- Rede: completa — VirtIO-Net, e1000, rtl8139, WiFi Intel 7260 com WPA2 real (PBKDF2-SHA1, 4-way handshake)
+- Vídeo: estável em QEMU — DRM nativo (BGA, i915, radeon, nouveau; i915 commit
+  gated) + VESA/LFB com fallback; campanhas em silício real abertas (P6)
+- Áudio: validado em QEMU — driver HDA nativo, AC97, PCSPKR fallback; hardware
+  real aberto (P5)
+- Rede: **virtio IPv4 client valida em QEMU** (DHCP/ARP/ICMP + responders,
+  `validate-network-datapath`); e1000/rtl8139 sao dead code (zero callers) e o
+  Wi-Fi Intel 7260 e fachada (BDF fixo 0:0:0, scan hardcoded) — ver P3; o
+  modulo WPA2 (PBKDF2/PTK/4-way) tem cripto real mas esta orfao
 - Jogos: corrigidos — Doom com resolução de assets via aliases, todos os ports BSD com launch correto
 - Memória: heap com free-list allocator, physmem até 4GB, paging com suporte a 4KB pages
 - GUI: reescrita com microui — desktop dinâmico, modular, 492 linhas (vs 7000+ antes)
-- USB: mass-storage nativo (BOT) + NVMe implementados
-- POSIX/Compat: camada BSD integrada (libc, pthreads, socket, X11)
+- USB: discovery de controladores funciona; runtime mass-storage (BOT)/NVMe tem
+  codigo mas sem relatorio de validacao
+- POSIX/Compat: camada BSD integrada (libc, pthreads, socket); X11/X-Like em andamento
 
 ## Bugs corrigidos
 

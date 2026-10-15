@@ -17,7 +17,8 @@ Tudo que ja foi entregue, validado ou virou historico deve ficar nos documentos 
 
 | Area | Status |
 | --- | --- |
-| Rede em QEMU (virtio, DHCP/ARP/ICMP/UDP/TCP client) | [x] FUNCIONAL em QEMU user-net |
+| Rede em QEMU (virtio: DHCP/ARP/ICMP client + responders, loopback) | [x] FUNCIONAL em QEMU user-net — `make validate-network-datapath` PASS (dhcp bound, gateway ICMP roundtrip, inbound ARP/ICMP responders, TX drop=0; pcap evidence) |
+| Rede em QEMU — UDP/TCP client | [ ] UDP = DHCP only; TCP SYN/ACK path existe, sem validacao end-to-end (P3) |
 | Rede real utilizavel (NICs adicionais, WiFi, robustez) | [ ] PARCIAL/ABERTA — ver COMPLETION_ACTION_PLAN P3 |
 | Audio em QEMU (HDA/AC97/pcspkr playback) | [x] VALIDADO via validate-audio-* |
 | Audio real em hardware | [ ] ABERTA — AUDIO_HARDWARE_VALIDATION_MATRIX.md 0/20 linhas preenchidas |

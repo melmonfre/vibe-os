@@ -115,7 +115,7 @@ Hoje a verdade dura e simples e esta: a rede segue em MVP sintético de control-
 - [ ] DNS: the live resolver is a minimal in-tree A-record client (compat/src/posix/netdb.c) with a HARDCODED server 10.0.2.3; the BSD `unwind` base is not integrated. Feed DHCP-provided DNS instead (COMPLETION_ACTION_PLAN P3)
 - [ ] Wi-Fi: NOT functional. Scan results are hardcoded SSIDs (kernel/microkernel/network.c) and "connect" fabricates an IP; no 802.11 auth/assoc frames, no CCMP data path. wifi_wpa2.c crypto is real but orphaned. See COMPLETION_ACTION_PLAN P3
 - [ ] socket ABI still needs work beyond the MVP (backlog=1, 8 sockets, no IPv6)
-- [ ] ifconfig/route/netstat print snapshots (no real route table); curl supports file:// only; wget does not exist; ping works via ICMP client but `ping localhost` is fabricated. Track in COMPLETION_ACTION_PLAN P3
+- [ ] ifconfig/route/netstat print snapshots (no real route table); curl supports file:// only; wget does not exist; `ping` uses the real ICMP client and `ping localhost` now goes through the kernel 127/8 loopback (socket → enqueue → recv) instead of a fabricated print — proven by `make validate-network-datapath` (loopback smoke marker). Track in COMPLETION_ACTION_PLAN P3
 - [ ] DNS default/fallback servers configurable (currently hardcoded 10.0.2.3)
 
 ### Navegador

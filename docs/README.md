@@ -4,25 +4,34 @@
 
 ## Project Status
 
+Kept honest against executed evidence (COMPLETION_ACTION_PLAN P9). A ✅ means
+a report/log in `build/` or a `make validate-*` target backs it; ⚠️ means code
+exists but is unverified or partial; ❌ means the claim was false (facade or
+dead code) with the gap tracked in `docs/guidelines/COMPLETION_ACTION_PLAN.md`.
+
 | Component | Status |
 | --- | --- |
-| Boot chain (MBR → VBR → Stage2 → Kernel) | ✅ Complete |
-| Memory subsystem (free-list allocator, 4GB physmem, 4KB paging) | ✅ Complete |
-| Storage: ATA, AHCI, NVMe, USB BOT | ✅ Complete |
-| Network: VirtIO, e1000, rtl8139, Intel 7260 Wi-Fi | ✅ Complete |
-| Audio: Intel HDA, AC97, USB Audio, pcspkr fallback | ✅ Complete |
-| Input: PS/2 keyboard, mouse | ✅ Complete |
-| Video: LFB, VESA, native DRM (BGA, i915, radeon, nouveau) | ✅ Complete |
-| Desktop GUI (microui, dynamic desktop, taskbar, applets) | ✅ Complete |
-| Microkernel services (IPC, restart, events, async) | ✅ Complete (Phases A-G) |
-| ABI compatibility (BSD/POSIX shapes, ELF32, sockets, termios) | ✅ Complete |
-| Wi-Fi WPA2 (PBKDF2-SHA1, 4-way handshake, 802.11 scanning) | ✅ Complete |
-| USB substrate (UHCI/OHCI/EHCI/XHCI discovery, device descriptors) | ✅ Complete |
-| Native USB mass-storage runtime (NVMe, USB BOT) | ✅ Complete |
-| Video DRM backends (BGA, i915, radeon, nouveau) | ✅ Complete |
-| POSIX/Compat layer (BSD libc, pthreads, sockets, X11) | ✅ Complete |
-| SMP bring-up and validation | 🔄 In progress |
+| Boot chain (MBR → VBR → Stage2 → Kernel) | ✅ `validate-phase6-boot-smoke` 6/6 (QEMU); real-BIOS chain audited (hw_validation.md) |
+| Memory subsystem (free-list allocator, 4GB physmem, 4KB paging) | ✅ Heap header guards/canaries, reserved ranges |
+| Storage: ATA, AHCI | ✅ `validate-phase6` ide + ahci scenarios; persistence `validate-storage-persist` |
+| Storage: NVMe, USB BOT (runtime) | ⚠️ Code present, probed after USB init; no validation report — unverified |
+| Network: virtio IPv4 client (DHCP/ARP/ICMP, reachable) | ✅ `validate-network-datapath` PASS: DHCP bound, gateway ICMP roundtrip, inbound ARP/ICMP responders, TX `drop=0` (pcap evidence) |
+| Network: UDP/TCP client | ⚠️ UDP = DHCP only; TCP SYN/ACK path exists but unvalidated (P3) |
+| Network: e1000, rtl8139 | ❌ Dead code — zero callers outside their own file (P3 camada 1) |
+| Wi-Fi (Intel 7260 / iwlwifi) | ❌ Facade — fixed BDF 0:0:0, hardcoded scan list, fabricated connect (P3 camada 3) |
+| Wi-Fi WPA2 crypto module (PBKDF2/PTK/4-way) | ⚠️ Real crypto but orphaned — no 802.11 auth/assoc or CCMP data path |
+| Audio: Intel HDA, AC97, pcspkr (QEMU) | ✅ `validate-audio-*` in QEMU |
+| Audio: real hardware | ❌ Open — hardware matrix not filled (P5, hardware-gated) |
+| Input: PS/2 keyboard, mouse | ✅ Desktop session validated in QEMU |
+| Video: LFB, VESA | ✅ QEMU validated |
+| Video: native DRM (BGA, i915, radeon, nouveau) | ⚠️ i915 commit gated by `INTEL_I915_EXPERIMENTAL_COMMIT`; real-silicon campaigns open (P6) |
+| Desktop GUI (microui, dynamic desktop, taskbar, applets) | ✅ QEMU validated |
+| Microkernel services (IPC, restart, events, async) | ✅ Phases A-G |
+| ABI compatibility (BSD/POSIX shapes, ELF32, sockets, termios) | ✅ `validate-abi-compat-surface` / `validate-abi-final` |
+| USB substrate (UHCI/OHCI/EHCI/XHCI discovery, device descriptors) | ⚠️ UHCI discovery+init runs in QEMU; controller-count query reports 0 (inconsistent) |
+| POSIX/Compat layer (BSD libc, pthreads, sockets) | ⚠️ Partial — ABI surface validated; route/netstat/ifconfig are snapshots (P3/P8) |
 | POSIX Graphics X-Like compatibility | 🔄 In progress |
+| SMP bring-up | 🔄 In progress — 2-CPU bring-up OK; real-time SMP2 has an open timing race (P4, non-gating for UP hardware boot) |
 | Craft (voxel game) | 🔄 In progress |
 
 ## Layout
