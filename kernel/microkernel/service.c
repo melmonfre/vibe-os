@@ -1128,11 +1128,25 @@ static int mk_service_request_process(const struct mk_service_record *service,
 
                 if (g_request_timeout_budget > 0) {
                     g_request_timeout_budget -= 1;
-                    kernel_debug_printf("service: request timeout svc=%d type=%d src=%d dst=%d\n",
-                                        (int)service->type,
-                                        (int)request_copy.type,
-                                        (int)request_copy.source_pid,
-                                        (int)request_copy.target_pid);
+                    /*
+                     * Host-state peek (KNOWN_BUGS "Sessao interativa trava no
+                     * meio" / plano 0.6): when a request times out, the two
+                     * possible culprits are (a) the host task is alive but
+                     * never dequeued this reply, or (b) the host task itself is
+                     * stuck/starved. Print the host task's scheduler state so
+                     * the stall localizes to a side by MEASUREMENT, not theory.
+                     */
+                    {
+                        process_t *host = scheduler_find_task_by_pid(service->pid);
+
+                        kernel_debug_printf("service: request timeout svc=%d type=%d src=%d dst=%d host-state=%d host-cpu=%d\n",
+                                            (int)service->type,
+                                            (int)request_copy.type,
+                                            (int)request_copy.source_pid,
+                                            (int)request_copy.target_pid,
+                                            host ? (int)host->state : -999,
+                                            host ? host->current_cpu : -999);
+                    }
                 }
 
                 if (mutable_service != 0) {

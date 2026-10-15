@@ -41,13 +41,26 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   `netmgrd status` inteiro, mas o COMMANDO nao completa (sem
   `shell: command exit netmgrd rc=`). Um watchdog de infinite-wait no sweep do
   scheduler foi tentado e REMOVIDO: disparava em idle legitimo (shell/host
-  bloqueado sem deadline e normal), sinal ruidoso nao-calibrado. INSTRUMENTO
-  QUE FICA: contadores `input-diag` (orcados, aditivos) em
-  `kernel/drivers/input/{input,keyboard}.c`. PROXIMO PASSO (nao feito aqui):
-  traco do lado CONSUMIDOR — o que `mk_input_service_read_key`/host de input
-  faz apos dequeue e como o `netmgrd` (app ring3 lancado pelo shell) aguarda
-  o round-trip MK_SERVICE_NETWORK; o stall (ii) e o host do app preso num
-  wait do service de rede/transfer sem estourar timeout.
+  bloqueado sem deadline e normal), sinal ruidoso nao-calibrado. INSTRUMENTOS
+  QUE FICAM: contadores `input-diag` (orcados) em
+  `kernel/drivers/input/{input,keyboard}.c` + host-state peek no trace de
+  `service: request timeout` em `kernel/microkernel/service.c`.
+  AVANCO (15/10 parte 4 — re-producao com o host peek): o modo (ii) esta agora
+  LOCALIZADO por evidencia, NAO mais por hipotese: `printf` do app ring3 vai por
+  `write(1)` -> `SYSCALL_WRITE` -> `sys_fs_write` -> `mk_filesystem_service_write`
+  (transfer + `mk_service_request(MK_SERVICE_FILESYSTEM)`), NAO pelo caminho de
+  teclado/redes que eu vinha suspeitando. O `netmgrd` imprimiu 13 linhas e
+  TRAVOU dentro de um `write` de stdout; na MESMA re-producao o budget de
+  `service: request timeout` (agora com host-state) NAO disparou nenhuma vez ->
+  o request de filesystem do app NAO esta estourando timeout, esta preso mais
+  fundo (host FS e provavelmente o seu storage aninhado sem ser despachado /
+  flow-control), e o app espera a resposta indefinidamente. A hipotese antiga
+  "round-trip MK_SERVICE_NETWORK" estava ERRADA e foi substituida por esta
+  medicao. PROXIMO PASSO (nao feito aqui): medir o lado do HOST de filesystem
+  no momento do stall (estado/agendabilidade do task fs e do storage que ele
+  encadeia) — o peek atual so cobre o caminho que ESToura timeout, preciso de um
+  que mostre o request que NUNCA recebe reply sem timeout. 0.6 permanece ABERTO;
+  nada aqui foi claimado como corrigido.
 
 ## Status geral
 
