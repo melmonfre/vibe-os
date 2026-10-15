@@ -8,6 +8,8 @@
 
 #define PS2_STATUS_PORT 0x64u
 #define PS2_DATA_PORT 0x60u
+extern volatile unsigned int g_input_scancodes_read;
+
 #define PS2_STATUS_OUTPUT_FULL 0x01u
 #define PS2_STATUS_INPUT_FULL 0x02u
 #define PS2_STATUS_AUX_OUTPUT_FULL 0x20u
@@ -325,6 +327,7 @@ void kernel_keyboard_irq_handler(void) {
     }
 
     scancode = inb(PS2_DATA_PORT);
+    g_input_scancodes_read++;
     kernel_keyboard_process_scancode(scancode);
     kernel_irq_complete(1);
 }
@@ -335,6 +338,7 @@ void kernel_keyboard_poll(void) {
     while ((inb(PS2_STATUS_PORT) & (PS2_STATUS_OUTPUT_FULL | PS2_STATUS_AUX_OUTPUT_FULL)) ==
            PS2_STATUS_OUTPUT_FULL) {
         uint8_t scancode = inb(PS2_DATA_PORT);
+        g_input_scancodes_read++;
         kernel_keyboard_process_scancode(scancode);
     }
 

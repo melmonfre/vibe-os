@@ -27,18 +27,27 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   harness — ha um travamento real de sessao interativa, que e a CAUSA RAIZ das
   flakes de `validate-network-surface`, `validate-abi-compat-surface` e
   `validate-audio-stack`. Nao reproduzido em UP headless sem interacao.
-  ESTADO DA INVESTIGACAO (15/10 parte 2): (a) o echo do shell NAO passa pelo
-  servico de console — `console_write` do userland vai direto para
-  `sys_text_write` (kernel), entao o host de console nao e o culpado do echo;
-  (b) o shell polla tecla via **request IPC sincrono a cada iteracao**
-  (`sys_poll_key` -> `SYSCALL_INPUT_KEY` -> `mk_input_service_read_key` ->
-  `mk_service_request(MK_SERVICE_INPUT)`), o que faz do host de INPUT o
-  suspeito principal; (c) NENHUM `service: request timeout` aparece no serial
-  (o timeout default e 32 ticks), entao ou o request nao estoura, ou o trace
-  orcado ja foi consumido. PROXIMO PROBE: contadores
-  enfileirado/entregue/descartado no caminho do input (kernel
-  `kernel_input_key_event_dequeue` + lado host de input) e trace do reply do
-  host, para ver qual lado para primeiro.
+  ESTADO DA INVESTIGACAO (15/10 parte 3 — instrumentos medidos): (a) o echo do
+  shell NAO passa pelo servico de console (`console_write` -> `sys_text_write`
+  kernel), entao o host de console nao e o culpado. (b) NENHUM request IPC
+  estoura: o budget de `service: request timeout` (16) nunca e consumido em
+  nenhum log -> descarta "request preso com timeout". (c) PRODUCAO DE INPUT
+  SADA SA (medido com o novo contador `input-diag`): durante o stall os
+  contadores avancam (`scancodes`/`produced`/`consumed` sobem juntos,
+  `drops=0`), ou seja tecla chega, vira key e e consumida — o gargalo NAO e o
+  teclado/8042/mailbox. (d) O stall tem DOIS modos independentes de input:
+  (i) `boot mode: rescue shell` aparece mas `shell: ready` NUNCA aparece com o
+  timer seguindo (shell trava ANTES do prompt); (ii) shell da prompt, consome
+  `netmgrd status` inteiro, mas o COMMANDO nao completa (sem
+  `shell: command exit netmgrd rc=`). Um watchdog de infinite-wait no sweep do
+  scheduler foi tentado e REMOVIDO: disparava em idle legitimo (shell/host
+  bloqueado sem deadline e normal), sinal ruidoso nao-calibrado. INSTRUMENTO
+  QUE FICA: contadores `input-diag` (orcados, aditivos) em
+  `kernel/drivers/input/{input,keyboard}.c`. PROXIMO PASSO (nao feito aqui):
+  traco do lado CONSUMIDOR — o que `mk_input_service_read_key`/host de input
+  faz apos dequeue e como o `netmgrd` (app ring3 lancado pelo shell) aguarda
+  o round-trip MK_SERVICE_NETWORK; o stall (ii) e o host do app preso num
+  wait do service de rede/transfer sem estourar timeout.
 
 ## Status geral
 
