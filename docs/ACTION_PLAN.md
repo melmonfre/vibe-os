@@ -1,5 +1,10 @@
 # Plano de Ação Consolidado — VibeOS Finalização
 
+> **SUPERSEDED (15/10):** este plano esta desatualizado (marcava como `[x]`
+> Wi-Fi/audio/video que o codigo e o KNOWN_BUGS contradizem). O backlog vivo
+> esta em [guidelines/DEFINITIVE_CLOSURE_PLAN.md](guidelines/DEFINITIVE_CLOSURE_PLAN.md)
+> (ondas 0–9). Manter apenas como historico.
+
 **Regra universal:** O kernel nunca pode quebrar o userland.
 Toda mudança deve ser aditiva, versionada ou com fallback.
 Nada de rebuild obrigatório do userland.

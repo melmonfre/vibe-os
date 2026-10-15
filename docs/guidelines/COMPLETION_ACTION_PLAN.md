@@ -1,5 +1,12 @@
 # Plano de Acao para Finalizar a Implementacao Completa do VibeOS
 
+> **CONSOLIDADO (15/10):** o trabalho em aberto deste plano e dos demais planos
+> do repo vive agora em [DEFINITIVE_CLOSURE_PLAN.md](DEFINITIVE_CLOSURE_PLAN.md)
+> ("Plano de Fechamento Definitivo"), organizado em ondas com regra anti-stub.
+> Este arquivo permanece como **log de evidencia por prioridade** (historico de
+> por que cada item fechou). Nao abrir trabalho novo aqui — use o novo plano e
+> registre a prova de volta neste log quando o item fechar.
+
 last: P1 CONCLUIDA (commit b23ac3fc5): boot stall corrigido (stack de boot movida para 0x800000 + cmov/i586 + ioapic pin+2 + EOI de IRQ espoliador); validate-phase6-boot-smoke 6/6 PASS
 doing: P2/P4 parciais (ver checkboxes); open: SMP2/4 stall em 'fs: sys_storage_load' (race de wakeup no AP)
 next: P4 restante (wakeup AP) e P3 camada 1 (NIC abstraction)

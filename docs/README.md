@@ -7,7 +7,9 @@
 Kept honest against executed evidence (COMPLETION_ACTION_PLAN P9). A ✅ means
 a report/log in `build/` or a `make validate-*` target backs it; ⚠️ means code
 exists but is unverified or partial; ❌ means the claim was false (facade or
-dead code) with the gap tracked in `docs/guidelines/COMPLETION_ACTION_PLAN.md`.
+dead code) with the gap tracked in the open-work backlog:
+[`guidelines/DEFINITIVE_CLOSURE_PLAN.md`](guidelines/DEFINITIVE_CLOSURE_PLAN.md)
+(the consolidated plan that absorbed every other plan — waves 0–9, anti-stub rule).
 
 | Component | Status |
 | --- | --- |

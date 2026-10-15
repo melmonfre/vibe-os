@@ -1,5 +1,10 @@
 # Plano Consolidado de Finalizacao do VibeOS
 
+> **CONSOLIDADO (15/10):** o backlog em aberto foi absorvido por
+> [guidelines/DEFINITIVE_CLOSURE_PLAN.md](guidelines/DEFINITIVE_CLOSURE_PLAN.md)
+> (ondas 0–9, regra anti-stub). Este arquivo permanece como registro do estado
+> de finalizacao; trabalho novo vai no plano novo.
+
 Este e um plano ativo de execucao. Ele complementa a documentacao tecnica em `docs/` e o backlog arquitetural de longo prazo em [guidelines/MICROKERNEL_MIGRATION.md](guidelines/MICROKERNEL_MIGRATION.md).
 
 Data da consolidacao: 2026-06-13
