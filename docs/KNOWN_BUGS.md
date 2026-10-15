@@ -56,7 +56,23 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   fundo (host FS e provavelmente o seu storage aninhado sem ser despachado /
   flow-control), e o app espera a resposta indefinidamente. A hipotese antiga
   "round-trip MK_SERVICE_NETWORK" estava ERRADA e foi substituida por esta
-  medicao. PROXIMO PASSO (nao feito aqui): medir o lado do HOST de filesystem
+  medicao.
+  REFINAMENTO DECISIVO (15/10 parte 5 — evidencia em boot rescue-shell digitando
+  `js`, apos remover os placeholders falsos de js/ruby/python): o app roda,
+  escreve a saida completa no console e SAI LIMPO — serial mostra `app: main
+  returned`, `app: atexit done`, `lang: app returned js` e `init: task-event
+  terminated pid=12 prio=app class=app` (o evento de terminacao FOI publicado).
+  A shell, porem, NUNCA imprime `shell: command exit js rc=` nem volta ao
+  prompt, e os comandos seguintes digitados nunca rodam. => o stall (ii) NAO
+  esta no app / console / storage; esta no WAKE do host-wait da shell quando o
+  processo filho termina (caminho `host_wait_for_task_exit` em
+  bootstrap_hosts.c + assinatura de task-event). Isso também reinterpreta o
+  netmgrd: ele provavelmente TERMINOU; a shell e que nunca acordou. OBSERVAR
+  TAMBEM: `sched-dispatch: BAD-FORENSICS ... ctx=0x13fff...` ainda dispara em
+  app ring3 saudavel (o fix de 15/10 cobriu ebp/esp, mas nao o check de
+  frame/ctx quando o contexto salva na janela da stack de usuario) — trace e
+  ruido a calibrar em passada propria.
+  PROXIMO PASSO (nao feito aqui): medir o lado do HOST de filesystem
   no momento do stall (estado/agendabilidade do task fs e do storage que ele
   encadeia) — o peek atual so cobre o caminho que ESToura timeout, preciso de um
   que mostre o request que NUNCA recebe reply sem timeout. 0.6 permanece ABERTO;
