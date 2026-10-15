@@ -66,6 +66,8 @@
 #define MK_NETWORK_IPV4_DEFAULT_DNS 0x0A000203u
 #define MK_NETWORK_IPV4_DEFAULT_NETMASK 0xFFFFFF00u
 #define MK_NETWORK_ICMP_WAIT_TICKS 25u
+#define MK_NETWORK_ARP_CACHE_MAX 8u
+#define MK_NETWORK_ARP_TIMEOUT_TICKS 3000u /* 30s at 100 Hz: stale MACs must not live forever */
 #define MK_NETWORK_IPPROTO_TCP 6u
 #define MK_TCP_FLAG_FIN 1u
 #define MK_TCP_FLAG_SYN 2u
@@ -245,7 +247,7 @@ struct mk_network_service_state {
     uint32_t dns_ipv4;
     uint32_t netmask_ipv4;
     uint16_t ipv4_packet_id;
-    struct mk_network_arp_cache_entry arp_cache;
+    struct mk_network_arp_cache_entry arp_cache[MK_NETWORK_ARP_CACHE_MAX];
     struct mk_network_pci_probe_state pci_probe;
     struct mk_network_socket_state sockets[MK_NETWORK_SOCKET_MAX];
 };
@@ -519,24 +521,87 @@ static uint16_t mk_network_sockaddr_port(const struct sockaddr *address, uint32_
     return mk_network_be16_load(raw + 2u);
 }
 
+static int mk_network_arp_entry_fresh(const struct mk_network_arp_cache_entry *entry,
+                                      uint32_t now) {
+    /* Unsigned diff survives tick wraparound: fresh iff 0 <= (now-tick) < timeout. */
+    uint32_t age;
+
+    if (entry == 0 || entry->valid == 0) {
+        return 0;
+    }
+    age = (uint32_t)(now - entry->tick);
+    return age < MK_NETWORK_ARP_TIMEOUT_TICKS ? 1 : 0;
+}
+
 static void mk_network_cache_arp(uint32_t ipv4, const uint8_t *mac) {
+    struct mk_network_arp_cache_entry *entry;
+    struct mk_network_arp_cache_entry *oldest;
+    uint32_t index;
+    uint32_t now;
+
     if (ipv4 == 0u || mac == 0) {
         return;
     }
-    g_network_state.arp_cache.valid = 1;
-    g_network_state.arp_cache.ipv4 = ipv4;
-    memcpy(g_network_state.arp_cache.mac, mac, 6u);
-    g_network_state.arp_cache.tick = kernel_timer_get_ticks();
+    now = kernel_timer_get_ticks();
+
+    /* Refresh an existing mapping; never duplicate an IP. */
+    for (index = 0u; index < MK_NETWORK_ARP_CACHE_MAX; ++index) {
+        entry = &g_network_state.arp_cache[index];
+        if (entry->valid && entry->ipv4 == ipv4) {
+            memcpy(entry->mac, mac, 6u);
+            entry->tick = now;
+            return;
+        }
+    }
+
+    /* Insert into a free slot... */
+    for (index = 0u; index < MK_NETWORK_ARP_CACHE_MAX; ++index) {
+        entry = &g_network_state.arp_cache[index];
+        if (!entry->valid) {
+            entry->valid = 1;
+            entry->ipv4 = ipv4;
+            memcpy(entry->mac, mac, 6u);
+            entry->tick = now;
+            return;
+        }
+    }
+
+    /* ...otherwise replace the oldest entry (manual clock-diff, wrap-safe). */
+    oldest = &g_network_state.arp_cache[0];
+    for (index = 1u; index < MK_NETWORK_ARP_CACHE_MAX; ++index) {
+        entry = &g_network_state.arp_cache[index];
+        if ((int32_t)(entry->tick - oldest->tick) < 0) {
+            oldest = entry;
+        }
+    }
+    oldest->valid = 1;
+    oldest->ipv4 = ipv4;
+    memcpy(oldest->mac, mac, 6u);
+    oldest->tick = now;
 }
 
 static int mk_network_lookup_arp(uint32_t ipv4, uint8_t *mac_out) {
-    if (!g_network_state.arp_cache.valid ||
-        g_network_state.arp_cache.ipv4 != ipv4 ||
-        mac_out == 0) {
+    struct mk_network_arp_cache_entry *entry;
+    uint32_t index;
+    uint32_t now;
+
+    if (mac_out == 0 || ipv4 == 0u) {
         return -1;
     }
-    memcpy(mac_out, g_network_state.arp_cache.mac, 6u);
-    return 0;
+    now = kernel_timer_get_ticks();
+    for (index = 0u; index < MK_NETWORK_ARP_CACHE_MAX; ++index) {
+        entry = &g_network_state.arp_cache[index];
+        if (!entry->valid || entry->ipv4 != ipv4) {
+            continue;
+        }
+        if (!mk_network_arp_entry_fresh(entry, now)) {
+            entry->valid = 0; /* expired: force a re-ARP instead of a stale MAC */
+            continue;
+        }
+        memcpy(mac_out, entry->mac, 6u);
+        return 0;
+    }
+    return -1;
 }
 
 static uint32_t mk_network_next_hop_ipv4(uint32_t destination_ipv4) {
@@ -3090,6 +3155,58 @@ static void mk_network_responder_selftest(void) {
 
     g_network_responder_selftest_step = 2;
     kernel_debug_puts("network: responder self-test sent\n");
+
+    /*
+     * ARP cache self-check, non-interactive evidence for multi-entry +
+     * timeout: both the self-test peer (learned by the synthetic ARP request
+     * and echo above) AND the gateway must coexist as fresh entries — with
+     * the old 1-entry cache the peer would always evict the gateway. Then
+     * age the peer entry past the window: lookup must MISS (and invalidate),
+     * re-learn must HIT again.
+     */
+    {
+        struct mk_network_arp_cache_entry *peer_entry = 0;
+        struct mk_network_arp_cache_entry *entry;
+        uint8_t probe_mac[6];
+        uint32_t valid_entries = 0u;
+        int peer_seen = 0;
+        int gw_seen = 0;
+        uint32_t index;
+
+        for (index = 0u; index < MK_NETWORK_ARP_CACHE_MAX; ++index) {
+            entry = &g_network_state.arp_cache[index];
+            if (!entry->valid) {
+                continue;
+            }
+            valid_entries += 1u;
+            if (entry->ipv4 == MK_NETWORK_SELFTEST_PEER_IP) {
+                peer_seen = 1;
+                peer_entry = entry;
+            }
+            if (entry->ipv4 == g_network_state.gateway_ipv4) {
+                gw_seen = 1;
+            }
+        }
+        if (peer_seen == 0 || gw_seen == 0 || valid_entries < 2u || peer_entry == 0) {
+            kernel_debug_printf("network: arp cache FAILED (entries=%u peer=%d gw=%d)\n",
+                                (unsigned int)valid_entries, peer_seen, gw_seen);
+            return;
+        }
+
+        peer_entry->tick = (uint32_t)(kernel_timer_get_ticks() - MK_NETWORK_ARP_TIMEOUT_TICKS - 5u);
+        if (mk_network_lookup_arp(MK_NETWORK_SELFTEST_PEER_IP, probe_mac) == 0) {
+            kernel_debug_puts("network: arp cache FAILED (stale entry not expired)\n");
+            return;
+        }
+        mk_network_cache_arp(MK_NETWORK_SELFTEST_PEER_IP, peer_mac);
+        if (mk_network_lookup_arp(MK_NETWORK_SELFTEST_PEER_IP, probe_mac) == 0 &&
+            memcmp(probe_mac, peer_mac, 6u) == 0) {
+            kernel_debug_printf("network: arp cache multi ok entries=%u timeout ok\n",
+                                (unsigned int)valid_entries);
+        } else {
+            kernel_debug_puts("network: arp cache FAILED (relearn/lookup mismatch)\n");
+        }
+    }
 }
 
 static void mk_network_progress_state(void) {

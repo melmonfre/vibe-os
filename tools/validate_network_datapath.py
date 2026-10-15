@@ -31,6 +31,7 @@ BOOT_MARKERS = [
     "network: arp request answered",
     "network: icmp echo-reply sent",
     "network: loopback smoke ok",
+    "network: arp cache multi ok",
 ]
 
 # Peer MAC used by the in-guest responder self-test (10.0.2.77).
@@ -161,7 +162,8 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
         lines.append(f"- ICMP echo reply to self-test peer: {'yes' if selftest_icmp else 'NO'}")
         lines.append("")
         for marker in ("dhcp bound", "icmp gateway roundtrip ok", "arp request answered",
-                       "icmp echo-reply sent", "responder self-test sent", "loopback smoke ok"):
+                       "icmp echo-reply sent", "responder self-test sent", "loopback smoke ok",
+                       "arp cache FAILED", "arp cache multi ok"):
             for entry in log.splitlines():
                 if marker in entry:
                     lines.append("```text")
