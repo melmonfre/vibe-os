@@ -14,27 +14,31 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   corrida e anexar watchpoint e contraproducente. Boot de hardware real e UP e
   nao e afetado; `smp2`/`smp4` sao flag experimental off por padrao. Probes
   negativos e proximas abordagens registrados em COMPLETION_ACTION_PLAN P4.
-- **USB host: contagem inconsistente**: `kernel_usb_host_init()` encontra e
-  inicializa o UHCI (`usb: UHCI at 00:01.2 (8086:7020)`, `usb: OK`) mas
-  `kernel_usb_host_controller_count()` retorna 0 logo em seguida
-  (`usb: no controllers found`) — o log de boot se contradiz.
 - **Sessao interativa trava no meio: console/entrada param de escoar (15/10)**:
   reproduzido com probe manual fora de qualquer harness. Boot rescue ->
   `shell: ready` em 3s -> digitar `netmgrd status` -> o echo dos caracteres
   PARA no meio da linha (`... user@vibe-os:/ % netmgrd st`) e nunca mais
   aparece caracter algum, enquanto o timer segue imprimindo (`tick=1500..4000`)
-  = o guest esta VIVO, apenas o caminho de console/leitura de tecla parou.
+  = o guest esta VIVO, apenas o escoamento da sessao interativa parou.
   No harness (`validate-network-surface`) o sintoma irmao: o app `netmgrd`
   imprime 13 linhas do proprio status e PARA no meio da lista
   (`event stream: mailbox` e a ultima), sem `socket rx capacity:` nem o
   `shell: command exit netmgrd rc=`. Ou seja: nao e (so) timing de sendkey do
-  harness — ha um travamento real no escoamento de console/entrada de sessao
-  interativa, que e a CAUSA RAIZ das flakes de `validate-network-surface`,
-  `validate-abi-compat-surface` e `validate-audio-stack` (todas dirigem a
-  sessao por teclado). Nao reproduzido ainda em UP headless sem interacao.
-  Proximo probe: instrumentar a fila de console (host) e a de teclado
-  (`SYSCALL_INPUT_KEY` -> `mk_input_service_read_key`) com contadores de
-  enfileirado/entregue/descartado, e ver qual lado para primeiro.
+  harness — ha um travamento real de sessao interativa, que e a CAUSA RAIZ das
+  flakes de `validate-network-surface`, `validate-abi-compat-surface` e
+  `validate-audio-stack`. Nao reproduzido em UP headless sem interacao.
+  ESTADO DA INVESTIGACAO (15/10 parte 2): (a) o echo do shell NAO passa pelo
+  servico de console — `console_write` do userland vai direto para
+  `sys_text_write` (kernel), entao o host de console nao e o culpado do echo;
+  (b) o shell polla tecla via **request IPC sincrono a cada iteracao**
+  (`sys_poll_key` -> `SYSCALL_INPUT_KEY` -> `mk_input_service_read_key` ->
+  `mk_service_request(MK_SERVICE_INPUT)`), o que faz do host de INPUT o
+  suspeito principal; (c) NENHUM `service: request timeout` aparece no serial
+  (o timeout default e 32 ticks), entao ou o request nao estoura, ou o trace
+  orcado ja foi consumido. PROXIMO PROBE: contadores
+  enfileirado/entregue/descartado no caminho do input (kernel
+  `kernel_input_key_event_dequeue` + lado host de input) e trace do reply do
+  host, para ver qual lado para primeiro.
 
 ## Status geral
 
@@ -106,3 +110,9 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
 - **Comportamento observado:** cada dispatch de uma tarefa de usuario imprimia `sched-dispatch: BAD-FORENSICS ... frame{... cs=0x1b ...} regs_in_win=0`, repetidamente a cada tick; o volume afogava os marcadores que os validadores interativos leem do serial (o `netmgrd status` "nao terminava" para o harness porque a saida dele ficava soterrada).
 - **Causa raiz:** `scheduler_dispatch_forensics()` validava `frame->ebp`/`esp_dummy` SEMPRE contra a janela da stack de KERNEL. Mas um frame de retomada ring3 carrega registradores de USUARIO — o `ebp` aponta legitimamente para a stack do usuario (`[user_stack_top - VIBE_APP_STACK_SIZE, user_stack_top)`), nunca para a stack de kernel. Resultado: falso positivo sistematico em toda tarefa de usuario com `ebp` nao-zero.
 - **Correcao aplicada:** quando `frame->cs == USER_CS_SELECTOR`, `ebp` e aceito se for 0, estiver na janela de usuario OU na janela de kernel (frames construidos guardam um ou outro) e `esp_dummy` em qualquer das duas; os checks de `eip`/`cs` (que pegaram a classe #4) continuam valendo. Provas: log de boot com ZERO `BAD-FORENSICS` apos o fix (antes: repetido por tick); `validate-network-datapath` PASS; `validate-phase6-boot-smoke` 6/6.
+
+### [x] 11. USB host: contagem de controladores ficava 0 apos o UHCI iniciar — CORRIGIDO (15/10)
+
+- **Comportamento observado:** log de boot se contradizia — `usb: UHCI at 00:01.2 (8086:7020)` / `bsd_usb: 1 UHCI controller(s) initialized` seguidos de `usb: no controllers found` / `usb: not found`.
+- **Causa raiz:** `kernel_usb_host_probe_cb()` (que popula `g_kernel_usb_host_state` chamando `kernel_usb_host_store_controller`) era CODIGO MORTO — nenhum `kernel_pci_enumerate` o invocava, entao `kernel_usb_host_controller_count()` (e toda a API de info/listagem) lia `.controllers == 0` mesmo com um controlador PCI de classe 0x0C/0x03 presente e inicializado.
+- **Correcao aplicada:** `kernel_usb_host_init()` passa a chamar `kernel_pci_enumerate(kernel_usb_host_probe_cb, &g_kernel_usb_host_state)` apos a varredura. Provas: boot com `usb-host: controller=uhci pci=8086:7020 loc=0:1.2 irq=b bar=4 io=c040 ports=2` e `[14] usb: init complete (1 controllers, 0 devices)` (antes: `usb: no controllers found`); `validate-network-datapath` PASS; `validate-phase6-boot-smoke` 6/6.

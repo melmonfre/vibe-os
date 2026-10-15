@@ -89,7 +89,7 @@ depurando coisa conhecida).
 
 | # | Item | Estado verificado (15/10) | Definicao de pronto | Prova | Bloqueio |
 | --- | --- | --- | --- | --- | --- |
-| 0.1 | Bug de boot: `kernel_usb_host_controller_count()` retorna 0 apos UHCI iniciar | log se contradiz (`usb: UHCI at 00:01.2` → `usb: no controllers found`) | contagem real | boot log coerente + `validate-phase6-boot-smoke` | — |
+| 0.1 | Bug de boot: `kernel_usb_host_controller_count()` retorna 0 apos UHCI iniciar | **[x] FEITO 15/10** — causa raiz: `kernel_usb_host_probe_cb` (que popula `g_kernel_usb_host_state` via `kernel_usb_host_store_controller`) era CODIGO MORTO: nunca chamado, entao a contagem ficava 0 mesmo com controlador presente. Fix: `kernel_usb_host_init` agora chama `kernel_pci_enumerate(kernel_usb_host_probe_cb, &g_kernel_usb_host_state)` | log coerente (`usb: init complete (1 controllers, 0 devices)` + linha `usb-host: controller=uhci pci=8086:7020 irq=b bar=4 io=c040 ports=2` em vez de `usb: no controllers found`) | boot log + `validate-phase6-boot-smoke` | — |
 | 0.2 | `make` sem warns: dedup `build/libksh.a` + varredura de 229 TODO/stub/n.i. | `libksh.a` ja deduplicado (Build.compat.mk:132–135); TODO sweep pendente | cada TODO convertido em: feito / bug em KNOWN_BUGS / item neste plano | `make` rc=0 sem warning | — |
 | 0.3 | Telemetria: `g_timer_trace_budget` fixo em 8 prints | dificulta diagnostico de boot lento | knob de quiet/verbose | doc + default | — |
 | 0.4 | Consolidacao de planos: marcar os absorvidos como "consolidado em DEFINITIVE_CLOSURE_PLAN.md" | 15+ planos com drift entre si | cada plano antigo ganha header de pointer; `docs/README.md` atualizado | grep | — |

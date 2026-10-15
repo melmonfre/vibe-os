@@ -3481,6 +3481,16 @@ void kernel_usb_host_init(void) {
 
     kernel_debug_printf("usb: %u USB controller(s) found via PCI\n", (unsigned int)found);
 
+    /*
+     * Populate g_kernel_usb_host_state so the count/info queries agree with
+     * what was just found. The enumerate callback (kernel_usb_host_probe_cb ->
+     * kernel_usb_host_store_controller) was written for exactly this and was
+     * never wired up, so kernel_usb_host_controller_count() kept returning 0
+     * right after "usb: OK" -- the boot log literally contradicted itself
+     * ("usb: UHCI at 00:01.2" then "usb: no controllers found").
+     */
+    (void)kernel_pci_enumerate(kernel_usb_host_probe_cb, &g_kernel_usb_host_state);
+
     if (found > 0u) {
         kernel_debug_puts("usb: starting BSD UHCI driver (deferred)\n");
         bsd_usb_init();
