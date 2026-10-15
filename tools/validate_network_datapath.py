@@ -140,6 +140,16 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
         icmp_rep = kinds.count("icmp-type0")
         selftest_arp = any(k == "arp-reply" and dst == SELFTEST_PEER_MAC for k, dst, _l in frames)
         selftest_icmp = any(k == "icmp-type0" and dst == SELFTEST_PEER_MAC for k, dst, _l in frames)
+        # TX-ring proof: the boot bursts ARP-reply + echo-reply back-to-back
+        # inside one drain pass; drop=0 means the 8-deep queue never refused a
+        # frame the old 1-in-flight design would have silently lost.
+        tx_drop = 0
+        for line in log.splitlines():
+            if "icmp gateway roundtrip ok" in line and "drop=" in line:
+                try:
+                    tx_drop = int(line.split("drop=")[1].split()[0])
+                except (IndexError, ValueError):
+                    tx_drop = -1
 
         lines.append("## Boot markers")
         lines.append("")
@@ -160,6 +170,7 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
         lines.append("")
         lines.append(f"- ARP reply to self-test peer: {'yes' if selftest_arp else 'NO'}")
         lines.append(f"- ICMP echo reply to self-test peer: {'yes' if selftest_icmp else 'NO'}")
+        lines.append(f"- TX ring drops during boot (roundtrip line): {tx_drop} (expected 0)")
         lines.append("")
         for marker in ("dhcp bound", "icmp gateway roundtrip ok", "arp request answered",
                        "icmp echo-reply sent", "responder self-test sent", "loopback smoke ok",
@@ -174,7 +185,7 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
         # Gateway roundtrip requires our outbound echo (type 8) and a reply
         # (type 0); reachability requires the responder replies to the peer.
         wire_ok = icmp_req >= 1 and icmp_rep >= 1
-        responders_ok = selftest_arp and selftest_icmp
+        responders_ok = selftest_arp and selftest_icmp and tx_drop == 0
         if missing:
             lines.append("")
             lines.append(f"FAIL: timed out waiting for markers: {', '.join(missing)}")
@@ -192,7 +203,7 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
             return False
         if not responders_ok:
             lines.append("")
-            lines.append("FAIL: responder self-test produced no reachability frames on the wire")
+            lines.append("FAIL: responder self-test / TX ring not clean on the wire")
             lines.append("")
             report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             return False

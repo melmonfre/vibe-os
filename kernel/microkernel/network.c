@@ -4,6 +4,7 @@
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/event.h>
 #include <kernel/hal/io.h>
+#include <kernel/lock.h>
 #include <kernel/microkernel/message.h>
 #include <kernel/microkernel/network.h>
 #include <kernel/microkernel/network_queue.h>
@@ -204,7 +205,6 @@ struct mk_network_virtio_legacy_queue {
 
 struct mk_network_virtio_link_state {
     int rx_posted;
-    int tx_busy;
     int tx_smoke_sent;
     int tx_smoke_done;
     int rx_activity_seen;
@@ -230,8 +230,32 @@ static struct mk_network_virtio_net_hdr
     g_network_virtio_rx_hdr[MK_NETWORK_VIRTIO_RX_SLOT_COUNT] __attribute__((aligned(16)));
 static uint8_t g_network_virtio_rx_payload[MK_NETWORK_VIRTIO_RX_SLOT_COUNT][MK_NETWORK_VIRTIO_RX_BUFFER_BYTES]
     __attribute__((aligned(16)));
-static struct mk_network_virtio_net_hdr g_network_virtio_tx_hdr __attribute__((aligned(16)));
-static uint8_t g_network_virtio_tx_frame[MK_NETWORK_VIRTIO_TX_FRAME_BYTES] __attribute__((aligned(16)));
+/*
+ * TX ring: up to MK_NETWORK_VIRTIO_TX_RING_SLOTS frames in flight, each with
+ * its OWN hdr+payload buffer and descriptor pair (desc[slot*2..slot*2+1],
+ * same indexing the RX ring already used). The previous design shared ONE
+ * staging buffer and ONE descriptor pair across every sender, and gated with
+ * a non-atomic check-then-set on tx_busy: with the BSP timer tick draining
+ * the ring while a network syscall sent on any CPU (and responder replies
+ * fired from inside the drain), two writers could publish over the same
+ * desc pair / scratch buffer mid-DMA and the second frame silently dropped.
+ * All ring bookkeeping now runs under g_virtio_ring_lock (irqsave), and
+ * builders hand a stack frame to submit so there is no shared scratch left.
+ */
+#define MK_NETWORK_VIRTIO_TX_RING_SLOTS 8u
+
+struct mk_network_virtio_tx_slot {
+    struct mk_network_virtio_net_hdr hdr;
+    uint8_t frame[MK_NETWORK_VIRTIO_TX_FRAME_BYTES];
+    int in_flight;
+} __attribute__((aligned(16)));
+
+static struct mk_network_virtio_tx_slot
+    g_network_virtio_tx_slots[MK_NETWORK_VIRTIO_TX_RING_SLOTS] __attribute__((aligned(16)));
+static uint32_t g_network_virtio_tx_next_slot;
+static uint32_t g_network_virtio_tx_inflight;
+static uint32_t g_network_virtio_tx_dropped;
+static spinlock_t g_virtio_ring_lock;
 static const uint8_t g_network_virtio_fallback_mac[6] = {0x52u, 0x54u, 0x00u, 0x12u, 0x34u, 0x56u};
 static struct mk_network_virtio_link_state g_network_virtio_link;
 
@@ -991,7 +1015,7 @@ static int mk_network_virtio_frame_is_arp_reply(const uint8_t *frame, uint32_t p
 static void mk_network_virtio_send_arp_request(struct mk_network_pci_probe_state *probe,
                                                uint32_t sender_ipv4,
                                                uint32_t target_ipv4) {
-    uint8_t *frame = g_network_virtio_tx_frame;
+    uint8_t frame[MK_NETWORK_VIRTIO_TX_FRAME_BYTES];
     const uint8_t *source_mac;
 
     if (probe == 0 || !probe->virtio_queue_ready || sender_ipv4 == 0u || target_ipv4 == 0u) {
@@ -1026,7 +1050,7 @@ static void mk_network_virtio_send_arp_request(struct mk_network_pci_probe_state
 static int mk_network_virtio_send_arp_reply(struct mk_network_pci_probe_state *probe,
                                             const uint8_t *target_mac,
                                             uint32_t target_ipv4) {
-    uint8_t *frame = g_network_virtio_tx_frame;
+    uint8_t frame[MK_NETWORK_VIRTIO_TX_FRAME_BYTES];
     const uint8_t *source_mac;
 
     if (probe == 0 || !probe->virtio_queue_ready || target_mac == 0 ||
@@ -1060,7 +1084,7 @@ static int mk_network_virtio_send_icmp_echo(struct mk_network_pci_probe_state *p
                                             uint16_t sequence,
                                             const uint8_t *payload,
                                             uint32_t payload_len) {
-    uint8_t *frame = g_network_virtio_tx_frame;
+    uint8_t frame[MK_NETWORK_VIRTIO_TX_FRAME_BYTES];
     const uint8_t *source_mac;
     uint32_t frame_len;
     uint32_t ip_total_length;
@@ -1118,7 +1142,7 @@ static int mk_network_virtio_send_icmp_echo_reply(struct mk_network_pci_probe_st
                                                   uint32_t destination_ipv4,
                                                   const uint8_t *icmp_message,
                                                   uint32_t icmp_len) {
-    uint8_t *frame = g_network_virtio_tx_frame;
+    uint8_t frame[MK_NETWORK_VIRTIO_TX_FRAME_BYTES];
     const uint8_t *source_mac;
     uint32_t frame_len;
     uint32_t ip_total_length;
@@ -1207,8 +1231,9 @@ static int mk_network_icmp_probe_consume(uint32_t source_ipv4,
         return 0;
     }
     g_icmp_probe.finished = 1;
-    kernel_debug_printf("network: icmp gateway roundtrip ok rtt_ticks=%u gw=%d.%d.%d.%d\n",
+    kernel_debug_printf("network: icmp gateway roundtrip ok rtt_ticks=%u drop=%u gw=%d.%d.%d.%d\n",
                         (unsigned int)(kernel_timer_get_ticks() - g_icmp_probe.first_try_tick),
+                        (unsigned int)g_network_virtio_tx_dropped,
                         (unsigned int)((g_network_state.gateway_ipv4 >> 24) & 0xFFu),
                         (unsigned int)((g_network_state.gateway_ipv4 >> 16) & 0xFFu),
                         (unsigned int)((g_network_state.gateway_ipv4 >> 8) & 0xFFu),
@@ -1276,7 +1301,7 @@ static int mk_network_virtio_send_udp(struct mk_network_pci_probe_state *probe,
                                       uint16_t source_port,
                                       const uint8_t *payload,
                                       uint32_t payload_len) {
-    uint8_t *frame = g_network_virtio_tx_frame;
+    uint8_t frame[MK_NETWORK_VIRTIO_TX_FRAME_BYTES];
     const uint8_t *source_mac;
     uint32_t frame_len;
     uint32_t ip_total_length;
@@ -1385,7 +1410,7 @@ static int mk_network_virtio_send_tcp_segment(struct mk_network_pci_probe_state 
                                                uint8_t flags,
                                                const uint8_t *payload,
                                                uint32_t payload_len) {
-    uint8_t *frame = g_network_virtio_tx_frame;
+    uint8_t frame[MK_NETWORK_VIRTIO_TX_FRAME_BYTES];
     const uint8_t *source_mac;
     uint32_t frame_len;
     uint32_t tcp_len;
@@ -2045,57 +2070,88 @@ static void mk_network_virtio_handle_rx_frame(uint16_t head_desc,
     }
 }
 
-static int mk_network_virtio_submit_frame(struct mk_network_pci_probe_state *probe,
-                                          const uint8_t *frame,
-                                          uint32_t frame_len) {
+/*
+ * Core TX submit. The caller MUST hold g_virtio_ring_lock (public wrapper
+ * below). The frame is copied into a private slot (hdr+payload) so there is
+ * no shared scratch buffer and no fixed descriptor pair: the a7ece92a7
+ * self-wipe class of bug (caller == staging alias) is structurally impossible
+ * now, and N frames can be in flight instead of one. Returns 0 on submit,
+ * -1 on invalid/drop (ring-full increments tx_dropped, never silent zero).
+ */
+static int mk_network_virtio_submit_frame_core(struct mk_network_pci_probe_state *probe,
+                                               const uint8_t *frame,
+                                               uint32_t frame_len) {
     struct mk_network_virtio_legacy_queue *queue_state;
+    struct mk_network_virtio_tx_slot *slot;
+    uint32_t scan;
+    uint32_t slot_index;
+    uint16_t base;
 
     if (probe == 0 || frame == 0 || frame_len == 0u || !probe->virtio_queue_ready) {
         return -1;
     }
 
     queue_state = &g_network_virtio_queues[MK_NETWORK_VIRTIO_TX_QUEUE_INDEX];
-    if (queue_state->queue_size < 2u || g_network_virtio_link.tx_busy) {
+    if (queue_state->queue_size < (MK_NETWORK_VIRTIO_TX_RING_SLOTS * 2u)) {
         return -1;
     }
-    if (frame_len > sizeof(g_network_virtio_tx_frame)) {
+    if (frame_len > MK_NETWORK_VIRTIO_TX_FRAME_BYTES) {
         return -1;
     }
 
-    memset(&g_network_virtio_tx_hdr, 0, sizeof(g_network_virtio_tx_hdr));
-    /*
-     * Every TX builder (arp/icmp/udp/reply) fills g_network_virtio_tx_frame
-     * directly and passes that same pointer here. Wiping the staging buffer
-     * before the copy would erase the frame, and the self-copy would then DMA
-     * 42/594 all-zero bytes to the device — which is exactly what happened:
-     * the host saw frames with dest MAC 00:00:00:00:00:00 and dropped every
-     * one, so it never answered ARP or DHCP and RX stayed silent. Only stage
-     * the frame when the caller handed us a distinct buffer.
-     */
-    if (frame != g_network_virtio_tx_frame) {
-        memset(g_network_virtio_tx_frame, 0, sizeof(g_network_virtio_tx_frame));
-        memcpy(g_network_virtio_tx_frame, frame, frame_len);
+    slot = 0;
+    slot_index = 0u;
+    for (scan = 0u; scan < MK_NETWORK_VIRTIO_TX_RING_SLOTS; ++scan) {
+        uint32_t idx = (g_network_virtio_tx_next_slot + scan) % MK_NETWORK_VIRTIO_TX_RING_SLOTS;
+        if (!g_network_virtio_tx_slots[idx].in_flight) {
+            slot = &g_network_virtio_tx_slots[idx];
+            slot_index = idx;
+            break;
+        }
+    }
+    if (slot == 0) {
+        g_network_virtio_tx_dropped += 1u;
+        return -1;
     }
 
-    queue_state->desc[0].addr = (uint64_t)(uintptr_t)&g_network_virtio_tx_hdr;
-    queue_state->desc[0].len = MK_NETWORK_VIRTIO_HDR_SIZE;
-    queue_state->desc[0].flags = MK_NETWORK_VIRTIO_DESC_F_NEXT;
-    queue_state->desc[0].next = 1u;
-    queue_state->desc[1].addr = (uint64_t)(uintptr_t)&g_network_virtio_tx_frame[0];
-    queue_state->desc[1].len = frame_len;
-    queue_state->desc[1].flags = 0u;
-    queue_state->desc[1].next = 0u;
+    memset(&slot->hdr, 0, sizeof(slot->hdr));
+    memcpy(slot->frame, frame, frame_len);
 
-    mk_network_virtio_publish_desc_chain(queue_state, 0u);
-    g_network_virtio_link.tx_busy = 1;
+    base = (uint16_t)(slot_index * 2u);
+    queue_state->desc[base].addr = (uint64_t)(uintptr_t)&slot->hdr;
+    queue_state->desc[base].len = MK_NETWORK_VIRTIO_HDR_SIZE;
+    queue_state->desc[base].flags = MK_NETWORK_VIRTIO_DESC_F_NEXT;
+    queue_state->desc[base].next = (uint16_t)(base + 1u);
+    queue_state->desc[base + 1u].addr = (uint64_t)(uintptr_t)slot->frame;
+    queue_state->desc[base + 1u].len = frame_len;
+    queue_state->desc[base + 1u].flags = 0u;
+    queue_state->desc[base + 1u].next = 0u;
+
+    mk_network_virtio_publish_desc_chain(queue_state, base);
+    slot->in_flight = 1;
+    g_network_virtio_tx_inflight += 1u;
+    g_network_virtio_tx_next_slot = (slot_index + 1u) % MK_NETWORK_VIRTIO_TX_RING_SLOTS;
     g_network_virtio_link.tx_frames_submitted += 1u;
     g_network_virtio_link.last_tx_frame_bytes = frame_len;
     mk_network_virtio_notify_queue(probe->io_base, MK_NETWORK_VIRTIO_TX_QUEUE_INDEX);
     return 0;
 }
 
+static int mk_network_virtio_submit_frame(struct mk_network_pci_probe_state *probe,
+                                          const uint8_t *frame,
+                                          uint32_t frame_len) {
+    uint32_t flags;
+    int result;
+
+    flags = spinlock_lock_irqsave(&g_virtio_ring_lock);
+    result = mk_network_virtio_submit_frame_core(probe, frame, frame_len);
+    spinlock_unlock_irqrestore(&g_virtio_ring_lock, flags);
+    return result;
+}
+
 static void mk_network_virtio_post_rx_buffers(struct mk_network_pci_probe_state *probe) {
     struct mk_network_virtio_legacy_queue *queue_state;
+    uint32_t flags;
     uint16_t slot;
 
     if (probe == 0 || !probe->virtio_queue_ready || g_network_virtio_link.rx_posted) {
@@ -2107,6 +2163,13 @@ static void mk_network_virtio_post_rx_buffers(struct mk_network_pci_probe_state 
         return;
     }
 
+    flags = spinlock_lock_irqsave(&g_virtio_ring_lock);
+    /* Double-check under the lock: two CPUs racing maybe_activate must not
+     * publish the RX chains twice. */
+    if (g_network_virtio_link.rx_posted) {
+        spinlock_unlock_irqrestore(&g_virtio_ring_lock, flags);
+        return;
+    }
     for (slot = 0u; slot < MK_NETWORK_VIRTIO_RX_SLOT_COUNT; ++slot) {
         uint16_t head_desc = (uint16_t)(slot * 2u);
         uint16_t data_desc = (uint16_t)(head_desc + 1u);
@@ -2129,53 +2192,72 @@ static void mk_network_virtio_post_rx_buffers(struct mk_network_pci_probe_state 
 
     g_network_virtio_link.rx_posted = 1;
     mk_network_virtio_notify_queue(probe->io_base, MK_NETWORK_VIRTIO_RX_QUEUE_INDEX);
+    spinlock_unlock_irqrestore(&g_virtio_ring_lock, flags);
 }
 
 static void mk_network_virtio_send_tx_smoke(struct mk_network_pci_probe_state *probe) {
+    uint32_t submitted_before;
+
     if (probe == 0 || !probe->virtio_queue_ready || g_network_virtio_link.tx_smoke_sent) {
         return;
     }
 
+    submitted_before = g_network_virtio_link.tx_frames_submitted;
     mk_network_virtio_send_arp_request(probe,
                                        MK_NETWORK_IPV4_DEFAULT_ADDR,
                                        MK_NETWORK_IPV4_DEFAULT_GATEWAY);
-    if (g_network_virtio_link.tx_busy) {
+    if (g_network_virtio_link.tx_frames_submitted != submitted_before) {
         g_network_virtio_link.tx_smoke_sent = 1;
     }
 }
 
 static void mk_network_virtio_drain_tx_queue(struct mk_network_pci_probe_state *probe) {
     struct mk_network_virtio_legacy_queue *tx_queue;
+    uint32_t flags;
 
     if (probe == 0 || !probe->virtio_queue_ready) {
         return;
     }
 
     tx_queue = &g_network_virtio_queues[MK_NETWORK_VIRTIO_TX_QUEUE_INDEX];
+    flags = spinlock_lock_irqsave(&g_virtio_ring_lock);
     while (tx_queue->last_used_idx != tx_queue->used->idx) {
         uint16_t used_slot = (uint16_t)(tx_queue->last_used_idx % tx_queue->queue_size);
         struct mk_network_vring_used_elem *elem = &tx_queue->used->ring[used_slot];
+        uint16_t head_desc = (uint16_t)elem->id;
+        uint16_t slot = (uint16_t)(head_desc / 2u);
 
         tx_queue->last_used_idx = (uint16_t)(tx_queue->last_used_idx + 1u);
-        g_network_virtio_link.tx_busy = 0;
+        if (slot < MK_NETWORK_VIRTIO_TX_RING_SLOTS &&
+            g_network_virtio_tx_slots[slot].in_flight) {
+            g_network_virtio_tx_slots[slot].in_flight = 0;
+            if (g_network_virtio_tx_inflight != 0u) {
+                g_network_virtio_tx_inflight -= 1u;
+            }
+        }
         g_network_virtio_link.tx_frames_completed += 1u;
         (void)mk_network_publish_event(MK_NETWORK_EVENT_BACKEND_TX,
                                        0,
                                        0,
                                        g_network_state.status.link_state,
                                        g_network_virtio_link.last_tx_frame_bytes);
-        if ((int)elem->id == 0) {
+        if ((int)head_desc == 0) {
             g_network_virtio_link.tx_smoke_done = 1;
             if (!g_network_virtio_link.tx_smoke_logged) {
-                kernel_debug_puts("network: virtio tx smoke consumed\n");
                 g_network_virtio_link.tx_smoke_logged = 1;
+                kernel_debug_puts("network: virtio tx smoke consumed\n");
             }
         }
     }
+    spinlock_unlock_irqrestore(&g_virtio_ring_lock, flags);
 }
 
 static void mk_network_virtio_drain_rx_queue(struct mk_network_pci_probe_state *probe) {
     struct mk_network_virtio_legacy_queue *rx_queue;
+    uint32_t flags;
+    uint16_t head_desc;
+    uint16_t slot;
+    uint32_t payload_len;
 
     if (probe == 0 || !probe->virtio_queue_ready) {
         return;
@@ -2183,19 +2265,39 @@ static void mk_network_virtio_drain_rx_queue(struct mk_network_pci_probe_state *
 
     rx_queue = &g_network_virtio_queues[MK_NETWORK_VIRTIO_RX_QUEUE_INDEX];
 
-    while (rx_queue->last_used_idx != rx_queue->used->idx) {
-        uint16_t used_slot = (uint16_t)(rx_queue->last_used_idx % rx_queue->queue_size);
-        struct mk_network_vring_used_elem *elem = &rx_queue->used->ring[used_slot];
-        uint16_t head_desc = (uint16_t)elem->id;
-        uint16_t slot = (uint16_t)(head_desc / 2u);
-        uint32_t payload_len = elem->len > MK_NETWORK_VIRTIO_HDR_SIZE ?
-            (uint32_t)(elem->len - MK_NETWORK_VIRTIO_HDR_SIZE) : 0u;
+    for (;;) {
+        /*
+         * Claim one used entry under the lock (two CPUs may poll: the BSP
+         * timer tick and a service-send spin — each entry must be claimed
+         * exactly once). The frame is then processed OUTSIDE the lock:
+         * handle_rx_frame runs the ingest path, whose responders call
+         * submit_frame (which takes the lock) — holding it across that would
+         * self-deadlock the non-recursive spinlock. The buffer is only
+         * re-offered to the device AFTER processing, under the lock.
+         */
+        flags = spinlock_lock_irqsave(&g_virtio_ring_lock);
+        if (rx_queue->last_used_idx == rx_queue->used->idx) {
+            spinlock_unlock_irqrestore(&g_virtio_ring_lock, flags);
+            break;
+        }
+        {
+            uint16_t used_slot = (uint16_t)(rx_queue->last_used_idx % rx_queue->queue_size);
+            struct mk_network_vring_used_elem *elem = &rx_queue->used->ring[used_slot];
 
-        rx_queue->last_used_idx = (uint16_t)(rx_queue->last_used_idx + 1u);
+            head_desc = (uint16_t)elem->id;
+            payload_len = elem->len > MK_NETWORK_VIRTIO_HDR_SIZE ?
+                (uint32_t)(elem->len - MK_NETWORK_VIRTIO_HDR_SIZE) : 0u;
+            rx_queue->last_used_idx = (uint16_t)(rx_queue->last_used_idx + 1u);
+        }
+        spinlock_unlock_irqrestore(&g_virtio_ring_lock, flags);
+
+        slot = (uint16_t)(head_desc / 2u);
         mk_network_virtio_handle_rx_frame(head_desc, slot, payload_len);
 
         if (slot < MK_NETWORK_VIRTIO_RX_SLOT_COUNT) {
+            flags = spinlock_lock_irqsave(&g_virtio_ring_lock);
             mk_network_virtio_publish_desc_chain(rx_queue, head_desc);
+            spinlock_unlock_irqrestore(&g_virtio_ring_lock, flags);
         }
     }
 
@@ -2269,6 +2371,11 @@ static void mk_network_probe_virtio_legacy_queues(struct mk_network_pci_probe_st
 
     memset(g_network_virtio_queues, 0, sizeof(g_network_virtio_queues));
     memset(&g_network_virtio_link, 0, sizeof(g_network_virtio_link));
+    /* Device reset drops all rings: forget any in-flight TX slots too. */
+    memset(g_network_virtio_tx_slots, 0, sizeof(g_network_virtio_tx_slots));
+    g_network_virtio_tx_next_slot = 0u;
+    g_network_virtio_tx_inflight = 0u;
+    spinlock_init(&g_virtio_ring_lock);
     for (queue_index = 0u; queue_index < MK_NETWORK_VIRTIO_QUEUE_COUNT; ++queue_index) {
         uint16_t queue_size;
 
@@ -3123,8 +3230,9 @@ static void mk_network_responder_selftest(void) {
         return;
     }
 
-    /* step 0: wait for the (1-deep) TX slot to free before the second frame. */
-    if (g_network_virtio_link.tx_busy) {
+    /* step 0: back-pressure only if the whole TX ring is busy (8 slots; the
+     * two self-test frames normally land in distinct slots back-to-back). */
+    if (g_network_virtio_tx_inflight >= MK_NETWORK_VIRTIO_TX_RING_SLOTS) {
         return;
     }
 
