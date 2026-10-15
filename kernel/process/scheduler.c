@@ -25,6 +25,23 @@ static void scheduler_list_diag(const char *what, process_t *node, process_t *pr
 static process_t *g_head = NULL;
 static process_t *g_current[32];
 static process_t *g_cursor[32];
+static uint32_t g_timeslice_remaining[32];
+static volatile int g_scheduler_preemption_ready = 0;
+static volatile uint32_t g_sched_frame_calls;
+static volatile uint32_t g_sched_frame_preemptive_true;
+static volatile int g_sched_frame_last_cpu = -2;
+static volatile int g_sched_frame_last_cur_pid = -2;
+/*
+ * Per-pid selection counters (item 0.6, budget-free). The point-in-time census
+ * alone could not distinguish "the starved shell is never selected" from "it is
+ * selected but stuck", because the sample instant is a single phase of the
+ * 4-tick timeslice cycle (2000 % 4 == 0 aliases ts0 to a constant). Counting how
+ * many times the dispatcher actually handed the CPU to each pid is phase-free
+ * and directly answers whether pid 5 monopolises selection while 10/11 stay at
+ * zero. g_sched_ts_phase breaks the ts0 alias: census samples ts0 at two
+ * different modular phases (0 and 1025) so a cycling timeslice is visible.
+ */
+static volatile uint32_t g_sched_sel_count[32];
 
 /*
  * Overdue-wake detector (COMPLETION_ACTION_PLAN P4 / KNOWN_BUGS "Sessao
@@ -79,7 +96,7 @@ static int scheduler_walk_reaches(process_t *needle) {
     return 0;
 }
 
-static volatile uint32_t g_sched_census_budget = 8u;
+static volatile uint32_t g_sched_census_budget = 40u;
 
 static void sched_cat(char *dst, int cap, int *pos, const char *s) {
     while (*s != '\0' && *pos < cap - 1) {
@@ -109,7 +126,7 @@ static void sched_cat_u32(char *dst, int cap, int *pos, unsigned int v) {
 static void scheduler_census(uint32_t tick) {
     process_t *scan;
     uint32_t steps = 0u;
-    char line[224];
+    char line[384];
     int pos;
 
     if (g_sched_census_budget == 0u) {
@@ -120,6 +137,26 @@ static void scheduler_census(uint32_t tick) {
     line[0] = '\0';
     sched_cat(line, (int)sizeof(line), &pos, "sched-census t=");
     sched_cat_u32(line, (int)sizeof(line), &pos, tick);
+    sched_cat(line, (int)sizeof(line), &pos, " calls=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, g_sched_frame_calls);
+    sched_cat(line, (int)sizeof(line), &pos, " pre=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, g_sched_frame_preemptive_true);
+    sched_cat(line, (int)sizeof(line), &pos, " lastcpu=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, (unsigned int)(g_sched_frame_last_cpu >= 0 ? (unsigned int)g_sched_frame_last_cpu : 9u));
+    sched_cat(line, (int)sizeof(line), &pos, " lastcur=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, (unsigned int)(g_sched_frame_last_cur_pid >= 0 ? (unsigned int)g_sched_frame_last_cur_pid : 9u));
+    sched_cat(line, (int)sizeof(line), &pos, " preempt=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, (unsigned int)g_scheduler_preemption_ready);
+    sched_cat(line, (int)sizeof(line), &pos, " ts0=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, (unsigned int)g_timeslice_remaining[0]);
+    sched_cat(line, (int)sizeof(line), &pos, " sel5=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, g_sched_sel_count[5u & 31u]);
+    sched_cat(line, (int)sizeof(line), &pos, " sel10=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, g_sched_sel_count[10u & 31u]);
+    sched_cat(line, (int)sizeof(line), &pos, " sel11=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, g_sched_sel_count[11u & 31u]);
+    sched_cat(line, (int)sizeof(line), &pos, " sel12=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, g_sched_sel_count[12u & 31u]);
     sched_cat(line, (int)sizeof(line), &pos, ":");
     for (scan = g_head; scan != NULL; scan = scan->next) {
         if (!scheduler_node_sane(scan)) {
@@ -133,6 +170,8 @@ static void scheduler_census(uint32_t tick) {
         sched_cat(line, (int)sizeof(line), &pos, ":");
         sched_cat_u32(line, (int)sizeof(line), &pos,
                       (unsigned int)(scan->current_cpu >= 0 ? (unsigned int)scan->current_cpu : 9u));
+        sched_cat(line, (int)sizeof(line), &pos, ":");
+        sched_cat_u32(line, (int)sizeof(line), &pos, scan->wait_deadline);
         if (++steps >= 40u) {
             break;
         }
@@ -143,10 +182,19 @@ static void scheduler_census(uint32_t tick) {
 static void scheduler_overdue_scan(uint32_t tick) {
     uint32_t i;
 
-    if ((tick % 2000u) >= 25u) {
-        /* census every ~2000 ticks, aligned to the 25-tick scan cadence */
-    } else if ((tick % 2000u) == 0u) {
-        scheduler_census(tick);
+    {
+        /*
+         * Sample the census at two modular phases (0 and 1025), both multiples
+         * of the 25-tick scan cadence. Phase 0 aliases the 4-tick timeslice
+         * (2000 % 4 == 0), so it always reads ts0 right after a fresh dispatch;
+         * phase 1025 (1025 % 4 == 1) reads a different point of the cycle and
+         * exposes whether ts0 actually decrements between dispatches.
+         */
+        uint32_t census_phase = tick % 2000u;
+
+        if (census_phase == 0u || census_phase == 1025u) {
+            scheduler_census(tick);
+        }
     }
 
     if (g_sched_overdue_budget == 0u) {
@@ -179,14 +227,12 @@ static void scheduler_overdue_scan(uint32_t tick) {
     }
 }
 
-static uint32_t g_timeslice_remaining[32];
 static spinlock_t g_scheduler_lock;
 static spinlock_t g_task_event_lock;
 static int g_scheduler_boot_trace_emitted = 0;
 static int g_scheduler_switch_trace_budget = 24;
 static int g_scheduler_block_trace_budget = 24;
 static int g_scheduler_timeout_trace_budget = 16;
-static volatile int g_scheduler_preemption_ready = 0;
 static volatile int g_scheduler_task_events_ready = 0;
 static uint8_t g_audio_task_added_trace_emitted = 0u;
 static uint8_t g_audio_first_dispatch_trace_emitted = 0u;
@@ -1309,12 +1355,17 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
     kernel_trap_frame_t *resume_frame;
     uint32_t flags = spinlock_lock_irqsave(&g_scheduler_lock);
 
-    (void)preemptive;
+    g_sched_frame_calls++;
+    if (preemptive) {
+        g_sched_frame_preemptive_true++;
+    }
+    g_sched_frame_last_cpu = (int)cpu_index;
 
     if (cpu_index >= 32u) {
         cpu_index = 0u;
     }
     current = g_current[cpu_index];
+    g_sched_frame_last_cur_pid = (current != NULL) ? current->pid : -1;
     if (!g_scheduler_preemption_ready) {
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         return frame;
@@ -1431,6 +1482,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
                                     (unsigned)have_tr, (unsigned)want_tr);
             }
         }
+        g_sched_sel_count[next->pid & 31] += 1u;
         next->state = PROCESS_RUNNING;
         next->current_cpu = (int)cpu_index;
         next->last_cpu = (int)cpu_index;
@@ -1466,6 +1518,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
                                                next,
                                                resume_frame != NULL ? resume_frame : frame);
     } else {
+        g_sched_sel_count[current->pid & 31] += 1u;
         current->state = PROCESS_RUNNING;
         current->current_cpu = (int)cpu_index;
         current->last_cpu = (int)cpu_index;

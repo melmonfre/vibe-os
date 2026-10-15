@@ -107,6 +107,36 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   as variaveis sao declaradas abaixo do census — mover declaracao ou expor via
   acessor). Hipoteses vivas: wait INFINITO (deadline 0) no caminho pos-comando
   (fs_flush/host_wait), ou preempcao desligada nesse boot.
+  CENSUS ESTENDIDO + SEL-COUNTERS (15/10 parte 8 — a hipotese de INANICAO da
+  parte 7 foi FALSIFICADA por medicao). Tres instrumentos novos em
+  kernel/process/scheduler.c: (1) contadores de entrada g_sched_frame_calls /
+  g_sched_frame_preemptive_true / last_cpu / last_cur_pid; (2) g_sched_sel_count
+  por pid (incrementado em AMBOS os caminhos de dispatch: next!=current e
+  self-pick next==current) — livre de orcamento, logo imune ao alias de amostra;
+  (3) census em DUAS fases modulares (0 e 1025), ambas multiplas de 25 (o census
+  so roda na cadencia de 25 ticks) e com 2000%4==0 vs 1025%4==1. O alias era
+  real: com a amostra so na fase 0 (multipla do timeslice de 4 ticks), ts0 lia
+  sempre 4 e parecia NUNCA decrementar; com a fase 1025, ts0 mede 2/3/4 — ou
+  seja a path preemptiva DECREMENTA o timeslice e o scheduler PREEMPTA
+  (pre==tick: exatamente 1 chamada preemptiva por tick). E os sel-counters sao
+  todos NAO-ZERO e crescentes: sel5≈6994, sel10≈1831, sel11≈6922, sel12≈6882 em
+  t=8000. => nem "shell nunca e selecionada" nem "timeslice nao anda": a shell
+  (pid=10) E despachada centenas de vezes. A assinatura REAL do stall esta no
+  serial do MESMO boot: 'host-wait: stalled pid=10 polls=256..4096 alive=1' e
+  'host-wait: stalled pid=11 polls=256..4096 alive=1' — os dois HOSTS
+  (bootstrap_hosts.c host_wait_for_task_exit) ficam girando; o census mostra os
+  pids 10/11 como BLOCKED (state=2) com wait_deadline re-armando para ~agora
+  (ex.: 8001 quando t=8000) a cada amostra, i.e. a tarefa esperada fica viva e
+  BLOQUEADA num wait temporizado que se re-arma, nunca termina -> o host nunca
+  ve o EXIT e o comando nao retorna. => 0.6 NAO e inanicao de CPU; e o par
+  wait/exit-notify (o filho bloqueia e nao termina). A guarda de aging segue
+  valida como robustez (evita uma classe real de inanicao) mas NAO era a causa
+  deste stall. PROXIMO INSTRUMENTO: mirar o lado do FILHO bloqueado (qual wait
+  temporizado re-arma) + o storage service pid=1 (a ultima linha de syscall
+  antes do stall e 'service: storage request type=17 from pid=12 to pid=1').
+  0.6 permanece ABERTO; nada aqui foi claimado como corrigido. Nota: os
+  'sched-dispatch: BAD-FORENSICS' reapareceram para pid=12 (frame ring3 com
+  regs_in_win=0) — mesma familia do bug #10, ruidoso mas nao fatal.
   PROXIMO PASSO (nao feito aqui): medir o lado do HOST de filesystem
   no momento do stall (estado/agendabilidade do task fs e do storage que ele
   encadeia) — o peek atual so cobre o caminho que ESToura timeout, preciso de um
