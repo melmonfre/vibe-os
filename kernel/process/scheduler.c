@@ -25,6 +25,160 @@ static void scheduler_list_diag(const char *what, process_t *node, process_t *pr
 static process_t *g_head = NULL;
 static process_t *g_current[32];
 static process_t *g_cursor[32];
+
+/*
+ * Overdue-wake detector (COMPLETION_ACTION_PLAN P4 / KNOWN_BUGS "Sessao
+ * interativa trava no meio", item 0.6 branch decision). Every bounded block
+ * records (task,deadline) in this small ring; each ~25 ticks the timeout hook
+ * checks entries still BLOCKED long after their deadline AND asks whether the
+ * walk from g_head still REACHES the node. "overdue + unreachable" means the
+ * timed wait can never be woken because the list walk stops before it
+ * (truncation/phantom node — the LIST-CYCLE/BAD-NODE family); "overdue +
+ * reachable" would instead point at the wake logic itself. Budgeted, so it
+ * can never flood the serial.
+ */
+#define SCHED_BLOCK_RING 64u
+#define SCHED_OVERDUE_GRACE_TICKS 200u
+struct sched_block_record {
+    process_t *task;
+    uint32_t deadline;
+    uint8_t flagged;
+};
+static struct sched_block_record g_sched_block_ring[SCHED_BLOCK_RING];
+static uint32_t g_sched_block_ring_next;
+static volatile uint32_t g_sched_overdue_budget = 12u;
+
+static void scheduler_note_block(process_t *task, uint32_t wait_deadline) {
+    uint32_t idx;
+
+    if (task == NULL || wait_deadline == 0u) {
+        return;
+    }
+    idx = g_sched_block_ring_next % SCHED_BLOCK_RING;
+    g_sched_block_ring[idx].task = task;
+    g_sched_block_ring[idx].deadline = wait_deadline;
+    g_sched_block_ring[idx].flagged = 0u;
+    g_sched_block_ring_next += 1u;
+}
+
+static int scheduler_walk_reaches(process_t *needle) {
+    process_t *task;
+    uint32_t steps = 0u;
+
+    for (task = g_head; task != NULL; task = task->next) {
+        if (!scheduler_node_sane(task)) {
+            break; /* same early exit the real sweep must take */
+        }
+        if (task == needle) {
+            return 1;
+        }
+        if (++steps > SCHED_LIST_WALK_CAP) {
+            break;
+        }
+    }
+    return 0;
+}
+
+static volatile uint32_t g_sched_census_budget = 8u;
+
+static void sched_cat(char *dst, int cap, int *pos, const char *s) {
+    while (*s != '\0' && *pos < cap - 1) {
+        dst[(*pos)++] = *s++;
+    }
+    dst[*pos] = '\0';
+}
+
+static void sched_cat_u32(char *dst, int cap, int *pos, unsigned int v) {
+    char tmp[12];
+    int n = 0;
+
+    if (v == 0u) {
+        tmp[n++] = '0';
+    } else {
+        while (v > 0u && n < (int)sizeof(tmp)) {
+            tmp[n++] = (char)('0' + (v % 10u));
+            v /= 10u;
+        }
+    }
+    while (n > 0 && *pos < cap - 1) {
+        dst[(*pos)++] = tmp[--n];
+    }
+    dst[*pos] = '\0';
+}
+
+static void scheduler_census(uint32_t tick) {
+    process_t *scan;
+    uint32_t steps = 0u;
+    char line[224];
+    int pos;
+
+    if (g_sched_census_budget == 0u) {
+        return;
+    }
+    g_sched_census_budget -= 1u;
+    pos = 0;
+    line[0] = '\0';
+    sched_cat(line, (int)sizeof(line), &pos, "sched-census t=");
+    sched_cat_u32(line, (int)sizeof(line), &pos, tick);
+    sched_cat(line, (int)sizeof(line), &pos, ":");
+    for (scan = g_head; scan != NULL; scan = scan->next) {
+        if (!scheduler_node_sane(scan)) {
+            sched_cat(line, (int)sizeof(line), &pos, " [BAD]");
+            break;
+        }
+        sched_cat(line, (int)sizeof(line), &pos, " ");
+        sched_cat_u32(line, (int)sizeof(line), &pos, (unsigned int)(scan->pid > 0 ? scan->pid : -scan->pid));
+        sched_cat(line, (int)sizeof(line), &pos, ":");
+        sched_cat_u32(line, (int)sizeof(line), &pos, (unsigned int)scan->state);
+        sched_cat(line, (int)sizeof(line), &pos, ":");
+        sched_cat_u32(line, (int)sizeof(line), &pos,
+                      (unsigned int)(scan->current_cpu >= 0 ? (unsigned int)scan->current_cpu : 9u));
+        if (++steps >= 40u) {
+            break;
+        }
+    }
+    kernel_debug_printf("%s\n", line);
+}
+
+static void scheduler_overdue_scan(uint32_t tick) {
+    uint32_t i;
+
+    if ((tick % 2000u) >= 25u) {
+        /* census every ~2000 ticks, aligned to the 25-tick scan cadence */
+    } else if ((tick % 2000u) == 0u) {
+        scheduler_census(tick);
+    }
+
+    if (g_sched_overdue_budget == 0u) {
+        return;
+    }
+    for (i = 0u; i < SCHED_BLOCK_RING; ++i) {
+        struct sched_block_record *rec = &g_sched_block_ring[i];
+        process_t *task = rec->task;
+
+        if (task == NULL || rec->flagged != 0u || rec->deadline == 0u) {
+            continue;
+        }
+        if (tick < rec->deadline ||
+            (uint32_t)(tick - rec->deadline) < SCHED_OVERDUE_GRACE_TICKS) {
+            continue;
+        }
+        if (task->state != PROCESS_BLOCKED || task->wait_channel == 0 ||
+            task->wait_deadline == 0u) {
+            continue;
+        }
+        rec->flagged = 1u;
+        if (g_sched_overdue_budget != 0u) {
+            g_sched_overdue_budget -= 1u;
+            kernel_debug_printf("sched-watch: overdue pid=%d state=%d deadline=%u tick=%u reachable=%d\n",
+                                task->pid, (int)task->state,
+                                (unsigned int)rec->deadline,
+                                (unsigned int)tick,
+                                scheduler_walk_reaches(task));
+        }
+    }
+}
+
 static uint32_t g_timeslice_remaining[32];
 static spinlock_t g_scheduler_lock;
 static spinlock_t g_task_event_lock;
@@ -375,6 +529,26 @@ static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
     }
 
     base_score = (int)(task->priority_tier * 16u) + affinity_score + wait_penalty - wait_bonus;
+
+    /*
+     * Starvation guard (measured 15/10, KNOWN_BUGS "Sessao interativa trava no
+     * meio" item 0.6): the score had NO age term, so a frequently-yielding
+     * higher-tier task re-won every selection round and a woken lower-tier
+     * task stayed READY forever. Reproduced deterministically: the rescue
+     * shell host (tier APP) and the lang loader sat READY (census: state=0)
+     * for 16k ticks while a tier-service pid kept the CPU — hard livelock at
+     * interactive app launch. Age the score by time since the task last ran,
+     * bounded to 64 points (> the 4x16 tier span) so any starving runnable
+     * task eventually outranks a busy task of a much better tier.
+     */
+    if (task->last_start_tick != 0u) {
+        uint32_t waited = (uint32_t)(kernel_timer_get_ticks() - task->last_start_tick);
+
+        if (waited > 512u) {
+            waited = 512u;
+        }
+        base_score -= (int)(waited / 8u);
+    }
     if (base_score < 0) {
         base_score = 0;
     }
@@ -1458,6 +1632,7 @@ int scheduler_block_current_ex(const void *wait_channel,
     current->wait_event_class = wait_event_class;
     current->wait_owner_service = wait_owner_service;
     current->wake_boost_budget = 0u;
+    scheduler_note_block(current, wait_deadline);
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
     if (g_scheduler_block_trace_budget > 0) {
         g_scheduler_block_trace_budget -= 1;
@@ -1603,6 +1778,10 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
     uint32_t flags;
 
     flags = spinlock_lock_irqsave(&g_scheduler_lock);
+
+    if ((tick % 25u) == 0u) {
+        scheduler_overdue_scan(tick);
+    }
 
     /*
      * Budgeted canary sweep (COMPLETION_ACTION_PLAN P4, class #3). The

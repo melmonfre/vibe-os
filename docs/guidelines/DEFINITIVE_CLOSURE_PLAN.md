@@ -1,8 +1,8 @@
-# Plano de Fechamento Definitivo — VibeOS (Revisão 2)
+# Plano de Fechamento Definitivo — VibeOS (Revisão 3)
 
-last: 2026-10-15 — revisão de TODOS os planos do repo contra o código verificado (HEAD 918376735)
+last: 2026-10-15 — revisão de TODOS os planos contra o código verificado (HEAD: ver git log; revisão v3 incorpora a caçada ao 0.6)
 doing: backlog definitivo, organizado em ondas, com regra anti-stub e prova obrigatória
-next: Onda 0 (fundação) — itens 0.2, 0.3, 0.6, 0.8
+next: Onda 0 — 0.6 (segundo fator medido: wait infinito pós-comando OU preempção off) + 0.2/0.3/0.8
 state: active
 intent: execution-backlog
 
@@ -36,6 +36,15 @@ CRAFT 67 · ICON 39 · VIDEO 32 · NETWORK_AUDIO 47 · MICROKERNEL 3 · COMPAT 2
 MODULAR 6 · GAMES 7 · java 2. A Onda 6 concentra a maior parte.
 
 ---
+
+## Mudou desde a v2 (revisão v3)
+
+| Fonte | Estado | Evidência |
+| --- | --- | --- |
+| 0.6 causa raiz (parcial) | MEDIDA | `sched-census` (novo, `kernel/process/scheduler.c`) mostrou a shell (pid=10) e o loader (pid=11) **READY, `current_cpu=-1`, por 16k ticks** enquanto pid=5 ficava RUNNING na cpu0 — **inanição**, não lista truncada nem deadline perdido (detector `sched-watch: overdue` silencioso) |
+| 0.6 fix (parcial) | APLICADO | `scheduler_task_score` não tinha **termo de envelhecimento** (base = tier*16 + afinidade). Aging por tempo desde o último run (cap 64 pts > span de 4 tiers). Efeito medido: pid=10 deixou de ser READY eterno e voltou a **BLOCKED** (a shell voltou a rodar) — porém **o stall ainda não fecha**; resta um segundo fator |
+| 0.6 próximo probe | DESENHADO | census estendido com `wait_deadline`/`wait_channel` do bloqueado + `g_scheduler_preemption_ready` e `g_timeslice_remaining[0]` (a 1ª tentativa não compilou: variáveis declaradas abaixo do census). Hipóteses vivas: wait **infinito** (deadline 0) no pós-comando, ou preempção desligada neste boot |
+| Instrumentos que ficam | ✅ | `sched-census` + `sched-watch: overdue` (orçados) além de `input-diag`, `host-wait` e host-state peek |
 
 ## 0. Contrato deste plano
 

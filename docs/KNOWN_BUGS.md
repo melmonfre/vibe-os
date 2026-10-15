@@ -87,6 +87,26 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   classes SMP) — se o overdue disparar p/ pid=10 no stall, 0.6 CONVERGE para a
   causa da classe #5; (B) a task nao esta BLOCKED (stuck noutro lado do
   receive) — se nao disparar, instrumentar scheduler_task_event_receive.
+  CENSUS + AGING (15/10 parte 7 — instrumentos 'sched-watch: overdue' e
+  'sched-census' em kernel/process/scheduler.c): o census (pid:state:cpu de
+  todo no alcancavel, 0=READY 1=RUNNING 2=BLOCKED 3=TERMINATED, cpu=9 e -1)
+  mediu o stall de forma identica de t=2000 a t=16000: pid=10 (shell) e pid=11
+  (loader) em READY com current_cpu=-1, enquanto pid=5 ficava RUNNING na cpu0 o
+  tempo TODO — inanicao, nao lista truncada nem deadline perdido (o detector
+  overdue ficou silencioso). Causa apontada no codigo: scheduler_task_score nao
+  tinha NENHUM termo de envelhecimento (base = tier*16 + afinidade…), entao uma
+  tarefa de tier melhor que re-escala sempre vencia a disputa e a task recem-
+  acordada nunca era despachada. FIX APLICADO (parcial): aging por tempo desde o
+  ultimo run (cap 64 pts > span de 4 tiers) em scheduler_task_score. EFEITO
+  MEDIDO: pid=10 deixou de ficar READY eterno e passou a BLOCKED (ou seja, a
+  shell VOLTOU A RODAR), mas o stall AINDA nao fecha (sem 'shell: command exit
+  js rc='); os estados seguintes permanecem identicos entre amostras. => resta
+  um SEGUNDO fator; proximo instrumento: census estendido com wait_deadline/
+  wait_channel do bloqueado + o flag g_scheduler_preemption_ready e
+  g_timeslice_remaining[0] (a tentativa de incluir os dois ultimos nao compilou:
+  as variaveis sao declaradas abaixo do census — mover declaracao ou expor via
+  acessor). Hipoteses vivas: wait INFINITO (deadline 0) no caminho pos-comando
+  (fs_flush/host_wait), ou preempcao desligada nesse boot.
   PROXIMO PASSO (nao feito aqui): medir o lado do HOST de filesystem
   no momento do stall (estado/agendabilidade do task fs e do storage que ele
   encadeia) — o peek atual so cobre o caminho que ESToura timeout, preciso de um
