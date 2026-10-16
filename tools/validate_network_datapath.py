@@ -15,9 +15,9 @@ observe boot markers and the wire. Two profiles (--nic):
   and, when a packet capture is available, an on-wire ARP reply plus an ICMP
   echo request/echo reply pair.
 
-  e1000 (driver-level gate): boots with -device e1000 and requires the e1000
-  driver markers plus an on-wire ARP request/reply pair driven by the guest's
-  own probe (see E1000_MARKERS for the exact scope and why the service-level
+  e1000 / rtl8139 (driver-level gate): boot with -device <nic> and require that
+  driver's markers plus an on-wire ARP request/reply pair driven by the guest's
+  own probe (see DRIVER_MARKERS for the exact scope and why the service-level
   DHCP gate is not applicable there).
 
 Both are deterministic (no input injection); the virtio profile is the
@@ -43,20 +43,32 @@ BOOT_MARKERS = [
     "network: arp cache multi ok",
 ]
 
-# e1000 profile (driver-level gate). The NIC service's DHCP/responder stack
-# in network.c is still hard-gated on the virtio backend (that wiring is the
-# open NIC-abstraction decision [!]), so this profile honestly gates what
-# the e1000 DRIVER owns end to end: PCI probe, reset, MAC via EEPROM (with
-# RA fallback), MMIO, TX ring + DD reclaim, RX fill + consume, IRQ ack. The
-# guest sends ONE real ARP who-has for the QEMU user-net gateway (10.0.2.2)
-# and must receive the real reply — TX and RX both proven on the wire, no
-# synthetic inbound injection.
-E1000_MARKERS = [
-    "e1000: found device",
-    "e1000: link=up",
-    "e1000: datapath probe sent",
-    "e1000: datapath ok arp-reply",
-]
+# Driver-level profiles (gate what the NIC DRIVER owns end to end). The NIC
+# service's DHCP/responder stack in network.c is still hard-gated on the virtio
+# backend (that wiring is the open NIC-abstraction decision [!]), so these
+# profiles honestly gate: PCI probe, MAC, ring setup, DMA, TX submit + reclaim,
+# RX fill + consume, IRQ ack. The guest sends ONE real ARP who-has for the QEMU
+# user-net gateway (10.0.2.2) and must receive the real reply — TX and RX both
+# proven on the wire, no synthetic inbound injection.
+DRIVER_MARKERS = {
+    "e1000": [
+        "e1000: found device",
+        "e1000: link=up",
+        "e1000: datapath probe sent",
+        "e1000: datapath ok arp-reply",
+    ],
+    "rtl8139": [
+        "rtl8139: found device",
+        "rtl8139: device initialized",
+        "rtl8139: datapath probe sent",
+        "rtl8139: datapath ok arp-reply",
+    ],
+}
+
+DRIVER_DEVICES = {
+    "e1000": "e1000,netdev=net0",
+    "rtl8139": "rtl8139,netdev=net0",
+}
 
 # Peer MAC used by the in-guest responder self-test (10.0.2.77).
 SELFTEST_PEER_MAC = "52:54:00:aa:bb:cc"
@@ -104,8 +116,9 @@ def parse_pcap(pcap_path: Path) -> List[Tuple[str, str, int]]:
 
 def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path,
         nic: str = "virtio") -> bool:
-    markers = E1000_MARKERS if nic == "e1000" else BOOT_MARKERS
-    device = "e1000,netdev=net0" if nic == "e1000" else "virtio-net-pci,netdev=net0"
+    driver_profile = nic in DRIVER_MARKERS
+    markers = DRIVER_MARKERS[nic] if driver_profile else BOOT_MARKERS
+    device = DRIVER_DEVICES.get(nic, "virtio-net-pci,netdev=net0")
     lines: List[str] = ["# Network Datapath Validation", "",
                         f"- nic profile: `{nic}`", ""]
     with tempfile.TemporaryDirectory(prefix="vibe-network-datapath-") as temp_dir:
@@ -193,22 +206,21 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path,
         lines.append(f"- ARP replies: {kinds.count('arp-reply')}")
         lines.append(f"- ICMP echo requests (type 8): {icmp_req}")
         lines.append(f"- ICMP echo replies (type 0): {icmp_rep}")
-        if nic == "e1000":
+        if driver_profile:
             lines.append("")
-            lines.append("## e1000 driver datapath")
+            lines.append(f"## {nic} driver datapath")
             lines.append("")
             lines.append(f"- ARP request (who-has 10.0.2.2) on wire: "
                          f"{'yes' if 'arp-request' in kinds else 'NO'}")
             lines.append(f"- ARP reply from the user-net gateway on wire: "
                          f"{'yes' if 'arp-reply' in kinds else 'NO'}")
-            for marker in ("e1000: mac=", "e1000: link=", "e1000: datapath",
-                           "e1000: probe target"):
-                for entry in log.splitlines():
-                    if marker in entry:
-                        lines.append("```text")
-                        lines.append(entry.strip())
-                        lines.append("```")
-                        break
+            shown = 0
+            for entry in log.splitlines():
+                if entry.startswith(f"{nic}:") and shown < 6:
+                    lines.append("```text")
+                    lines.append(entry.strip())
+                    lines.append("```")
+                    shown += 1
         else:
             lines.append("")
             lines.append("## Responder reachability (self-test frames to "
@@ -230,7 +242,7 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path,
                         break
 
         # Gate per profile.
-        if nic == "e1000":
+        if driver_profile:
             # Driver-level proof: the guest's real ARP request must reach the
             # wire and slirp's real reply must reach the guest (marker). Both
             # ends of the ring + DMA are on the wire by construction.
@@ -252,7 +264,7 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path,
             return False
         if not wire_ok:
             lines.append("")
-            if nic == "e1000":
+            if driver_profile:
                 lines.append("FAIL: boot markers seen but the ARP request/reply pair is not on the wire")
             else:
                 lines.append("FAIL: boot markers seen but the wire capture lacks the ICMP echo pair")
@@ -267,9 +279,9 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path,
             return False
 
         lines.append("")
-        if nic == "e1000":
-            lines.append("PASS: e1000 driver probed, rings armed, and a real ARP request/reply "
-                         "round-trip completed (TX submit+DD reclaim, RX fill+consume proven on wire).")
+        if driver_profile:
+            lines.append(f"PASS: {nic} driver probed, rings armed, and a real ARP request/reply "
+                         "round-trip completed (TX submit+reclaim, RX fill+consume proven on wire).")
         else:
             lines.append("PASS: DHCP bound + gateway ICMP roundtrip + inbound ARP/ICMP responders "
                          "confirmed on the wire.")
@@ -283,9 +295,9 @@ def main() -> int:
     parser.add_argument("--image", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument("--memory-mb", type=int, default=3072)
-    parser.add_argument("--nic", choices=("virtio", "e1000"), default="virtio",
+    parser.add_argument("--nic", choices=("virtio", "e1000", "rtl8139"), default="virtio",
                         help="virtio: full service datapath gate; "
-                             "e1000: e1000 driver-level datapath gate")
+                             "e1000/rtl8139: driver-level datapath gate")
     args = parser.parse_args()
 
     report_path = Path(args.report)
