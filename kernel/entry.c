@@ -22,6 +22,7 @@
 #include <kernel/drivers/usb/usb_host.h>
 #include <kernel/drivers/input/input.h>
 #include <kernel/drivers/network/virtio_net.h>
+#include <kernel/drivers/network/e1000.h>
 #include <kernel/drivers/network/wifi_pci.h>
 #include <kernel/drivers/network/wifi_data_plane.h>
 #include <kernel/drivers/storage/nvme.h>
@@ -630,6 +631,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_early_post(0xD0); kernel_storage_init(); kernel_early_post(0xD1);
     kernel_debug_printf("[step=%x] storage: init returned\n", boot_seq);
            kernel_virtio_net_init();
+           kernel_e1000_init();
            kernel_wifi_pci_init();
            kernel_wifi_data_plane_init();
     kernel_debug_printf("[step=%x] storage: regs done\n", boot_seq);

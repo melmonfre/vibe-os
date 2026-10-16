@@ -2182,7 +2182,7 @@ validate-network-surface: $(IMAGE)
 	$(PYTHON) tools/validate_network_surface.py --image $(IMAGE) --report build/network-surface-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
 
 validate-network-datapath: $(IMAGE)
-	$(PYTHON) tools/validate_network_datapath.py --image $(IMAGE) --report build/network-datapath-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB)
+	$(PYTHON) tools/validate_network_datapath.py --image $(IMAGE) --report build/network-datapath-validation$(if $(filter e1000,$(NIC)),-e1000).md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) $(if $(filter e1000,$(NIC)),--nic e1000)
 
 validate-network-terminal-surface: $(IMAGE)
 	$(PYTHON) tools/validate_modular_apps.py --image $(IMAGE) --report build/network-terminal-validation.md --qemu $(QEMU) --memory-mb $(QEMU_MEMORY_MB) \

@@ -8,6 +8,7 @@
 #include <kernel/kernel_string.h>
 #include <kernel/lock.h>
 #include <kernel/memory/heap.h>
+#include <kernel/drivers/timer/timer.h>
 
 #define E1000_VENDOR_INTEL 0x8086u
 #define E1000_DEVICE_82540EM 0x100Eu
@@ -15,12 +16,30 @@
 #define E1000_DEVICE_82571 0x105Eu
 #define E1000_DEVICE_82572 0x107Du
 
+/*
+ * Ring sizes. The e1000 stores TDLEN/RDLEN masked with 0xfff80 (bits [6:0]
+ * reserved: the length must be a 128-byte multiple; the 8254x datasheet is
+ * looser at 16 bytes, QEMU is stricter). 64 x 16 B = 1024 B satisfies both.
+ * Buffer sizes: 1518 for TX frames (MTU), 2048 for RX matching RCTL BSIZE.
+ */
 #define E1000_NUM_TX_DESC 64u
 #define E1000_NUM_RX_DESC 64u
 #define E1000_TX_DESC_SIZE 16u
 #define E1000_RX_DESC_SIZE 16u
 #define E1000_ETH_MTU 1518u
 #define E1000_RX_BUFSZ 2048u
+
+/* TX descriptor STATUS bits (byte 8 of the legacy 16-byte TX desc): DD is
+ * bit 0 — hardware sets it when the frame has been transmitted. */
+#define E1000_TXD_STATUS_DD 0x01u
+#define E1000_RAH_ENABLE (1u << 31)
+
+/* Driver-level datapath probe (P3): a genuine ARP who-has for the QEMU
+ * user-net gateway. Not synthetic inbound injection — this is real egress
+ * from the real MAC; it is phrased in the log line so a real-LAN miss is
+ * never read as a device failure. */
+#define E1000_PROBE_TARGET_IP4 10u, 0u, 2u, 2u
+#define E1000_PROBE_WINDOW_TICKS 300u
 
 #define E1000_REG_CTRL 0x0000u
 #define E1000_REG_STATUS 0x0008u
@@ -37,11 +56,25 @@
 #define E1000_REG_RCTL 0x0100u
 #define E1000_REG_TCTL 0x0400u
 #define E1000_REG_TIPG 0x0410u
-#define E1000_REG_TDBAL 0x0420u
-#define E1000_REG_TDBAH 0x0424u
-#define E1000_REG_TDLEN 0x0428u
-#define E1000_REG_TDH 0x0430u
-#define E1000_REG_TDT 0x0438u
+/*
+ * TX descriptor ring registers. ROOT CAUSE of the first bring-up failure:
+ * these were programmed at 0x420/0x424/0x428/0x430/0x438 — the EARLY 82543
+ * alias window. That window is legacy compatibility padding; the 8254x
+ * canonical addresses are 0x3800+. QEMU 11.1.2's model implements ONLY the
+ * canonical set (its hw/net/e1000_regs.h documents 0x420 as "Alias to
+ * TDBAL" but the alias is absent from the macreg op tables), so every write
+ * to the alias was an unknown-register write, silently discarded: TDLEN read
+ * back 0, the device owned no ring, and no frame ever left the MAC. The RX
+ * ring never had this problem because its canonical base (0x2800) is the
+ * address everyone uses. Programming the canonical offsets is correct on
+ * real silicon too (datasheet: TDBAL 0x3800, TDLEN 0x3808, TDH 0x3810,
+ * TDT 0x3818).
+ */
+#define E1000_REG_TDBAL 0x3800u
+#define E1000_REG_TDBAH 0x3804u
+#define E1000_REG_TDLEN 0x3808u
+#define E1000_REG_TDH 0x3810u
+#define E1000_REG_TDT 0x3818u
 #define E1000_REG_RDBAL 0x2800u
 #define E1000_REG_RDBAH 0x2804u
 #define E1000_REG_RDLEN 0x2808u
@@ -158,9 +191,25 @@ struct e1000_device {
     struct e1000_rx_desc rx_desc_ring[E1000_NUM_RX_DESC] __attribute__((aligned(16)));
     uint8_t *tx_buffers[E1000_NUM_TX_DESC];
     uint8_t *rx_buffers[E1000_NUM_RX_DESC];
+    /*
+     * Ring bookkeeping (root fix, P3 "corrida do IRQ de RX" + TX accounting):
+     * tx_cur = next slot the producer fills; tx_reclaim = oldest slot not yet
+     * confirmed DD. The OLD code derived free slots from TDH (a hardware
+     * register that does not advance linearly with the software cursor), so
+     * tx_avail could go negative-modulo and the producer would reuse a slot
+     * the hardware still owned. In-flight = (tx_cur - tx_reclaim) mod N.
+     */
     volatile uint32_t tx_cur;
-    volatile uint32_t tx_avail;
+    volatile uint32_t tx_reclaim;
     volatile uint32_t rx_cur;
+    volatile uint32_t tx_frames_sent;
+    volatile uint32_t tx_drops;
+    volatile uint32_t rx_frames_seen;
+
+    /* datapath probe state machine (0=pre, 1=sent, 2=done) */
+    volatile uint32_t probe_state;
+    volatile uint32_t probe_deadline;
+    volatile uint32_t probe_deadline_base;
 
     uint8_t mac[6];
     spinlock_t lock;
@@ -240,21 +289,55 @@ static int e1000_read_mac(struct e1000_device *dev) {
     uint16_t mac_lo;
     uint16_t mac_mid;
     uint16_t mac_hi;
+    uint32_t ral;
+    uint32_t rah;
 
-    if (e1000_eeprom_read(dev, 0, &mac_lo) != 0 ||
-        e1000_eeprom_read(dev, 1, &mac_mid) != 0 ||
-        e1000_eeprom_read(dev, 2, &mac_hi) != 0) {
-        return -1;
+    if (e1000_eeprom_read(dev, 0, &mac_lo) == 0 &&
+        e1000_eeprom_read(dev, 1, &mac_mid) == 0 &&
+        e1000_eeprom_read(dev, 2, &mac_hi) == 0) {
+        dev->mac[0] = (uint8_t)(mac_lo & 0xFFu);
+        dev->mac[1] = (uint8_t)((mac_lo >> 8) & 0xFFu);
+        dev->mac[2] = (uint8_t)(mac_mid & 0xFFu);
+        dev->mac[3] = (uint8_t)((mac_mid >> 8) & 0xFFu);
+        dev->mac[4] = (uint8_t)(mac_hi & 0xFFu);
+        dev->mac[5] = (uint8_t)((mac_hi >> 8) & 0xFFu);
+        return 0;
     }
 
-    dev->mac[0] = (uint8_t)(mac_lo & 0xFFu);
-    dev->mac[1] = (uint8_t)((mac_lo >> 8) & 0xFFu);
-    dev->mac[2] = (uint8_t)(mac_mid & 0xFFu);
-    dev->mac[3] = (uint8_t)((mac_mid >> 8) & 0xFFu);
-    dev->mac[4] = (uint8_t)(mac_hi & 0xFFu);
-    dev->mac[5] = (uint8_t)((mac_hi >> 8) & 0xFFu);
-
+    /*
+     * Fallback: after device reset the RA registers carry the programmed MAC
+     * (QEMU loads -mac into RA at reset; the EEPROM bit-bang is the primary
+     * path). An all-zero RA still means "no MAC" and must fail honestly.
+     */
+    ral = e1000_read32(dev, E1000_REG_RAL);
+    rah = e1000_read32(dev, E1000_REG_RAH) & 0xFFFFu;
+    if ((ral | rah) == 0u) {
+        return -1;
+    }
+    dev->mac[0] = (uint8_t)(ral & 0xFFu);
+    dev->mac[1] = (uint8_t)((ral >> 8) & 0xFFu);
+    dev->mac[2] = (uint8_t)((ral >> 16) & 0xFFu);
+    dev->mac[3] = (uint8_t)((ral >> 24) & 0xFFu);
+    dev->mac[4] = (uint8_t)(rah & 0xFFu);
+    dev->mac[5] = (uint8_t)((rah >> 8) & 0xFFu);
     return 0;
+}
+
+/*
+ * Program the receive address register (RA[0]) from the MAC. Real silicon
+ * filters unicast against RA; without this the device only accepts traffic
+ * via the RCTL_UPE "accept all unicast" override, which is not how the
+ * controller is meant to be driven.
+ */
+static void e1000_program_ra(struct e1000_device *dev) {
+    uint32_t ral;
+    uint32_t rah;
+
+    ral = (uint32_t)dev->mac[0] | ((uint32_t)dev->mac[1] << 8) |
+          ((uint32_t)dev->mac[2] << 16) | ((uint32_t)dev->mac[3] << 24);
+    rah = (uint32_t)dev->mac[4] | ((uint32_t)dev->mac[5] << 8) | E1000_RAH_ENABLE;
+    e1000_write32(dev, E1000_REG_RAL, ral);
+    e1000_write32(dev, E1000_REG_RAH, rah);
 }
 
 static void e1000_link_up(struct e1000_device *dev) {
@@ -269,6 +352,13 @@ static void e1000_link_up(struct e1000_device *dev) {
 static int e1000_setup_tx_resources(struct e1000_device *dev) {
     uintptr_t ring_phys;
 
+    /*
+     * DMA addressing contract: this kernel maps the low physical RAM
+     * 1:1 (see docs/memory_map.md), so a kernel VA *is* the bus address —
+     * the same assumption the proven virtio and AHCI DMA paths already
+     * depend on. Descriptor/buffer addresses stay inside the first 4 GiB
+     * by construction on this 32-bit kernel; TDBAH=0 encodes that.
+     */
     memset(dev->tx_desc_ring, 0, sizeof(dev->tx_desc_ring));
     for (uint32_t i = 0; i < E1000_NUM_TX_DESC; i++) {
         dev->tx_buffers[i] = (uint8_t *)kernel_malloc(E1000_ETH_MTU);
@@ -287,7 +377,25 @@ static int e1000_setup_tx_resources(struct e1000_device *dev) {
     e1000_write32(dev, E1000_REG_TDT, 0u);
 
     dev->tx_cur = 0;
-    dev->tx_avail = E1000_NUM_TX_DESC;
+    dev->tx_reclaim = 0;
+    dev->tx_frames_sent = 0u;
+    dev->tx_drops = 0u;
+
+    /*
+     * One-shot self-check: the TX ring registers are the exact class of write
+     * that failed silently during bring-up (wrong register window), so verify
+     * the device echoed the length back instead of trusting the write.
+     */
+    {
+        uint32_t tdlen_echo = e1000_read32(dev, E1000_REG_TDLEN);
+
+        if (tdlen_echo != (E1000_NUM_TX_DESC * E1000_TX_DESC_SIZE)) {
+            kernel_debug_printf("e1000: tx ring length did not stick (tdlen=%x expected=%x)\n",
+                                (unsigned int)tdlen_echo,
+                                (unsigned int)(E1000_NUM_TX_DESC * E1000_TX_DESC_SIZE));
+            return -1;
+        }
+    }
 
     return 0;
 }
@@ -311,9 +419,12 @@ static int e1000_setup_rx_resources(struct e1000_device *dev) {
     e1000_write32(dev, E1000_REG_RDBAH, 0u);
     e1000_write32(dev, E1000_REG_RDLEN, E1000_NUM_RX_DESC * E1000_RX_DESC_SIZE);
     e1000_write32(dev, E1000_REG_RDH, 0u);
+    /* RDT names the LAST available-to-hardware descriptor: with the whole
+     * ring armed the tail sits at N-1 (hardware fills (RDT+1) mod N). */
     e1000_write32(dev, E1000_REG_RDT, E1000_NUM_RX_DESC - 1u);
 
     dev->rx_cur = 0;
+    dev->rx_frames_seen = 0u;
 
     rctl = e1000_read32(dev, E1000_REG_RCTL);
     rctl |= E1000_RCTL_EN | E1000_RCTL_SBP | E1000_RCTL_UPE | E1000_RCTL_MPE;
@@ -344,33 +455,179 @@ static void e1000_setup_interrupts(struct e1000_device *dev) {
     e1000_write32(dev, E1000_REG_IMS, E1000_ICR_TXDW | E1000_ICR_RXT0 | E1000_ICR_LSC);
 }
 
+/*
+ * TX completion reclaim: walk the oldest unclaimed slot forward while the
+ * hardware has set DD on it, clearing status so the slot can be refilled.
+ * DD is set in ORDER for the legacy TX path, so stopping at the first slot
+ * without DD is correct and cheap. Callable from the ISR (no printf here)
+ * and from producers/tick as a belt-and-braces reclaim (DD is a memory
+ * read — safe under the lock).
+ */
+static void e1000_reclaim_tx(struct e1000_device *dev) {
+    while (dev->tx_reclaim != dev->tx_cur) {
+        struct e1000_tx_desc *desc = &dev->tx_desc_ring[dev->tx_reclaim];
+        if ((desc->status & E1000_TXD_STATUS_DD) == 0u) {
+            break;
+        }
+        desc->status = 0u;
+        dev->tx_reclaim = (dev->tx_reclaim + 1u) % E1000_NUM_TX_DESC;
+    }
+}
+
+/*
+ * RX interrupt handler — ROOT FIX for the P3 "corrida do IRQ de RX".
+ * The previous handler walked rx_cur up to RDH *inside the ISR*, clearing
+ * each descriptor's DD and advancing the consumer cursor: it ate every
+ * frame itself, so kernel_e1000_recv_packet() (the API the service and the
+ * tick poller use) could never observe a completed descriptor. The ISR must
+ * only acknowledge and reclaim TX; RX consumption belongs to exactly ONE
+ * consumer path (recv_packet under the lock). Reading ICR here also clears
+ * the latched cause bits, which is the required ack.
+ */
 static void e1000_irq_handler(void) {
     struct e1000_device *dev = &g_e1000;
     uint32_t icr;
+    uint32_t flags;
 
     icr = e1000_read32(dev, E1000_REG_ICR);
-    if ((icr & E1000_ICR_LSC) != 0u) {
-        kernel_debug_printf("e1000: link status changed\n");
+    if ((icr & (E1000_ICR_TXDW | E1000_ICR_TXQE)) != 0u) {
+        flags = spinlock_lock_irqsave(&dev->lock);
+        e1000_reclaim_tx(dev);
+        spinlock_unlock_irqrestore(&dev->lock, flags);
     }
-    if ((icr & E1000_ICR_RXT0) != 0u) {
-        uint32_t rdh = e1000_read32(dev, E1000_REG_RDH);
-        while (dev->rx_cur != rdh) {
-            struct e1000_rx_desc *desc = &dev->rx_desc_ring[dev->rx_cur];
-            if ((desc->status & 0x01u) != 0u) {
-                uint16_t pkt_len = desc->length;
-                kernel_debug_printf("e1000: rx packet len=%u\n", (unsigned int)pkt_len);
-                desc->status = 0u;
-                desc->length = E1000_RX_BUFSZ;
-            }
-            dev->rx_cur = (dev->rx_cur + 1u) % E1000_NUM_RX_DESC;
-            rdh = e1000_read32(dev, E1000_REG_RDH);
+}
+
+/*
+ * Driver-level TX/RX datapath probe (P3 evidence hook). Sends ONE genuine
+ * ARP who-has for the QEMU user-net gateway (10.0.2.2) from the real MAC,
+ * then lets the tick drain RX looking for the ARP reply. This proves the
+ * descriptor rings, DMA addresses, MMIO and interrupt-free polling all work
+ * end to end WITHOUT touching the network service (whose backend dispatch is
+ * the still-open NIC abstraction [!]). On a real LAN the 10.0.2.2 gateway
+ * simply does not exist: the result line is worded so a miss reads as
+ * "probe target absent", not as a device failure.
+ */
+static int e1000_send_arp_probe(struct e1000_device *dev) {
+    uint8_t frame[42];
+    uint32_t i;
+    const uint8_t target_ip[4] = { E1000_PROBE_TARGET_IP4 };
+
+    for (i = 0u; i < 6u; ++i) {
+        frame[i] = 0xFFu; /* broadcast */
+    }
+    for (i = 0u; i < 6u; ++i) {
+        frame[6u + i] = dev->mac[i];
+    }
+    frame[12u] = 0x08u;
+    frame[13u] = 0x06u; /* ethertype ARP */
+    frame[14u] = 0x00u; frame[15u] = 0x01u; /* htype ethernet */
+    frame[16u] = 0x08u; frame[17u] = 0x00u; /* ptype IPv4 */
+    frame[18u] = 6u;
+    frame[19u] = 4u;
+    frame[20u] = 0x00u;
+    frame[21u] = 0x01u; /* opcode request */
+    for (i = 0u; i < 6u; ++i) {
+        frame[22u + i] = dev->mac[i];
+    }
+    for (i = 0u; i < 4u; ++i) {
+        frame[28u + i] = 0u; /* sender IP: unset pre-DHCP */
+    }
+    for (i = 0u; i < 6u; ++i) {
+        frame[32u + i] = 0u; /* target MAC unknown */
+    }
+    for (i = 0u; i < 4u; ++i) {
+        frame[38u + i] = target_ip[i];
+    }
+
+    return kernel_e1000_send_packet(frame, (uint32_t)sizeof(frame));
+}
+
+static int e1000_frame_is_probe_reply(const uint8_t *buf, uint32_t len) {
+    const uint8_t target_ip[4] = { E1000_PROBE_TARGET_IP4 };
+    uint32_t i;
+
+    if (len < 42u) {
+        return 0;
+    }
+    if (buf[12u] != 0x08u || buf[13u] != 0x06u) {
+        return 0;
+    }
+    if (buf[20u] != 0x00u || buf[21u] != 0x02u) {
+        return 0; /* not ARP reply */
+    }
+    for (i = 0u; i < 4u; ++i) {
+        if (buf[28u + i] != target_ip[i]) {
+            return 0; /* sender IP mismatch */
         }
-        e1000_write32(dev, E1000_REG_RDT, (dev->rx_cur + E1000_NUM_RX_DESC - 1u) % E1000_NUM_RX_DESC);
     }
-    if ((icr & E1000_ICR_TXDW) != 0u) {
-        uint32_t tdh = e1000_read32(dev, E1000_REG_TDH);
-        uint32_t released = (tdh - dev->tx_avail + E1000_NUM_TX_DESC) % E1000_NUM_TX_DESC;
-        dev->tx_avail = released;
+    return 1;
+}
+
+static void e1000_tick_hook(uint32_t tick) {
+    struct e1000_device *dev = &g_e1000;
+    /*
+     * The probe reply is 42 bytes; recv_packet truncates anything larger, so
+     * a modest on-stack window is enough (this hook runs from the timer tick
+     * — no 2 KB buffers on the IRQ stack).
+     */
+    uint8_t frame[128];
+    uint32_t len;
+    uint32_t drain;
+
+    if (!dev->present) {
+        return;
+    }
+
+    /*
+     * Belt-and-braces TX reclaim from the tick: the DD bit is plain memory,
+     * so reclaiming here keeps completion honest even if a TXDW edge is
+     * missed (frames faster than the device interrupt moderation). Senders
+     * also reclaim inline under the lock.
+     */
+    if ((tick % 50u) == 0u) {
+        uint32_t flags = spinlock_lock_irqsave(&dev->lock);
+        e1000_reclaim_tx(dev);
+        spinlock_unlock_irqrestore(&dev->lock, flags);
+    }
+
+    if (dev->probe_state == 0u) {
+        dev->probe_deadline_base = tick + 50u; /* let the link settle first */
+        dev->probe_state = 1u;
+    } else if (dev->probe_state == 1u) {
+        if (tick < dev->probe_deadline_base) {
+            return;
+        }
+        if (e1000_send_arp_probe(dev) == 0) {
+            kernel_debug_printf("e1000: datapath probe sent arp-who-has 10.0.2.2 (tx=%u)\n",
+                                (unsigned int)dev->tx_frames_sent);
+        } else {
+            kernel_debug_printf("e1000: datapath probe send failed (tx=%u drops=%u)\n",
+                                (unsigned int)dev->tx_frames_sent,
+                                (unsigned int)dev->tx_drops);
+        }
+        dev->probe_deadline = tick + E1000_PROBE_WINDOW_TICKS;
+        dev->probe_state = 2u;
+    }
+
+    /* Drain RX with a per-tick cap, then evaluate the probe. */
+    for (drain = 0u; drain < 8u; ++drain) {
+        len = 0u;
+        if (kernel_e1000_recv_packet(frame, (uint32_t)sizeof(frame), &len) != 0) {
+            break;
+        }
+        if (dev->probe_state == 2u && e1000_frame_is_probe_reply(frame, len)) {
+            kernel_debug_printf("e1000: datapath ok arp-reply len=%u rx=%u (probe target 10.0.2.2; QEMU user-net gateway)\n",
+                                (unsigned int)len,
+                                (unsigned int)dev->rx_frames_seen);
+            dev->probe_state = 3u;
+        }
+    }
+    if (dev->probe_state == 2u && tick >= dev->probe_deadline) {
+        kernel_debug_printf("e1000: probe target 10.0.2.2 silent in %u ticks (expected on a real LAN without that gateway; tx=%u rx=%u)\n",
+                            (unsigned int)E1000_PROBE_WINDOW_TICKS,
+                            (unsigned int)dev->tx_frames_sent,
+                            (unsigned int)dev->rx_frames_seen);
+        dev->probe_state = 3u;
     }
 }
 
@@ -398,6 +655,7 @@ static int e1000_probe(struct e1000_device *dev) {
         kernel_debug_printf("e1000: failed to read mac\n");
         return -1;
     }
+    e1000_program_ra(dev);
 
     kernel_debug_printf("e1000: mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
                         dev->mac[0], dev->mac[1], dev->mac[2],
@@ -431,6 +689,10 @@ static int e1000_probe(struct e1000_device *dev) {
                         (status_reg & E1000_STATUS_FD) ? "full" : "half");
 
     dev->present = 1;
+    dev->probe_state = 0u;
+    if (kernel_timer_register_tick_hook(e1000_tick_hook) != 0) {
+        kernel_debug_printf("e1000: tick hook registration failed (datapath probe disabled)\n");
+    }
     return 0;
 }
 
@@ -481,9 +743,9 @@ static int e1000_probe_pci(void) {
         cmd |= PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_BUS_MASTER;
         kernel_pci_config_write_u32(dev->bus, dev->slot, dev->function, 0x04u, cmd);
 
-        kernel_debug_printf("e1000: found device %d:%d.%d mmio=%p irq=%d\n",
+        kernel_debug_printf("e1000: found device %d:%d.%d mmio=%x irq=%d\n",
                             (int)dev->bus, (int)dev->slot, (int)dev->function,
-                            (void *)g_e1000.mmio_base, (int)g_e1000.irq_line);
+                            (unsigned int)g_e1000.mmio_base, (int)g_e1000.irq_line);
 
         if (e1000_probe(&g_e1000) == 0) {
             kernel_debug_printf("e1000: intel pro/1000 initialized at %d:%d.%d\n",
@@ -501,6 +763,7 @@ int kernel_e1000_send_packet(const uint8_t *data, uint32_t len) {
     struct e1000_device *dev = &g_e1000;
     uint32_t flags;
     uint32_t desc_idx;
+    uint32_t inflight;
     struct e1000_tx_desc *desc;
 
     if (!dev->present || data == 0 || len == 0 || len > E1000_ETH_MTU) {
@@ -509,7 +772,20 @@ int kernel_e1000_send_packet(const uint8_t *data, uint32_t len) {
 
     flags = spinlock_lock_irqsave(&dev->lock);
 
-    if (dev->tx_avail == 0) {
+    /*
+     * Reclaim completed (DD-set) slots before checking capacity, then
+     * measure in-flight against the reclaim cursor — never against TDH,
+     * which does not track the software producer. A full ring is a COUNTED
+     * drop, not a silent -1 (backpressure invariant: no silent overflow).
+     */
+    e1000_reclaim_tx(dev);
+    inflight = (dev->tx_cur - dev->tx_reclaim + E1000_NUM_TX_DESC) % E1000_NUM_TX_DESC;
+    if (inflight + 1u > E1000_NUM_TX_DESC) {
+        dev->tx_drops += 1u;
+        if (dev->tx_drops <= 4u) {
+            kernel_debug_printf("e1000: tx ring full, counted drop=%u\n",
+                                (unsigned int)dev->tx_drops);
+        }
         spinlock_unlock_irqrestore(&dev->lock, flags);
         return -1;
     }
@@ -518,11 +794,12 @@ int kernel_e1000_send_packet(const uint8_t *data, uint32_t len) {
     desc = &dev->tx_desc_ring[desc_idx];
     memcpy(dev->tx_buffers[desc_idx], data, len);
     desc->length = (uint16_t)len;
-    desc->cmd = 0x1u | 0x2u;
+    /* EOT (bit0, assert DD when done) | IFCS (bit1, insert FCS) */
+    desc->cmd = 0x3u;
     desc->status = 0u;
 
     dev->tx_cur = (desc_idx + 1u) % E1000_NUM_TX_DESC;
-    dev->tx_avail--;
+    dev->tx_frames_sent += 1u;
 
     e1000_write32(dev, E1000_REG_TDT, dev->tx_cur);
 
@@ -557,8 +834,10 @@ int kernel_e1000_recv_packet(uint8_t *buf, uint32_t max_len, uint32_t *len_out) 
 
         desc->status = 0u;
         desc->length = E1000_RX_BUFSZ;
+        dev->rx_frames_seen += 1u;
 
         dev->rx_cur = (dev->rx_cur + 1u) % E1000_NUM_RX_DESC;
+        /* RDT = last slot re-armed for the hardware = the one just consumed. */
         e1000_write32(dev, E1000_REG_RDT, (dev->rx_cur + E1000_NUM_RX_DESC - 1u) % E1000_NUM_RX_DESC);
     }
 

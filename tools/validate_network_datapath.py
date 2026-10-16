@@ -3,16 +3,25 @@
 
 Unlike tools/validate_network_surface.py (which drives the rescue shell with
 HMP sendkeys and is inherently timing-flaky), this validator only needs to
-observe boot markers and the wire: it boots the image with a virtio-net NIC on
-QEMU user-net, then requires
+observe boot markers and the wire. Two profiles (--nic):
 
-  * `network: dhcp bound`                      (DHCP offer/ack consumed in RX)
-  * `network: icmp gateway roundtrip ok`       (kernel echo to the gateway and
-                                                its reply back through RX)
+  virtio (default, the service datapath gate): boots the image with a
+  virtio-net NIC on QEMU user-net and requires
 
-and, when a packet capture is available, an on-wire ARP reply plus an ICMP
-echo request/echo reply pair. It is deterministic (no input injection) and is
-the acceptance gate for the P3 "rede real" datapath.
+    * `network: dhcp bound`                    (DHCP offer/ack consumed in RX)
+    * `network: icmp gateway roundtrip ok`     (kernel echo to the gateway and
+                                               its reply back through RX)
+
+  and, when a packet capture is available, an on-wire ARP reply plus an ICMP
+  echo request/echo reply pair.
+
+  e1000 (driver-level gate): boots with -device e1000 and requires the e1000
+  driver markers plus an on-wire ARP request/reply pair driven by the guest's
+  own probe (see E1000_MARKERS for the exact scope and why the service-level
+  DHCP gate is not applicable there).
+
+Both are deterministic (no input injection); the virtio profile is the
+acceptance gate for the P3 "rede real" datapath.
 """
 import argparse
 import shutil
@@ -32,6 +41,21 @@ BOOT_MARKERS = [
     "network: icmp echo-reply sent",
     "network: loopback smoke ok",
     "network: arp cache multi ok",
+]
+
+# e1000 profile (driver-level gate). The NIC service's DHCP/responder stack
+# in network.c is still hard-gated on the virtio backend (that wiring is the
+# open NIC-abstraction decision [!]), so this profile honestly gates what
+# the e1000 DRIVER owns end to end: PCI probe, reset, MAC via EEPROM (with
+# RA fallback), MMIO, TX ring + DD reclaim, RX fill + consume, IRQ ack. The
+# guest sends ONE real ARP who-has for the QEMU user-net gateway (10.0.2.2)
+# and must receive the real reply — TX and RX both proven on the wire, no
+# synthetic inbound injection.
+E1000_MARKERS = [
+    "e1000: found device",
+    "e1000: link=up",
+    "e1000: datapath probe sent",
+    "e1000: datapath ok arp-reply",
 ]
 
 # Peer MAC used by the in-guest responder self-test (10.0.2.77).
@@ -78,8 +102,12 @@ def parse_pcap(pcap_path: Path) -> List[Tuple[str, str, int]]:
     return frames
 
 
-def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -> bool:
-    lines: List[str] = ["# Network Datapath Validation", ""]
+def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path,
+        nic: str = "virtio") -> bool:
+    markers = E1000_MARKERS if nic == "e1000" else BOOT_MARKERS
+    device = "e1000,netdev=net0" if nic == "e1000" else "virtio-net-pci,netdev=net0"
+    lines: List[str] = ["# Network Datapath Validation", "",
+                        f"- nic profile: `{nic}`", ""]
     with tempfile.TemporaryDirectory(prefix="vibe-network-datapath-") as temp_dir:
         workspace = Path(temp_dir)
         scenario_image = workspace / "boot.img"
@@ -99,7 +127,7 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
                 "-monitor", "none",
                 "-no-reboot",
                 "-netdev", "user,id=net0",
-                "-device", "virtio-net-pci,netdev=net0",
+                "-device", device,
                 "-object", f"filter-dump,id=d0,netdev=net0,file={pcap_path}",
             ],
             stdout=subprocess.DEVNULL,
@@ -112,7 +140,7 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
             while time.time() < deadline:
                 if serial_log.exists():
                     log = serial_log.read_text(encoding="utf-8", errors="replace")
-                missing = [m for m in BOOT_MARKERS if m not in log]
+                missing = [m for m in markers if m not in log]
                 if not missing:
                     break
                 if proc.poll() is not None:
@@ -130,7 +158,7 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
         if serial_log.exists():
             log = serial_log.read_text(encoding="utf-8", errors="replace")
 
-        missing = [m for m in BOOT_MARKERS if m not in log]
+        missing = [m for m in markers if m not in log]
         frames = parse_pcap(pcap_path)
         kinds = [k for k, _dst, _len in frames]
 
@@ -153,10 +181,11 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
 
         lines.append("## Boot markers")
         lines.append("")
-        for marker in BOOT_MARKERS:
+        for marker in markers:
             lines.append(f"- `{marker}`: {'yes' if marker in log else 'NO'}")
-        lines.append(f"- `network: responder self-test sent`: "
-                     f"{'yes' if 'network: responder self-test sent' in log else 'NO'}")
+        if nic == "virtio":
+            lines.append(f"- `network: responder self-test sent`: "
+                         f"{'yes' if 'network: responder self-test sent' in log else 'NO'}")
         lines.append("")
         lines.append("## Wire (packet capture on netdev)")
         lines.append("")
@@ -164,28 +193,54 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
         lines.append(f"- ARP replies: {kinds.count('arp-reply')}")
         lines.append(f"- ICMP echo requests (type 8): {icmp_req}")
         lines.append(f"- ICMP echo replies (type 0): {icmp_rep}")
+        if nic == "e1000":
+            lines.append("")
+            lines.append("## e1000 driver datapath")
+            lines.append("")
+            lines.append(f"- ARP request (who-has 10.0.2.2) on wire: "
+                         f"{'yes' if 'arp-request' in kinds else 'NO'}")
+            lines.append(f"- ARP reply from the user-net gateway on wire: "
+                         f"{'yes' if 'arp-reply' in kinds else 'NO'}")
+            for marker in ("e1000: mac=", "e1000: link=", "e1000: datapath",
+                           "e1000: probe target"):
+                for entry in log.splitlines():
+                    if marker in entry:
+                        lines.append("```text")
+                        lines.append(entry.strip())
+                        lines.append("```")
+                        break
+        else:
+            lines.append("")
+            lines.append("## Responder reachability (self-test frames to "
+                         f"`{SELFTEST_PEER_MAC}`)")
+            lines.append("")
+            lines.append(f"- ARP reply to self-test peer: {'yes' if selftest_arp else 'NO'}")
+            lines.append(f"- ICMP echo reply to self-test peer: {'yes' if selftest_icmp else 'NO'}")
+            lines.append(f"- TX ring drops during boot (roundtrip line): {tx_drop} (expected 0)")
         lines.append("")
-        lines.append("## Responder reachability (self-test frames to "
-                     f"`{SELFTEST_PEER_MAC}`)")
-        lines.append("")
-        lines.append(f"- ARP reply to self-test peer: {'yes' if selftest_arp else 'NO'}")
-        lines.append(f"- ICMP echo reply to self-test peer: {'yes' if selftest_icmp else 'NO'}")
-        lines.append(f"- TX ring drops during boot (roundtrip line): {tx_drop} (expected 0)")
-        lines.append("")
-        for marker in ("dhcp bound", "icmp gateway roundtrip ok", "arp request answered",
-                       "icmp echo-reply sent", "responder self-test sent", "loopback smoke ok",
-                       "arp cache FAILED", "arp cache multi ok"):
-            for entry in log.splitlines():
-                if marker in entry:
-                    lines.append("```text")
-                    lines.append(entry.strip())
-                    lines.append("```")
-                    break
+        if nic == "virtio":
+            for marker in ("dhcp bound", "icmp gateway roundtrip ok", "arp request answered",
+                           "icmp echo-reply sent", "responder self-test sent", "loopback smoke ok",
+                           "arp cache FAILED", "arp cache multi ok"):
+                for entry in log.splitlines():
+                    if marker in entry:
+                        lines.append("```text")
+                        lines.append(entry.strip())
+                        lines.append("```")
+                        break
 
-        # Gateway roundtrip requires our outbound echo (type 8) and a reply
-        # (type 0); reachability requires the responder replies to the peer.
-        wire_ok = icmp_req >= 1 and icmp_rep >= 1
-        responders_ok = selftest_arp and selftest_icmp and tx_drop == 0
+        # Gate per profile.
+        if nic == "e1000":
+            # Driver-level proof: the guest's real ARP request must reach the
+            # wire and slirp's real reply must reach the guest (marker). Both
+            # ends of the ring + DMA are on the wire by construction.
+            wire_ok = ("arp-request" in kinds) and ("arp-reply" in kinds)
+            responders_ok = True  # responder self-test is virtio-profile scope
+        else:
+            # Gateway roundtrip requires our outbound echo (type 8) and a reply
+            # (type 0); reachability requires the responder replies to the peer.
+            wire_ok = icmp_req >= 1 and icmp_rep >= 1
+            responders_ok = selftest_arp and selftest_icmp and tx_drop == 0
         if missing:
             lines.append("")
             lines.append(f"FAIL: timed out waiting for markers: {', '.join(missing)}")
@@ -197,7 +252,10 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
             return False
         if not wire_ok:
             lines.append("")
-            lines.append("FAIL: boot markers seen but the wire capture lacks the ICMP echo pair")
+            if nic == "e1000":
+                lines.append("FAIL: boot markers seen but the ARP request/reply pair is not on the wire")
+            else:
+                lines.append("FAIL: boot markers seen but the wire capture lacks the ICMP echo pair")
             lines.append("")
             report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             return False
@@ -209,8 +267,12 @@ def run(qemu_binary: str, image_path: Path, memory_mb: int, report_path: Path) -
             return False
 
         lines.append("")
-        lines.append("PASS: DHCP bound + gateway ICMP roundtrip + inbound ARP/ICMP responders "
-                     "confirmed on the wire.")
+        if nic == "e1000":
+            lines.append("PASS: e1000 driver probed, rings armed, and a real ARP request/reply "
+                         "round-trip completed (TX submit+DD reclaim, RX fill+consume proven on wire).")
+        else:
+            lines.append("PASS: DHCP bound + gateway ICMP roundtrip + inbound ARP/ICMP responders "
+                         "confirmed on the wire.")
         report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return True
 
@@ -221,11 +283,14 @@ def main() -> int:
     parser.add_argument("--image", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument("--memory-mb", type=int, default=3072)
+    parser.add_argument("--nic", choices=("virtio", "e1000"), default="virtio",
+                        help="virtio: full service datapath gate; "
+                             "e1000: e1000 driver-level datapath gate")
     args = parser.parse_args()
 
     report_path = Path(args.report)
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    if run(args.qemu, Path(args.image), args.memory_mb, report_path):
+    if run(args.qemu, Path(args.image), args.memory_mb, report_path, args.nic):
         print(f"network-datapath: validation passed; see {report_path}")
         return 0
     print(f"network-datapath: validation failed; see {report_path}", file=sys.stderr)

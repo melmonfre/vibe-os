@@ -138,7 +138,7 @@ validate (relatorios em `build/*.md`):
 - SMP: `make validate-smp`
 - GPU: `make validate-gpu-backends`, `make validate-video`, `make validate-startx-*`
 - audio: `make validate-audio-stack`, `make validate-audio-hda-*`, `make validate-audio-matrix`
-- network: `make validate-network-surface`, `make validate-network-terminal-surface`
+- network: `make validate-network-surface`, `make validate-network-terminal-surface`, `make validate-network-datapath` (perfil virtio; `NIC=e1000` roda o gate do driver e1000)
 - ABI: `make validate-abi-compat-surface`, `make validate-abi-final` (static check de `docs/abi-inventory.md`)
 - apps: `make validate-modular-apps`, `make validate-craft-*`, `make validate-doom-*`
 
