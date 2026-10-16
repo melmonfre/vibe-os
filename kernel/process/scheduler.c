@@ -237,6 +237,7 @@ static void scheduler_overdue_scan(uint32_t tick) {
 static spinlock_t g_scheduler_lock;
 static spinlock_t g_task_event_lock;
 static int g_scheduler_boot_trace_emitted = 0;
+static int g_scheduler_head_trace_done = 0;
 static int g_scheduler_switch_trace_budget = 24;
 static int g_scheduler_block_trace_budget = 24;
 static int g_scheduler_timeout_trace_budget = 16;
@@ -1226,6 +1227,17 @@ void scheduler_add_task(process_t *proc) {
     if (g_head == NULL) {
         g_head = proc;
         g_cursor[proc->preferred_cpu >= 0 ? (uint32_t)proc->preferred_cpu : 0u] = proc;
+        /* One-shot breadcrumb: g_head is assigned EXACTLY once, so every
+         * BAD-HEAD trace in any later run is about THIS block. Naming it at
+         * birth (pid + node + alloc pc) turns the forensic "who freed the
+         * head?" question into a direct lookup. Budget: once per boot. */
+        if (!g_scheduler_head_trace_done) {
+            g_scheduler_head_trace_done = 1;
+            kernel_debug_printf("sched-head: first task pid=%d node=0x%x allocpc=0x%x\n",
+                                proc->pid,
+                                (unsigned int)(uintptr_t)proc,
+                                (unsigned int)kernel_heap_block_alloc_pc(proc));
+        }
     } else {
         process_t *p = g_head;
         uint32_t steps = 0u;
@@ -1269,6 +1281,42 @@ void scheduler_add_task(process_t *proc) {
     if (proc->service_type == MK_SERVICE_AUDIO) {
         kernel_text_puts("audiosvc: wake sent\n");
     }
+}
+
+/*
+ * Is `proc` currently reachable from g_head? Used by process_destroy to
+ * refuse freeing a LINKED task: the list is singly-linked and only
+ * scheduler_add_task ever writes g_head (once), so a freed while-linked
+ * block is exactly how g_head ends up dangling at a reallocated block —
+ * the class #5 signature (BAD-HEAD node whose header/payload is being
+ * rewritten by a new owner during sys_storage_load on real-time smp2).
+ * Walk is node-sane-guarded and step-capped: this runs from a destroy
+ * path that is itself suspect, so it must never dereference blindly.
+ */
+int scheduler_task_is_linked(const process_t *proc) {
+    process_t *task;
+    uint32_t steps = 0u;
+    uint32_t flags;
+    int found = 0;
+
+    if (proc == NULL) {
+        return 0;
+    }
+    flags = spinlock_lock_irqsave(&g_scheduler_lock);
+    for (task = g_head; task != NULL; task = task->next) {
+        if (task == proc) {
+            found = 1;
+            break;
+        }
+        if (!scheduler_node_sane(task)) {
+            break;
+        }
+        if (++steps > SCHED_LIST_WALK_CAP) {
+            break;
+        }
+    }
+    spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+    return found;
 }
 
 static process_t *find_next(uint32_t cpu_index, process_t *current) {

@@ -14,6 +14,22 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   corrida e anexar watchpoint e contraproducente. Boot de hardware real e UP e
   nao e afetado; `smp2`/`smp4` sao flag experimental off por padrao. Probes
   negativos e proximas abordagens registrados em COMPLETION_ACTION_PLAN P4.
+  **REFINADO 16/10 (dois boots real-time medidos):** (1) o antigo stall de
+  wakeup do storage NO smp2 sumiu — `fs: sys_storage_load returned` +
+  `init: storage smoke ok` rodam, o AP despacha tasks; (2) a parede atual e o
+  `g_head`/no do meio virando bloco de OUTRO dono AO VIVO: o node impresso duas
+  vezes seguidas muda de header (`size=0x680 magic=ALLO` -> `size=0x1
+  magic=0x1000000`; payload com bytes de metadados de storage/FAT) e o boot
+  congela POST-load (sem dispatch de tasks novas); (3) controle `-nic none`
+  reproduz igual — os drivers e1000/rtl8139 recem-postos sao INOCENTES; (4) o
+  novo guard `process-destroy: STILL-LINKED` (recusa liberar task linkada; no
+  mesmo commit) NAO disparou em run de controle inteiro com o guard buildado,
+  e a auditoria dos 4 sitios de free de process_t (destroy x3 + `elf_loader.c:
+  262`, unico `kernel_free` direto) mostra todos pre-link (`scheduler_add_task`
+  so em syscall.c:2016/2479/3757) — `process_destroy`/destroy-paths estao
+  EXCLUIDOS; o libertador (ou escritor-alias) e outra via. Proximo probe
+  desenhado: registro dos process_t linkados + checagem em TODO `kernel_free`
+  que nomeia o PC libertador em uma linha (sem gdb, que suprime a corrida).
 - **Sessao interativa trava no meio: console/entrada param de escoar (15/10)**:
   reproduzido com probe manual fora de qualquer harness. Boot rescue ->
   `shell: ready` em 3s -> digitar `netmgrd status` -> o echo dos caracteres

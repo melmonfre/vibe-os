@@ -8,8 +8,8 @@
 > registre a prova de volta neste log quando o item fechar.
 
 last: P1 CONCLUIDA (commit b23ac3fc5): boot stall corrigido (stack de boot movida para 0x800000 + cmov/i586 + ioapic pin+2 + EOI de IRQ espoliador); validate-phase6-boot-smoke 6/6 PASS
-doing: P2/P4 parciais (ver checkboxes); open: SMP2/4 stall em 'fs: sys_storage_load' (race de wakeup no AP)
-next: P4 restante (wakeup AP) e P3 camada 1 (NIC abstraction)
+doing: P2/P4 parciais (ver checkboxes); FECHADO 16/10: o stall de wakeup do storage no AP acabou (real-time smp2 faz `init: storage smoke ok`); parede atual de P4 = corrupcao de lista em tempo-real (classe #5) com assinatura NOVA medida (ver P4 open 16/10)
+next: P4 classe #5 (probe 'free: TASK-BLOCK' ja desenhado no plano) e P3 camada 1 (NIC abstraction [!])
 location: docs/guidelines
 state: active
 
@@ -159,7 +159,33 @@ ENDURECIMENTO DE WAITABLE + HONESTIDADE (14/10 parte 10): a cadeia `wait_next` d
 
 PROXIMO PROBE CONCRETO (classe #4): instrumentar o branch ring3-vs-ring0 em sys_task_create/syscall.c (imprimir modo escolhido + runs_in_user_mode + entry por task criada; assert: entry em janela de arena exige modo ring3) e rodar real-time smp2 ate a segunda carga lang — se a trace mostrar stub em ring0, o fix e forcar o modo pelo PARAMETRO do syscall (nunca herdado do chamador).
 ASSINATURA DEFINITIVA (smp2 icount, rodadas acumuladas): os headers corrompidos contem ENDERECOS DE RETORNO DE FUNCAO DE KERNEL (0x2a9ef=spinlock_lock_irqsave, 0x2ebd6=process_create_with_stack) e FRAGMENTOS ASCII de enderecos impressos ("2ebd","62d0" = substrings de %x do serial printf). Isto e corrupcao em FORMA DE STACK / overflow-forward de buffer vizinho, NAO uso errado da API de heap (nenhum guard de heap disparou), NAO duplicacao de pid (corrigida), NAO UAF de transfer (corrigido). O dono do primeiro next envenenado e consistentemente pid=2/pid=3 (alocados em process_create_with_stack=0x2ebd6). Proximo passo concreto: (1) identificar o bloco alocado IMEDIATAMENTE ANTES da vitima 0x391da950 (header em 0x391da940) e auditar seu escritor — o prehdr ja mostra cauda auto-referente (0x391da94c, 0x391da98c) sugerindo que o vizinho e outra process_t/waitable apontando para dentro da vitima; (2) canario de borda no heap: padding de 16 bytes apos cada payload verificado em kernel_free (pega o overflow-forward no momento do free, com allocpc do transgressor); (3) conferir se os buffers char[16] do serial printf (%x) podem estourar com valores grandes — os fragmentos ASCII "2ebd"/"62d0" vem dai. — em scheduler_list_diag, verificar se o `next` do prev eh cabeca de bloco valida (magic ALLOC e payload dentro de [heap_start,heap_end)) ANTES de seguir, e dumpar 16 words ao redor do prev quando nao for; (2) check de `g_cursor[cpu]`/`g_head` sanos no entry do find_next (cursor e o unico ponteiro de lista que NAO vem de um next de task); (3) suspeita nova: scheduler_add_task com LIST-CYCLE-AT-ADD aborta o append silenciosamente (p->next==NULL guard) — task criada mas nunca linkada + registro de launch apontando pra ela pode produzir referencias penduradas; verificar se algum launch retornou pid sem task na lista nos logs.
-Watchpoint de HW em `g_head` (0x1f84a0, .bss) e no par de words `0x391d5CE0` — e auditoria de `scheduler_timeout_tick_hook` (arrays `woke_tasks[16]`/`woke_inline[16]` com `woke_inline[woke_count - 1u]` indexado APOS o incremento — verificar off-by-one e o cap 16 vs wake de >16 tarefas no MESMO tick).
+Watchpoint de HW em `g_head` (0x1f84a0, .bss) e no par de words `0x391d5CE0` — e auditoria de `scheduler_timeout_tick_hook` (arrays `woke_tasks[16]`/`woke_inline[16]` com `woke_inline[woke_count - 1u]` indexado APOS o incremento — verificar off-by-one e o cap 16 vs wake de >16 tarefas no MESMO tick). AUDITADO 16/10: sem off-by-one (`woke_count++` pos-incremento indexa certo); cap 16 so descarta o REGISTRO de trace/evento, nunca o estado da task (que virou READY antes do cap). Nao e o mecanismo do stall.
+- [x] **ITEM 1 "Chamar smp_scheduler_enable()" JA ESTAVA FEITO** (16/10): chamado em `kernel/entry.c:796` apos bring-up; real-time smp2 mostra `smp: scheduler enabled cpus=2` + dispatches `sched: cpu=1 ...` (AP roda tasks pid=5/pid=9). A nota "zero callers" estava stale.
+- [x] **RACE DE WAKEUP DO STORAGE NO AP — FECHADO (16/10, medido):** real-time smp2 no HEAD atual completa a primeira cadeia de storage — serial mostra `service: storage request type=16 from pid=9 to pid=1` → `fs: sys_storage_load returned` → `fs: persistent image invalid, rebuilding` → `init: storage smoke begin` → `init: storage smoke ok` → assets carregam. O stall antigo em `fs: sys_storage_load` NAO existe mais; a parede do smp2 agora e SO a corrupcao de lista (abaixo). (A reserva de physmem do heap + atomic pid + refcount de transfer + stacks 32K coletivamente fecharam o caminho.)
+- [ ] **PAREDE ATUAL DO SMP2 (classe #5, assinatura REFINADA 16/10):** dois boots real-time gravados com o census estendido (guardas novos `sched-head:` e `process-destroy: STILL-LINKED` no mesmo commit):
+  - Run A (NIC default): `sched-list: BAD-HEAD cpu=1 node=0x390aef80 hdr{size=0x680 magic=ALLO allocpc=0x0} pid=0 kind=<addr-heap> state=1 next=0x1` e o MESMO node impresso imediatamente depois com header DIFERENTE (`size=0x1 magic=0x1000000`) — o bloco esta SENDO REESCRITO AO VIVO (dono novo, bytes de storage/FAT: `prehdr{0x6 0x68516 ...}`). g_head fica pendurado → find_next=NULL → dispatch de tasks novas para → boot congela antes de `desktop: session ready` (mas o init/desktop host JA rodaram — o congelamento e POST-storage-load).
+  - Run B (`-nic none`, controle): reproduz SEM nenhuma NIC — os drivers e1000/rtl8139 desta semana sao INOCENTES. Assinatura: `BAD-NODE-AT-ADD/FIND node=0x390748f0 kind=4 pid=0x1DA2...` (kind invalido, passo ~0x10/0x30 — padrao process_t-como) + `exception: #UD kernel-mode cpu=0 eip=3 cs=0`.
+  - `process_destroy` nao e o caminho conhecido do free: auditoria dos 3 sitios
+    de destroy (execve `loaded`, launch register-fail, create stack-fail) e do
+    `elf_loader.c:262` (o unico `kernel_free` de process_t fora do destroy)
+    mostra todos PRE-LINK — o proc do elf_load nunca passa por
+    `scheduler_add_task` (grep: add_task so existe em syscall.c:2016/2479/3757).
+    O guard `process-destroy: STILL-LINKED` (recusa o free e nomeia o caller)
+    fica no tree como prova viva; **rodada de controle COM o guard buildado
+    (`smp_nonic.log` 16/10): 0 disparos na serial inteira enquanto a parede
+    reproduz normal (`launch failed`+`#UD eip=0/3`)** — `process_destroy` esta
+    EXCLUIDO como libertador do bloco linkado por via conhecida; resta o probe
+    do registro de blocos-linkados checado em TODO `kernel_free` (abaixo).
+  - **STATUS HONESTO DO GATE 16/10:** `make validate-smp` agora FAIL em
+    `smp2-experimental`/`smp4-experimental` — os marcadores de bring-up
+    (online cpus, lapic armed, scheduler enabled) PASSAM, mas a lista atual do
+    tool exige `userland.app: shell start`, que a parede classe #5 impede em
+    tempo-real. Reproduzido IGUAL no build 2bc67f93c antes desta rodada (inclusive
+    `-nic none`) — logo NAO e regressao desta rodada; o "[x] bring-up markers
+    PASS" de 14/10 continua verdadeiro para os marcadores de bring-up, mas o
+    gate como um todo esta vermelho por causa da parede (registrado aqui para
+    nao existir verde-falso por omissao).
+  - **PROXIMO PROBE CONCRETO (desenhado, nao executado):** registro de 4-8 slots com os ponteiros de process_t ATUALMENTE LINKED (adicionados em scheduler_add_task, removidos so em terminate-definitivo); `kernel_free` verifica contra o registro e, em hit, imprime ORCAMENTO-ZERO `"free: TASK-BLOCK 0x.. pid=.. caller=0x%x"` com o PC do chamador. Isto distingue em UMA linha free-ilicito vs escrita-alias e nomeia o writer sem gdb (gdb suprimia a corrida).
 - [ ] Nota de telemetria: `g_timer_trace_budget` esta de novo em 8 prints (edit antigo perdido) — subir para 64 quando for diagnosticar boot lento.
 - [ ] UP nao regressou: `validate-phase6-boot-smoke` 6/6 PASS com esses fixes; smoke UP atinge `shell: ready`.
 - [ ] smp4: bring-up dos 3 APs nao fecha (`smp: online cpus=4/4` ausente) — o boot ainda assim avanca (degradado para os CPUs que online-aram) e chega no desktop (`desktop.app: launch startx`, tick=918). Provavel corrida no caminho INIT/SIPI com multiplos APs em paralelo (g_smp_boot_lock segura o BSP, mas `smp_wait_for_cpu` + retry resetam `g_smp_started_cpus = i` por indice). Precisa de trace do trampoline stage por AP.

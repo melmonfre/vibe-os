@@ -40,6 +40,7 @@ int scheduler_block_current_ex(const void *wait_channel,
                                uint32_t wait_event_class,
                                uint32_t wait_owner_service);
 int scheduler_wake_task(process_t *task);
+int scheduler_task_is_linked(const process_t *proc);
 int scheduler_complete_wait(process_t *task, uint32_t wait_result);
 int scheduler_task_event_subscribe(process_t *subscriber,
                                    uint32_t event_mask,

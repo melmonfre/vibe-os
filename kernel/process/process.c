@@ -440,6 +440,21 @@ void process_destroy(process_t *proc) {
     if (!proc) {
         return;
     }
+    /*
+     * Refuse to free a task still reachable from the scheduler list.
+     * g_head is written exactly once by scheduler_add_task, so a
+     * linked-then-freed block is precisely how the head ends up dangling
+     * at a recycled allocation (real-time smp2 BAD-HEAD signature,
+     * COMPLETION_ACTION_PLAN P4 / KNOWN_BUGS classe #5). A leak with a
+     * named caller diagnostic beats silent corruption of all dispatch.
+     */
+    if (scheduler_task_is_linked(proc)) {
+        kernel_debug_printf("process-destroy: STILL-LINKED pid=%d node=0x%x caller=0x%x (free refused)\n",
+                            proc->pid,
+                            (unsigned int)(uintptr_t)proc,
+                            (unsigned int)(uintptr_t)__builtin_return_address(0));
+        return;
+    }
     if (proc->stack) {
         kernel_free(proc->stack);
     }
