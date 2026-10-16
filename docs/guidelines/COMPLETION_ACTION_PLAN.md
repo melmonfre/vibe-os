@@ -8,8 +8,8 @@
 > registre a prova de volta neste log quando o item fechar.
 
 last: P1 CONCLUIDA (commit b23ac3fc5): boot stall corrigido (stack de boot movida para 0x800000 + cmov/i586 + ioapic pin+2 + EOI de IRQ espoliador); validate-phase6-boot-smoke 6/6 PASS
-doing: P2/P4 parciais (ver checkboxes); FECHADO 16/10: o stall de wakeup do storage no AP acabou (real-time smp2 faz `init: storage smoke ok`); parede atual de P4 = corrupcao de lista em tempo-real (classe #5) com assinatura NOVA medida (ver P4 open 16/10)
-next: P4 classe #5 (probe 'free: TASK-BLOCK' ja desenhado no plano) e P3 camada 1 (NIC abstraction [!])
+doing: P2/P4 parciais (ver checkboxes); FECHADO 16/10: (a) o stall de wakeup do storage no AP acabou (real-time smp2 faz `init: storage smoke ok`); (b) FIX servico-layer: `mk_service_launch_task` devolvia pid>0 como sucesso e callers liam !=0 como falha — os "deferred launch failed" de input/console/network eram SUCESSOS mal reportados (KNOWN_BUGS #14); pos-fix, smp2 real-time alcancou `desktop: session ready` sem icount pela primeira vez
+next: P4 classe #5 pos-desktop (probe desenhado: backtrace bruto no handler de #UD kernel-mode para nomear o salto NULL+3 no AP; WATCHED-FREE/STILL-LINKED/heap-sweep ja armados com 0 hits) e P3 camada 1 (NIC abstraction [!])
 location: docs/guidelines
 state: active
 
