@@ -460,6 +460,21 @@ static void mk_service_discard_worker_record(struct mk_service_record *service) 
     service->process = 0;
 }
 
+static volatile uint32_t g_service_restart_fail_budget = 12u;
+
+static void mk_service_restart_fail(const char *why, const struct mk_service_record *service) {
+    if (g_service_restart_fail_budget == 0u || service == 0) {
+        return;
+    }
+    g_service_restart_fail_budget--;
+    kernel_debug_printf("service: restart FAIL %s type=%d name0=%c process=%x pid=%d handler=%x\n",
+                        why, (int)service->type,
+                        service->name[0] != '\0' ? service->name[0] : '0',
+                        (unsigned int)(uintptr_t)service->process,
+                        service->pid,
+                        (unsigned int)(uintptr_t)service->local_handler);
+}
+
 static int mk_service_restart_worker_record(struct mk_service_record *service) {
     struct mk_launch_descriptor descriptor;
     int force_restart;
@@ -469,9 +484,11 @@ static int mk_service_restart_worker_record(struct mk_service_record *service) {
         return -1;
     }
     if (service->local_handler == 0) {
+        mk_service_restart_fail("no-local-handler", service);
         return -1;
     }
     if (service->name[0] == '\0') {
+        mk_service_restart_fail("empty-name", service);
         return -1;
     }
     if (service->process == 0 && service->pid == 0 && service->launch_flags == 0u) {
@@ -758,6 +775,16 @@ int mk_service_launch_worker(uint32_t type,
                                   MK_LAUNCH_FLAG_BOOTSTRAP | MK_LAUNCH_FLAG_BUILTIN);
 }
 
+static volatile uint32_t g_service_prepare_fail_budget = 12u;
+
+static void mk_service_prepare_fail(const char *why, uint32_t type) {
+    if (g_service_prepare_fail_budget == 0u) {
+        return;
+    }
+    g_service_prepare_fail_budget--;
+    kernel_debug_printf("service: prepare FAIL %s type=%u\n", why, (unsigned int)type);
+}
+
 int mk_service_prepare_task(uint32_t type,
                             const char *name,
                             mk_service_local_handler_fn handler,
@@ -768,11 +795,14 @@ int mk_service_prepare_task(uint32_t type,
     struct mk_service_record *service;
 
     if (type == MK_SERVICE_NONE || name == 0 || handler == 0 || entry == 0) {
+        mk_service_prepare_fail("bad-args", type);
         return -1;
     }
 
     service = mk_service_find_mutable_by_type(type);
     if (service != 0 && service->process != 0) {
+        /* Already launched: return the live pid as a POSITIVE signal.
+         * Callers must treat >0 as success (see mk_service_launch_task). */
         return service->pid;
     }
 
@@ -791,6 +821,7 @@ int mk_service_prepare_task(uint32_t type,
             }
         }
         if (service == 0) {
+            mk_service_prepare_fail("no-slot", type);
             return -1;
         }
     }
@@ -812,15 +843,32 @@ int mk_service_launch_task(uint32_t type,
                            uint32_t launch_flags) {
     struct mk_service_record *service;
     struct mk_launch_descriptor descriptor;
+    int prepared;
 
-    if (mk_service_prepare_task(type,
+    prepared = mk_service_prepare_task(type,
                                 name,
                                 handler,
                                 context,
                                 entry,
                                 stack_size,
-                                launch_flags) != 0) {
+                                launch_flags);
+    if (prepared < 0) {
         return -1;
+    }
+    if (prepared > 0) {
+        /*
+         * prepare_task reports an ALREADY-LAUNCHED service by returning its
+         * live pid. Contract of THIS function (and of every caller: the
+         * deferred launchers feeding mk_service_restart/mk_service_ensure,
+         * and audio.c) is 0 = success, negative = failure — so the pid is
+         * normalized to success. The old `!= 0` test made both the
+         * already-running case and the successful fresh launch below read
+         * as failures: init's deferred inputsvc/consolesvc/networksvc
+         * restarts on smp2 (no record yet -> launcher -> launch_task ->
+         * positive pid) were reporting "launch failed" for launches that
+         * had actually SUCCEEDED.
+         */
+        return 0;
     }
 
     service = mk_service_find_mutable_by_type(type);
@@ -846,7 +894,8 @@ int mk_service_launch_task(uint32_t type,
             return -1;
         }
         mk_service_retry_reset(service);
-        return pid;
+        /* success = 0 (see contract above; no caller consumes the pid) */
+        return 0;
     }
 }
 
@@ -882,9 +931,11 @@ int mk_service_restart(uint32_t type) {
             g_service_deferred_launchers[type] != 0) {
             return g_service_deferred_launchers[type]();
         }
+        mk_service_prepare_fail("no-record-no-launcher", type);
         return -1;
     }
     if (service->type == MK_SERVICE_INIT) {
+        mk_service_prepare_fail("init-not-restartable", type);
         return -1;
     }
     if (service->process == 0 && service->pid == 0) {

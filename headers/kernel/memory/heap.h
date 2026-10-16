@@ -42,6 +42,19 @@ int kernel_heap_block_predecessor(const void *ptr,
                                   uintptr_t *pred_allocpc_out,
                                   int *pred_canary_ok_out);
 
+/*
+ * Full physical sweep of the block chain (walk by header sizes from the
+ * heap start, never by any list). Used at the moment a scheduler list node
+ * is found corrupt: the predecessor of a victim may share the victim's
+ * fate (its own header already trashed), which makes
+ * kernel_heap_block_predecessor() give up silently — exactly what the
+ * real-time smp2 `prehdr{...}` dumps show. The sweep instead prints the
+ * last well-formed blocks' allocpc + canary state before the desync point
+ * and every trashed canary it meets, so ONE run names the overflowing
+ * buffer's allocation site. Budgeted internally (a couple of sweeps).
+ */
+void kernel_heap_forensic_sweep(const void *victim);
+
 /* public-facing API (aliases) */
 static inline void memory_init(uintptr_t start, size_t size) {
     kernel_mm_init(start, size);

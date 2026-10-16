@@ -258,3 +258,22 @@ Watchpoint de HW em `g_head` (0x1f84a0, .bss) e no par de words `0x391d5CE0` —
 P1 (boot) e o unico gate: P2/P3/P4/P5/P6 dependem de o kernel chegar em `init`. Dentro do pos-boot, a ordem recomendada e P2 (storage, pequeno e fecha o smoke do init) -> P3-camada1/2 (rede infra + stack) -> P4 (SMP) em paralelo com P5/P6 (audio/video campanhas) -> P7 (runtimes) -> P8 (userland acabamento) -> P9 roda continuo como trava de honestidade em cada PR.
 
 Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo commit, com caminho de prova (relatorio em `build/` ou comando reproduzivel).
+
+### P4 — adendo 16/10 (mesma rodada do fix da camada de serviços)
+
+- Os `deferred inputsvc/consolesvc/networksvc launch failed` medidos antes NÃO eram rejeição real:
+  eram SUCESSOS mal reportados (`mk_service_launch_task` devolvia pid>0 e os callers tratam !=0 como
+  falha — KNOWN_BUGS #14). As traces nomeadas (`launch: FAIL`, `service: prepare/restart FAIL`)
+  ficaram mudas porque não havia falha. O fix (normalizar sucesso a 0) foi provado no UP (5/5 `launch ok`)
+  e moveu o smp2 real-time para diante pela primeira vez: `desktop: session ready` atingido em tempo-real
+  (antes só com -icount), com os 5 serviços deferred ok.
+- **Parede restante do smp2 (classe #5, agora pós-desktop):** `exception: Page Fault user pid=9 eip=f000d957`
+  + `#UD kernel-mode cpu=1 eip=3 cs=8 b0=f0 b1=53 (halting)` logo após session ready — executar VA 3 em
+  modo kernel é salto/call através de ponteiro de função NULL+3 no AP. Instrumentos já no tree: census
+  expandido (parte 8/9), `sched-head`, STILL-LINKED, WATCHED-FREE (0 hits em todos os runs 16/10),
+  `heap-sweep` forense (armado; sem BAD-HEAD neste face). **PROXIMO PROBE (desenhado, não executado):**
+  no handler de #UD kernel-mode, dumpar as primeiras ~8 words do stack kernel que casem com o intervalo
+  .text (backtrace bruto orcado) — isto nomeia o CALL SITE do salto para 3 sem gdb (gdb suprime a corrida).
+- Gate status 16/10: UP `validate-phase6-boot-smoke` 6/6 (re-rodado com o build final); `validate-smp`
+  permanece FAIL em smp2/smp4 (exige `userland.app: shell start`; o crash pós-session-ready ainda o
+  impede) — vermelho honesto, sem verde por omissão.

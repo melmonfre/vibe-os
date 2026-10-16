@@ -592,6 +592,98 @@ int kernel_heap_block_predecessor(const void *ptr,
     return 1;
 }
 
+/*
+ * Physical block-chain sweep for corruption forensics (declared in
+ * headers/kernel/memory/heap.h). Walks by header sizes from the heap start,
+ * never by any scheduler/waitable list, so it still works when g_head and
+ * the neighborhood of the victim are already trashed. It reports:
+ *   - every ALLOC block with a broken EDGE canary (the overflowing source,
+ *     named by its allocpc = allocation site),
+ *   - the last up-to-2 well-formed blocks before the desync/victim (the
+ *     overflow source is the block immediately before the first trashed
+ *     header),
+ *   - the exact desync address + raw header words.
+ * Budgeted: two sweeps total, so it can never flood the serial.
+ */
+#define HEAP_SWEEP_MAX_BLOCKS 4096u
+
+static volatile uint32_t g_heap_sweep_budget = 2u;
+
+void kernel_heap_forensic_sweep(const void *victim) {
+    const struct free_block *prev1 = NULL;
+    const struct free_block *prev2 = NULL;
+    uintptr_t victim_hdr;
+    uintptr_t cursor;
+    uint32_t flags;
+    uint32_t steps = 0u;
+
+    if (g_heap_initialized == 0u || victim == 0) {
+        return;
+    }
+    if (g_heap_sweep_budget == 0u) {
+        return;
+    }
+    g_heap_sweep_budget--;
+
+    cursor = g_heap_start;
+    victim_hdr = ((uintptr_t)victim) - HEAP_HEADER_SIZE;
+
+    flags = spinlock_lock_irqsave(&g_heap_lock);
+    while (cursor < g_heap_end && steps < HEAP_SWEEP_MAX_BLOCKS) {
+        const struct free_block *blk = (const struct free_block *)cursor;
+
+        if (cursor == victim_hdr) {
+            kernel_debug_printf("heap-sweep: victim-chain step=%u prev1{start=0x%x size=0x%x allocpc=0x%x cnry=%d} prev2{start=0x%x size=0x%x allocpc=0x%x cnry=%d}\n",
+                                (unsigned int)steps,
+                                prev1 ? (unsigned int)(uintptr_t)prev1 : 0u,
+                                prev1 ? (unsigned int)prev1->size : 0u,
+                                prev1 && prev1->magic == HEAP_MAGIC_ALLOC ? (unsigned int)prev1->reserved : 0u,
+                                prev1 && prev1->magic == HEAP_MAGIC_ALLOC ? (heap_canary_ok(prev1) ? 1 : 0) : -1,
+                                prev2 ? (unsigned int)(uintptr_t)prev2 : 0u,
+                                prev2 ? (unsigned int)prev2->size : 0u,
+                                prev2 && prev2->magic == HEAP_MAGIC_ALLOC ? (unsigned int)prev2->reserved : 0u,
+                                prev2 && prev2->magic == HEAP_MAGIC_ALLOC ? (heap_canary_ok(prev2) ? 1 : 0) : -1);
+            break;
+        }
+
+        if (blk->magic != HEAP_MAGIC_ALLOC && blk->magic != HEAP_MAGIC_FREE) {
+            const uint32_t *w = (const uint32_t *)blk;
+            kernel_debug_printf("heap-sweep: DESYNC cursor=0x%x words{%x %x %x %x} step=%u prev1{start=0x%x size=0x%x allocpc=0x%x cnry=%d}\n",
+                                (unsigned int)cursor,
+                                w[0], w[1], w[2], w[3],
+                                (unsigned int)steps,
+                                prev1 ? (unsigned int)(uintptr_t)prev1 : 0u,
+                                prev1 ? (unsigned int)prev1->size : 0u,
+                                prev1 && prev1->magic == HEAP_MAGIC_ALLOC ? (unsigned int)prev1->reserved : 0u,
+                                prev1 && prev1->magic == HEAP_MAGIC_ALLOC ? (heap_canary_ok(prev1) ? 1 : 0) : -1);
+            break;
+        }
+        if (blk->size < HEAP_MIN_BLOCK || (blk->size & (HEAP_ALIGN - 1u)) != 0u ||
+            cursor + blk->size > g_heap_end) {
+            kernel_debug_printf("heap-sweep: BADSIZE cursor=0x%x size=0x%x magic=0x%x step=%u\n",
+                                (unsigned int)cursor, (unsigned int)blk->size,
+                                (unsigned int)blk->magic, (unsigned int)steps);
+            break;
+        }
+        if (blk->magic == HEAP_MAGIC_ALLOC && !heap_canary_ok(blk)) {
+            kernel_debug_printf("heap-sweep: OVERFLOW block=0x%x size=0x%x allocpc=0x%x step=%u\n",
+                                (unsigned int)cursor, (unsigned int)blk->size,
+                                (unsigned int)blk->reserved, (unsigned int)steps);
+        }
+
+        prev2 = prev1;
+        prev1 = blk;
+        cursor += blk->size;
+        steps++;
+    }
+    if (steps >= HEAP_SWEEP_MAX_BLOCKS) {
+        kernel_debug_printf("heap-sweep: capped at %u blocks (victim 0x%x unreached)\n",
+                            (unsigned int)HEAP_SWEEP_MAX_BLOCKS,
+                            (unsigned int)(uintptr_t)victim);
+    }
+    spinlock_unlock_irqrestore(&g_heap_lock, flags);
+}
+
 uintptr_t kernel_heap_block_alloc_pc(const void *ptr) {
     const struct free_block *block;
     uintptr_t addr = (uintptr_t)ptr;

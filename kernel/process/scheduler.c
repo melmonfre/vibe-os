@@ -1032,6 +1032,15 @@ static void scheduler_list_diag(const char *what, process_t *node, process_t *pr
                 kernel_debug_printf("sched-list:   OVERFLOW-WRITER pred{UNREACHABLE}\n");
             }
         }
+        /*
+         * Physical chain forensics: the predecessor walk above gives up
+         * silently when a mid-chain header is already trashed (observed on
+         * real-time smp2: prehdr shows text/self-pointers, i.e. the
+         * neighbor's OWN header is gone). The sweep walks the whole heap by
+         * size and names the overflowing source block's allocpc regardless.
+         * Takes g_heap_lock only — scheduler->heap order is established.
+         */
+        kernel_heap_forensic_sweep(node);
     }
 }
 
