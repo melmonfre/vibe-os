@@ -84,6 +84,7 @@ static int g_text_y = 0;
 static char g_text_cells[VGA_ROWS][VGA_COLS];
 static int g_text_batch_render = 0;
 static int g_text_dirty = 0;
+static int g_text_render_nocap_budget = 4;
 
 static int kernel_text_graphics_active(void) {
     /* Works with either backbuffer (heap) or direct framebuffer (pre-heap) */
@@ -125,10 +126,40 @@ static void kernel_text_render_graphics(void) {
 
     if (!target || scr_w <= 0 || scr_h <= 0 || pitch <= 0) return;
 
+    /*
+     * Capacity clamp (P4, classe #5 face-2): the previous guards only checked
+     * px<scr_w / py<scr_h — geometry from the MODE, not the truth about the
+     * buffer. On smp2 that let the shim write target[py*pitch+px] past the
+     * reserved aperture and into kernel .text (caught by the W^X trap as
+     * `Page Fault err=3 cr2=0x394db eip=kernel_text_render_graphics+0xd1`).
+     * The byte capacity now comes from kernel_video_target_capacity():
+     * malloc'd size for the shadow, reserved aperture for direct-LFB, 0 for
+     * anything else (refuse to draw rather than guess).
+     */
+    size_t cap = kernel_video_target_capacity(target);
+
+    if (cap == 0u) {
+        if (g_text_render_nocap_budget != 0) {
+            g_text_render_nocap_budget--;
+            kernel_debug_printf("text-render: no known capacity for target=0x%x (backbuf=%x fb=0x%x window=%x) - not drawing\n",
+                                (unsigned int)(uintptr_t)target,
+                                (unsigned int)(uintptr_t)backbuf,
+                                (unsigned int)(uintptr_t)fb,
+                                (unsigned int)kernel_video_fb_window_bytes());
+        }
+        return;
+    }
+
+    /* Rows that do not fit the aperture at all are dropped whole. */
+    int max_rows = (int)(cap / (size_t)pitch);
+    if (scr_h > max_rows) scr_h = max_rows;
+    if (scr_h <= 0) return;
+
     /* Clear text area */
     int clear_w = VGA_COLS * fw;
     int clear_h = VGA_ROWS * fh;
     if (clear_w > scr_w) clear_w = scr_w;
+    if (clear_w > pitch) clear_w = pitch;
     if (clear_h > scr_h) clear_h = scr_h;
     for (int y = 0; y < clear_h; y++)
         for (int x = 0; x < clear_w; x++)
@@ -149,8 +180,12 @@ static void kernel_text_render_graphics(void) {
                         for (int sx = 0; sx < 2; ++sx) {
                             int px = bx + fbcol * 2 + sx;
                             int py = by + r * 2 + sy;
-                            if (px >= 0 && py >= 0 && px < scr_w && py < scr_h)
-                                target[py * pitch + px] = 15u;
+                            size_t idx;
+                            if (px < 0 || py < 0 || px >= scr_w || py >= scr_h)
+                                continue;
+                            idx = (size_t)py * (size_t)pitch + (size_t)px;
+                            if (idx < cap)
+                                target[idx] = 15u;
                         }
                     }
                 }
@@ -163,8 +198,11 @@ static void kernel_text_render_graphics(void) {
         int cx = g_text_x * fw;
         int cy = g_text_y * fh + 13;
         for (int sx = 0; sx < 10 && cx + sx < scr_w; sx++)
-            for (int sy = 0; sy < 2 && cy + sy < scr_h; sy++)
-                target[(cy + sy) * pitch + cx + sx] = 15u;
+            for (int sy = 0; sy < 2 && cy + sy < scr_h; sy++) {
+                size_t idx = (size_t)(cy + sy) * (size_t)pitch + (size_t)(cx + sx);
+                if (idx < cap)
+                    target[idx] = 15u;
+            }
     }
 
     if (use_backbuf) kernel_video_flip();

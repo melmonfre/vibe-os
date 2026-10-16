@@ -99,6 +99,16 @@ static volatile uint8_t *g_fb = 0;
 static uint8_t *g_backbuf = 0;
 static uint8_t *g_shadow_backbuf = 0;
 static size_t g_shadow_backbuf_capacity = 0u;
+/*
+ * LFB aperture actually reserved+mapped for the framebuffer (set by
+ * kernel_video_set_fb_window from entry.c). The boot text shim must clamp
+ * writes by this, not by mode->pitch*height: a 640x480x32 frame is 1.2 MB
+ * while the mapped window can be smaller — writing "inside the mode" past
+ * the aperture is how the smp2 #PF (err=3, cr2 inside kernel .text)
+ * happened (COMPLETION_ACTION_PLAN P4, classe #5 face-2).
+ */
+static uintptr_t g_fb_window_base = 0u;
+static size_t g_fb_window_bytes = 0u;
 static uint8_t g_palette[256u * 3u];
 static int g_palette_ready = 0;
 static int g_graphics_enabled = 0;
@@ -1666,6 +1676,42 @@ struct video_mode *kernel_video_get_mode(void) {
 
 volatile uint8_t *kernel_video_get_fb(void) {
     return g_fb;
+}
+
+void kernel_video_set_fb_window(uintptr_t base, size_t bytes) {
+    g_fb_window_base = base;
+    g_fb_window_bytes = bytes;
+}
+
+size_t kernel_video_fb_window_bytes(void) {
+    return g_fb_window_bytes;
+}
+
+/*
+ * Real byte capacity of the buffer a caller writing through
+ * kernel_video_get_backbuffer()/get_fb() may touch:
+ *   - shadow backbuffer: its malloc'd size;
+ *   - direct LFB: only the portion of the RESERVED aperture from the
+ *     target onward (never the full pitch*height frame);
+ *   - anything else (unexpected base): 0 — callers must refuse to draw
+ *     rather than guess. 0 also results when the window was never set.
+ */
+size_t kernel_video_target_capacity(const void *target) {
+    uintptr_t t = (uintptr_t)target;
+
+    if (t == 0u) {
+        return 0u;
+    }
+    if (g_shadow_backbuf != 0 && t == (uintptr_t)g_shadow_backbuf) {
+        return g_shadow_backbuf_capacity;
+    }
+    if (g_fb_window_bytes != 0u &&
+        t >= g_fb_window_base &&
+        t < g_fb_window_base + g_fb_window_bytes) {
+        return g_fb_window_bytes - (t - g_fb_window_base);
+    }
+    /* Direct fb without a recorded window: cannot vouch for capacity. */
+    return 0u;
 }
 
 uint8_t *kernel_video_get_backbuffer(void) {

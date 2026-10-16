@@ -359,6 +359,20 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     gdt_init();
     mtrr_init();
     kernel_early_mark(0x15u, 0x05u);
+    /*
+     * Publish the boot LFB aperture BEFORE any rendering exists: the boot
+     * text shim renders from kernel_text_putc immediately, and the capacity
+     * clamp (kernel_video_target_capacity) must know the window then —
+     * waiting for memory_subsystem_init would make early renders refuse to
+     * draw (proven by the nocap budget log on first boot of the clamp).
+     */
+    {
+        uintptr_t win_start = 0u;
+        uintptr_t win_end = 0u;
+        if (kernel_boot_framebuffer_range(&win_start, &win_end)) {
+            kernel_video_set_fb_window(win_start, (size_t)(win_end - win_start));
+        }
+    }
     kernel_video_init(); /* preserve boot LFB when available */
     kernel_early_mark(0x16u, 0x07u);
     kernel_text_init();
@@ -439,6 +453,12 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_debug_printf("[%u] memory: heap ok, paging ok, physmem ok\n", (unsigned int)boot_seq);
     if (kernel_boot_framebuffer_range(&fb_start, &fb_end)) {
         physmem_reserve_range(fb_start, (size_t)(fb_end - fb_start));
+        /*
+         * Tell the video module its REAL writable aperture: renderers must
+         * clamp writes by this, not by mode->pitch*height (see
+         * kernel_video_target_capacity + text shim fix, P4 classe #5 face-2).
+         */
+        kernel_video_set_fb_window(fb_start, (size_t)(fb_end - fb_start));
         kernel_debug_printf("[%u] memory: framebuffer [%x, %x) %u kb\n",
                             (unsigned int)boot_seq,
                             (uint32_t)fb_start,

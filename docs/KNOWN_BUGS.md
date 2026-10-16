@@ -33,15 +33,33 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   0 hits — a premissa de free estava errada; (2) o hook do `heap-sweep` estava INALCANCAVEL
   (dentro de `if (prev!=NULL)`, e os diags chamam com prev=NULL) — o "0 hits" era artefato do
   instrumento, corrigido; com o sweep vivo, `heap-sweep: OVERFLOW ... allocpc=smp_init+0x2c2`
-  nomeou a face-1: **a stack de 4096 do AP (allocada em smp_init) exauria e pisava o bloco
-  vizinho (o process_t do pid=1/g_head)** — mesma classe da classe #1; **AP_STACK_SIZE
-  4096→32768** aplicado, face-1 sumiu dos runs seguintes; (3) a face-2 (bytes de .text != ELF em
-  execucao) foi pega pela armadilha nova `paging_protect_kernel_text()` (.text supervisor-RO +
-  CR0.WP; UP boota limpo com wp=on): no smp2, `Page Fault err=3 (write/kernel)
-  eip=kernel_text_render_graphics+0xd1 cr2=0x394db` — o shim grafico de texto do console escreve
-  `target[py*pitch+px]` checando so scr_w/scr_h sem capacidade real do backbuffer, vazando para
-  dentro do .text. **FIX PENDENTE:** bounds por capacidade de buffer no renderer
-  (kernel/drivers/video/text.c + video.c). Backtrace one-shot de #UD kernel-mode (`ud-bt`) entrou
+  apontou para o bloco da stack do AP (4096) como regiao danificada. **CORRECAO 16/10 parte 3
+  (releitura do layout do heap):** o canario fica no FIM do payload (heap.c: `block + size -
+  CANARY`), i.e. ACIMA do `stack_top = stack + size`; pilha que cresce para BAIXO nunca toca o
+  proprio canario — entao "canario do bloco da stack + cabecalho do PROXIMO bloco" danificados
+  = escrita para CIMA alem do topo da stack do AP, NAO exauriao para baixo como a conclusao de
+  parte 2 afirmava. A conclusao "face-1 FECHADA com AP_STACK 32K" esta **REABERTA**: com 32K o
+  sweep segue acusando o MESMO bloco (`OVERFLOW block size=0x8020 allocpc=smp_init+0x40b`,
+  novo run) — o aumento da stack nao eliminou a assinatur (nem a provou, nem a refutou como
+  causa; apenas mudou o alvo do padrao). O que a escrita acima do topo pode ser (trampolim com
+  stack_top obsoleto entre retries? off-by no accounting do heap? antigo ponteiro aliasado?)
+  fica como questao aberta da classe #5 com proximo passo concreto: ao disparar OVERFLOW num
+  bloco de stack, dumpar alem do canario os 8 words SEGUINTES (cabecalho do proximo) e
+  cruzar `stack_top` gravado no trampolim vs o stack_top do malloc atual (o retry de
+  INIT/SIPI pode deixar um valor antigo patcheado). O 32K fica (defensivo, custo zero).
+  (3) a face-2 (bytes de .text != ELF em execucao) foi pega pela armadilha nova
+  `paging_protect_kernel_text()` (.text supervisor-RO + CR0.WP; UP boota limpo com wp=on):
+  no smp2, `Page Fault err=3 (write/kernel) eip=kernel_text_render_graphics+0xd1
+  cr2=0x394db` — o shim grafico de texto do console escrevia `target[py*pitch+px]` checando so
+  scr_w/scr_h do MODO, nunca a capacidade real do buffer, vazando para dentro do .text.
+  **FACE-2 FECHADA 16/10 parte 3:** capacidade real exposta por
+  `kernel_video_target_capacity()` (shadow = tamanho mallocado; LFB direto = janela reservada
+  publicada por `kernel_video_set_fb_window()` ANTES de qualquer render — o setter tardio em
+  memory-init foi pegado pelo proprio log honesto `text-render: no known capacity ... window=0`,
+  que mostrou o shim renderizando antes do memory init), e os 3 loops do renderer clampados por
+  `idx < cap` (+ linhas que nao cabem na janela descartadas). PROVA: UP phase6 6/6 com o clamp;
+  smp2 real-time pos-fix com ZERO Page Fault/ud-bt (o escritor nomeado sumiu; a parede voltou a
+  ser apenas a face-1, reaberta acima). Backtrace one-shot de #UD kernel-mode (`ud-bt`) entrou
   junto e foi o que provou a face-2 (b0/b1 != ELF).
 - **Sessao interativa trava no meio: console/entrada param de escoar (15/10)**:
   reproduzido com probe manual fora de qualquer harness. Boot rescue ->

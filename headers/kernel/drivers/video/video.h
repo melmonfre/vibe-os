@@ -31,6 +31,10 @@ void kernel_video_refresh_backend(void);
 struct video_mode *kernel_video_get_mode(void);
 volatile uint8_t *kernel_video_get_fb(void);
 uint8_t *kernel_video_get_backbuffer(void);
+/* LFB aperture actually reserved+mapped (entry.c); capacity clamps below. */
+void kernel_video_set_fb_window(uintptr_t base, size_t bytes);
+size_t kernel_video_target_capacity(const void *target);
+size_t kernel_video_fb_window_bytes(void);
 size_t kernel_video_get_pixel_count(void);
 int kernel_video_pack_blit8_source(const uint8_t *src, int src_w, int src_h,
                                    uint8_t *dst, size_t dst_size);

@@ -9,7 +9,7 @@
 
 last: P1 CONCLUIDA (commit b23ac3fc5): boot stall corrigido (stack de boot movida para 0x800000 + cmov/i586 + ioapic pin+2 + EOI de IRQ espoliador); validate-phase6-boot-smoke 6/6 PASS
 doing: P2/P4 parciais (ver checkboxes); FECHADO 16/10: (a) o stall de wakeup do storage no AP acabou (real-time smp2 faz `init: storage smoke ok`); (b) FIX servico-layer: `mk_service_launch_task` devolvia pid>0 como sucesso e callers liam !=0 como falha — os "deferred launch failed" de input/console/network eram SUCESSOS mal reportados (KNOWN_BUGS #14); pos-fix, smp2 real-time alcancou `desktop: session ready` sem icount pela primeira vez
-next: P4 — bounds fix em `kernel_text_render_graphics` (pegos 16/10: overflow da AP-stack fechada com 32K; escritor de .text nomeado pelo W^X = PF err=3 eip=kernel_text_render_graphics+0xd1) e P3 camada 1 (NIC abstraction [!])
+next: P4 classe #5 face-1 REABERTA 16/10 parte 3 (releitura do layout do heap: canario fica ACIMA do topo da pilha, logo o dano no bloco da stack do AP e escrita para cima, nao exauriao — o 32K nao eliminou a assinatur, sweep segue acusando o bloco `smp_init+0x40b` com size=0x8020; proximo passo concreto: dumpar words apos o cabecalho do proximo bloco ao OVERFLOW de stack-block + cruzar stack_top patcheado no trampolim vs malloc atual nos retries INIT/SIPI). Face-2 FECHADA (bounds por capacidade real — ver adendo 3). P3 camada 1 (NIC abstraction [!]) segue travada em decisao
 location: docs/guidelines
 state: active
 
@@ -311,3 +311,31 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   re-gerado); smp2 real-time: sem OVERFLOW/BAD-HEAD/heap-sweep neste build; morre agora NO NOMEADO
   `kernel_text_render_graphics` PF (1 ocorrência) — progresso de diagnosticabilidade, validate-smp
   segue FAIL (honesto).
+
+### P4 — adendo 3 de 16/10 (face-2 FECHADA com bounds; face-1 REABERTA por releitura honesta)
+
+- **Face-2 fechada:** o shim `kernel_text_render_graphics` so conferia geometria do MODO
+  (`px<scr_w, py<scr_h`) e nunca a capacidade real do buffer; com o W^X da rodada anterior ele
+  foi pego escrevendo dentro do .text (`PF err=3 eip=kernel_text_render_graphics+0xd1
+  cr2=0x394db`). Fix: `kernel_video_target_capacity()` (shadow = bytes mallocados; LFB direto =
+  janela reservada publicada por `kernel_video_set_fb_window()`) + clamp `idx < cap` nos 3 loops
+  + linha de rows que nao cabem na janela. O setter foi movido para ANTES de
+  `kernel_video_init()` porque o primeiro boot com o clamp revelou (pelo proprio log honesto
+  `text-render: no known capacity ... window=0`) que o shim renderiza durante video-init, bem
+  antes de memory-init — sem isso o boot inteiro perderia texto (regra: instrumento que grita
+  vale mais que hipotese elegante). PROVA: UP `validate-phase6-boot-smoke` 6/6 com o clamp
+  ativo e sem nenhum nocap; smp2 real-time com ZERO Page Fault/ud-bt desde o fix.
+- **Face-1 REABERTA (correcao do registro de parte 2):** o canario do heap fica no FIM do
+  payload — ACIMA de `stack_top` — entao pilha crescendo para baixo nao pisa o proprio canario;
+  o padrao observado (canario do bloco da stack do AP + cabecalho do vizinho de cima) e escrita
+  PARA CIMA alem do topo da stack, e com 32K o sweep segue acusando o mesmo bloco
+  (`OVERFLOW size=0x8020 allocpc=smp_init+0x40b` no run pos-bounds). "AP_STACK 4096→32768
+  fechou a face-1" estava ERRADO como conclusao (o 32K fica, defensivo, mas nao eliminou a
+  assinatur). Hipoteses vivas nomeadas no KNOWN_BUGS (classe #5): stack_top obsoleto patcheado
+  no trampolim entre retries de INIT/SIPI, accounting off-by-no-free/coalesce, ou ponteiro
+  antigo para a regiao. Proximo passo concreto ao disparar OVERFLOW em bloco de stack: dumpar
+  os 8 words apos o cabecalho do vizinho + comparar `*(trampolim+STACK_PTR)` vs
+  `stack+AP_STACK_SIZE` atual.
+- Gates 16/10 parte 3: make -Werror verde; UP phase6 6/6 (build final com clamp); smp2 real-time
+  avanca para a face-1 pura (a face-2 nomeada sumiu). validate-smp segue vermelho no smp2/smp4
+  (face-1 ainda trava dispatch) — honesto, sem verde por omissao.
