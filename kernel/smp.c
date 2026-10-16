@@ -507,6 +507,24 @@ void smp_init(void) {
                     break;
                 }
                 g_smp_cpu_stage[i] = SMP_CPU_STAGE_PREPARED;
+                /*
+                 * Cross-check face-1 (P4): read back the stack pointer the
+                 * trampoline will ACTUALLY use from its physical slot and
+                 * compare with this attempt's stack_top. A stale patched
+                 * value (or a second AP reusing an old frame while its
+                 * 32K block is freed/alloced elsewhere) would show here.
+                 */
+                {
+                    volatile uint32_t *slot =
+                        (volatile uint32_t *)(uintptr_t)
+                        (AP_TRAMPOLINE_PHYS_ADDR + AP_TRAMPOLINE_STACK_PTR_OFFSET);
+                    uint32_t patched = *slot;
+
+                    kernel_debug_printf("smp: tramp stackptr readback=%x expected=%x match=%d\n",
+                                        (unsigned int)patched,
+                                        (unsigned int)stack_top,
+                                        patched == (uint32_t)stack_top ? 1 : 0);
+                }
                 kernel_debug_printf("smp: starting ap idx=%d apic=%x stack=%x (attempt %d)\n",
                                     (int)i,
                                     cpu->apic_id,

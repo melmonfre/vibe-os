@@ -608,6 +608,7 @@ int kernel_heap_block_predecessor(const void *ptr,
 #define HEAP_SWEEP_MAX_BLOCKS 4096u
 
 static volatile uint32_t g_heap_sweep_budget = 2u;
+static volatile uint32_t g_heap_sweep_detail_budget = 2u;
 
 void kernel_heap_forensic_sweep(const void *victim) {
     const struct free_block *prev1 = NULL;
@@ -669,6 +670,36 @@ void kernel_heap_forensic_sweep(const void *victim) {
             kernel_debug_printf("heap-sweep: OVERFLOW block=0x%x size=0x%x allocpc=0x%x step=%u\n",
                                 (unsigned int)cursor, (unsigned int)blk->size,
                                 (unsigned int)blk->reserved, (unsigned int)steps);
+            /*
+             * Nature-of-writer dump (face-1, COMPLETION_ACTION_PLAN P4):
+             * canary words + the NEIGHBOUR header + its first payload words.
+             * The damaged pattern above a stack block's top is either
+             * stack-shaped (kernel return addrs in [text_start,text_end)),
+             * file/metadata-shaped, or pointer-chains — this dump decides.
+             * Budgeted to one dump per sweep to stay readable.
+             */
+            {
+                extern char __kernel_text_start[];
+                extern char __kernel_text_end[];
+                const uint32_t *cw = (const uint32_t *)((const uint8_t *)blk + blk->size - 16u);
+                const uint32_t *nb = (const uint32_t *)(blk + 1);
+                const uint8_t *nx = (const uint8_t *)blk + blk->size;
+                uint32_t i;
+
+                if (g_heap_sweep_detail_budget != 0u) {
+                    g_heap_sweep_detail_budget--;
+                    kernel_debug_printf("heap-sweep: OVER canary{%x %x %x %x} nexthdr{%x %x %x %x}\n",
+                                        cw[0], cw[1], cw[2], cw[3],
+                                        nb[0], nb[1], nb[2], nb[3]);
+                    kernel_debug_printf("heap-sweep: OVER next+16{");
+                    for (i = 0u; i < 8u; ++i) {
+                        kernel_debug_printf("%x ", ((const uint32_t *)(nx + 16u))[i]);
+                    }
+                    kernel_debug_printf("} text=[%x,%x)\n",
+                                        (unsigned int)(uintptr_t)__kernel_text_start,
+                                        (unsigned int)(uintptr_t)__kernel_text_end);
+                }
+            }
         }
 
         prev2 = prev1;

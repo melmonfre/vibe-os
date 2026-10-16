@@ -65,6 +65,10 @@ static struct sched_block_record g_sched_block_ring[SCHED_BLOCK_RING];
 static uint32_t g_sched_block_ring_next;
 static volatile uint32_t g_sched_overdue_budget = 12u;
 
+/* Budget for the ghost-RUNNING repair trace (the repair itself is not
+ * budgeted: an unrepaired ghost is a permanent deadlock). */
+static volatile uint32_t g_sched_ghost_running_budget = 16u;
+
 static void scheduler_note_block(process_t *task, uint32_t wait_deadline) {
     uint32_t idx;
 
@@ -2005,8 +2009,8 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
          * task->wait_channel to detach waiters. Following a wild pointer
          * here would corrupt unrelated structures (the timeout hook was
          * the first walker to observe the SMP phantom-node corruption in
-         * earlier rounds). Cap steps as well, since a cycle would hold
-         * the scheduler lock forever.
+         * earlier rounds). Cap steps as well, since a cycle would hold the
+         * scheduler lock forever.
          */
         if (!scheduler_node_sane(task)) {
             scheduler_list_diag("BAD-NODE-IN-TIMEOUT", task, NULL);
@@ -2015,6 +2019,43 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
         if (++steps > SCHED_LIST_WALK_CAP) {
             scheduler_list_diag("LIST-CYCLE-IN-TIMEOUT", task, NULL);
             break;
+        }
+
+        /*
+         * Ghost-RUNNING repair (COMPLETION_ACTION_PLAN P4, classe #5).
+         * Invariant under g_scheduler_lock: a RUNNING task is exactly the
+         * g_current of its own CPU (dispatch sets both together; block
+         * flips state before anything else can observe). The inline-wake
+         * heuristic in this hook can leave a task RUNNING+current_cpu=c
+         * after CPU c moved on to another g_current — then find_next (which
+         * only considers READY) skips it FOREVER. Observed on real-time
+         * smp2: the storage host pinned at 1:1:1 while cpu1 dispatched
+         * others, every `service: request timeout svc=2`, boot dead.
+         * Detecting that contradiction and repairing to READY converts the
+         * silent deadlock into a bounded, named recovery.
+         */
+        if (task->state == PROCESS_RUNNING) {
+            int tcpu = task->current_cpu;
+            int ghost = 0;
+            if (tcpu >= 0 && tcpu < 32) {
+                ghost = (g_current[(uint32_t)tcpu] != task);
+            } else {
+                ghost = 1; /* RUNNING with no cpu: unreachable by dispatch too */
+            }
+            if (ghost) {
+                if (g_sched_ghost_running_budget != 0u) {
+                    g_sched_ghost_running_budget--;
+                    kernel_debug_printf("sched-repair: GHOST-RUNNING pid=%d cpu=%d cur=%x\n",
+                                        task->pid, tcpu,
+                                        (tcpu >= 0 && tcpu < 32)
+                                            ? (unsigned int)(uintptr_t)g_current[(uint32_t)tcpu]
+                                            : 0u);
+                }
+                task->state = PROCESS_READY;
+                task->current_cpu = -1;
+                wake_sleepers = 1u;
+            }
+            continue;
         }
 
         if (task->state != PROCESS_BLOCKED || task->wait_channel == 0 || task->wait_deadline == 0u) {
