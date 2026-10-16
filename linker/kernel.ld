@@ -7,10 +7,12 @@ SECTIONS
 
     .text : ALIGN(4)
     {
+        __kernel_text_start = .;
         KEEP(*(.entry))
         KEEP(*(.rmstub*))
         *(.text*)
     }
+    __kernel_text_end = .;
 
     .rodata : ALIGN(4)
     {

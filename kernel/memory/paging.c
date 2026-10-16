@@ -413,6 +413,46 @@ int paging_map_page(uintptr_t virt, uintptr_t phys, uint32_t flags) {
     return 0;
 }
 
+/*
+ * W^X trap for the class #5 wall (COMPLETION_ACTION_PLAN P4). Evidence: on
+ * real-time smp2 the AP took `#UD` INSIDE kernel_tss_set_kernel_stack with
+ * runtime bytes 0f 0f where the ELF has 83 f8 — the executing kernel .text
+ * was rewritten mid-run by a PTE-shaped write (0f = PRESENT|RW|USER|ACC).
+ * Physmem cannot hand these frames out (they are below the allocator base),
+ * so some writer holds a wild VA alias. Mark every .text page
+ * supervisor-read-only and set CR0.WP so even ring0 writes fault: the next
+ * corruption becomes a #PF that names the WRITER's own eip. A legitimate
+ * in-place text writer would fault during boot here — none is expected or
+ * known (class #1 already established such writes are bugs).
+ */
+extern char __kernel_text_start[];
+extern char __kernel_text_end[];
+
+int paging_protect_kernel_text(void) {
+    uintptr_t start = (uintptr_t)__kernel_text_start;
+    uintptr_t end = (uintptr_t)__kernel_text_end;
+    uintptr_t v;
+    uint32_t cr0;
+
+    if (!g_paging_enabled) {
+        return -1;
+    }
+    start &= ~(uintptr_t)(PAGING_4KB_PAGE_BYTES - 1u);
+    end = (end + (PAGING_4KB_PAGE_BYTES - 1u)) & ~(uintptr_t)(PAGING_4KB_PAGE_BYTES - 1u);
+    for (v = start; v < end; v += PAGING_4KB_PAGE_BYTES) {
+        if (paging_map_page(v, v, 0u) != 0) {
+            return -1;
+        }
+    }
+    /* CR0.WP (bit 16): without it ring0 ignores the PTE R/W bits entirely. */
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 |= 0x00010000u;
+    __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+    kernel_debug_printf("paging: kernel text write-protected [%x,%x) wp=on\n",
+                        (unsigned int)start, (unsigned int)end);
+    return 0;
+}
+
 int paging_unmap_page(uintptr_t virt) {
     uint32_t pde_index = PAGING_PDE_INDEX(virt);
     uint32_t pte_index = PAGING_PTE_INDEX(virt);

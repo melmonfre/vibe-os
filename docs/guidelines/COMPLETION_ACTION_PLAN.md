@@ -9,7 +9,7 @@
 
 last: P1 CONCLUIDA (commit b23ac3fc5): boot stall corrigido (stack de boot movida para 0x800000 + cmov/i586 + ioapic pin+2 + EOI de IRQ espoliador); validate-phase6-boot-smoke 6/6 PASS
 doing: P2/P4 parciais (ver checkboxes); FECHADO 16/10: (a) o stall de wakeup do storage no AP acabou (real-time smp2 faz `init: storage smoke ok`); (b) FIX servico-layer: `mk_service_launch_task` devolvia pid>0 como sucesso e callers liam !=0 como falha — os "deferred launch failed" de input/console/network eram SUCESSOS mal reportados (KNOWN_BUGS #14); pos-fix, smp2 real-time alcancou `desktop: session ready` sem icount pela primeira vez
-next: P4 classe #5 pos-desktop (probe desenhado: backtrace bruto no handler de #UD kernel-mode para nomear o salto NULL+3 no AP; WATCHED-FREE/STILL-LINKED/heap-sweep ja armados com 0 hits) e P3 camada 1 (NIC abstraction [!])
+next: P4 — bounds fix em `kernel_text_render_graphics` (pegos 16/10: overflow da AP-stack fechada com 32K; escritor de .text nomeado pelo W^X = PF err=3 eip=kernel_text_render_graphics+0xd1) e P3 camada 1 (NIC abstraction [!])
 location: docs/guidelines
 state: active
 
@@ -277,3 +277,37 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - Gate status 16/10: UP `validate-phase6-boot-smoke` 6/6 (re-rodado com o build final); `validate-smp`
   permanece FAIL em smp2/smp4 (exige `userland.app: shell start`; o crash pós-session-ready ainda o
   impede) — vermelho honesto, sem verde por omissão.
+
+### P4 — adendo 2 de 16/10 (backtrace + W^X no texto: classe #5 nomeada e parcialmente fechada)
+
+- **Correção de registro (honestidade):** o `heap-sweep` da rodada anterior tinha o hook INALCANÇÁVEL
+  (dentro do bloco `if (prev != NULL ...)` enquanto BAD-HEAD/BAD-NODE-IN-TIMEOUT chamam com
+  `prev==NULL`) — o "armado; 0 hits" NÃO era evidência, era bug do instrumento. Hook movido para o
+  topo do diag nesta rodada; passou a capturar imediatamente.
+- **FACE 1 FECHADA com causa raiz nomeada:** com o sweep funcional, o primeiro boot smp2 real-time
+  reportou `heap-sweep: OVERFLOW block=0x390adf20 size=0x1020 allocpc=0x5114b` + DESYNC no vizinho →
+  `0x5114b = smp_init+0x2c2` = **`kernel_malloc(AP_STACK_SIZE)` com AP_STACK_SIZE=4096**: a stack do AP
+  (que roda `smp_ap_entry`/schedule/IRQs para sempre) exauria e pisava para trás no heap — o bloco
+  adjacente corrompido era o do pid=1 (g_head), fechando semanas de "corrupção fantasma" com o mesmo
+  remédio já validado da classe #1 (workers 8K→32K): **AP_STACK_SIZE 4096→32768**. Neste mesmo boot o
+  backtrace do #UD já havia provado outra face: bytes em execução != ELF (`83 f8 20`→runtime `0f 0f`)
+  = .text reescrito durante execução, e essas páginas NÃO estão no pool do physmem (base=0x100000),
+  ou seja: escrita por VA aliado/envenenado, não reciclagem de frame.
+- **FACE 2 PEGA PELA ARMADILHA:** implementado `paging_protect_kernel_text()` — marca
+  `[__kernel_text_start,__kernel_text_end)` supervisor-RO em PTEs 4K (split do huge page, API já
+  existia) + **CR0.WP=1** (sem isto ring0 ignora R/W). Símbolos linker `__kernel_text_start/end`
+  adicionados ao kernel.ld. UP boota limpo com a proteção (`paging: kernel text write-protected
+  [10000,65000) wp=on` → `desktop: session ready`): não existe escritor legítimo de .text. No smp2
+  real-time com 32K-AP-stack: ZERO faces de heap/lista (overflow #1 morto), e o escritor foi PEGO em
+  flagrante: `Page Fault err=3 (write, kernel) eip=0x47fab cr2=0x394db` com
+  **`0x47fab = kernel_text_render_graphics+0xd1`** — o shim gráfico de texto do console escreve fora
+  da capacidade do backbuffer (laço `target[py*pitch+px]` sem checagem de capacidade do buffer vs
+  `scr_h*pitch`) e o destino vazado cai dentro do próprio .text. **FIX PENDENTE (próxima rodada):**
+  bounds reais no renderer (capacidade da backbuffer/fb em vez de scr_w/scr_h apenas; auditar
+  pitch×height vs tamanho alocado em kernel/drivers/video/text.c + video.c).
+- Instrumentos que ficam: backtrace one-shot do #UD kernel-mode (ud-bt), W^X do kernel text (trap
+  permanente anti-reenescrita de código), heap-sweep com hook corrigido, AP stack 32K.
+- Gates 16/10 parte 2: `make` -Werror verde; UP `validate-phase6-boot-smoke` 6/6 com wp=on (relatório
+  re-gerado); smp2 real-time: sem OVERFLOW/BAD-HEAD/heap-sweep neste build; morre agora NO NOMEADO
+  `kernel_text_render_graphics` PF (1 ocorrência) — progresso de diagnosticabilidade, validate-smp
+  segue FAIL (honesto).

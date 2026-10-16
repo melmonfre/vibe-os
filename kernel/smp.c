@@ -43,7 +43,18 @@
 #define AP_TRAMPOLINE_DATA_END_OFFSET 0x130u
 #define AP_TRAMPOLINE_CODE_LIMIT 0x100u
 #define AP_TRAMPOLINE_DEBUG_STAGE_ADDR 0x7FF0u
-#define AP_STACK_SIZE 4096u
+/*
+ * AP kernel stack: this block runs smp_ap_entry forever (schedule() loop +
+ * nested LAPIC-timer/IRQ frames + debug printf chains). 4096 was the LAST
+ * small worker stack left after class #1 grew the service workers
+ * 8192->32768. Root-cause evidence (real-time smp2, 16/10): the heap
+ * forensic sweep named THIS allocation as the forward-overflow source
+ * (`heap-sweep: OVERFLOW ... allocpc=smp_init+0x2c2`, canary trashed) whose
+ * spill hit the adjacent pid=1 task block — the multi-week "phantom" list
+ * corruption (live-changing bytes, PTE-shaped values, no writer visible
+ * through the victim's own VA). Same size as the proven service workers.
+ */
+#define AP_STACK_SIZE 32768u
 #define AP_START_TIMEOUT_TICKS 500u
 #define BIOS_WARM_RESET_VECTOR_OFFSET_ADDR 0x467u
 #define BIOS_WARM_RESET_VECTOR_SEGMENT_ADDR 0x469u

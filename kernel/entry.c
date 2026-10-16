@@ -595,6 +595,16 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
      */
     physmem_reserve_range(heap_start, (size_t)(heap_end - heap_start));
     kernel_mm_init(heap_start, heap_end - heap_start);
+    /*
+     * Class #5 trap: make kernel .text supervisor-read-only + CR0.WP so the
+     * observed PTE-shaped rewrite of running code becomes a #PF naming the
+     * writer (see paging.c). If this faults during boot, a legitimate text
+     * writer exists and the whole premise changes — the #PF eip says so.
+     */
+    if (paging_protect_kernel_text() != 0) {
+        kernel_debug_printf("[%u] memory: kernel text protection FAILED (text still writable)\n",
+                            (unsigned int)boot_seq);
+    }
     kernel_early_post(0xA0); kernel_video_refresh_backend(); kernel_early_post(0xA1);
     mk_transfer_init();
     kernel_debug_printf("[%u] memory: done heap=[%x, %x)\n",

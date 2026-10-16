@@ -152,6 +152,51 @@ void divide_error_handler(uint32_t eip, uint32_t cs) {
     kernel_panic("Divide Error");
 }
 
+/*
+ * Raw kernel backtrace for the class #5 wall (COMPLETION_ACTION_PLAN P4).
+ * The real-time smp2 death is `#UD kernel-mode eip=3` — a call/jump through
+ * a near-NULL function pointer — and gdb cannot be attached (it suppresses
+ * the race). Scan the current kernel stack for words inside .text (linker
+ * symbols __kernel_text_start/__kernel_text_end) and print them with their
+ * slot index; resolving the pcs afterwards via `nm build/kernel.elf` names
+ * the caller chain of the wild jump. One-shot, bounded scan: a dead boot
+ * must not flood or over-read the stack.
+ */
+extern char __kernel_text_start[];
+extern char __kernel_text_end[];
+
+static void invalid_opcode_backtrace(void) {
+    static int done = 0;
+    volatile const uint32_t *sp;
+    uint32_t base;
+    uint32_t top;
+    uint32_t printed = 0u;
+    uint32_t i;
+
+    if (done != 0) {
+        return;
+    }
+    done = 1;
+
+    __asm__ volatile("mov %%esp, %0" : "=r"(base));
+    base = (base + 3u) & ~3u;
+    sp = (volatile const uint32_t *)(uintptr_t)base;
+    top = 64u; /* 256 bytes of stack: enough for the caller chain, bounded */
+
+    kernel_debug_printf("ud-bt: sp=%x text=[%x,%x)\n",
+                        (unsigned int)base,
+                        (unsigned int)(uintptr_t)__kernel_text_start,
+                        (unsigned int)(uintptr_t)__kernel_text_end);
+    for (i = 0u; i < top && printed < 10u; ++i) {
+        uint32_t w = sp[i];
+        if (w >= (uint32_t)(uintptr_t)__kernel_text_start &&
+            w <  (uint32_t)(uintptr_t)__kernel_text_end) {
+            kernel_debug_printf("ud-bt: [%u] 0x%x\n", (unsigned int)i, w);
+            printed += 1u;
+        }
+    }
+}
+
 void invalid_opcode_handler(uint32_t eip, uint32_t cs) {
     static const char hex[] = "0123456789ABCDEF";
     char buf[4][11]; /* eip, cs, bytes[0], bytes[1] */
@@ -159,6 +204,8 @@ void invalid_opcode_handler(uint32_t eip, uint32_t cs) {
     if (exception_is_user_mode(cs)) {
         exception_kill_user_task("Invalid Opcode", 0u, eip, cs, 0u);
     }
+
+    invalid_opcode_backtrace();
 
     /* helper to format 32-bit hex */
     #define FMT32(val, dst) do { \

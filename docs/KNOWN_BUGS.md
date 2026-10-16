@@ -27,9 +27,22 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   e a auditoria dos 4 sitios de free de process_t (destroy x3 + `elf_loader.c:
   262`, unico `kernel_free` direto) mostra todos pre-link (`scheduler_add_task`
   so em syscall.c:2016/2479/3757) — `process_destroy`/destroy-paths estao
-  EXCLUIDOS; o libertador (ou escritor-alias) e outra via. Proximo probe
-  desenhado: registro dos process_t linkados + checagem em TODO `kernel_free`
-  que nomeia o PC libertador em uma linha (sem gdb, que suprime a corrida).
+  EXCLUIDOS; o libertador (ou escritor-alias) e outra via.
+  **FECHAMENTO PARCIAL 16/10 parte 2 (as duas faces finalmente NOMEADAS):** (1) o "registro de
+  blocos linkados + kernel_free" descobriu-se JA EXISTIR (watch por allocpc, `WATCHED-FREE`) e dar
+  0 hits — a premissa de free estava errada; (2) o hook do `heap-sweep` estava INALCANCAVEL
+  (dentro de `if (prev!=NULL)`, e os diags chamam com prev=NULL) — o "0 hits" era artefato do
+  instrumento, corrigido; com o sweep vivo, `heap-sweep: OVERFLOW ... allocpc=smp_init+0x2c2`
+  nomeou a face-1: **a stack de 4096 do AP (allocada em smp_init) exauria e pisava o bloco
+  vizinho (o process_t do pid=1/g_head)** — mesma classe da classe #1; **AP_STACK_SIZE
+  4096→32768** aplicado, face-1 sumiu dos runs seguintes; (3) a face-2 (bytes de .text != ELF em
+  execucao) foi pega pela armadilha nova `paging_protect_kernel_text()` (.text supervisor-RO +
+  CR0.WP; UP boota limpo com wp=on): no smp2, `Page Fault err=3 (write/kernel)
+  eip=kernel_text_render_graphics+0xd1 cr2=0x394db` — o shim grafico de texto do console escreve
+  `target[py*pitch+px]` checando so scr_w/scr_h sem capacidade real do backbuffer, vazando para
+  dentro do .text. **FIX PENDENTE:** bounds por capacidade de buffer no renderer
+  (kernel/drivers/video/text.c + video.c). Backtrace one-shot de #UD kernel-mode (`ud-bt`) entrou
+  junto e foi o que provou a face-2 (b0/b1 != ELF).
 - **Sessao interativa trava no meio: console/entrada param de escoar (15/10)**:
   reproduzido com probe manual fora de qualquer harness. Boot rescue ->
   `shell: ready` em 3s -> digitar `netmgrd status` -> o echo dos caracteres
