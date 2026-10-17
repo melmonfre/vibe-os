@@ -661,3 +661,18 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   mk_service_restart/reinvestimento de slot se alguma referencia antiga de pid=1 (record
   ou context) sobrevive — auditando o ciclo de vida do process_t do INIT (servico storage
   e reiniciavel: `restarts=` no log).
+
+### P4 — adendo 15b de 17/10 (auditoria estatica da "escrita acima do topo": candidatos limpos; sonda runtime e o proximo passo)
+
+- Auditados os caminhos que PODERIAM escrever em [stack_top, +N): (1) `process_setup_initial_context`
+  (process.c:269-270) calcula `top - sizeof(*frame)` — correto; (2) `fork` (syscall.c:2349):
+  malloc e memcpy AMBOS com `current->stack_size` — tamanhos batem, sem overrun; (3) `thread`
+  (syscall.c:3739): nao copia stack (context novo no topo) — limpo; (4) tramp AP: stackptr
+  readback match=1 medido em execucao anterior; (5) nao ha indexacao `top[+k]` em nenhum
+  call-site (`grep stack+size` mostra apenas os dois usos ja checados).
+- O proximo passo e RUNTIME e ja tem forma definida: testemunha em `sanitize_resume_frame`
+  para frame >= stack_top (a atual WATERMARK-FRAME so olha wm/fora-do-range; falta o modo
+  "frame COMECA no topo exato", que e exatamente a janela medida 0x390b5f30=canary do bloco
+  do AP) + idem para o eplogo de IRQ no AP quando g_current[cpu]==NULL (idle hlt: ESP do
+  handler pode estar no topo do bloco do AP e qualquer push "para cima" por bug de frame
+  cairia la). Se o RESUME-FRAME-AT-TOP disparar, a face-1 fecha no emissor.
