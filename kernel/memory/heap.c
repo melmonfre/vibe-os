@@ -409,6 +409,40 @@ void kernel_free(void *ptr) {
                             (unsigned int)(uintptr_t)__builtin_return_address(0));
     }
 
+    /*
+     * Face-1 FREE-side alias witness (P4, classe #5 face (f), adendo 12
+     * sonda seguinte): the malloc-side check refuted the "allocator hands a
+     * live stack block to a NEW owner" variant, but the complementary entry
+     * — a stack block RETURNED TO THE FREELIST while its owner is still
+     * alive and using it — is only observable here, at the release moment
+     * itself (the owner keeps writing into memory that is also on the free
+     * list; a later alloc need not even land on it for frames to collide).
+     * Legit releases are covered by the walk rules: TERMINATED tasks are
+     * skipped (process_destroy of a dead task is fine), and the execve
+     * deferred free is safe because current->stack already points to the
+     * NEW stack, not the parked block being released.
+     */
+    {
+        uintptr_t lo = (uintptr_t)ptr;
+        uintptr_t hi = lo + (free_size - HEAP_HEADER_SIZE - HEAP_CANARY_SIZE);
+        uintptr_t os = 0u, oe = 0u;
+        int ost = -1;
+        int victim = scheduler_stack_overlap(lo, hi, &os, &oe, &ost);
+
+        if (victim >= 0) {
+            static volatile uint32_t g_heap_free_live_budget = 6u;
+            if (g_heap_free_live_budget != 0u) {
+                g_heap_free_live_budget--;
+                kernel_debug_printf("heap-free-live-stack: free=[%x,%x) names live pid=%d state=%d stack=[%x,%x) allocpc=%x freepc=%x\n",
+                                    (unsigned int)lo, (unsigned int)hi,
+                                    victim, ost,
+                                    (unsigned int)os, (unsigned int)oe,
+                                    (unsigned int)block->reserved,
+                                    (unsigned int)(uintptr_t)__builtin_return_address(0));
+            }
+        }
+    }
+
     block->magic = HEAP_MAGIC_FREE;
     block->reserved = 0u;
 
@@ -667,6 +701,11 @@ void kernel_heap_forensic_sweep(const void *victim) {
         const struct free_block *blk = (const struct free_block *)cursor;
 
         if (cursor == victim_hdr) {
+            kernel_debug_printf("heap-sweep: victim-hdr block=0x%x size=0x%x magic=%x allocpc=%x\n",
+                                (unsigned int)cursor,
+                                (unsigned int)blk->size,
+                                (unsigned int)blk->magic,
+                                (unsigned int)blk->reserved);
             kernel_debug_printf("heap-sweep: victim-chain step=%u prev1{start=0x%x size=0x%x allocpc=0x%x cnry=%d} prev2{start=0x%x size=0x%x allocpc=0x%x cnry=%d}\n",
                                 (unsigned int)steps,
                                 prev1 ? (unsigned int)(uintptr_t)prev1 : 0u,

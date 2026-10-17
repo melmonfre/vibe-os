@@ -72,9 +72,16 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   ATENCAO metodologica: nesse storm a serial esta INTERLEAVED — apenas valores repetidos
   cross-linha sao evidencia. Sonda armada (17/10, adendo 12): witness `heap-alias` em
   kernel_malloc contra ranges de tasks vivas — LADO-MALLOC REFUTADO (0 hits no smp2; UP
-  limpo). Gap restante: lado-FREE (stack liberada com dono vivo nunca e detectada pelo
-  alloc se o proprio dono continua a usar o bloco). Ver
-  `docs/guidelines/COMPLETION_ACTION_PLAN.md` P4 adendos 11-12.
+  limpo) e `heap-free-live-stack` em kernel_free (0 hits = o mecanismo NAO passa pelo
+  free). FLAGRANTE (adendo 13): tick-guard CANARY-BAD pegou o switch `old=5 next=0` com
+  o RECORD pid=0 trazendo stack=0x390b6fa4 (desalinhado %8=4, dentro da stack do pid=1)
+  e size=166074 (nao-potencia) e o iret usando o contexto 0x390be120 EMPRESTADO do
+  pid=1 (eip=6 -> GP -> panic). Face rotacionou no run seguinte para `#UD cpu=0
+  eip=0x25db4` com bytes IGUAIS ao ELF (retorno 2 bytes antes do alvo legitimo dentro
+  de `call` em mk_audio_refresh_topology_snapshot) — leitura atual: ponteiros/retornos
+  DESLOCADOS, nao texto plantado (W^X/pf-text limpos). Sweep do header do bloco do
+  record armada para o proximo flagrante. Ver
+  `docs/guidelines/COMPLETION_ACTION_PLAN.md` P4 adendos 11-14.
 - **Sessao interativa trava no meio: console/entrada param de escoar (15/10)**:
   reproduzido com probe manual fora de qualquer harness. Boot rescue ->
   `shell: ready` em 3s -> digitar `netmgrd status` -> o echo dos caracteres

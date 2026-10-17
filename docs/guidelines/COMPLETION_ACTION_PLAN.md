@@ -529,3 +529,67 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   Se o alias entra pelo free (stack liberada com dono vivo; o proprio dono continua usando o
   bloco, sem nunca haver um novo alloc), o malloc-witness NAO dispara — e este e o gap que a
   sonda seguinte fecha.
+
+### P4 — adendo 13 de 17/10 (witness FREE-side armada: 0 hits; mas o tick-guard pegou a CADEIA do crash em flagrante — record pid=0 com campos impossiveis e frame emprestado do pid=1)
+
+- FREE-SIDE ARMADA: `heap-free-live-stack` em `kernel_free` antes do coalesce (mesmo
+  helper `scheduler_stack_overlap`, budget 6) — pega stack liberada com dono vivo SEM
+  nunca haver re-alloc. UP session-ready: 0 hits (sem falso-positivo no boot inteiro);
+  smp2: 0 hits tambem. Logo o mecanismo da face (f) NAO passa pelo free de stack viva.
+- FLAGRANTE (run 17/10g, smp2 real-time, tick ~1116, cpu=1): cadeia lida em ordem —
+  (1) `sched-dispatch: BAD-FORENSICS cpu=1 pid=1 ... ctx=0x390be120 stack=0x390b6600
+  size=32768 frame{ebp=0x2babc esp=0x1ec064(.bss, vizinho de g_cpu_tss@0x1ec0b0)
+  eip=0x6 cs=0x390be164(heap DENTRO da stack do proprio pid=1)}`; (2) `timeout pid=1
+  event=154988`; (3) switch `old=5/1 next=0/2` — o record do "next" pid=0 traz
+  `stack=0x390b6fa4` (DESALINHADO: %8=4, payload de kernel_malloc e 8B-alinhado SEMPRE;
+  e mora dentro de [0x390b6600,+32K) = stack do pid=1!) e `size=166074=0x2890A` (nenhum
+  kernel usa tamanho de stack nao-potencia; valores legitimos vistos: 16384/32768/65536/
+  262144); (4) `tick-guard: STACK-CANARY-BAD cpu=1 pid=0` — o primeiro hit real do
+  STACK-CANARY-BAD e um RELATO CORRETO sobre record-lixo, nao artefato; (5) `sanitize
+  cpu=1 old=5 next=0 frame=0x390be120 eip=6` — o "next" pid=0 usa o MESMO contexto do
+  pid=1 (0x390be120) — e iret->GP err=a eip=8->PANIC.
+- LEITURA: um record de task (process_t) esta sendo SOBRESCRITO com endereco vivo de
+  objeto do kernel (.bss/TSS-adjacente, enderecos internos da stack de outro pid), OU
+  g_current/find_next esta lendo um process_t JA LIBERADO/reinvestido — os dois
+  formatos implicam "memoria do RECORD virou outra coisa", nao "ponteiro da task
+  corrompido". FIELDS-BAD nao disparou porque stack/size passam nas checagens simples
+  (dentro do heap window, 1024..4MB) — a testemunha decisiva e o header do bloco do
+  proprio record.
+- PROXIMO PASSO (1/rodada): no momento CANARY-BAD/FIELDS-BAD, dumpar o HEADER heap do
+  bloco do process_t (16B antes do record: {size,magic,next,reserved=allocpc}) e
+  traduzir allocpc via nm — NOMEA qual alocacao e duena da memoria onde o record mora.
+  Se allocpc != kernel dos sitios de process_t, o bloco foi reinvestido = UAF do record.
+
+### P4 — adendo 14 de 17/10 (flagrante do adendo 13 em build com sweep-on-hit NAO replicou a face; nova decodificacao: eip NO MEIO de instrucao com bytes == ELF => retorno corrompido no caminho audio, nao escrita em text)
+
+- BUILD NOVO (witnesses da rodada anteriores + `kernel_heap_forensic_sweep(t)` nos ramos
+  FIELDS-BAD/CANARY-BAD + dump `victim-hdr{size,magic,allocpc}` do bloco do proprio record):
+  UP smoke rc=0. smp2 real-time: heap-alias 0 hits, heap-free-live-stack 0 hits e NENHUM
+  hit de CANARY/FIELDS nesta execucao — a face ROTACIONOU (ver abaixo), entao o resultado
+  da sweep-on-hit fica PENDENTE (nao e evidencia de "record integro", e ausencia de gatilho).
+- FLAGRANTE DA RUN ANTERIOR (17/10g, ja registrado no adendo 13) permanece como a melhor
+  captura: record pid=0 com stack/size imposiveis + iret com eip=6 no contexto emprestado
+  do pid=1 -> GP -> panic.
+- NOVA DECODIFICACAO (run 17/10h, smp2): `#UD cpu=0 eip=0x25db4 cs=8 b0=ff b1=ff` — nm:
+  `0x25db4 = mk_audio_refresh_topology_snapshot+0x3b`; objdump: em 0x25db1 ha
+  `e8 67 d4 ff ff call 2321d <mk_audio_backend_current_is_usable>` — ou seja, b0/b1 sao os
+  bytes REAIS do ELF no MEIO da instrucao: eip PAROU 2 bytes ANTES do alvo de retorno
+  legitimo (0x25db6 = push da call). Isto e um salto/retorno DESALINHADO (return address
+  corrompida em byte baixo, ou eip carregado de contexto lixo), NAO texto escrito —
+  coerente com W^X limpo e pf-text 0 hits. O `eip=3 b0=f0 53` irmao continua sem decode
+  (abaixo de .text: bytes da regiao IVT do BIOS — pode ser conteudo REAL de RAM la, o que
+  tambem aponta para "eip veio de dados", nao "texto plantado").
+- ud-bt do mesmo evento: cadeia `spinlock_unlock_irqrestore+0x11 / spinlock_lock_irqsave+0xa
+  / scheduler_schedule_frame+0xb1 / kernel_heap_is_block+0x7b` repetida — a stack era um
+  caminho scheduler/spinlock/heap legitimo no momento do #UD.
+- SINTese honesta da face-1 agora: (i) records de task aparecem com campos que sao
+  enderecos vivos de OUTROS objetos (adendo 13); (ii) eips de crash caem no MEIO de
+  instrucoes validas a pequenas distancias do alvo correto (este adendo). Ambas as
+  assinaturas sao de PONTeiros/RETORNOS DESLOCAADOS, nao de lixo aleatorio nem de texto
+  plantado. Proxima sonda (1/rodada): no `sanitize_resume_frame`, quando o frame e de
+  KERNEL-mode, checar `eip` contra os limites do ELF de cada func? — mais barato e direto:
+  witness no RET de IRQ (`idt` epilogos): comparar o eip restaurado com a tabela de
+  chamadas? Ja existe WATERMARK-FRAME; o gap real e o ESPACO entre dispatch e iret.
+  Candidato mais forte: a stack do `scheduler_schedule_frame` do AP recebe o FRAME via
+  IRQ-trampoline do smp.c — auditar o eplogo de `smp_timer_irq_handler` (push/pop do
+  frame) contra reentrancia (IRQ de outro dispositivo no meio do eplogo no AP).

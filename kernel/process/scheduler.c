@@ -2172,6 +2172,10 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
                                         (unsigned int)t->stack_size,
                                         (unsigned int)hs, (unsigned int)he,
                                         (unsigned int)tick);
+                    /* Name the current owner of the RECORD's own block: if
+                     * the task record memory was re-handed to another
+                     * allocation, the victim-hdr allocpc says who. */
+                    kernel_heap_forensic_sweep(t);
                 }
                 continue;
             }
@@ -2195,6 +2199,15 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
                                     (unsigned int)(uintptr_t)t->stack,
                                     (unsigned int)t->stack_size,
                                     (unsigned int)tick);
+                /* Face-(f) chain capture (adendo 13): the FIRST real
+                 * CANARY-BAD (run 17/10g: pid=0, stack=0x390b6fa4 misaligned
+                 * INSIDE pid=1's stack range, size=166074 non-power-of-two)
+                 * is a correct report about a GARBAGE RECORD, not an intact
+                 * task whose stack overflowed. Sweep the heap to name the
+                 * current owner of the block where the record itself lives:
+                 * magic=FREE or allocpc!=process_t sites => the record
+                 * memory was re-handed (UAF), not merely its fields clobbered. */
+                kernel_heap_forensic_sweep(t);
             }
         }
     }
