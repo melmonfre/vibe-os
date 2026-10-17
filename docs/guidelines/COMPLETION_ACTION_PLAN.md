@@ -451,3 +451,27 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   deixa record->process apontando para task morta enquanto o pid-slot ja foi reinvestido.
 - Faces: este run = (a) alias-writer com conteudo agora identificado como TEXTO; probe v2
   (smp_probe_watch) continua apos session-ready e para no exception — metodologia melhorada.
+
+### P4 — adendo 10 de 17/10 (auditoria dos dois suspeitos do adendo 9: sem escritor confirmado; backdoor pid-0 do transfer FECHADO)
+
+- AUDITORIA NEGATIVA (honesto): (1) handlers FS adquirem/escrevem/soltam na ordem certa
+  (data_write→read(fd,buffer,size)→release, tudo dentro do caso switch; nenhum uso da
+  pointer depois do release); scan por janela apos cada `mk_transfer_release` nos 22 sitios:
+  0 flags reais (2 falsos-positivos = atribuicao de parametro de saida). (2) o retry-worker
+  roda como TASK com pid proprio (mk_service_retry_worker_entry) — nao e contexto pid-0.
+  (3) o task-event stream escreve em arrays ESTATICOS (subscription->events / stream->events
+  = storage embutida no registro estatico), nao em heap — descarta o vetor "copia de texto
+  para buffer heap de outro dono" por essa via.
+- UNICO DEFECTO CONCRETO da auditoria e FECHADO: `mk_transfer_has_access` dava acesso TOTAL a
+  qualquer transfer quando o contexto nao tinha task (pid==0: idle/AP-hlt/pretarefas). Agora
+  pid-0 so alcanga transfers de owner_pid==0 (boot, mesmo dominio). Este era o UNICO
+  caminho code-review-encontrado pelo qual codigo sem-task poderia escrever no buffer de uma
+  task viva — compativel com o conteudo textual (caminhos com digitos) plantado na face-(a).
+  NAO se afirma que era o escritor das faces (a)-(e): as faces continuam ocorrendo com a
+  regra fechada (run 17/10d morreu cedo na familia eip=3/cs=1, sp em .bss, retaddrs
+  spinlock_unlock). UP nao regressa (todos os fluxos legitimos carregam pid real).
+- Gates 17/10d: make -Werror; UP phase6 6/6 com a regra nova (rc=0, build/). Face-1 segue
+  aberta; proxima pista candidata: o novo sp=0x1fc2e8 (.bss) + retaddrs spinlock sugere
+  frame corrompido LENDO de .bss — investigar writes em dados do scheduler durante a janela
+  storage-load com a witness tick-guard ja armada (0 hits ate aqui = escrita nao e estouro de
+  stack de task viva).

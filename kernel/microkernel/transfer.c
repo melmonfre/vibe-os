@@ -60,8 +60,20 @@ static int mk_transfer_has_access(const struct mk_transfer_slot *slot, uint32_t 
     if (slot == 0) {
         return 0;
     }
+    /*
+     * pid==0 means "no task context" (g_current == NULL on this CPU: idle, or
+     * pre-init boot code). It used to grant access to EVERY transfer — any
+     * code running from such a context could read or scribble another task's
+     * buffer unchecked, exactly the "text copied into a buffer it does not
+     * own" shape of the classe #5 face-(a) dumps (decimal path digits landed
+     * in the AP stack-block tail neighborhood). Tightened: the no-task
+     * context only reaches transfers also owned by pid 0 (boot-created, one
+     * trust domain before real tasks exist). Task-context callers (all
+     * syscall handlers and service workers) carry their real pid and are
+     * unaffected — proven by the UP/SMP gates run with this change.
+     */
     if (pid == 0u) {
-        return 1;
+        return slot->owner_pid == 0u;
     }
     if (slot->owner_pid == pid) {
         return 1;
