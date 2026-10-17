@@ -247,6 +247,9 @@ static spinlock_t g_scheduler_lock;
 static volatile uint32_t g_sched_apsp_budget = 6u;
 static volatile uint32_t g_sched_apsp_baseline = 2u;
 
+/* Face-1 intra-execution stack guard (adendo 7 candidate #1). */
+static volatile uint32_t g_sched_tick_guard_budget = 8u;
+
 static uintptr_t scheduler_current_rsp(void) {
     uintptr_t rsp;
     __asm__ volatile("mov %%esp, %0" : "=r"(rsp));
@@ -2051,6 +2054,41 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
 
     if ((tick % 25u) == 0u) {
         scheduler_overdue_scan(tick);
+    }
+
+    /*
+     * INTRA-EXECUTION stack guard (face-1, P4 adendo 7 candidate #1 — the
+     * first witness that does NOT depend on dispatch timing). For every CPU,
+     * the tail canary of the stack block of its CURRENT running task must
+     * stay intact: legitimate pushes live strictly inside the payload, the
+     * canary sits ABOVE the declared stack top, so a broken canary means
+     * something wrote past the top of a stack that is RUNNING RIGHT NOW —
+     * naming the victim pid while the owner is still g_current, minutes
+     * before the neighbor-header desync would show up in the list walk.
+     * g_current[] is only mutated under this same lock, so reading other
+     * CPUs' entries here is race-free. kernel_heap_block_canary_ok takes
+     * g_heap_lock: scheduler->heap order already established.
+     */
+    if (g_sched_tick_guard_budget != 0u) {
+        uint32_t cpu;
+        for (cpu = 0u; cpu < 32u; ++cpu) {
+            process_t *t = g_current[cpu];
+            if (t == NULL || t->stack == NULL || t->state != PROCESS_RUNNING) {
+                continue;
+            }
+            if (kernel_heap_block_canary_ok(t->stack)) {
+                continue;
+            }
+            g_sched_tick_guard_budget--;
+            kernel_debug_printf("tick-guard: STACK-CANARY-BAD cpu=%u pid=%d stack=%x size=%u tick=%u\n",
+                                (unsigned int)cpu, t->pid,
+                                (unsigned int)(uintptr_t)t->stack,
+                                (unsigned int)t->stack_size,
+                                (unsigned int)tick);
+            if (g_sched_tick_guard_budget == 0u) {
+                break;
+            }
+        }
     }
 
     /*

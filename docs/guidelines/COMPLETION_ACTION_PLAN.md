@@ -404,3 +404,29 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   (OVER-dump com cadeia tss_set), (b) GP err=a5f0 watermark-frame, (c) salto ao blob
   (eip=userland_entry+0x684, 00 no ELF), (d) queda ao heap em execucao (este adendo),
   (e) face-1 classica BAD-HEAD com bloco vivo. Todas com ao menos uma testemunha armada.
+
+### P4 — adendo 8 de 17/10 (1ª witness intra-execução armada; W^X entrega o PRIMEIRO escritor em flagrante)
+
+- `tick-guard: STACK-CANARY-BAD`: a cada tick, o canario-cauda do bloco da stack da task
+  em execucao em CADA cpu (g_current[] so e mutado sob g_scheduler_lock; leitura
+  cross-cpu aqui e segura; heap lock sob scheduler lock = ordem estabelecida). Pega
+  estouro PARA CIMA em flagrante, com o dono ainda corrente. Armada; 0 hits na face do run.
+- Run real-time smp2 (mesmo build): apos `#UD cpu=1 eip=3 (b0=f0 b1=53)`, o W^X de .text
+  produziu o PRIMEIRO escritor pego escrevendo: `Page Fault err=3 eip=0x1ba53 cr2=0x1d081`
+  (write, kernel, protecao em pagina RO). Resolucao por nm: eip=`mk_network_virtio_poll_queues`
+  (comeco), cr2=DENTRO de `mk_network_progress_state+0xa5b` — AMBOS em .text.
+- CONTRADICAO APARENTE RESOLVIDA = EVIDENCIA-CHAVE: a primeira instrucao do escritor no ELF e
+  `cmpl $0x0,[0x18f7ac]` (LEITURA; nao explicaria err=3 nem cr2=0x1d081). Conclusao: os BYTES
+  em execucao em 0x1ba53 DIFEREM do ELF — o "escritor" e na verdade um ponto de .text JA
+  corrompido com `f0 53` (mesmo par impresso no `#UD eip=3 b0=f0 b1=53` desta e de faces
+  anteriores), decodificado como `lock ...` -> RMW que o W^X barra. PAR `f0 53` plantado em
+  multiplos pontos de .text e a assinatura UNIFICADORA das faces (a)-(d)+(este): algo grava
+  fragmentos de 2 bytes em enderecos de codigo BAIXOS (0x1ba52, 0x1d081, 0x11394, 0x390e7584-
+  familia heap). PROXIMO PASSO CONCRETO (1 por rodada): no handler de PF por violacao de .text,
+  dumpar 16 bytes AO REDOR do cr2 E do eip (com budget), para ver se os vizinhos dos pontos
+  corrompidos mostram o padrao f0-53 / outros fragmentos — o padrao espacial nomeia o mecanismo
+  (linear-overflow vs disperso = tabela de ponteiros/objeto sendo escrito com base errada).
+- Faces consolidadas continuam (a)-(e) no adendo 7; este run = variante de (a/b/d) com o
+  writer agora NOMEADO pelo proprio W^X (primeira vez que um run entrega eip+cr2 de escrita
+  ilegal em codigo sem nenhum watchdog de dispatch precisar disparar).
+- UP gate: rc=0 phase6 6/6 com as duas testemunhas novas (tick-guard + W^X ja doado) no build.
