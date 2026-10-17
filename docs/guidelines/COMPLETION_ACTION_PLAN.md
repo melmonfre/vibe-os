@@ -430,3 +430,24 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   writer agora NOMEADO pelo proprio W^X (primeira vez que um run entrega eip+cr2 de escrita
   ilegal em codigo sem nenhum watchdog de dispatch precisar disparar).
 - UP gate: rc=0 phase6 6/6 com as duas testemunhas novas (tick-guard + W^X ja doado) no build.
+
+### P4 — adendo 9 de 17/10 (dissecção espacial armada; face revelada contem ASCII DECIMAL — o escritor copia TEXTO por ponteiro velho)
+
+- Witness `pf-text:` (page_fault_handler em idt.c): ao violar .text, dumpa 11 words ao redor
+  do cr2 E do eip (budget 8). Armada; 0 hits nesta face (o run morreu pela via #UD/heap, nao
+  por PF de .text).
+- LEITURA NOVA do OVER/DESYNC-dump deste run: os dados plantados sao ASCII DECIMAL —
+  `allocpc=0x33373130` = "0173", `sp=0x333931c8` = "1903", `prehdr` com ponteiros internos
+  0x390b5fxx — i.e. o escritor esta COPYANDO TEXTO DE DEBUG (digitos de %d/%u) para dentro da
+  cauda do bloco da stack do AP, atraves de um ponteiro velho. O buffer[16] do serial printf foi
+  auditado (hex<=8, dec<=10 — nao e estouro do proprio printf). Suspeitos naturais: qualquer
+  caminho que grave logs/eventos em buffers apontados por `process_t*`/`launch record`/
+  `service->process` STALE apos terminate (o terminate NAO libera o bloco, mas um
+  launch-record ou fila com copia-texto ainda pode referi-lo e escrever via VA velho quando o
+  HEAP real do bloco for reinvestido — EXATAMENTE o mecanismo que produz ASCII no vizinho).
+- PROXIMO PASSO CONCRETO (1 por rodada): auditoria dos consumidores que COPIAM para
+  buffers derivados de process_t* de terceiros (task-event stream/eventos de servico com
+  texto), checando `state==TERMINATED` antes de escrever; e verificar se `mk_launch_release_pid`
+  deixa record->process apontando para task morta enquanto o pid-slot ja foi reinvestido.
+- Faces: este run = (a) alias-writer com conteudo agora identificado como TEXTO; probe v2
+  (smp_probe_watch) continua apos session-ready e para no exception — metodologia melhorada.

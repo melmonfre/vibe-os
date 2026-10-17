@@ -285,10 +285,56 @@ void general_protection_handler(uint32_t error_code, uint32_t eip, uint32_t cs) 
     kernel_panic("General Protection");
 }
 
+/*
+ * Face-1 spatial dissection (COMPLETION_ACTION_PLAN P4, adendo 8). When a
+ * fault touches the read-only .text (illegal write cr2 inside .text, or the
+ * faulting eip inside .text), dump the surrounding words of BOTH addresses.
+ * The spatial pattern of the `f0 53`-style fragments — contiguous run vs
+ * scattered — is what distinguishes a LINEAR overflow from a write through
+ * an object with the wrong base. Pure reads of an already-mapped RO page:
+ * cannot fault recursively, cannot block. Budgeted so it never floods.
+ */
+extern char __kernel_text_start[];
+extern char __kernel_text_end[];
+
+static void pf_dissect_line(const char *tag, uintptr_t addr, uintptr_t ts, uintptr_t te) {
+    uintptr_t base;
+    volatile const uint32_t *w;
+    uint32_t i;
+
+    if (addr < ts + 32u || addr + 32u >= te) {
+        kernel_debug_printf("%s=%x (near text edge, no window)\n", tag, (unsigned int)addr);
+        return;
+    }
+    base = (addr & ~(uintptr_t)3u) - 32u;
+    w = (volatile const uint32_t *)base;
+    kernel_debug_printf("%s=%x window[-32..+12]{", tag, (unsigned int)addr);
+    for (i = 0u; i < 11u; ++i) {
+        kernel_debug_printf("%x ", w[i]);
+    }
+    kernel_debug_printf("} text=[%x,%x)\n", (unsigned int)ts, (unsigned int)te);
+}
+
 void page_fault_handler(uint32_t error_code, uint32_t eip, uint32_t cs) {
     uint32_t cr2 = 0u;
 
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+
+    {
+        uintptr_t ts = (uintptr_t)__kernel_text_start;
+        uintptr_t te = (uintptr_t)__kernel_text_end;
+        static volatile uint32_t g_pf_dissect_budget = 8u;
+
+        if (g_pf_dissect_budget != 0u &&
+            ((cr2 >= ts && cr2 < te) || (eip >= ts && eip < te))) {
+            g_pf_dissect_budget--;
+            kernel_debug_printf("pf-text: err=%x eip=%x cr2=%x\n",
+                                (unsigned int)error_code, (unsigned int)eip, (unsigned int)cr2);
+            pf_dissect_line("pf-text: CR2", (uintptr_t)cr2, ts, te);
+            pf_dissect_line("pf-text: EIP", (uintptr_t)eip, ts, te);
+        }
+    }
+
     if (exception_is_user_mode(cs)) {
         exception_kill_user_task("Page Fault", error_code, eip, cs, cr2);
     }
