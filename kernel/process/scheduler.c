@@ -434,7 +434,41 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
     expected_cs = frame_is_user_mode ? USER_CS_SELECTOR : KERNEL_CS_SELECTOR;
 
     if (next_task != NULL && next_task->stack != NULL) {
-        kernel_tss_set_kernel_stack((uintptr_t)next_task->stack + next_task->stack_size);
+        uintptr_t esp0 = (uintptr_t)next_task->stack + next_task->stack_size;
+
+        kernel_tss_set_kernel_stack(esp0);
+
+        /*
+         * Face-1 witness (P4): esp0 is ALWAYS derived from a kernel_malloc'd
+         * task stack, so it must land inside the heap. A set from outside it
+         * means the task we just dispatched carries garbage in stack/
+         * stack_size (the victim pattern: run A showed pid=1 with
+         * stack=0x390aefe4 pointing inside its own block), and every
+         * ring3->ring0 trap from here on pushes frames into that wrong
+         * region — which is how "frame chains above another block" appear.
+         * Budgeted; names the victim pid at the exact poisoning moment.
+         */
+        {
+            uintptr_t hs = kernel_heap_start();
+            uintptr_t he = kernel_heap_end();
+
+            if (hs != 0u && he != 0u && (esp0 <= hs || esp0 > he)) {
+                static volatile uint32_t g_sched_esp0_budget = 8u;
+                if (g_sched_esp0_budget != 0u) {
+                    g_sched_esp0_budget--;
+                    kernel_debug_printf("sched-esp0: SUSPECT pid=%d kind=%d cpu=%u stack=%x size=%u esp0=%x heap=[%x,%x) ctx=%x state=%d caller=%x\n",
+                                        next_task->pid, (int)next_task->kind,
+                                        (unsigned int)cpu_index,
+                                        (unsigned int)(uintptr_t)next_task->stack,
+                                        (unsigned int)next_task->stack_size,
+                                        (unsigned int)esp0,
+                                        (unsigned int)hs, (unsigned int)he,
+                                        (unsigned int)(uintptr_t)next_task->context,
+                                        (int)next_task->state,
+                                        (unsigned int)(uintptr_t)__builtin_return_address(0));
+                }
+            }
+        }
     } else {
         kernel_tss_set_kernel_stack(0u);
     }

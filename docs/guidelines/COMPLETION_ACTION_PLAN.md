@@ -377,3 +377,30 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - A auditoria pedida no adendo 5 (stale pointers pos-terminate/swap) encontrou em `sys_execve` um UAF REAL porem LATENTE: `kernel_free(current->stack)` era feito enquanto o proprio syscall executava sobre essa stack, e o TSS esp0 so era reposto no proximo dispatch. Latente porque nenhum userland compilado chama SYSCALL_EXECVE (grep: unicos 'execve' estao em arvores vendored nao-buildadas de links2/breakpad) — logo NAO explica as assinaturas de escrita-alias da face-1; mas e o MESMO tipo de buraco que as explica, e fica fechado na fonte.
 - Fix: `process_t.pending_stack_free` (campo append, interno-kernel, ABI intata; zerado nos memcpy-wholesale de fork/thread); execve ESTACIONA a stack velha + repoe esp0 imediatamente; liberacao de verdade no switch-away ou terminate (executam fora da stack estacionada). Ordem scheduler->heap ja estabelecida. KNOWN_BUGS #15.
 - Gates: UP `validate-phase6-boot-smoke` 6/6 com o fix (rc=0, build/); smp2 real-time re-rodado sem regressao (resultado no commit). Face-1 permanece ABERTA com o proximo passo do adendo 5 (trace de kernel_tss_set_kernel_stack + auditoria stale g_current/service->process/launch-record) — agora sem o confounder do execve-UAF no caminho.
+
+### P4 — adendo 7 de 17/10 (face nova: queda para o heap EM EXECUCAO sem tocar o caminho de dispatch)
+
+- Witness `sched-esp0: SUSPECT` (scheduler_sanitize_resume_frame: todo esp0 setado fora do heap
+  com pid/stack/size/caller, budget 8) ARMADA; 0 hits na face medida.
+- Run real-time smp2 17/10: `#UD kernel-mode cpu=1 eip=0x390e7584` com o proprio ESP da trap no
+  heap (`ud-bt: sp=390e7554`), **sem** BAD-FORENSICS, **sem** OVERFLOW/BAD-HEAD, **sem**
+  SUSPECT-esp0, **sem** sched-rsp OUTSIDE, e log final visivelmente CORROMPIDO por traces
+  entrelacados durante o halt ("hscheduler: timeout pid=15489520 cla...").
+- INFERENCIA NOVA (estreita o espaco): a queda para dentro do heap NAO passou por context
+  salvo (senao BAD-FORENSICS/SUSPECT pegariam no dispatch) e o esp ja estava no heap no
+  momento do #UD — logo a corrupcao atingiu FRAMES VIVOS da pilha em execucao (retorno ou
+  ponteiro de funcao dentro de um frame atual), exatamente o que a nota da classe #3 ("the
+  trashing lands during execution") vinha dizendo. Testemunhas de tempo-de-dispatch NAO
+  enxergam essa janela; a face-1 precisa de witness INTRA-EXECUCAO.
+- Proximas candidatas (uma por rodada, para nao virar ruido): (1) guarda de water mark no
+  TOPO da stack da task atual checado no tick da propria task (se as frames vivas ja
+  estao no territorio 0xA5, o esp afundou — pega o esgotamento em flagrante no
+  proximo tick); (2) canary de borda de 16B ACIMA do esp0 (topo declarado) verificado a
+  cada sched-scan — um estouro para cima (iret/pop acima do topo) fica nomeado; (3) os
+  traces entrelacados do halt sugerem serial-lock no caminho de panic — auditar o
+  dump de panic para nao perder evidencia (baixa prioridade).
+- Estado UP: gate phase6 em execucao para este build (resultado no commit). Faces
+  documentadas da parede classe #5 em smp2: (a) alias-writer no bloco da stack do AP
+  (OVER-dump com cadeia tss_set), (b) GP err=a5f0 watermark-frame, (c) salto ao blob
+  (eip=userland_entry+0x684, 00 no ELF), (d) queda ao heap em execucao (este adendo),
+  (e) face-1 classica BAD-HEAD com bloco vivo. Todas com ao menos uma testemunha armada.
