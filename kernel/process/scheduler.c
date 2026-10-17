@@ -249,6 +249,8 @@ static volatile uint32_t g_sched_apsp_baseline = 2u;
 
 /* Face-1 intra-execution stack guard (adendo 7 candidate #1). */
 static volatile uint32_t g_sched_tick_guard_budget = 8u;
+static volatile uint32_t g_sched_tick_field_budget = 8u;
+static volatile uint32_t g_sched_tick_tss_budget = 8u;
 
 static uintptr_t scheduler_current_rsp(void) {
     uintptr_t rsp;
@@ -1703,6 +1705,20 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         next->context_switches += 1u;
         g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
         g_current[cpu_index] = next;
+        /*
+         * Face-1 witness precision fix (P4): publish esp0 together with
+         * g_current, under the same lock. Before this, the TSS esp0 was
+         * only written later by scheduler_sanitize_resume_frame AFTER the
+         * unlock, so a tick guard on another CPU legitimately saw
+         * g_current[cpu]=next with the PREVIOUS task's esp0 — the real-time
+         * smp2 run 2026-10-13 caught exactly that (pid=5 running,
+         * esp0=top-of-pid=12, every value a valid heap stack top, so NOT
+         * corruption). The write is idempotent with the sanitize pass, which
+         * still runs later and keeps its SUSPECT checks.
+         */
+        if (next->stack != NULL && next->stack_size != 0u) {
+            kernel_tss_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
+        }
         resume_frame = next->context;
         if (resume_frame == NULL) {
             kernel_debug_printf("scheduler: select missing context pid=%d next_context=NULL\n",
@@ -2069,24 +2085,71 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
      * CPUs' entries here is race-free. kernel_heap_block_canary_ok takes
      * g_heap_lock: scheduler->heap order already established.
      */
-    if (g_sched_tick_guard_budget != 0u) {
+    /*
+     * INTRA-EXECUTION stack guard (face-1, P4 adendo 7 candidate #1,
+     * extended 17/10e). For every CPU, the CURRENT task's stack block must:
+     *  (1) have stack/stack_size fields that are coherent (pointer inside
+     *      the heap, plausible size) — the decoded face pattern places
+     *      corrupt esp/eip INSIDE scheduler .bss globals, exactly what a
+     *      clobbered `stack` field would produce at the next iret/trap;
+     *  (2) keep its tail canary intact (upward overflow detector);
+     *  (3) match this CPU's live TSS esp0 == stack+size, because esp0 lives
+     *      in .bss next to the corrupted addresses — a direct write to
+     *      g_cpu_tss bypasses every setter-side witness.
+     * All reads run under g_scheduler_lock (g_current is only mutated under
+     * it). Budgeted; never mutates state (witness-only until the face is
+     * named consistently enough to justify a repair).
+     */
+    {
         uint32_t cpu;
+        uintptr_t hs = kernel_heap_start();
+        uintptr_t he = kernel_heap_end();
+
         for (cpu = 0u; cpu < 32u; ++cpu) {
             process_t *t = g_current[cpu];
-            if (t == NULL || t->stack == NULL || t->state != PROCESS_RUNNING) {
+            uintptr_t top;
+
+            if (t == NULL || t->state != PROCESS_RUNNING) {
+                continue;
+            }
+            if (t->stack == NULL || hs == 0u || he == 0u) {
+                continue;
+            }
+            top = (uintptr_t)t->stack + t->stack_size;
+
+            if ((uintptr_t)t->stack <= hs || (uintptr_t)t->stack >= he ||
+                top >= he || t->stack_size < 1024u || t->stack_size > (4u << 20)) {
+                if (g_sched_tick_field_budget != 0u) {
+                    g_sched_tick_field_budget--;
+                    kernel_debug_printf("tick-guard: STACK-FIELDS-BAD cpu=%u pid=%d stack=%x size=%u heap=[%x,%x) tick=%u\n",
+                                        (unsigned int)cpu, t->pid,
+                                        (unsigned int)(uintptr_t)t->stack,
+                                        (unsigned int)t->stack_size,
+                                        (unsigned int)hs, (unsigned int)he,
+                                        (unsigned int)tick);
+                }
                 continue;
             }
             if (kernel_heap_block_canary_ok(t->stack)) {
+                uintptr_t esp0 = kernel_tss_get_kernel_stack(cpu);
+                if (esp0 != 0u && esp0 != top && g_sched_tick_tss_budget != 0u) {
+                    g_sched_tick_tss_budget--;
+                    kernel_debug_printf("tick-guard: ESP0-MISMATCH cpu=%u pid=%d esp0=%x expected=%x stack=%x size=%u tick=%u\n",
+                                        (unsigned int)cpu, t->pid,
+                                        (unsigned int)esp0, (unsigned int)top,
+                                        (unsigned int)(uintptr_t)t->stack,
+                                        (unsigned int)t->stack_size,
+                                        (unsigned int)tick);
+                }
                 continue;
             }
-            g_sched_tick_guard_budget--;
-            kernel_debug_printf("tick-guard: STACK-CANARY-BAD cpu=%u pid=%d stack=%x size=%u tick=%u\n",
-                                (unsigned int)cpu, t->pid,
-                                (unsigned int)(uintptr_t)t->stack,
-                                (unsigned int)t->stack_size,
-                                (unsigned int)tick);
-            if (g_sched_tick_guard_budget == 0u) {
-                break;
+            if (g_sched_tick_guard_budget != 0u) {
+                g_sched_tick_guard_budget--;
+                kernel_debug_printf("tick-guard: STACK-CANARY-BAD cpu=%u pid=%d stack=%x size=%u tick=%u\n",
+                                    (unsigned int)cpu, t->pid,
+                                    (unsigned int)(uintptr_t)t->stack,
+                                    (unsigned int)t->stack_size,
+                                    (unsigned int)tick);
             }
         }
     }

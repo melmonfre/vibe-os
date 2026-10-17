@@ -61,6 +61,17 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   smp2 real-time pos-fix com ZERO Page Fault/ud-bt (o escritor nomeado sumiu; a parede voltou a
   ser apenas a face-1, reaberta acima). Backtrace one-shot de #UD kernel-mode (`ud-bt`) entrou
   junto e foi o que provou a face-2 (b0/b1 != ELF).
+- **Face (f) da classe #5 — tudo dentro de UM bloco de stack (17/10e)**: apos o fix de
+  publicacao de esp0 sob lock (tick-guard: 0 hits), o smp2 real-time crasha com storm
+  pos-`storage request type=16`: `user-frame mismatch` com cs=heap-address, `spinlock: stuck
+  lock=0x390e76ec`, `#UD cpu=0 eip=7 cs=0x10082`, `#UD cpu=1 eip=f cs=0x30303030` (ASCII
+  "0000"), `GP err=e93c eip=0x390e7508`, `ud-bt sp=0x390e75b4` — 0x390e7a5c/0x390e7508/
+  0x390e76ec/0x390e75b4 todos dentro de [0x390d8080,0x390e8080) (bloco de stack de task de
+  64KB): multiplos "donos" apontando para o mesmo bloco. HIPOTESE-LIDER: aliasing de bloco
+  (alloc devolve stack ainda em uso), o que explica as witnesses de campo do task passarem.
+  ATENCAO metodologica: nesse storm a serial esta INTERLEAVED — apenas valores repetidos
+  cross-linha sao evidencia. Proxima sonda: witness de overlap em kernel_malloc contra
+  ranges de tasks vivas. Ver `docs/guidelines/COMPLETION_ACTION_PLAN.md` P4 adendo 11.
 - **Sessao interativa trava no meio: console/entrada param de escoar (15/10)**:
   reproduzido com probe manual fora de qualquer harness. Boot rescue ->
   `shell: ready` em 3s -> digitar `netmgrd status` -> o echo dos caracteres

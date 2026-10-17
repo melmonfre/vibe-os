@@ -926,6 +926,17 @@ void kernel_tss_set_kernel_stack(uintptr_t stack_top) {
     g_cpu_tss[cpu_index].ss0 = KERNEL_DS_SELECTOR;
 }
 
+/* Read-back of the esp0 a CPU would load on its next ring3->ring0 entry.
+ * Used by the face-1 tick guard: if some writer clobbers g_cpu_tss (it lives
+ * in .bss, the same neighborhood the corrupted frames were observed in),
+ * this exposes it without depending on the setter path. */
+uintptr_t kernel_tss_get_kernel_stack(uint32_t cpu_index) {
+    if (cpu_index >= GDT_MAX_CPUS) {
+        return 0u;
+    }
+    return (uintptr_t)g_cpu_tss[cpu_index].esp0;
+}
+
 /*
  * TSS/TR diagnostic (COMPLETION_ACTION_PLAN P4, class #5). kernel_cpu_index()
  * picks WHICH g_cpu_tss[] we write; the CPU's actual TR picks which one the

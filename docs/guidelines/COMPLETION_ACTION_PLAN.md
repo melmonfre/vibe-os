@@ -475,3 +475,35 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   frame corrompido LENDO de .bss — investigar writes em dados do scheduler durante a janela
   storage-load com a witness tick-guard ja armada (0 hits ate aqui = escrita nao e estouro de
   stack de task viva).
+
+### P4 — adendo 11 de 17/10 (tick-guard dispara em VALORES LEGITIMOS = janela de publicacao de esp0; hipotese .bss-clobber REFUTADA; nova face: tudo dentro de UM bloco de stack)
+
+- A witness tripla do tick-guard (STACK-FIELDS-BAD / STACK-CANARY-BAD / ESP0-MISMATCH, com
+  `kernel_tss_get_kernel_stack()`) disparou 7x em smp2 real-time — mas TODOS os valores eram
+  topos de stack LEGITIMOS de outras tasks (pid=5 corria, esp0=topo-do-pid=12; depois o
+  inverso). Diagnosticado na fonte: `scheduler_sanitize_resume_frame` escrevia o esp0 DEPOIS
+  do unlock, enquanto `g_current[cpu]=next` e publicado sob o lock -> a guard de outro cpu
+  amostra a janela real (nao-corruucao). FIX: esp0 publicado junto com g_current, sob o mesmo
+  lock (`kernel/process/scheduler.c`, bloco de dispatch; sanitize mantem suas checks).
+- Re-run smp2 com o fix: **tick-guard 0 hits** e UP phase6-boot-smoke verde (rc=0).
+  Conclusao honesta da rodada: REFUTADO (ao nivel de amostragem de tick) o clobber de
+  stack/stack_size/esp0/canary por lixo tipo .bss — FIELDS/CANARY/SUSPECT/WATERMARK/DESYNC/
+  DOUBLE-DISPATCH/TR-MISMATCH todos 0 hits. O estado do task e consistente; o lixo mora em
+  OUTRO lugar.
+- NOVA FACE (f) da classe #5, medida no run pos-fix: storm de crash APES de `storage request
+  type=16 from pid=9 to pid=1` alternando 9<->1: `user-frame mismatch` (cs de frame =
+  endereco heap), `spinlock: stuck lock=0x390e76ec`, `#UD cpu=0 eip=7 cs=0x10082 b0=f0 b1=c3`,
+  `#UD cpu=1 eip=f cs=0x30303030` (ASCII "0000"!), `GP err=e93c eip=0x390e7508 cs=8`,
+  `ud-bt sp=0x390e75b4`. CROSS-CONSISTENTE: 0x390e7a5c / 0x390e7508 / 0x390e76ec / 0x390e75b4
+  todos dentro de UM bloco de stack de task [0x390d8080,0x390e8080) (64KB, do pid=5) —
+  multiplos "donos" apontando para o mesmo bloco. HIPOTESE-LIDER AGORA: ALIASING de bloco de
+  stack (alloc devolve um bloco que outra task viva ainda usa / free com referencias), o que
+  explica as witnesses de campo passarem: o bloco e legitimo, a sobreposicao e interna.
+- HIGIENE DE LEITURA: no storm de crash a serial esta INTERLEAVED (linhas coladas — e.g.
+  "kud-bt" = fim de "stuck" + "ud-bt"; "expected=216" != USER_CS_SELECTOR 0x1B; "cpu=226934"
+  impossivel). So valores repetidos cross-linha sao evidencia; campos unicos de linha de crash
+  devem ser tratados como possivel mistura de duas printfs.
+- Proxima sonda (round seguinte): witness de alias no alocador — em `kernel_malloc` apos
+  sucesso, verificar sobreposicao [p,p+n) contra ranges [stack,stack+size) de tasks vivas
+  (lista g_head + g_current[]); disparar `heap-alias: new block overlaps live task stack
+  pid=...`. Se aliasar, nomeia o par de tasks no momento exato da dupla posse.
