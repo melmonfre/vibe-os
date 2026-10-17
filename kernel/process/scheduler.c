@@ -65,6 +65,7 @@ static struct sched_block_record g_sched_block_ring[SCHED_BLOCK_RING];
 static uint32_t g_sched_block_ring_next;
 static volatile uint32_t g_sched_overdue_budget = 12u;
 
+
 /* Budget for the ghost-RUNNING repair trace (the repair itself is not
  * budgeted: an unrepaired ghost is a permanent deadlock). */
 static volatile uint32_t g_sched_ghost_running_budget = 16u;
@@ -239,6 +240,56 @@ static void scheduler_overdue_scan(uint32_t tick) {
 }
 
 static spinlock_t g_scheduler_lock;
+
+/* Face-1 witnesses (P4 classe #5): budget for the AP esp-vs-stack report
+ * (6 anomalies) + 2 "OK" baseline reports per cpu-role so a silent witness
+ * is never confused with an armed one. */
+static volatile uint32_t g_sched_apsp_budget = 6u;
+static volatile uint32_t g_sched_apsp_baseline = 2u;
+
+static uintptr_t scheduler_current_rsp(void) {
+    uintptr_t rsp;
+    __asm__ volatile("mov %%esp, %0" : "=r"(rsp));
+    return rsp;
+}
+
+/* Called from the AP's LAPIC tick handler (and BSP PIT) at a known point:
+ * answers "where is this CPU's ESP vs the stack of the task it claims to be
+ * running" — the OVER-detail dump (16/10 parte 5) showed real trap-frame
+ * chains (kernel_tss_set_kernel_stack retaddrs) sitting ABOVE the AP
+ * declared stack_top; this witness says whether ESP actually lives there. */
+void scheduler_rsp_witness(uint32_t cpu_index) {
+    process_t *t;
+    uintptr_t rsp = scheduler_current_rsp();
+    uintptr_t s, se;
+    uint32_t flags;
+
+    flags = spinlock_lock_irqsave(&g_scheduler_lock);
+    t = (cpu_index < 32u) ? g_current[cpu_index] : NULL;
+    if (t == 0 || t->stack == 0 || t->stack_size == 0u) {
+        spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+        return;
+    }
+    s = (uintptr_t)t->stack;
+    se = s + t->stack_size;
+    spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+
+    if (rsp + 64u >= s && rsp <= se + 64u) {
+        if (g_sched_apsp_baseline != 0u) {
+            g_sched_apsp_baseline--;
+            kernel_debug_printf("sched-rsp: OK cpu=%u pid=%d rsp=%x stack=[%x,%x)\n",
+                                (unsigned int)cpu_index, t->pid,
+                                (unsigned int)rsp, (unsigned int)s, (unsigned int)se);
+        }
+        return;
+    }
+    if (g_sched_apsp_budget != 0u) {
+        g_sched_apsp_budget--;
+        kernel_debug_printf("sched-rsp: OUTSIDE cpu=%u pid=%d state=%d rsp=%x stack=[%x,%x)\n",
+                            (unsigned int)cpu_index, t->pid, (int)t->state,
+                            (unsigned int)rsp, (unsigned int)s, (unsigned int)se);
+    }
+}
 static spinlock_t g_task_event_lock;
 static int g_scheduler_boot_trace_emitted = 0;
 static int g_scheduler_head_trace_done = 0;
@@ -333,6 +384,48 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
 
     if (frame == NULL) {
         return NULL;
+    }
+
+    /*
+     * Face-1 witness (COMPLETION_ACTION_PLAN P4, classe #5). The smp2 GP
+     * `err=a5f0 eip=1fc3e4(.bss)` decodes as an iret whose selector words
+     * still hold 0xA5 — the process-stack watermark fill (classe #1
+     * instrumentation) — i.e. a task was about to resume from a region that
+     * never received a real trap frame (or from a stale context pointer
+     * outside its own stack). Detect at the LAST gate before the iret and
+     * name the victim; do NOT fabricate a frame (no repair before we know
+     * the frequency and the creating path).
+     */
+    if (next_task != NULL && next_task->stack != NULL && next_task->stack_size != 0u) {
+        uintptr_t f = (uintptr_t)frame;
+        uintptr_t s = (uintptr_t)next_task->stack;
+        uintptr_t se = s + next_task->stack_size;
+        const uint32_t *w = (const uint32_t *)f;
+        int wm_hits = 0;
+        int outside = (f < s) || (f + sizeof(kernel_user_trap_frame_t) > se);
+        uint32_t i;
+
+        if (!outside && f + 8u * sizeof(uint32_t) <= se) {
+            for (i = 0u; i < 8u; ++i) {
+                if (w[i] == 0xA5A5A5A5u) {
+                    wm_hits++;
+                }
+            }
+        }
+        if (outside || wm_hits >= 3) {
+            static volatile uint32_t g_sched_wmframe_budget = 8u;
+            if (g_sched_wmframe_budget != 0u) {
+                g_sched_wmframe_budget--;
+                kernel_debug_printf("sched-resume: WATERMARK-FRAME pid=%d kind=%d cpu=%u frame=%x stack=[%x,%x) outside=%d wm=%d eip=%x cs=%x sw0=%x sw1=%x\n",
+                                    next_task->pid, (int)next_task->kind,
+                                    (unsigned int)cpu_index,
+                                    (unsigned int)f, (unsigned int)s, (unsigned int)se,
+                                    outside, wm_hits,
+                                    (unsigned int)frame->eip, (unsigned int)frame->cs,
+                                    (f + 8u * sizeof(uint32_t) <= se) ? w[0] : 0u,
+                                    (f + 8u * sizeof(uint32_t) <= se) ? w[1] : 0u);
+            }
+        }
     }
 
     original_cs = frame->cs;

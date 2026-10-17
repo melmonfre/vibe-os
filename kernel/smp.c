@@ -638,6 +638,9 @@ kernel_trap_frame_t *smp_timer_irq_handler(kernel_trap_frame_t *frame) {
     if (g_smp_scheduler_enabled == 0u) {
         return frame;
     }
+    /* Face-1 witness (P4): ESP of THIS cpu vs the stack bounds of the task
+     * g_current claims for it. Budgeted + baselined inside the helper. */
+    scheduler_rsp_witness(kernel_cpu_index());
     return scheduler_schedule_frame(frame, 1);
 }
 

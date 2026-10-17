@@ -12,6 +12,7 @@ void scheduler_init(void);
 
 /* add a newly created process to the run queue */
 void scheduler_add_task(process_t *proc);
+void scheduler_rsp_witness(uint32_t cpu_index);
 
 /* enter the scheduler cooperatively from the current CPU context */
 void schedule(void);

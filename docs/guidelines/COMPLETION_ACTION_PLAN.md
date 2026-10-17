@@ -9,7 +9,7 @@
 
 last: P1 CONCLUIDA (commit b23ac3fc5): boot stall corrigido (stack de boot movida para 0x800000 + cmov/i586 + ioapic pin+2 + EOI de IRQ espoliador); validate-phase6-boot-smoke 6/6 PASS
 doing: P2/P4 parciais (ver checkboxes); FECHADO 16/10: (a) o stall de wakeup do storage no AP acabou (real-time smp2 faz `init: storage smoke ok`); (b) FIX servico-layer: `mk_service_launch_task` devolvia pid>0 como sucesso e callers liam !=0 como falha — os "deferred launch failed" de input/console/network eram SUCESSOS mal reportados (KNOWN_BUGS #14); pos-fix, smp2 real-time alcancou `desktop: session ready` sem icount pela primeira vez
-next: P4 classe #5 face-1 — probes da parte 3 EXECUTADOS 16/10 parte 4: tramp `stackptr readback match=1` (hipotese retry-obsoleto MORTA ao patch-time), guard `sched-repair GHOST-RUNNING` 0 hits no run (invariante nao violada neste run; guard permanente fica), OVER-detail dump pronto. NOVA PISTA do run atual: `GP err=a5f0 eip=1fc3e4(dentro .bss)` — `a5f0` = selector montado de BYTES 0xA5 (watermark de stack!) num iret: dispatch montou frame em regiao nunca preenchida. Proximo passo concreto: traco orcado no caminho de resume quando as words do frame caem no padrao 0xA5 + auditoria de quem preenche context/frame de task recem-criada (fork/execve-reset). Face-2 FECHADA. P3 NIC abstraction [!] segue travada em decisao
+next: P4 classe #5 — witnesses executados 16/10 parte 5: WATERMARK-FRAME 0 hits; sched-rsp OK x2 + 0 OUTSIDE (ESP do AP dentro das stacks declaradas nos ticks — 'esp acima do topo' NAO se sustenta no ponto amostrado); a face-1 (OVER-dump com cadeia de frames tss_set_kernel_stack ACIMA do topo do bloco) reconcilia com isso via ESCRITA por ponteiro-velho/alias. Proximo passo concreto: traco orcado em kernel_tss_set_kernel_stack (quem chama, valor do esp0, cpu) + auditoria dos usos de ponteiros de task/stack depois de terminate (g_current stale, service->process stale, launch record stale). RUN atual deu nova face: #UD eip=0x11394=userland_entry+0x684 (salto para dentro do BLOB; bytes 00 00 no ELF = salto selvagem, nao reescrita); ud-bt bruto e heuristico (flag: e1000_ioctl nao tem chamadores -> residuo). Face-2 FECHADA. P3 NIC abstraction [!] segue travada em decisao
 location: docs/guidelines
 state: active
 
@@ -339,3 +339,35 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - Gates 16/10 parte 3: make -Werror verde; UP phase6 6/6 (build final com clamp); smp2 real-time
   avanca para a face-1 pura (a face-2 nomeada sumiu). validate-smp segue vermelho no smp2/smp4
   (face-1 ainda trava dispatch) — honesto, sem verde por omissao.
+
+### P4 — adendo 5 de 16/10 (witnesses de campo: WATERMARK-FRAME 0 hits; sched-rsp OK; nova face = salto para o BLOB userland)
+
+- Dois witnesses novos entregues e medidos em smp2 real-time:
+  1. `sched-resume: WATERMARK-FRAME` (sanitize_resume_frame): frame fora da
+     stack da task OU >=3 words == 0xA5A5A5A5. **0 disparos** — a face do
+     `GP err=a5f0` nao se reproduziu neste build; o detector fica armado e
+     orcado (8).
+  2. `sched-rsp` (ESP real do CPU vs stack da task atual, chamado do
+     smp_timer_irq_handler): `sched-rsp: OK cpu=1 pid=4 rsp=390d794c
+     stack=[390cf9e0,390d79e0)` x2 (baseline) e **0 OUTSIDE** — o ESP do AP
+     esta dentro das stacks declaradas das tasks nos momentos amostrados; a
+     hipotese "AP operando com esp acima do stack_top declarado" NAO se
+     sustenta no ponto amostrado.
+- OVER-detail dump (parte 4) classificou a face-1 de um run anterior: as
+  words eram uma cadeia de frames com retaddr `kernel_tss_set_kernel_stack`
+  escritas ACIMA do topo do bloco de 32K da stack do AP — porem o sched-rsp
+  (acima) diz que o esp do AP estava em stacks validas nos ticks. As duas
+  leituras se reconciliam se o dano vier de ESCRITA via ponteiro velho/alias
+  (nao do push do proprio AP): pr proxima rodada — ligar o OVER-dump a um
+  trace de `kernel_tss_set_kernel_stack`/`esp0` (quem chama, com qual valor)
+  orcado, ja que a retaddr desta funcao apareceu nas words capturadas.
+- RUN ATUAL deu ainda outra face: `#UD eip=0x11394` com bytes `00 00`;
+  resolucao: `userland_entry+0x684` — salto para DENTRO do blob de userland
+  embutido (regiao .text no layout do linker), nao reescrita de codigo.
+  O ud-bt bruto apontou `kernel_e1000_ioctl+0xb4` mas **ninguem chama
+  kernel_e1000_ioctl no kernel** (grep: so a definicao) — backtrace bruto e
+  heuristico (varre stack; pode capturar residuos), registrar assim e nao
+  tratar a cadeia como culpa.
+- Gates: make -Werror verde; UP phase6 6/6 (relatorio build/); smp2 segue
+  vermelho por classe #5 com faces alternando (OVERFLOW-de-alias, GP-writer,
+  salto-ao-blob) — todas agora com witness no tree.
