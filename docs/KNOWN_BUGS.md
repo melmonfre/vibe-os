@@ -70,8 +70,11 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   64KB): multiplos "donos" apontando para o mesmo bloco. HIPOTESE-LIDER: aliasing de bloco
   (alloc devolve stack ainda em uso), o que explica as witnesses de campo do task passarem.
   ATENCAO metodologica: nesse storm a serial esta INTERLEAVED — apenas valores repetidos
-  cross-linha sao evidencia. Proxima sonda: witness de overlap em kernel_malloc contra
-  ranges de tasks vivas. Ver `docs/guidelines/COMPLETION_ACTION_PLAN.md` P4 adendo 11.
+  cross-linha sao evidencia. Sonda armada (17/10, adendo 12): witness `heap-alias` em
+  kernel_malloc contra ranges de tasks vivas — LADO-MALLOC REFUTADO (0 hits no smp2; UP
+  limpo). Gap restante: lado-FREE (stack liberada com dono vivo nunca e detectada pelo
+  alloc se o proprio dono continua a usar o bloco). Ver
+  `docs/guidelines/COMPLETION_ACTION_PLAN.md` P4 adendos 11-12.
 - **Sessao interativa trava no meio: console/entrada param de escoar (15/10)**:
   reproduzido com probe manual fora de qualquer harness. Boot rescue ->
   `shell: ready` em 3s -> digitar `netmgrd status` -> o echo dos caracteres

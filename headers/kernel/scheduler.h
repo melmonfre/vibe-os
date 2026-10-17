@@ -14,6 +14,12 @@ void scheduler_init(void);
 void scheduler_add_task(process_t *proc);
 void scheduler_rsp_witness(uint32_t cpu_index);
 
+/* Face-1 alias witness (class #5): returns the pid of a LIVE task whose
+ * declared stack range [stack, stack+size) overlaps [lo, hi), or -1.
+ * Called from kernel_malloc; read-only, capped walk, no locks. */
+int scheduler_stack_overlap(uintptr_t lo, uintptr_t hi, uintptr_t *os_out,
+                            uintptr_t *oe_out, int *state_out);
+
 /* enter the scheduler cooperatively from the current CPU context */
 void schedule(void);
 

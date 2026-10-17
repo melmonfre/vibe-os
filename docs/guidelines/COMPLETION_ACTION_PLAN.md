@@ -507,3 +507,25 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   sucesso, verificar sobreposicao [p,p+n) contra ranges [stack,stack+size) de tasks vivas
   (lista g_head + g_current[]); disparar `heap-alias: new block overlaps live task stack
   pid=...`. Se aliasar, nomeia o par de tasks no momento exato da dupla posse.
+
+### P4 — adendo 12 de 17/10 (witness heap-alias armada: LADO-MALLOC da face (f) REFUTADO; smp2 deste build chegou a session-ready com 1 excecao)
+
+- ARMADA: `scheduler_stack_overlap()` (scheduler.c, walk capped sem lock) chamada de
+  `kernel_malloc` apos sucesso — qualquer bloco entregue sobrepondo [stack,stack+size) de
+  task viva (nao-TERMINATED) nomeia o par (`heap-alias: alloc=[..) overlaps live pid=..
+  allocpc=..`, budget 6). Cobre os 5 sitios de stack (process_create/fork/thread/elf-load/AP)
+  e QUALQUER alocacao (buffer de app sobre stack viva tambem).
+- MEDICAO: make -Werror verde; UP phase6-boot-smoke rc=0 (witness ativa no boot inteiro,
+  0 hits = sem falso-positivo); smp2 real-time: **0 hits de heap-alias** -> o lado-malloc do
+  aliasing (allocator devolvendo bloco de task viva) esta REFUTADO nesta execucao.
+- NOTACAO DO RUN (nao claimar como fix): este build passou de `desktop: session ready` com
+  UMA unica excecao (`#UD cpu=1 eip=3 b0=f0 b1=53` por volta da janela storage type=16; o
+  restante do boot seguiu, com `sched-dispatch: BAD-FORENSICS` no fim — residuo 0.8 ja
+  catalogado). Run anterior pos-fix tinha tido storm multi-exception ANTES do session-ready.
+  TIMING-SENSITIVE: a witness anda a lista de tasks em cada malloc e perturba o timing — a
+  diferenca nao e atribuida a correcao de bug, e sim registrada como variacao de face.
+- Proximo passo da face (f) (lado-FREE): witness simetrica em `kernel_free` — se o range
+  liberado bate com [stack,..) de task VIVA, nomeia `heap-free-live-stack pid=.. freepc=..`.
+  Se o alias entra pelo free (stack liberada com dono vivo; o proprio dono continua usando o
+  bloco, sem nunca haver um novo alloc), o malloc-witness NAO dispara — e este e o gap que a
+  sonda seguinte fecha.

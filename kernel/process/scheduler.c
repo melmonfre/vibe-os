@@ -295,6 +295,51 @@ void scheduler_rsp_witness(uint32_t cpu_index) {
                             (unsigned int)rsp, (unsigned int)s, (unsigned int)se);
     }
 }
+/*
+ * Face-1 alias witness (COMPLETION_ACTION_PLAN P4, classe #5 face (f)): every
+ * address of the smp2 crash storm (frame cs=heap, GP eip, stuck spinlock,
+ * ud-bt sp) landed INSIDE one live 64KB task-stack block
+ * [0x390d8080,0x390e8080) while every field guard passed — several owners
+ * pointing at the same block at once. This check is called from
+ * kernel_malloc: a freshly allocated heap block overlapping a live task's
+ * declared stack range means the allocator handed back memory someone is
+ * still using; it names the victim pid at the exact double-ownership moment.
+ * Read-only walk without g_scheduler_lock (g_head is only mutated under it;
+ * sampling is fine for a diagnostic, node walk is capped).
+ */
+int scheduler_stack_overlap(uintptr_t lo, uintptr_t hi, uintptr_t *os_out,
+                            uintptr_t *oe_out, int *state_out) {
+    const process_t *task;
+    uint32_t guard = 0u;
+
+    for (task = g_head; task != NULL && guard < 256u; task = task->next, ++guard) {
+        uintptr_t s = (uintptr_t)task->stack;
+        uintptr_t e;
+
+        if (s == 0u || task->stack_size < 1024u ||
+            task->stack_size > (4u * 1024u * 1024u)) {
+            continue;
+        }
+        if (task->state == PROCESS_TERMINATED) {
+            continue;
+        }
+        e = s + task->stack_size;
+        if (s < hi && lo < e) {
+            if (os_out != NULL) {
+                *os_out = s;
+            }
+            if (oe_out != NULL) {
+                *oe_out = e;
+            }
+            if (state_out != NULL) {
+                *state_out = (int)task->state;
+            }
+            return task->pid;
+        }
+    }
+    return -1;
+}
+
 static spinlock_t g_task_event_lock;
 static int g_scheduler_boot_trace_emitted = 0;
 static int g_scheduler_head_trace_done = 0;

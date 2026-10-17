@@ -2,6 +2,7 @@
 #include <kernel/lock.h>
 #include <kernel/kernel_string.h>
 #include <kernel/drivers/debug/debug.h>
+#include <kernel/scheduler.h>
 
 /*
  * Block layout: 16-byte header {size, magic, next, reserved} followed by an
@@ -246,6 +247,38 @@ void *kernel_malloc(size_t size) {
     heap_canary_write(best);
     g_heap_used += best->size;
     spinlock_unlock_irqrestore(&g_heap_lock, flags);
+
+    /*
+     * Face-1 alias witness (COMPLETION_ACTION_PLAN P4, classe #5 face (f)):
+     * a block we just handed out must not overlap the declared stack range
+     * of a live task. If it does, the allocator returned memory another
+     * owner is still using — the crash-storm signature (cs=heap address,
+     * GP eip, stuck spinlock and ud-bt sp ALL inside
+     * [0x390d8080,0x390e8080), one 64KB task stack) says several owners
+     * point at one block while every field guard passes. Budgeted; names
+     * the victim pair at the exact double-ownership moment. Runs AFTER the
+     * heap lock is dropped; the walk itself takes no locks.
+     */
+    {
+        uintptr_t blo = (uintptr_t)best;
+        uintptr_t bhi = blo + best->size;
+        uintptr_t os = 0u, oe = 0u;
+        int ost = -1;
+        int victim = scheduler_stack_overlap(blo, bhi, &os, &oe, &ost);
+
+        if (victim >= 0) {
+            static volatile uint32_t g_heap_alias_budget = 6u;
+            if (g_heap_alias_budget != 0u) {
+                g_heap_alias_budget--;
+                kernel_debug_printf("heap-alias: alloc=[%x,%x) overlaps live pid=%d state=%d stack=[%x,%x) allocpc=%x\n",
+                                    (unsigned int)blo, (unsigned int)bhi,
+                                    victim, ost,
+                                    (unsigned int)os, (unsigned int)oe,
+                                    (unsigned int)call_pc);
+            }
+        }
+    }
+
     return (void *)((uint8_t *)best + HEAP_HEADER_SIZE);
 }
 
