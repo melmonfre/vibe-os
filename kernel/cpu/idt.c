@@ -230,6 +230,9 @@ void invalid_opcode_handler(uint32_t eip, uint32_t cs) {
                         (unsigned int)kernel_cpu_index(),
                         (unsigned int)eip, (unsigned int)cs,
                         (unsigned int)b0, (unsigned int)b1);
+    /* Face-1: the last esp0 installs name which kernel stack this CPU was
+     * armed to take traps on when it died (class #5, P4). */
+    kernel_tss_install_ring_dump("ud");
     kernel_text_puts("\n#UD EIP="); kernel_text_puts(buf[0]);
     kernel_text_puts(" CS=");       kernel_text_puts(buf[1]);
     kernel_text_puts(" B0=");       kernel_text_puts(buf[2]);

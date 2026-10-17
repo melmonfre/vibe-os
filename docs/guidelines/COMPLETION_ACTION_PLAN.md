@@ -676,3 +676,68 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   do AP) + idem para o eplogo de IRQ no AP quando g_current[cpu]==NULL (idle hlt: ESP do
   handler pode estar no topo do bloco do AP e qualquer push "para cima" por bug de frame
   cairia la). Se o RESUME-FRAME-AT-TOP disparar, a face-1 fecha no emissor.
+
+### P4 — adendo 16 de 17/10 (anel de instalacoes de esp0 armado + prova de que o AP BOOTA na stack dele; face rotacionou para o wake-up PERDIDO do storage — sem crash desta vez, hang aos 360s)
+
+- ARMADO: (1) ring de 12 `{cpu, esp0, caller}` no UNICO escritor de esp0
+  (`kernel_tss_set_kernel_stack`, cpu.c), dumpado automaticamente no panic e no halt do
+  #UD (`tss-ring:` linhas); (2) bounds da stack do AP por cpu em `smp.c`
+  (`smp_ap_stack_bounds`); (3) log one-shot do frame REAL do AP no primeiro C
+  (`smp: ap entry cpu=1 frame=390b5f2c stack=[390adf30,390b5f30) in=1`) — **PROVADO: o
+  trampoline arma o AP dentro do proprio bloco** (elimina "AP bootou em stack reciclada");
+  (4) `IDLE-OUTSIDE` no sched-rsp: ESP do AP SEM task comparado com os bounds proprios.
+- RUN (smp2 real-time, build novo): NAO CRASHOU. TIMEOUT 360s com HANG: `init: storage
+  smoke begin` aparece, `fs: sys_storage_load returned` NAO; census terminal mostra
+  pid=1 `state=2(BLOCKED) ev=2 owner=2` (canal do storage nunca sinalizado) e
+  `sel5=249369` de `calls=289741` (~86% das selecoes) — pid=5 consome o scheduler.
+  Nenhuma excecao, nenhuma testemunha nova disparou (ring/IDLE so fariam em crash/idle).
+- LEITURA: a parede do smp2 tem DUAS faces que alternam com jitter: (A) corrupcao/crash
+  na janela storage-load (adendos 11-15, vitima = record do init, janela = acima do topo
+  da stack do AP); (B) ESTA: wake-up perdido do storage (item ORIGINAL do P4 reopen) —
+  init bloqueia no canal e o completion nao chega. (B) e o mesmo padrao do bug de wakeup
+  ja fechado? no: o fechado era RACE de wakeup no worker do AP; aqui o pedido NUNCA
+  completa (nenhum `returned`), com o cpu=0 monopolizado por pid=5. Prioridade: nomear
+  pid=5 e o seu loop (launch order: pid5 = primeiro servico deferred da lista
+  input/console/network — confirmar via traco `first dispatch`), entao decidir se o
+  monopolio he' starvation real (sem yield no loop do pid5) ou apenas timeslice-heavy.
+- GATES: make -Werror verde; UP validate-phase6-boot-smoke rc=0; `in=1` no UP? (UP nao
+  tem AP: o log do UP smoke nao contem a linha — coerente). smp2: sem crash => sem
+  evidencia de fix; parede PERSISTE (agora como hang). Proxima rodada: face (B) —
+  instrumentar o pedido storage pendente de pid=1 (fila do host + wakeup do worker) e o
+  loop de pid=5.
+
+### P4 — adendo 16a de 17/10 (anel PAGOU: o AP CONGELA as instalacoes de esp0 aos 195 enquanto o BSP segue; idle do AP é legitimo na propria stack; PF err=3 no endereco historico 1ba53 revivido)
+
+- WITNESS IDLE v2 (corrigida no mesmo dia): v1 comparava com janela ±4096 e dava
+  falso-atributo ("on live pid=1" para rsp DENTRO da stack de boot do proprio AP).
+  v2 = precedencia IDLE-BOOT (stack propria) > IDLE-TASK (dentro de stack viva;
+  com STATE do dono — idle sobre stack de task BLOCKED é colisao) > IDLE-ORPHAN.
+  Medido: `IDLE-BOOT cpu=1 rsp=390b5e64 boot=[390adf30,390b5f30)` — o AP ocioso
+  esta NA STACK DELE, correto. Duas hipoteses mortas: trampoline errado (in=1) e
+  idle-ESP-orfao.
+- ANEL DE INSTALACOES (medido em crash real, run idle3, morte aos ~8s):
+  `tss-ring: ud installs=371 totals{cpu0=176 cpu1=195} live_esp0{cpu0=390e8080
+  cpu1=391426e0}` → nos dumps seguintes `cpu1` PARA DE SUBIR (195→195→195)
+  enquanto `cpu0` continua (211→397): **o AP nao executa mais NENHUMA
+  installacao de esp0 desde ~195 — ele para de despachar MUITO ANTES de morrer**,
+  mas continua rodando codigo (os #UD sao cpu=1!). live_esp0 cpu1 = 0x391426e0 =
+  topo legitimo da stack do pid=9 (256K) — no momento da morte o esp0 do AP NAO
+  esta apontando para a janela envenenada; a janela fica sem explicacao pelo
+  lado do TSS. Fica um padrao novo e duro: "AP roda sem dispatchar" = ou esta
+  preso num loop sem preemption (timeslice nunca estoura? g_timeslice restante),
+  ou o tick dele (LAPIC) parou de chegar (handler nao roda => schedule_frame
+  nunca) — o congelamento de installs e a assinatura do AP sem tick.
+- REVIVIDO: `exception: Page Fault err=3 eip=1ba53 cs=8 extra=1d081` (face (b)
+  historica) no MESMO run — o par f0 53 agora lido como `LOCK PUSH EBX` (f0=LOCK
+  prefixo invalido em push => #UD exatamente com b0=f0 b1=53 quando a execucao
+  salta para endereco cujo byte e f0). Coerente com salto por eip-lixo para
+  regioes que contem f0 53 (IVT em 0x3: conteudo do vetor, nao plantacao).
+- NOVO ALVO (1/rodada): instrumentar a CHEGADA DO TICK no AP: contadores
+  `ap tick count` (smp_timer_irq_handler++ por cpu) e dump junto do anel no
+  crash + witness no idle-hlt do AP ("AP-HLT-SINCE %u ticks" budgeted). Se o
+  tick parou: causa provavel = LAPIC timer do AP desarmado/ISR sem EOI em
+  algum caminho (vector 0x53? ou o spurious). Se o tick continua e installs
+  param: o schedule_frame do AP esta retornando cedo (guardar motivo).
+- GATES: make -Werror verde; UP phase6-boot-smoke rc=0 (witness v2 + anel
+  ativos, sem ruido no UP); smp2: crash persiste (vermelho honesto), anel
+  disparou 3x + 1 panic com dados acima.

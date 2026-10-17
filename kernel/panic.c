@@ -1,4 +1,5 @@
 #include <kernel/kernel.h>
+#include <kernel/cpu/cpu.h>
 #include <kernel/drivers/video/video.h>
 #include <kernel/drivers/debug/debug.h>
 
@@ -16,6 +17,8 @@ void kernel_panic(const char *msg) {
     /* Serial next: the VGA text path can itself be dead (video state
      * corrupt); a silent panic in a QEMU headless run is undebuggable. */
     kernel_debug_printf("kernel_panic: %s\n", msg != 0 ? msg : "(null)");
+    /* Face-1: which esp0 installations armed this death? (class #5, P4) */
+    kernel_tss_install_ring_dump("panic");
     kernel_text_clear();
     kernel_text_puts("KERNEL PANIC:\n");
     if (msg) {

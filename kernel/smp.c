@@ -89,6 +89,29 @@ struct smp_bootdebug_persist {
 
 static volatile uint32_t g_smp_started_cpus = 1u;
 static volatile uint32_t g_smp_cpu_stage[32];
+/*
+ * Face-1 AP stack bounds (COMPLETION_ACTION_PLAN P4, classe #5): the poison
+ * window of the 17/10h capture started EXACTLY at stack_top of the AP stack
+ * block and ran upward. The scheduler's tick witness can only judge "ESP vs
+ * the CURRENT task's stack"; when a CPU has no current task (idle hlt loop)
+ * there is no other declared range to check against. Recording the payload
+ * bounds here lets scheduler_rsp_witness name an idle CPU whose ESP has
+ * already left its own bootstrap stack.
+ */
+static uintptr_t g_smp_ap_lo[32];
+static uintptr_t g_smp_ap_hi[32];
+
+int smp_ap_stack_bounds(uint32_t cpu_index, uintptr_t *lo_out, uintptr_t *hi_out) {
+    if (cpu_index >= 32u || lo_out == 0 || hi_out == 0) {
+        return -1;
+    }
+    if (g_smp_ap_lo[cpu_index] == 0u) {
+        return -1;
+    }
+    *lo_out = g_smp_ap_lo[cpu_index];
+    *hi_out = g_smp_ap_hi[cpu_index];
+    return 0;
+}
 static spinlock_t g_smp_boot_lock;
 static int g_smp_initialized = 0;
 static volatile uint32_t g_smp_scheduler_enabled = 0u;
@@ -381,7 +404,22 @@ void smp_ap_entry(void) {
     for (uint32_t i = 0; i < kernel_cpu_count(); ++i) {
         const struct kernel_cpu_state *cpu = kernel_cpu_state(i);
         if (cpu && cpu->apic_id == apic_id) {
+            uintptr_t boot_frame = (uintptr_t)__builtin_frame_address(0);
             g_smp_cpu_stage[i] = SMP_CPU_STAGE_AP_ENTER;
+            /*
+             * Face-1 (P4): the poison window of the 17/10h capture begins
+             * EXACTLY at this AP stack's payload top. One-time proof that the
+             * AP is executing INSIDE its own block from the very first
+             * C instruction: frame must be inside [lo, hi). If it ever shows
+             * OUT, the trampoline armed the AP on a recycled/wrong stack.
+             */
+            kernel_debug_printf("smp: ap entry cpu=%d frame=%x stack=[%x,%x) in=%d\n",
+                                (int)i,
+                                (unsigned int)boot_frame,
+                                (unsigned int)(i < 32u ? g_smp_ap_lo[i] : 0u),
+                                (unsigned int)(i < 32u ? g_smp_ap_hi[i] : 0u),
+                                (int)(i < 32u && boot_frame >= g_smp_ap_lo[i] &&
+                                     boot_frame < g_smp_ap_hi[i]));
             break;
         }
     }
@@ -490,6 +528,10 @@ void smp_init(void) {
             continue;
         }
         stack_top = (uint32_t)(uintptr_t)stack + AP_STACK_SIZE;
+        if (i < 32u) {
+            g_smp_ap_lo[i] = (uintptr_t)stack;
+            g_smp_ap_hi[i] = (uintptr_t)stack_top;
+        }
 
         {
             int ap_started = 0;
@@ -503,6 +545,10 @@ void smp_init(void) {
                     /* Diagnostic already emitted; never release an AP onto
                      * a mis-patched trampoline (silent sipi1 hang). */
                     kernel_free(stack);
+                    if (i < 32u) {
+                        g_smp_ap_lo[i] = 0u;
+                        g_smp_ap_hi[i] = 0u;
+                    }
                     g_smp_cpu_stage[i] = SMP_CPU_STAGE_FAILED;
                     break;
                 }

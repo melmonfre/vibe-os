@@ -17,6 +17,10 @@ void smp_wakeup_ipi_handler(void);
 void smp_wake_sleeping_cpus(void);
 uint32_t smp_cpu_stage(uint32_t cpu_index);
 uint8_t smp_trampoline_debug_stage(void);
+/* Face-1 witness: payload bounds of the boot stack this CPU index was
+ * launched on (0/-1 if the AP never got one). Lets the scheduler tick
+ * witness judge ESP of a CPU that has NO current task (idle hlt loop). */
+int smp_ap_stack_bounds(uint32_t cpu_index, uintptr_t *lo_out, uintptr_t *hi_out);
 void smp_persist_trace_arm(void);
 void smp_persist_trace_mark(uint8_t code);
 void smp_persist_trace_disarm(void);

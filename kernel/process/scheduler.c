@@ -252,6 +252,8 @@ static volatile uint32_t g_sched_tick_guard_budget = 8u;
 static volatile uint32_t g_sched_tick_field_budget = 8u;
 static volatile uint32_t g_sched_tick_tss_budget = 8u;
 static volatile uint32_t g_sched_tick_bottom_budget = 8u;
+static volatile uint32_t g_sched_rsp_idle_budget = 4u;
+static volatile uint32_t g_sched_rsp_idle_baseline = 2u;
 
 static uintptr_t scheduler_current_rsp(void) {
     uintptr_t rsp;
@@ -274,6 +276,62 @@ void scheduler_rsp_witness(uint32_t cpu_index) {
     t = (cpu_index < 32u) ? g_current[cpu_index] : NULL;
     if (t == 0 || t->stack == 0 || t->stack_size == 0u) {
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+        /*
+         * IDLE ESP witness (face-1, P4 adendo 16; corrected same day): the
+         * first version compared rsp to the CPU's BOOTSTRAP stack and fired
+         * `IDLE-OUTSIDE cpu=1 rsp=390bdf90` — the AP was idling on a HEAP
+         * address (the stack window of another task). That is not by itself
+         * a bug: hlt-loop ESP legitimately lives on whichever task stack the
+         * CPU last ran. What is a bug is idling on a STACK THAT NO LONGER
+         * BELONGS TO A LIVE TASK: after terminate/destroy frees a task stack,
+         * a CPU still parked in hlt on that page keeps pushing IRQ frames
+         * into recycled memory — the exact "resumed onto the other CPU's
+         * stack / CS holding a stack address" family named in smp_ap_entry's
+         * comment. So: while IDLE, rsp must lie inside a live task's stack
+         * (alias-check helper), or inside the CPU's own bootstrap stack.
+         * Anything else names the orphan ESP. Budget 4 per boot.
+         */
+        {
+            uintptr_t lo = 0u, hi = 0u;
+            uintptr_t os = 0u, oe = 0u;
+            int ost = -1;
+            int in_boot = (smp_ap_stack_bounds(cpu_index, &lo, &hi) == 0 &&
+                           rsp >= lo && rsp < hi);
+
+            if (in_boot) {
+                /* Idling on this CPU's own bootstrap stack is the designed
+                 * state (hlt loop after boot). One-shot baseline so silence
+                 * is never mistaken for "not armed". */
+                if (g_sched_rsp_idle_baseline != 0u) {
+                    g_sched_rsp_idle_baseline--;
+                    kernel_debug_printf("sched-rsp: IDLE-BOOT cpu=%u rsp=%x boot=[%x,%x)\n",
+                                        (unsigned int)cpu_index,
+                                        (unsigned int)rsp,
+                                        (unsigned int)lo, (unsigned int)hi);
+                }
+            } else {
+                int owner = scheduler_stack_overlap(rsp, rsp + 1u, &os, &oe, &ost);
+
+                if (owner >= 0 && g_sched_rsp_idle_baseline != 0u) {
+                    /* NOTE: "on live" is NOT automatically safe — if the
+                     * owner's state is BLOCKED/READY (not RUNNING on some
+                     * cpu), an idle CPU parked on its stack is a COLLISION:
+                     * both will push into the same pages. state is printed
+                     * for exactly this reason. */
+                    g_sched_rsp_idle_baseline--;
+                    kernel_debug_printf("sched-rsp: IDLE-TASK cpu=%u rsp=%x on live pid=%d state=%d stack=[%x,%x)\n",
+                                        (unsigned int)cpu_index,
+                                        (unsigned int)rsp, owner, ost,
+                                        (unsigned int)os, (unsigned int)oe);
+                } else if (owner < 0 && g_sched_rsp_idle_budget != 0u) {
+                    g_sched_rsp_idle_budget--;
+                    kernel_debug_printf("sched-rsp: IDLE-ORPHAN cpu=%u rsp=%x boot=[%x,%x) no live stack covers it\n",
+                                        (unsigned int)cpu_index,
+                                        (unsigned int)rsp,
+                                        (unsigned int)lo, (unsigned int)hi);
+                }
+            }
+        }
         return;
     }
     s = (uintptr_t)t->stack;
