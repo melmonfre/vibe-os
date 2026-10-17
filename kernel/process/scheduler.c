@@ -558,6 +558,8 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
         if (outside || wm_hits >= 3) {
             static volatile uint32_t g_sched_wmframe_budget = 8u;
             if (g_sched_wmframe_budget != 0u) {
+                const uint32_t *rec = (const uint32_t *)(const void *)next_task;
+                int ri;
                 g_sched_wmframe_budget--;
                 kernel_debug_printf("sched-resume: WATERMARK-FRAME pid=%d kind=%d cpu=%u frame=%x stack=[%x,%x) outside=%d wm=%d eip=%x cs=%x sw0=%x sw1=%x\n",
                                     next_task->pid, (int)next_task->kind,
@@ -567,6 +569,32 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
                                     (unsigned int)frame->eip, (unsigned int)frame->cs,
                                     (f + 8u * sizeof(uint32_t) <= se) ? w[0] : 0u,
                                     (f + 8u * sizeof(uint32_t) <= se) ? w[1] : 0u);
+                /*
+                 * Record map (adendo 18): the ctx-save witness proved the
+                 * four legitimate `current->context = frame` saves are NOT
+                 * the writer (0 hits across runs, while resumes show
+                 * context=8 inside pid=5's record). So the record's memory
+                 * is being overwritten from outside — dump the whole first
+                 * half of the record plus the offsetof() of every field the
+                 * walk trusts (next/context/stack/state/pid), so the poison
+                 * SHAPE names the source object (stride of a wrong
+                 * subscription/mailbox copy vs frame-chain vs struct-of-
+                 * another-type), like the OVER dumps did for the spiral.
+                 */
+                kernel_debug_printf("sched-resume: OFFSETS next=%x ctx=%x stack=%x size=%x state=%x pid=%x cpu=%x\n",
+                                    (unsigned int)offsetof(process_t, next),
+                                    (unsigned int)offsetof(process_t, context),
+                                    (unsigned int)offsetof(process_t, stack),
+                                    (unsigned int)offsetof(process_t, stack_size),
+                                    (unsigned int)offsetof(process_t, state),
+                                    (unsigned int)offsetof(process_t, pid),
+                                    (unsigned int)offsetof(process_t, current_cpu));
+                kernel_debug_printf("sched-resume: RECORD{");
+                for (ri = 0; ri < 24; ++ri) {
+                    kernel_debug_printf("%x ", rec[ri]);
+                }
+                kernel_debug_printf("} task=%x\n",
+                                    (unsigned int)(uintptr_t)next_task);
             }
         }
     }
@@ -655,6 +683,43 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
         frame->eflags = (original_eflags | 0x00000202u) & ~(0x4000u | 0x3000u);
     }
     return frame;
+}
+
+/*
+ * Face-1 survivor witness (P4 classe #5, adendo 18): the clean post-spiral
+ * capture caught WATERMARK-FRAME naming the RESUME side — pid=9's saved
+ * context = 0x390e7a5c, a pointer INSIDE pid=5's stack block, while pid=9's
+ * own stack was [391026e0,391426e0). The only dynamic writers of `context`
+ * are the four `current->context = frame` saves in schedule_frame; a save
+ * lands on a foreign stack only if the CPU's live ESP did not belong to the
+ * task g_current claims — i.e. ownership desync, one tick BEFORE the resume.
+ * This helper wraps every save with the range check and names the site on
+ * the FIRST poisoning write (budgeted). frame==NULL saves (terminate paths)
+ * pass through unchecked (they are cleared intentionally).
+ */
+static volatile uint32_t g_sched_ctxsave_budget = 6u;
+static void scheduler_save_current_context(process_t *task,
+                                           kernel_trap_frame_t *frame,
+                                           const char *site) {
+    if (task != NULL && frame != NULL && task->stack != NULL &&
+        task->stack_size != 0u) {
+        uintptr_t f = (uintptr_t)frame;
+        uintptr_t s = (uintptr_t)task->stack;
+        uintptr_t se = s + task->stack_size;
+
+        if (f < s || f + sizeof(kernel_trap_frame_t) > se) {
+            if (g_sched_ctxsave_budget != 0u) {
+                g_sched_ctxsave_budget--;
+                kernel_debug_printf("sched-ctx-save: OUTSIDE-OWN-STACK site=%s pid=%d kind=%d cpu=%d frame=%x stack=[%x,%x) sw=%u\n",
+                                    site, task->pid, (int)task->kind,
+                                    task->current_cpu,
+                                    (unsigned int)f, (unsigned int)s,
+                                    (unsigned int)se,
+                                    (unsigned int)task->context_switches);
+            }
+        }
+    }
+    task->context = frame;
 }
 
 static uint32_t scheduler_online_cpu_count(void) {
@@ -1748,7 +1813,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         current != NULL &&
         current->state == PROCESS_RUNNING &&
         current->current_cpu == (int)cpu_index) {
-        current->context = frame;
+        scheduler_save_current_context(current, frame, "preempt-skip");
         if (g_timeslice_remaining[cpu_index] > 1u) {
             g_timeslice_remaining[cpu_index] -= 1u;
             spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
@@ -1756,7 +1821,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         }
     }
     if (current && current->state == PROCESS_RUNNING && current->current_cpu == (int)cpu_index) {
-        current->context = frame;
+        scheduler_save_current_context(current, frame, "switch-out");
         scheduler_account_runtime(current, now_ticks);
         if (current->wake_boost_budget != 0u) {
             current->wake_boost_budget -= 1u;
@@ -1779,7 +1844,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         current->last_cpu = (int)cpu_index;
     } else if (current && current->state == PROCESS_BLOCKED &&
                current->current_cpu == (int)cpu_index) {
-        current->context = frame;
+        scheduler_save_current_context(current, frame, "block-save");
         scheduler_account_runtime(current, now_ticks);
         current->current_cpu = -1;
         current->last_cpu = (int)cpu_index;
@@ -1796,6 +1861,31 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
             resume_frame = current->context != NULL ? current->context : frame;
             spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
             return scheduler_sanitize_resume_frame(cpu_index, current, current, resume_frame);
+        }
+
+        /*
+         * Invariant witness (face-1 survivor, P4 adendo 18): the no-task
+         * branch legitimately nulls g_current for BLOCKED/TERMINATED holders
+         * (their context was saved by the switch-out branches above — first
+         * sampling fired on state=2 BLOCKED with curcpu=-1 and a VALID ctx,
+         * i.e. the designed flow, so those states are excluded here). A
+         * RUNNING task reaching this path means NO switch-out branch owned
+         * it — g_current is cleared while the task still believes it runs on
+         * this cpu — and is precisely the shape the timeout hook later
+         * reports as GHOST-RUNNING (measured hang: pid=9 overdue BLOCKED ->
+         * GHOST-RUNNING cur=0). Name the event while the evidence is live.
+         */
+        if (current != NULL && current->state == PROCESS_RUNNING &&
+            g_current[cpu_index] == current) {
+            static volatile uint32_t g_sched_idle_live_budget = 6u;
+            if (g_sched_idle_live_budget != 0u) {
+                g_sched_idle_live_budget--;
+                kernel_debug_printf("sched-idle: clear-with-live-task cpu=%u pid=%d state=%d curcpu=%d ctx=%x sw=%u\n",
+                                    (unsigned int)cpu_index, current->pid,
+                                    (int)current->state, current->current_cpu,
+                                    (unsigned int)(uintptr_t)current->context,
+                                    (unsigned int)current->context_switches);
+            }
         }
 
         g_current[cpu_index] = 0;
@@ -1926,7 +2016,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
         current->current_cpu = (int)cpu_index;
         current->last_cpu = (int)cpu_index;
         current->last_start_tick = now_ticks;
-        current->context = frame;
+        scheduler_save_current_context(current, frame, "reuse");
         g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
         resume_frame = current->context;
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);

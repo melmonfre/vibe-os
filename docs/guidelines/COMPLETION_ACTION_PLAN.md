@@ -773,3 +773,41 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   novo equilibrio), ou iret para frame em meio-de-dados (WATERMARK-FRAME agora com
   concorrencia reduzida pode finalmente pegar in-flagrante). validate-smp: segue
   vermelho honesto (smp2 ainda morre), porem o mecanismo fechado e uma parede a menos.
+
+### P4 — adendo 18 de 17/10 (sobrevivente mapeado: context do RECORD sobrescrito por fora (saves legítimos EXONERADOS por witness); face alterna poison/hang/profundo; 3 testemunhas permanentes armadas)
+
+- FLAGRANTE SEM ESPIRAL (run ctx): `WATERMARK-FRAME pid=5 kind=1 cpu=1 frame=8
+  stack=[390d8080,390e8080) outside=1` — o AP acordou o worker do storage com
+  `context=8` (lê a IVT do BIOS: eip==cs==0xf000d957 = vetor real em 0x08, lixo
+  coerente). Run anterior (surv): `pid=9 frame=390e7a5c` — context do record do
+  desktop host apontando para DENTRO da stack do pid=5. Duas vítimas, mesma
+  forma: o CAMPO context do record foi escrito por fora.
+- EXONERACAO DOS SAVES LEGITIMOS: witness nova `sched-ctx-save:
+  OUTSIDE-OWN-STACK` embrulhou os 4 `current->context = frame` do
+  schedule_frame (uniquos escritores dinâmicos) — 0 hits em 3 runs, inclusive
+  nos runs que MORRERAM de context corrompido. Conclusao medida: o writer nao e
+  o caminho de save; o record e sobrescrito por um escritor externo (forma
+  desconhecida ainda) OU o context e corrompido apos o ultimo save valido.
+- MAPA ARMADO: WATERMARK-FRAME agora dumpa `OFFSETS` (offsetof de next/context/
+  stack/state/pid/cpu) + `RECORD{24 words}` da vitima — no proximo flagrante a
+  FORMA do veneno no record nomeia o objeto-fonte (stride de subscription/
+  mailbox vs cadeia de frames vs outro struct), como o OVER-dump fez com a
+  espiral. Nenhum run desta rodada reproduziu o poison (face rotacionou para
+  hang startx/`clear-with-live` e #UD simples) — resultado do mapa PENDENTE,
+  honesto.
+- INVARIANT `clear-with-live-task`: primeiras amostras em pid1/6/8 com
+  `state=2 curcpu=-1 ctx=<valido>` = o fluxo PROJETADO (block salva contexto no
+  switch-out e o ramo no-task null o g_current). Refinada para
+  `state==RUNNING && g_current==current` (a violacao real que gera GHOST-RUNNING);
+  apos refinamento: 0 hits em smp2. A witness de hang (overdue pid=9 state=2
+  deadline avancando de 4 em 4 = wait re-armado) continua na familia do item
+  0.6/`host-wait de task-exit`, NAO e a classe #5.
+- ESTADO DA PAREDE: o fix da espiral (adendo 17) permanece — faces agora:
+  (i) poison de record por escritor externo (crashes eip=3/8/heap), (ii) hang
+  do ciclo storage/startx (wait re-armado, 0.6). Proxima sonda (1/rodada): o
+  RECORD map no proximo WATERMARK-FRAME + cruzar com `kernel_heap_watch_pc` do
+  allocpc dos records (process_create_with_stack) para ver WATCHED-FREE — um
+  free indevido de record-vivo tambem explicaria context=lixo.
+- GATES: make -Werror verde; UP validate-phase6-boot-smoke rc=0 com as 3
+  testemunhas novas ativas; smp2: vermelho honesto inalterado (3 runs: poison
+  capturado 1x, hang 1x, #UD simples 1x).
