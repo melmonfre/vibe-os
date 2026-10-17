@@ -839,3 +839,51 @@ int kernel_heap_block_canary_ok(const void *ptr) {
     spinlock_unlock_irqrestore(&g_heap_lock, flags);
     return ok;
 }
+
+/*
+ * Face-1 disambiguation witness (COMPLETION_ACTION_PLAN P4, classe #5,
+ * adendo 15): kernel_heap_block_canary_ok() returns 0 for THREE different
+ * situations — a trashed tail canary (upward overflow), a non-ALLOC/clobbered
+ * block HEADER (a downward-growing stack that exhausted its payload smashes
+ * its OWN header first), and a pointer that never was a block payload at all
+ * (misaligned). The first STACK-CANARY-BAD capture (pid=0 record with
+ * stack=0x390b6fa4 size=166074) is really the THIRD case: the pointer is
+ * misaligned, i.e. garbage fields, not an overflow. This API separates the
+ * cases so the next flag names the failure mode: rc<0 = why, rc=0 = block
+ * fully valid. The header {size,magic,next,reserved} words are returned via
+ * hdr[] when the header is inside the heap, whatever else is wrong.
+ */
+int kernel_heap_block_validate(const void *ptr, uintptr_t hdr[4]) {
+    const struct free_block *block;
+    uintptr_t addr = (uintptr_t)ptr;
+    uint32_t flags;
+    int rc = 0;
+
+    if (g_heap_initialized == 0u || ptr == 0) {
+        return -1;
+    }
+    if (addr < g_heap_start + HEAP_HEADER_SIZE ||
+        addr >= g_heap_end ||
+        (addr & (HEAP_ALIGN - 1u)) != 0u) {
+        return -2;
+    }
+    block = (const struct free_block *)(addr - HEAP_HEADER_SIZE);
+    flags = spinlock_lock_irqsave(&g_heap_lock);
+    if (hdr != NULL) {
+        hdr[0] = (uintptr_t)block->size;
+        hdr[1] = block->magic;
+        hdr[2] = (uintptr_t)block->next;
+        hdr[3] = block->reserved;
+    }
+    if (block->magic != HEAP_MAGIC_ALLOC) {
+        rc = -3; /* header trashed or block free: downward overflow or stale ptr */
+    } else if (block->size < HEAP_MIN_BLOCK ||
+               (block->size & (HEAP_ALIGN - 1u)) != 0u ||
+               (uintptr_t)block + block->size > g_heap_end) {
+        rc = -4; /* implausible block size: header trashed */
+    } else if (!heap_canary_ok(block)) {
+        rc = -5; /* payload overrun past the tail */
+    }
+    spinlock_unlock_irqrestore(&g_heap_lock, flags);
+    return rc;
+}

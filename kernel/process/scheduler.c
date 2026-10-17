@@ -251,6 +251,7 @@ static volatile uint32_t g_sched_apsp_baseline = 2u;
 static volatile uint32_t g_sched_tick_guard_budget = 8u;
 static volatile uint32_t g_sched_tick_field_budget = 8u;
 static volatile uint32_t g_sched_tick_tss_budget = 8u;
+static volatile uint32_t g_sched_tick_bottom_budget = 8u;
 
 static uintptr_t scheduler_current_rsp(void) {
     uintptr_t rsp;
@@ -2179,35 +2180,94 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
                 }
                 continue;
             }
-            if (kernel_heap_block_canary_ok(t->stack)) {
-                uintptr_t esp0 = kernel_tss_get_kernel_stack(cpu);
-                if (esp0 != 0u && esp0 != top && g_sched_tick_tss_budget != 0u) {
-                    g_sched_tick_tss_budget--;
-                    kernel_debug_printf("tick-guard: ESP0-MISMATCH cpu=%u pid=%d esp0=%x expected=%x stack=%x size=%u tick=%u\n",
+            {
+                uintptr_t hdr[4] = {0u, 0u, 0u, 0u};
+                int vrc = kernel_heap_block_validate(t->stack, hdr);
+
+                /*
+                 * Watermark bottom check (process.c fills the whole stack with
+                 * 0xA5A5A5A5 before placing the initial frame): if the FIRST 8
+                 * words at the stack base are all consumed, this RUNNING task
+                 * has already touched the very bottom of its stack — the
+                 * precondition for the downward-exhaustion poisoning named in
+                 * face (f) (stacks sit right after their process_t; growth past
+                 * the base smashes the block below). Witness-only, budgeted.
+                 */
+                if (vrc == 0) {
+                    const uint32_t *base = (const uint32_t *)t->stack;
+                    uint32_t untouched = 0u;
+                    uint32_t i;
+
+                    for (i = 0u; i < 8u; ++i) {
+                        if (base[i] == 0xA5A5A5A5u) {
+                            untouched++;
+                        }
+                    }
+                    if (untouched == 0u && g_sched_tick_bottom_budget != 0u) {
+                        g_sched_tick_bottom_budget--;
+                        kernel_debug_printf("tick-guard: BOTTOM-TOUCHED cpu=%u pid=%d stack=%x size=%u tick=%u\n",
+                                            (unsigned int)cpu, t->pid,
+                                            (unsigned int)(uintptr_t)t->stack,
+                                            (unsigned int)t->stack_size,
+                                            (unsigned int)tick);
+                    }
+                }
+
+                if (vrc == 0 || vrc == -5) {
+                    if (vrc == -5 && g_sched_tick_guard_budget != 0u) {
+                        g_sched_tick_guard_budget--;
+                        kernel_debug_printf("tick-guard: STACK-CANARY-BAD cpu=%u pid=%d stack=%x size=%u hdr{size=%x magic=%x next=%x pc=%x} tick=%u\n",
+                                            (unsigned int)cpu, t->pid,
+                                            (unsigned int)(uintptr_t)t->stack,
+                                            (unsigned int)t->stack_size,
+                                            (unsigned int)hdr[0], (unsigned int)hdr[1],
+                                            (unsigned int)hdr[2], (unsigned int)hdr[3],
+                                            (unsigned int)tick);
+                        kernel_heap_forensic_sweep(t->stack);
+                    }
+                    uintptr_t esp0 = kernel_tss_get_kernel_stack(cpu);
+                    if (esp0 != 0u && esp0 != top && g_sched_tick_tss_budget != 0u) {
+                        g_sched_tick_tss_budget--;
+                        kernel_debug_printf("tick-guard: ESP0-MISMATCH cpu=%u pid=%d esp0=%x expected=%x stack=%x size=%u tick=%u\n",
+                                            (unsigned int)cpu, t->pid,
+                                            (unsigned int)esp0, (unsigned int)top,
+                                            (unsigned int)(uintptr_t)t->stack,
+                                            (unsigned int)t->stack_size,
+                                            (unsigned int)tick);
+                    }
+                    continue;
+                }
+                if (vrc == -2) {
+                    /* Misaligned / outside-heap payload: the RECORD's stack
+                     * field is garbage data, not an overflow — this is what
+                     * the first "CANARY-BAD" capture (17/10g) actually was. */
+                    if (g_sched_tick_guard_budget != 0u) {
+                        g_sched_tick_guard_budget--;
+                        kernel_debug_printf("tick-guard: STACK-PTR-NOTBLOCK cpu=%u pid=%d stack=%x size=%u tick=%u\n",
+                                            (unsigned int)cpu, t->pid,
+                                            (unsigned int)(uintptr_t)t->stack,
+                                            (unsigned int)t->stack_size,
+                                            (unsigned int)tick);
+                        kernel_heap_forensic_sweep(t);
+                    }
+                    continue;
+                }
+                if ((vrc == -3 || vrc == -4) && g_sched_tick_guard_budget != 0u) {
+                    /* Own header trashed: a downward-exhausting stack smashes
+                     * this block's header first, and the block immediately
+                     * below is usually the RECORD (stacks are allocated right
+                     * after the process_t) — sweep names both headers with
+                     * allocpc so the poisoning victim is explicit. */
+                    g_sched_tick_guard_budget--;
+                    kernel_debug_printf("tick-guard: STACK-HDR-SMASHED cpu=%u pid=%d stack=%x size=%u hdr{size=%x magic=%x next=%x pc=%x} rc=%d tick=%u\n",
                                         (unsigned int)cpu, t->pid,
-                                        (unsigned int)esp0, (unsigned int)top,
                                         (unsigned int)(uintptr_t)t->stack,
                                         (unsigned int)t->stack_size,
-                                        (unsigned int)tick);
+                                        (unsigned int)hdr[0], (unsigned int)hdr[1],
+                                        (unsigned int)hdr[2], (unsigned int)hdr[3],
+                                        vrc, (unsigned int)tick);
+                    kernel_heap_forensic_sweep(t->stack);
                 }
-                continue;
-            }
-            if (g_sched_tick_guard_budget != 0u) {
-                g_sched_tick_guard_budget--;
-                kernel_debug_printf("tick-guard: STACK-CANARY-BAD cpu=%u pid=%d stack=%x size=%u tick=%u\n",
-                                    (unsigned int)cpu, t->pid,
-                                    (unsigned int)(uintptr_t)t->stack,
-                                    (unsigned int)t->stack_size,
-                                    (unsigned int)tick);
-                /* Face-(f) chain capture (adendo 13): the FIRST real
-                 * CANARY-BAD (run 17/10g: pid=0, stack=0x390b6fa4 misaligned
-                 * INSIDE pid=1's stack range, size=166074 non-power-of-two)
-                 * is a correct report about a GARBAGE RECORD, not an intact
-                 * task whose stack overflowed. Sweep the heap to name the
-                 * current owner of the block where the record itself lives:
-                 * magic=FREE or allocpc!=process_t sites => the record
-                 * memory was re-handed (UAF), not merely its fields clobbered. */
-                kernel_heap_forensic_sweep(t);
             }
         }
     }

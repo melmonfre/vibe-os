@@ -26,6 +26,10 @@ uintptr_t kernel_heap_block_alloc_pc(const void *ptr);
  * live forward-overflow adjacent to it (free-time canary checks miss this
  * because the block is never freed). */
 int kernel_heap_block_canary_ok(const void *ptr);
+/* Full block validation with named failure modes: rc 0=valid, -1=uninit/null,
+ * -2=outside heap/misaligned, -3=magic!=ALLOC (trashed header), -4=bad size,
+ * -5=canary broken. hdr[] receives the header words when readable. */
+int kernel_heap_block_validate(const void *ptr, uintptr_t hdr[4]);
 /* Register an allocation-site PC to watch: any kernel_free of a block whose
  * allocpc matches emits a WATCHED-FREE trace naming the freeing caller.
  * Used to detect a task-owned block being released while still linked. */

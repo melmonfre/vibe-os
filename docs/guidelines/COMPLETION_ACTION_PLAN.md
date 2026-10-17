@@ -593,3 +593,71 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   Candidato mais forte: a stack do `scheduler_schedule_frame` do AP recebe o FRAME via
   IRQ-trampoline do smp.c — auditar o eplogo de `smp_timer_irq_handler` (push/pop do
   frame) contra reentrancia (IRQ de outro dispositivo no meio do eplogo no AP).
+
+### P4 — adendo 15 de 17/10 (sweep-on-hit PAGOU: record da parede é o process_t do INIT, header legitimo, payload envenenado; vizinhos fisicos nomeados por allocpc; CANARY-BAD desambigado em modos)
+
+- INSTRUMENTO NOVO: `kernel_heap_block_validate(ptr, hdr[4])` (heap.c) separa os 3 modos que
+  `kernel_heap_block_canary_ok` colapsava em "0": rc -2 ponteiro nao-e-bloco (desalinhado/
+  fora-heap), -3/-4 cabecalho do bloco esmagado (exaustao para baixo atinge o PROPRIO header),
+  -5 canary de cauda (estouro para cima). tick-guard agora reporta
+  `STACK-PTR-NOTBLOCK / STACK-HDR-SMASHED / STACK-CANARY-BAD + words do header` +
+  `BOTTOM-TOUCHED` (8 words de marca 0xA5 na BASE consumidos = stack encostou no fundo).
+- FLAGRANTE ATRIBUIDO (run hd, smp2, tick ~275, cpu=1): `LIST-CYCLE-IN-FIND node=0x390b5f80
+  hdr{size=0x680 magic=ALLOC allocpc=0x3072f} pid=1 state=2 next=0xa prev=self` — o node
+  envenenado e o PROPRIO process_t do INIT: bloco ALOCADO LEGITIMAMENTE
+  (allocpc=process_create_with_stack+0x11f) mas PAYLOAD pisada: `next` = 0xA (inteiro
+  pequeno onde deveria ser ponteiro) e a lista entra em ciclo (prev==node). O record NAO
+  foi reinvestido (UAF de record REFUTADA neste caso); o veneno entra por ESCrita no payload.
+- VIZINHOS FISICOS (chain): logo ABAIXO do record, bloco 0x30 de `ramfs_read+0x119`
+  (cnry=1 no momento) cujo payload contem FRAGMENTOS ASCII de hex ("090b" "129d" "6f20")
+  + ponteiro cru 0x390b5fd8 para DENTRO do record; abaixo deste, o bloco 0x8020 (=AP_STACK
+  32K+32) alocado por `smp_init+0x42c` com CANARY DE CAUDA ESMAGADA contendo {1,
+  0x390b5fb5, 0x390b5fa4, 1} — enderecos internos do payload do record do init. Zona de
+  escrita contigua: [canary-do-bloco-AP-stack, payload-block-ramfs, payload-do-record].
+  Em leitura posterior o MESMO header aparece com valores DIFERENTES (face "live-changing"
+  confirmada).
+- HIPOTESE AGORA (medida, nao mais rotacao): o escritor enche a janela acima do topo da
+  stack do AP e o record do init com dados que contem TEXTO-de-ENDERECO (pedacos ASCII
+  "090b"/"129d"/"6f20" = digitos de um %x impresso) e ponteiros apontando para dentro do
+  record — assinatura de caminho fs/printf gravando em buffer cujo BASE foi calculado a
+  partir do ponteiro do record/stack errado (off-by-um-ponteiro), com o `ramfs_read+0x119`
+  como vizinho imediato. Proxima sonda (1/rodada): auditoria de bounds do buffer de 0x30
+  alocado no caminho de leitura do ramfs (linha 217 copia `toread` no buf do CHAMADOR, sem
+  bounds do lado do chamador; conferir quem chama com buffers pequenos — storage load de
+  pid=1 com `fs: sys_storage_load begin` no log imediatamente antes do hit) + dump
+  dirigido das 8 words em [record-64, record+64) no momento STACK-CANARY/PTR.
+- GATES: make -Werror verde; UP phase6-boot-smoke rc=0 (witness nova ativa, 0 falso-
+  positivo: BOTTOM-TOUCHED/PTR/HDR todos quietos no UP ate session-ready); smp2: parede
+  inalterada (vermelho honesto), mas pela primeira vez a parede foi NOMEADA em termos de
+  objeto-alvo (record do init) em vez de rotacao de eip.
+
+### P4 — adendo 15a de 17/10 (CORRECAO do adendo 15: resolucao feita com nm STALE; com a tabela do build atual, o flagrante conta outra historia — e melhor)
+
+- ERRO MEU REGISTRADO: as resolucoes "ramfs_read+0x119 / font_row_bits / kernel_debug_printf
+  como allocpc" usadas no adendo 15 vieram de um /tmp/ksyms.txt de build ANTERIOR. Com
+  `nm -n` do MESMO ELF do teste, as mesma addresses dizem:
+  - 0x3072f = process_create_with_stack (record do init: confirmadissimo alocacao legitima)
+  - 0x348b1 = **ramfs_create+0x69** → o bloco de 0x30 abaixo do record e o `n->data` de um
+    arquivo ramfs criado com ~16 bytes (`n->data = kernel_malloc(size)`, call-site 0x348ab)
+  - 0x51bd6 = smp_init+0x229 → bloco 0x8020 = AP_STACK_SIZE (32768+32): a stack do AP ✓
+  - 0x480ad = **serial_emit_field+0xb7** e 0x4850e = **kernel_debug_printf+0x2b2** → os
+    "headers" lidos como lixo na regiao contem ENDERECOS DE RETORNO do proprio caminho de
+    printf/serial
+  - 0x25e6c = mk_audio_refresh_topology_snapshot+0xf3
+- LEITURA CORRIGIDA (o que de fato se encaixa): os bytes plantados em [canary-da-stack-do-AP
+  → n->data-do-ramfs → payload-do-record-do-init] sao uma CADEIA DE FRAMES DE EXECUCAO
+  REAL (retaddrs de serial_emit_field/kernel_debug_printf + ponteiros para buffers ramfs e
+  para o record). Isso e exatamente o padrao de "uma task passou a executar com ESP
+  apontando para essa janela": os pushes para baixo da execucao escrevem frames de
+  printf/ramfs nessa regiao, e as testemunhas (BAD-HEAD/LIST-CYCLE/STACK-*) leem frames
+  como se fossem headers/nodes. Nao ha "escritor misterioso de texto": o escritor e a
+  propria execucao, na stack errada.
+- HIPOTESE-ALVO AGORA (unica que explica faces (a)-(f) juntas): em algum ponto do caminho
+  storage-load do init no AP, `task->context` (ESP salvo) ou o `stack` da task passam a
+  apontar para [fim-da-stack-do-AP .. record-do-init], e a task CONTINUA executando ali.
+  O `next=0xa` do record = campo de frame de printf escrito sobre o record, nao um valor
+  plantado. Proxima sonda (1/rodada): na hora do BAD-HEAD/LIST-CYCLE, comparar
+  `node->context`/`node->stack` com a janela do record e checar em process_terminate/
+  mk_service_restart/reinvestimento de slot se alguma referencia antiga de pid=1 (record
+  ou context) sobrevive — auditando o ciclo de vida do process_t do INIT (servico storage
+  e reiniciavel: `restarts=` no log).
