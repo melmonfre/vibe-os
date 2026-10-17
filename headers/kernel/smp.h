@@ -21,6 +21,11 @@ uint8_t smp_trampoline_debug_stage(void);
  * launched on (0/-1 if the AP never got one). Lets the scheduler tick
  * witness judge ESP of a CPU that has NO current task (idle hlt loop). */
 int smp_ap_stack_bounds(uint32_t cpu_index, uintptr_t *lo_out, uintptr_t *hi_out);
+/* Face-1 tick-arrival counters (per cache-line padded). smp_timer_irq_handler
+ * bumps its cpu slot; dump reads them at death to tell "tick stopped" from
+ * "schedule_frame ran but returned early". */
+void smp_tick_count_bump(uint32_t cpu_index);
+void smp_tick_counts_dump(void);
 void smp_persist_trace_arm(void);
 void smp_persist_trace_mark(uint8_t code);
 void smp_persist_trace_disarm(void);

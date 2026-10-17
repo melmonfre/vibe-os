@@ -741,3 +741,35 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - GATES: make -Werror verde; UP phase6-boot-smoke rc=0 (witness v2 + anel
   ativos, sem ruido no UP); smp2: crash persiste (vermelho honesto), anel
   disparou 3x + 1 panic com dados acima.
+
+### P4 — adendo 17 de 17/10 (CAUSA-RAIZ DA ESPIRAL FECHADA: idle-loop aninhado do schedule_frame; fix em arvore; parede da classe #5 PERSISTE com nova assinatura)
+
+- MEDICAO (testemunha IDLE v2): `IDLE-ORPHAN cpu=1 rsp=390b65f0/6550/64b0/6410` — ESP do AP
+  descendo EXATAMENTE 160B por tick, DENTRO do bloco do record do init. Cadeia causal
+  agora fechada na fonte: no caminho sem-tasks, `scheduler_schedule_frame` entra em
+  `for(;;){sti;hlt;find_next}` SEM retornar; o tick LAPIC chama `smp_timer_irq_handler` →
+  `scheduler_schedule_frame` de novo → `find_next` NULL → NOVO loop aninhado → +160B de
+  trap-frame por tick, nunca unwind. Frames de execucao (printf/serial/ramfs retaddrs —
+  os "fragmentos" das faces a-e) corroem de cima para baixo: stack da ultima task → record
+  do init (next/state/context → LIST-CYCLE/BAD-HEAD) → bloco ramfs → canary do bloco do AP.
+  Um mecanismo explica: "AP roda sem despachar" (installs congelavam: so o loop mais
+  interior roda), ESP0-MISMATCH "legitimo", WATERMARK-FRAME, PF-text plantado, eip=3/7
+  (iret lendo dados de frame corrompidos como eip), e o "cs segurando endereco de stack".
+- FIX (causa-raiz, nao sintoma): bit `g_sched_idle_mask` por cpu, setado sob
+  g_scheduler_lock ao entrar no loop idle e limpo ao break; `schedule_frame` rejeita
+  re-entrada do topo (devolve o frame do proprio tick; hlt da iret de volta ao loop, que
+  JA re-polla find_next — nenhuma wakeup perdida por construcao). Trace `reentry-suppressed`
+  budgeted (testemunha nunca silenciosa). ABI: nenhuma mudanca; userland: intocado.
+- PROVA DO FIX (2 runs smp2 real-time): `reentry-suppressed cpu=1/cpu=0 rsp=390be0e0`
+  ESTAVEL (sem descida), ZERO IDLE-ORPHAN (antes: 4+ por run), installs AP SANS CONGELAR:
+  `totals{cpu0=584 cpu1=247}` / `{cpu0=318 cpu1=511}` ticks cpu1=285; UP phase6-boot-smoke
+  rc=0; build -Werror verde.
+- ESTADO DA PAREDE (honesto): ABERTA, mais funda. Runs pos-fix morrem em ~429-434 linhas
+  (antes: 408-526 variavel) com NOVA face: `GP err=1000 eip=390e7636 cs=8` (eip dentro da
+  stack do pid5) e `#UD cpu=1 eip=2009c cs=0 b0=c6 b1=5b` (eip em .text com CS=0). A
+  espiral era MAIOR fonte de corrupcao mas nao a unica — proxima sonda: o que pula para
+  dentro de stack do pid5/para .text com CS=0 no caminho storage (mesma janela type=16);
+  candidatos: saved-context de task morta re-dispatchado (auditar g_cursor/GHOST com o
+  novo equilibrio), ou iret para frame em meio-de-dados (WATERMARK-FRAME agora com
+  concorrencia reduzida pode finalmente pegar in-flagrante). validate-smp: segue
+  vermelho honesto (smp2 ainda morre), porem o mecanismo fechado e uma parede a menos.

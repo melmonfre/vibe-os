@@ -19,6 +19,10 @@ void scheduler_rsp_witness(uint32_t cpu_index);
  * Called from kernel_malloc; read-only, capped walk, no locks. */
 int scheduler_stack_overlap(uintptr_t lo, uintptr_t hi, uintptr_t *os_out,
                             uintptr_t *oe_out, int *state_out);
+/* Face-1 per-cpu schedule_frame entry counter + death dump (class #5,
+ * adendo 17): pair with smp_tick_counts_dump to locate the stall stage. */
+uint32_t scheduler_frame_entry_count(uint32_t cpu_index);
+void scheduler_frame_counts_dump(void);
 
 /* enter the scheduler cooperatively from the current CPU context */
 void schedule(void);

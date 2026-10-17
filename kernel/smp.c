@@ -101,6 +101,36 @@ static volatile uint32_t g_smp_cpu_stage[32];
 static uintptr_t g_smp_ap_lo[32];
 static uintptr_t g_smp_ap_hi[32];
 
+/*
+ * Face-1 tick arrival counters (P4 adendo 17): the esp0 ring showed the AP
+ * stopping all installs at 195 while the BSP climbed to 397 (sum exact at
+ * two dumps, so NOT a false-sharing artifact). Two explanations remain:
+ * the AP's LAPIC timer stopped firing (handler never runs), or the handler
+ * runs and schedule_frame returns without switching. These per-cpu counters
+ * distinguish them at death; each counter is padded to its own cache line
+ * because a non-atomic RMW into a SHARED line would itself lose AP
+ * increments — the very measurement being tested.
+ */
+typedef struct {
+    volatile uint32_t n;
+    uint32_t pad[15];
+} smp_tick_ctr_t;
+static smp_tick_ctr_t g_smp_tick_count[4];
+
+void smp_tick_count_bump(uint32_t cpu_index) {
+    if (cpu_index < 4u) {
+        g_smp_tick_count[cpu_index].n++;
+    }
+}
+
+void smp_tick_counts_dump(void) {
+    kernel_debug_printf("smp-ticks: cpu0=%u cpu1=%u cpu2=%u cpu3=%u\n",
+                        (unsigned int)g_smp_tick_count[0].n,
+                        (unsigned int)g_smp_tick_count[1].n,
+                        (unsigned int)g_smp_tick_count[2].n,
+                        (unsigned int)g_smp_tick_count[3].n);
+}
+
 int smp_ap_stack_bounds(uint32_t cpu_index, uintptr_t *lo_out, uintptr_t *hi_out) {
     if (cpu_index >= 32u || lo_out == 0 || hi_out == 0) {
         return -1;
@@ -681,6 +711,7 @@ void smp_wakeup_ipi_handler(void) {
  */
 kernel_trap_frame_t *smp_timer_irq_handler(kernel_trap_frame_t *frame) {
     local_apic_eoi();
+    smp_tick_count_bump(kernel_cpu_index());
     if (g_smp_scheduler_enabled == 0u) {
         return frame;
     }

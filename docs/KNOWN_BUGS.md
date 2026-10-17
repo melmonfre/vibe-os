@@ -70,7 +70,14 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   64KB): multiplos "donos" apontando para o mesmo bloco. HIPOTESE-LIDER: aliasing de bloco
   (alloc devolve stack ainda em uso), o que explica as witnesses de campo do task passarem.
   ATENCAO metodologica: nesse storm a serial esta INTERLEAVED — apenas valores repetidos
-  cross-linha sao evidencia. Sonda armada (17/10, adendo 12): witness `heap-alias` em
+  cross-linha sao evidencia. CORRECAO de leitura (adendo 17): atribui na epoca "cpu=226934/
+  expected=216" a mistura de duas printfs; a aritmetica posterior (o valor esperado e
+  sempre a constante 0x1B, e o anel de esp0 bate as somas por cpu) mostra que a linha
+  tambem pode ser args de printf lidos de regiao ja corrompida — indistinguivel no storm.
+  A regra permanece: so valores cross-consistentes entre linhas sao evidencia. Explicacao
+  final para TODAS as faces chegou no adendo 17: o idle-loop do schedule_frame aninhava
+  ~160B de trap-frames por tick no AP, corroendo record/buffers/canary de cima para baixo.
+  Sonda armada (17/10, adendo 12): witness `heap-alias` em
   kernel_malloc contra ranges de tasks vivas — LADO-MALLOC REFUTADO (0 hits no smp2; UP
   limpo) e `heap-free-live-stack` em kernel_free (0 hits = o mecanismo NAO passa pelo
   free). FLAGRANTE (adendo 13): tick-guard CANARY-BAD pegou o switch `old=5 next=0` com

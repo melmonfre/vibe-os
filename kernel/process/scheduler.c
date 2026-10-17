@@ -29,6 +29,40 @@ static uint32_t g_timeslice_remaining[32];
 static volatile int g_scheduler_preemption_ready = 0;
 static volatile uint32_t g_sched_frame_calls;
 static volatile uint32_t g_sched_frame_preemptive_true;
+/*
+ * Face-1 per-cpu schedule_frame entry counter (P4 adendo 17), cache-line
+ * padded. Paired with smp_tick_counts_dump it names the exact stage: if
+ * ticks arrive but this stays frozen on cpu1, schedule_frame is never
+ * reached (enabled gate or dispatch stall above it). Exposed for the death
+ * dumps.
+ */
+typedef struct {
+    volatile uint32_t n;
+    uint32_t pad[15];
+} sched_frame_ctr_t;
+static sched_frame_ctr_t g_sched_frame_cpu_count[4];
+
+uint32_t scheduler_frame_entry_count(uint32_t cpu_index) {
+    return (cpu_index < 4u) ? (uint32_t)g_sched_frame_cpu_count[cpu_index].n : 0u;
+}
+
+/*
+ * Face-1 idle-reentry guard (adendo 17): bit set while schedule_frame's no
+ * tasks idle hlt loop owns the CPU, so a tick interrupt re-entering
+ * schedule_frame is rejected at the top instead of nesting another hlt loop
+ * on the same stack. Mutated only under g_scheduler_lock. reentry-suppressed
+ * trace is budgeted so the guard itself is observable and never silent.
+ */
+static volatile uint32_t g_sched_idle_mask;
+static volatile uint32_t g_sched_idle_reentry_budget = 8u;
+
+void scheduler_frame_counts_dump(void) {
+    kernel_debug_printf("sched-frame: cpu0=%u cpu1=%u cpu2=%u cpu3=%u\n",
+                        (unsigned int)g_sched_frame_cpu_count[0].n,
+                        (unsigned int)g_sched_frame_cpu_count[1].n,
+                        (unsigned int)g_sched_frame_cpu_count[2].n,
+                        (unsigned int)g_sched_frame_cpu_count[3].n);
+}
 static volatile int g_sched_frame_last_cpu = -2;
 static volatile int g_sched_frame_last_cur_pid = -2;
 /*
@@ -1670,8 +1704,42 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
     if (cpu_index >= 32u) {
         cpu_index = 0u;
     }
+    if (cpu_index < 4u) {
+        g_sched_frame_cpu_count[cpu_index].n++;
+    }
     current = g_current[cpu_index];
     g_sched_frame_last_cur_pid = (current != NULL) ? current->pid : -1;
+    /*
+     * ROOT-CAUSE FIX (face-1, P4 classe #5, adendo 17). The idle path below
+     * runs `for(;;){ sti; hlt; ... find_next ... }` WITHOUT returning. While
+     * a CPU sits in that loop its LAPIC tick still fires; the tick handler
+     * calls scheduler_schedule_frame again, find_next still says NULL, and
+     * the inner call enters ANOTHER idle loop — nested ~160 bytes per tick,
+     * forever, on the stack region the last task left behind. Measured 2026-10-17:
+     * IDLE-ORPHAN sampled the AP's ESP descending 0x390b65f0 -> 0x390b6550 ->
+     * 0x390b64b0 -> 0x390b6410 (exactly 160B/tick) INSIDE the init process_t
+     * block — each nested trap frame eats through the init record (poisoning
+     * next/state/context -> LIST-CYCLE/BAD-HEAD), then the ramfs block below,
+     * then the AP stack's own tail canary — ONE mechanism explains faces
+     * (a)-(f) including "AP installs froze while it kept executing" (the
+     * nested loop dispatches nothing; only the outer loop ever breaks).
+     *
+     * Fix: while the idle loop owns this CPU, schedule_frame returns the
+     * caller's own frame untouched (the tick just irets back into hlt).
+     * The loop already re-runs find_next after every wake, so no wakeup can
+     * be missed by suppressing re-entry; suppressed reentries are traced
+     * (budgeted) so the witness is never silently inert.
+     */
+    if ((g_sched_idle_mask & (1u << cpu_index)) != 0u) {
+        spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+        if (g_sched_idle_reentry_budget != 0u) {
+            g_sched_idle_reentry_budget--;
+            kernel_debug_printf("sched-idle: reentry-suppressed cpu=%u rsp=%x (tick irets to hlt loop)\n",
+                                (unsigned int)cpu_index,
+                                (unsigned int)(uintptr_t)frame);
+        }
+        return frame;
+    }
     if (!g_scheduler_preemption_ready) {
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
         return frame;
@@ -1732,6 +1800,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
 
         g_current[cpu_index] = 0;
         g_timeslice_remaining[cpu_index] = SCHEDULER_TIMESLICE_TICKS;
+        g_sched_idle_mask |= (1u << cpu_index);
         spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
 
         for (;;) {
@@ -1740,6 +1809,7 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
             flags = spinlock_lock_irqsave(&g_scheduler_lock);
             next = find_next(cpu_index, 0);
             if (next != NULL) {
+                g_sched_idle_mask &= ~(1u << cpu_index);
                 break;
             }
             spinlock_unlock_irqrestore(&g_scheduler_lock, flags);

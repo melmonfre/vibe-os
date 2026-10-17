@@ -5,6 +5,7 @@
 #include <kernel/drivers/video/video.h>
 #include <kernel/scheduler.h>
 #include <kernel/cpu/cpu.h>
+#include <kernel/smp.h>
 
 #define IDT_ENTRIES 256
 #define IRQ0_VECTOR 0x20
@@ -233,6 +234,8 @@ void invalid_opcode_handler(uint32_t eip, uint32_t cs) {
     /* Face-1: the last esp0 installs name which kernel stack this CPU was
      * armed to take traps on when it died (class #5, P4). */
     kernel_tss_install_ring_dump("ud");
+    smp_tick_counts_dump();
+    scheduler_frame_counts_dump();
     kernel_text_puts("\n#UD EIP="); kernel_text_puts(buf[0]);
     kernel_text_puts(" CS=");       kernel_text_puts(buf[1]);
     kernel_text_puts(" B0=");       kernel_text_puts(buf[2]);
