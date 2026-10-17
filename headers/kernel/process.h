@@ -125,6 +125,13 @@ typedef struct process {
     uint32_t runs_in_user_mode;
     struct process *wait_next;
     struct process *next;   /* linked‑list pointer for scheduler */
+    /*
+     * execve stack swap (P4 fix): the OLD kernel stack must NOT be freed
+     * while the kernel is still executing on it and the TSS esp0 may still
+     * point at its top. sys_execve parks it here; the next switch-away or
+     * the terminate of this task releases it (both run off this stack).
+     */
+    void *pending_stack_free;
 
     /* Signal state */
     uint32_t signal_pending;

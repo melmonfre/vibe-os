@@ -2339,6 +2339,7 @@ static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
         return (uint32_t)-1;
     }
     memcpy(child, current, sizeof(process_t));
+    child->pending_stack_free = 0;   /* owned by parent only */
 
     if (current->stack == 0 || current->stack_size == 0u) {
         kernel_free(child);
@@ -2540,12 +2541,28 @@ static uint32_t sys_execve(uint32_t path_ptr, uint32_t argv_ptr,
         return (uint32_t)-1;
     }
 
+    /*
+     * UAF fix (P4 audit): the old code did kernel_free(current->stack)
+     * HERE, while sys_execve itself is executing on that very stack and
+     * this cpu's TSS esp0 still points to its top. The freed block returns
+     * to the allocator, so the ongoing trap frame, later IRQ frames, or a
+     * ring3->ring0 entry before the next dispatch all WRITE FREED MEMORY
+     * that another owner may already hold. Park the old stack instead:
+     * released at the next switch-away/terminate (see pending_stack_free).
+     */
+    if (current->pending_stack_free != 0) {
+        kernel_free(current->pending_stack_free);
+        current->pending_stack_free = 0;
+    }
     if (current->stack != 0) {
-        kernel_free(current->stack);
+        current->pending_stack_free = current->stack;
     }
 
     current->stack = loaded->stack;
     current->stack_size = loaded->stack_size;
+    /* Close the esp0 window NOW: any ring3->ring0 trap between this return
+     * and the next dispatch must land on the NEW stack, not the parked one. */
+    kernel_tss_set_kernel_stack((uintptr_t)current->stack + current->stack_size);
     current->context = loaded->context;
     current->image_base = loaded->image_base;
     current->image_size = loaded->image_size;
@@ -3710,6 +3727,7 @@ static uint32_t sys_thread_create(uint32_t entry_ptr, uint32_t arg_ptr, uint32_t
         return (uint32_t)-1;
     }
     memcpy(thread, current, sizeof(process_t));
+    thread->pending_stack_free = 0;  /* owned by the task that execv/created it */
     normalized_stack = stack_size;
     if (normalized_stack == 0u) {
         normalized_stack = 4096u;

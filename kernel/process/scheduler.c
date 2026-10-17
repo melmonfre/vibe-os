@@ -1606,6 +1606,19 @@ kernel_trap_frame_t *scheduler_schedule_frame(kernel_trap_frame_t *frame, int pr
     g_cursor[cpu_index] = next->next != NULL ? next->next : g_head;
     old_task = current;
 
+    /*
+     * Deferred execve stack release (P4 UAF fix): once the task is being
+     * scheduled through, nothing on this cpu references its parked old stack
+     * any more (saved context lives in the NEW stack, esp0 was repointed at
+     * execve time). kernel_free here runs off the new stack, never the
+     * parked one, and takes g_heap_lock under g_scheduler_lock — the
+     * scheduler->heap order already established by scheduler_node_sane().
+     */
+    if (old_task != NULL && old_task->pending_stack_free != NULL) {
+        kernel_free(old_task->pending_stack_free);
+        old_task->pending_stack_free = NULL;
+    }
+
     if (next != current) {
         /*
          * Anti-double-dispatch assertion (COMPLETION_ACTION_PLAN P4, class
@@ -1789,6 +1802,13 @@ void scheduler_terminate_task(process_t *task) {
     task->wait_owner_service = 0u;
     task->wake_boost_budget = 0u;
     task->wait_next = 0;
+
+    /* Deferred execve stack release on the terminate path too (the task may
+     * never switch away before dying). Runs on the task's CURRENT stack. */
+    if (task->pending_stack_free != NULL) {
+        kernel_free(task->pending_stack_free);
+        task->pending_stack_free = NULL;
+    }
 
     for (cpu = 0u; cpu < 32u; ++cpu) {
         if (g_current[cpu] == task) {

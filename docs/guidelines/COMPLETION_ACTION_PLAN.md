@@ -371,3 +371,9 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - Gates: make -Werror verde; UP phase6 6/6 (relatorio build/); smp2 segue
   vermelho por classe #5 com faces alternando (OVERFLOW-de-alias, GP-writer,
   salto-ao-blob) — todas agora com witness no tree.
+
+### P4 — adendo 6 de 16/10 (auditoria de ponteiros achou UAF LATENTE de execve; corrigido; face-1 segue aberta)
+
+- A auditoria pedida no adendo 5 (stale pointers pos-terminate/swap) encontrou em `sys_execve` um UAF REAL porem LATENTE: `kernel_free(current->stack)` era feito enquanto o proprio syscall executava sobre essa stack, e o TSS esp0 so era reposto no proximo dispatch. Latente porque nenhum userland compilado chama SYSCALL_EXECVE (grep: unicos 'execve' estao em arvores vendored nao-buildadas de links2/breakpad) — logo NAO explica as assinaturas de escrita-alias da face-1; mas e o MESMO tipo de buraco que as explica, e fica fechado na fonte.
+- Fix: `process_t.pending_stack_free` (campo append, interno-kernel, ABI intata; zerado nos memcpy-wholesale de fork/thread); execve ESTACIONA a stack velha + repoe esp0 imediatamente; liberacao de verdade no switch-away ou terminate (executam fora da stack estacionada). Ordem scheduler->heap ja estabelecida. KNOWN_BUGS #15.
+- Gates: UP `validate-phase6-boot-smoke` 6/6 com o fix (rc=0, build/); smp2 real-time re-rodado sem regressao (resultado no commit). Face-1 permanece ABERTA com o proximo passo do adendo 5 (trace de kernel_tss_set_kernel_stack + auditoria stale g_current/service->process/launch-record) — agora sem o confounder do execve-UAF no caminho.
