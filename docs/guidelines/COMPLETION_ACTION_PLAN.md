@@ -841,3 +841,37 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - GATES: make -Werror verde; UP validate-phase6-boot-smoke rc=0 (CTX witness
   ativa, 0 falso-positivo); smp2: 3 runs = 2 hang + 1 #UD simples, vermelho
   honesto, sem regressao.
+
+### P4 — adendo 20 de 17/10 (wake-loss do cliente storage REFUTADO por medicacao; hang = TEMPESTADE de requests de task-userland pid=5; crash face: eip DENTRO da stack do pid=9)
+
+- INSTRUMENTOS NOVOS (permanentes, budgeted): (1) `ipc_queue_stats()` —
+  profundidade da fila + pending/wake/timeout/waiters do waitable de qualquer
+  task; (2) trace do timeout do cliente agora inclui hostQ/hostW + cliQ/cliW;
+  (3) `storage waitloop:` — uma linha por iteracao do wait do cliente (budget
+  16) com `recv` e os IDs da reply; (4) `first-of-kind req` — dedupe por
+  (src,svc,type), nomeia a PRIMEIRA vez de cada tipo de request.
+- MEDICAO-CHAVE (runs qs/wl, 7 runs): TODAS as iteracoes amostradas tem
+  `recv=276 r{src=1 dst=9 type=16}` = a reply do storage CHEGA, e do tamanho
+  certo, com os IDs certos. O timeout do cliente nunca disparou
+  (`request timeout` = 0 hits em 5 runs com a traca nova). A HIPOTESE DE
+  WAKE-LOSS DO CLIENTE ESTA MORTA por evidencia — o canal storage
+  request→reply funciona.
+- REDIRECAO DO HANG: census dos runs-hang: `calls=309430` em ~15.7k ticks
+  (~20 entradas schedule_frame POR TICK) com `sel5=269291` — pid=5 e uma task
+  USERLAND (first dispatch `eip=userland_entry+0x0 kind=1 service=1`) em
+  TEMPESTADE request/reply contra o host service=1; os demais serviços
+  (owners=2,4,5...) ficam BLOCKED atras. O hang nao e wake-loss: e uma
+  task-userland que nao bloqueia (loop vivo de IPC), monopolizando o dispatch
+  enquanto a cadeia de servicos espera. Proxima sonda: o trace
+  `first-of-kind` num run-HANG (este morreu aos 8s antes da tempestade) para
+  nomear svc/type do loop de pid=5 + checar se o host do service=1 responde
+  (depth do host) — e entao: starvation de scheduling vs bug de app.
+- CRASH FACE (wl7): `#UD cpu=1 eip=391026c3 cs=8` — eip DENTRO do bloco de
+  stack do pid=9 ([391026e0,391426e0): 0x391026c3 fica 29B ABAIXO do BASE —
+  no bloco heap imediatamente anterior, agora rotulo-me: alvo = o que executa
+  la. A witness CTX-OUTSIDE continua a arma certa (ainda nao pegou: poison nao
+  rotacionou nos runs com ela).
+- GATES: make -Werror verde; UP validate-phase6-boot-smoke rc=0 com os
+  instrumentos novos; smp2 7 runs: faces {crash eip-heap, hang tempestade,
+  crash f0 53} — vermelho honesto, mas o mapa de candidatos encolheu de
+  "wake-loss storage" para "livelock de pid=5 + escritor intra-stack".

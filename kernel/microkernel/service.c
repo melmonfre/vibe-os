@@ -23,6 +23,10 @@ static int g_request_send_fail_budget = 16;
 static int g_unexpected_reply_budget = 16;
 static int g_request_timeout_budget = 16;
 static int g_storage_request_trace_budget = 8;
+static int g_storage_waitloop_trace_budget = 16;
+/* P4 adendo 20: the hang is a USERLAND task (pid5, entry=userland_entry)
+ * hammering ~20 requests/tick. Name WHICH message type per source. */
+static int g_request_rate_trace_budget = 8;
 static int g_storage_write_request_trace_emitted = 0;
 static int g_storage_worker_trace_budget = 8;
 static int g_storage_reply_trace_budget = 8;
@@ -1047,6 +1051,48 @@ static int mk_service_request_process(const struct mk_service_record *service,
                                     service->pid);
             }
         }
+        /*
+         * P4 adendo 20 rate trace: budgeted once-per-(src,svc,type) first
+         * sighting. The measured hang has a USERLAND task (pid5,
+         * userland_entry) generating ~20 schedule_frame calls/tick as a
+         * request/reply loop against the extracted hosts. This names the
+         * message type and target so the spin can be localized to a call
+         * site in the app ABI (which syscall loops) instead of theory.
+         */
+        if (g_request_rate_trace_budget > 0) {
+            static struct { int src; uint32_t type; uint32_t svc; int seen; }
+                rate_seen[16];
+            static uint32_t rate_slots;
+            uint32_t si;
+            int dup = 0;
+
+            for (si = 0u; si < rate_slots && si < 16u; ++si) {
+                if (rate_seen[si].src == current->pid &&
+                    rate_seen[si].type == request_copy.type &&
+                    rate_seen[si].svc == service->type) {
+                    dup = 1;
+                    break;
+                }
+            }
+            if (!dup) {
+                if (rate_slots < 16u) {
+                    rate_seen[rate_slots].src = current->pid;
+                    rate_seen[rate_slots].type = request_copy.type;
+                    rate_seen[rate_slots].svc = service->type;
+                    rate_seen[rate_slots].seen = 1;
+                    rate_slots++;
+                }
+                g_request_rate_trace_budget -= 1;
+                kernel_debug_printf("service: first-of-kind req svc=%d type=%d src=%d dst=%d kind=%d user=%d tick=%u\n",
+                                    (int)service->type,
+                                    (int)request_copy.type,
+                                    (int)current->pid,
+                                    (int)service->pid,
+                                    (int)current->kind,
+                                    (int)current->runs_in_user_mode,
+                                    (unsigned int)kernel_timer_get_ticks());
+            }
+        }
         if ((service->type == MK_SERVICE_VIDEO ||
              service->type == MK_SERVICE_AUDIO ||
              service->type == MK_SERVICE_NETWORK ||
@@ -1120,6 +1166,40 @@ static int mk_service_request_process(const struct mk_service_record *service,
                                                     remaining_ticks);
             }
 
+            /*
+             * P4 wake-loss trace (adendo 20): the client loop kept waiting
+             * WITHOUT the timeout branch ever firing, so the wait wakes on
+             * SOME signal but never yields a matching reply. Sample the
+             * task's own channel stats each iteration (budgeted): depth=
+             * messages queued here, pending=stray signals, wake/timeout=
+             * counter movement. depth>0 && received<0 => a message is stuck
+             * behind a size/match filter; pending>0 && depth==0 => someone
+             * signals the wrong channel (the host replies into a queue the
+             * client does not read); wake climbing while depth stays 0 =>
+             * phantom wakes (signal without message).
+             */
+            if (service->type == MK_SERVICE_STORAGE &&
+                g_storage_waitloop_trace_budget > 0) {
+                int depth = -1, waiters = -1;
+                uint32_t pend = 0u, wake = 0u, tmo = 0u;
+
+                g_storage_waitloop_trace_budget -= 1;
+                ipc_queue_stats(current, &depth, &pend, &wake, &tmo, &waiters);
+                kernel_debug_printf("storage waitloop: src=%d rem=%u recv=%d r{src=%d dst=%d type=%d} depth=%d pend=%u wake=%u tmo=%u waiters=%d\n",
+                                    (int)request_copy.source_pid,
+                                    (unsigned int)remaining_ticks,
+                                    received,
+                                    (received == (int)sizeof(response)) ?
+                                        (int)response.source_pid : -999,
+                                    (received == (int)sizeof(response)) ?
+                                        (int)response.target_pid : -999,
+                                    (received == (int)sizeof(response)) ?
+                                        (int)response.type : -999,
+                                    depth,
+                                    (unsigned int)pend, (unsigned int)wake,
+                                    (unsigned int)tmo, waiters);
+            }
+
                     if (received == (int)sizeof(response)) {
                 if (response.source_pid == waiting_pid &&
                     response.target_pid == (uint32_t)current->pid) {
@@ -1189,14 +1269,31 @@ static int mk_service_request_process(const struct mk_service_record *service,
                      */
                     {
                         process_t *host = scheduler_find_task_by_pid(service->pid);
+                        int host_depth = -1, host_waiters = -1;
+                        uint32_t host_pending = 0u, host_wake = 0u, host_tmo = 0u;
+                        int cli_depth = -1;
+                        uint32_t cli_pending = 0u, cli_wake = 0u, cli_tmo = 0u;
 
-                        kernel_debug_printf("service: request timeout svc=%d type=%d src=%d dst=%d host-state=%d host-cpu=%d\n",
+                        ipc_queue_stats(host, &host_depth, &host_pending,
+                                        &host_wake, &host_tmo, &host_waiters);
+                        ipc_queue_stats(current, &cli_depth, &cli_pending,
+                                        &cli_wake, &cli_tmo, NULL);
+                        kernel_debug_printf("service: request timeout svc=%d type=%d src=%d dst=%d host-state=%d host-cpu=%d hostQ=%d hostW{pend=%u wake=%u tmo=%u waiters=%d} cliQ=%d cliW{pend=%u wake=%u tmo=%u}\n",
                                             (int)service->type,
                                             (int)request_copy.type,
                                             (int)request_copy.source_pid,
                                             (int)request_copy.target_pid,
                                             host ? (int)host->state : -999,
-                                            host ? host->current_cpu : -999);
+                                            host ? host->current_cpu : -999,
+                                            host_depth,
+                                            (unsigned int)host_pending,
+                                            (unsigned int)host_wake,
+                                            (unsigned int)host_tmo,
+                                            host_waiters,
+                                            cli_depth,
+                                            (unsigned int)cli_pending,
+                                            (unsigned int)cli_wake,
+                                            (unsigned int)cli_tmo);
                     }
                 }
 
