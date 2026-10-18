@@ -286,6 +286,7 @@ static volatile uint32_t g_sched_tick_guard_budget = 8u;
 static volatile uint32_t g_sched_tick_field_budget = 8u;
 static volatile uint32_t g_sched_tick_tss_budget = 8u;
 static volatile uint32_t g_sched_tick_bottom_budget = 8u;
+static volatile uint32_t g_sched_tick_ctx_budget = 8u;
 static volatile uint32_t g_sched_rsp_idle_budget = 4u;
 static volatile uint32_t g_sched_rsp_idle_baseline = 2u;
 
@@ -2428,6 +2429,38 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
                                             (unsigned int)(uintptr_t)t->stack,
                                             (unsigned int)t->stack_size,
                                             (unsigned int)tick);
+                    }
+                }
+
+                if (vrc == 0) {
+                    /*
+                     * Intra-execution CONTEXT witness (face-1 survivor,
+                     * adendo 19): run 17/10k-po2 died at #UD eip=3 WITHOUT
+                     * any WATERMARK-FRAME — the frame is only checked at
+                     * dispatch, so poisoning that lands BETWEEN dispatch and
+                     * the iret epilogue is invisible there. `context` is the
+                     * resume frame pointer: for a RUNNING task it must lie
+                     * INSIDE its own validated stack payload (every writer
+                     * — schedule_frame saves, fork, execve — builds frames
+                     * there). A context outside [stack, stack+size) while
+                     * RUNNING is the exact mid-flight poison, caught one
+                     * tick before death, with the RECORD map for free.
+                     */
+                    uintptr_t c = (uintptr_t)t->context;
+
+                    if (c != 0u && (c < (uintptr_t)t->stack ||
+                                    c + sizeof(kernel_trap_frame_t) > top)) {
+                        if (g_sched_tick_ctx_budget != 0u) {
+                            g_sched_tick_ctx_budget--;
+                            kernel_debug_printf("tick-guard: CTX-OUTSIDE cpu=%u pid=%d state=%d ctx=%x stack=[%x,%x) sw=%u tick=%u\n",
+                                                (unsigned int)cpu, t->pid,
+                                                (int)t->state, (unsigned int)c,
+                                                (unsigned int)(uintptr_t)t->stack,
+                                                (unsigned int)top,
+                                                (unsigned int)t->context_switches,
+                                                (unsigned int)tick);
+                            kernel_heap_forensic_sweep(t);
+                        }
                     }
                 }
 

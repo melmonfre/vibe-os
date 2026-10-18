@@ -811,3 +811,33 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - GATES: make -Werror verde; UP validate-phase6-boot-smoke rc=0 com as 3
   testemunhas novas ativas; smp2: vermelho honesto inalterado (3 runs: poison
   capturado 1x, hang 1x, #UD simples 1x).
+
+### P4 — adendo 19 de 17/10 (witness CTX-OUTSIDE armada p/ corrupção intra-execucao; EXONERADO por medicacao o free-de-record-vivo; face DOMINANTE agora = hang original do P4: host pid=1 em wait sem timeout enquanto pid=9 re-arma wait de 4 ticks)
+
+- ARMADA `tick-guard: CTX-OUTSIDE`: RUNNING tasks tem `context` (ponteiro do
+  frame de resume) checado CONTRA O PROPRIO stack validado no tick (antes só
+  dispatch via WATERMARK-FRAME). Justificativa medida: run 17/10k-po2 morreu
+  em #UD eip=3 SEM WATERMARK — frame intacto no dispatch, corrompido entre
+  dispatch e iret. Violacao chama sweep+RECORD. Status: armado; poison face nao
+  rotacionou nos 3 runs seguintes (0 hits — honesto: nao-evidencia).
+- EXONERADO POR MEDICACAO: `WATCHED-FREE` (allocpc dos records ja vigiado desde
+  add_task, scheduler.c:1545) — ZERO hits em 6+ runs smp2 incluindo runs com
+  record-corruption capturada. A hipotese "record liberado enquanto vivo (UAF)"
+  esta MORTA por observacao. Resta: escritor externo sobre record vivo.
+- FACE DOMINANTE AGORA (hang, 2 de 3 runs): sequencia identica nos runs —
+  `storage request type=16 from pid=9 to pid=1` → pid=9 entra em wait com
+  deadline de 4 ticks e RE-ARMA para sempre (`overdue pid=9 ... deadline=669/
+  677/681/...` avancando de 4 em 4) → o HOST `block pid=1 kind=1 svc=2
+  event=2 owner=2 deadline=0` — sleep SEM TIMEOUT em canal de evento do proprio
+  servico. Este e o item ORIGINAL do P4 (wake do storage worker) sob nova face:
+  quem deveria sinalizar o waitable do host (pid=1) ao chegar o request? Se o
+  signal cai na janela block-SIGNALED abortada, o host dorme para sempre e o
+  cliente roda o loop de timeout+rearm — dead-lock de wake-loss com watchdog
+  proprio (sched-watch). Proxima sonda (1/rodada): auditar mk_service/mailbox
+  push → kernel_waitable_signal no caminho storage-request→host, e o loop
+  `scheduler_block_current_ex` (abort SIGNALED existe; falta o re-check do
+  mailbox apos abort?) — reproduzir UP-falso-positivo? UP nunca hanga (sem AP
+  host path). Teste-alvo: `storage request` logado + host dorme sem signal.
+- GATES: make -Werror verde; UP validate-phase6-boot-smoke rc=0 (CTX witness
+  ativa, 0 falso-positivo); smp2: 3 runs = 2 hang + 1 #UD simples, vermelho
+  honesto, sem regressao.
