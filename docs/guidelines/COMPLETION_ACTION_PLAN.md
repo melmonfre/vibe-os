@@ -1024,3 +1024,32 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - GATES: make -Werror verde; UP smoke rc=0 (build ja amostrado); 6 runs
   honestos documentados. NENHUMA mudanca de codigo desta rodada alem das
   testemunhas existentes — proxima rodada instrumenta o delta de wake.
+
+### P4 — adendo 26 de 18/10 (CORRECAO do adendo 25: o "wake 220 ticks atrasado" era ARTEFATO de copia stale do ring; discrinador live-vs-ring mostra waits SAUDAVEIS; face nova: #UD f0 53 migrou para o bring-up do AP, antes do scheduler-enable)
+
+- DISCRIMINADOR ARMADO (overdue scan agora imprime `live=` e `ch=`): ov4
+  (hang) `deadline=8716 live=8926 ch=1f97c8 tick=8925` e run bom `deadline=778
+  live=1001 tick=1000` — o wait DEADLINE VIVO esta no futuro imediato (saudavel,
+  re-armado a cada ciclo); o `deadline=` do stream e a COPIA STALE do
+  block-ring (a scan compara grace pelo RING, nao pelo vivo). Logo a leitura do
+  adendo 25 ("wakes atrasam ~220 ticks") esta REFUTADA — retiro a hipotese de
+  wake-lag; o hang continua sendo "reply que nao chega", mas NAO por atraso de
+  wake de timeout: a wait de pid=9 esta viva e re-armando normalmente.
+- FATO NOVO (ov2/ov3): duas estagnacoes ANTES de `smp: scheduler enabled`
+  (120s) — ov3 terminal: `#UD eip=3 cs=8 b0=f0 b1=53` (a MESMA assinatura da
+  janela storage, agora no bring-up do AP); ov2 para no `lapic id=1 enabled=1`
+  do AP sem marcador seguinte. A face f0 53 NAO esta presa a janela storage —
+  aparece em qualquer fase com timing adverso. WHO/CTX continuam 0 hits em 10
+  runs amostrados — as faces de morte atuais (bring-up/pre-storage) nao passam
+  pelos 4 saves nem pelo dispatch de task de usuario.
+- PROXIMA SODA (1/rodada): o epilog da IRQ de bring-up do AP — mesma firma do
+  adendo 17 (iret de um handler cuja FRAME foi corrompida): ao entrar no
+  `smp: scheduler enabled` window, dumpar um snapshot do frame atual do AP
+  (esp0/eip) via trap de um vetor de calibracao? Mais barato: o #UD de ov3
+  aconteceu na CPU que imprimiu "lapic: id=1 enabled=1" = O PROPRIO AP
+  morrendo cedo no caminho `smp_ap_entry` posterior — auditar o caminho
+  `smp_ap_entry` pos-`scheduler bring-up` (park loop hlt + wake ipi) contra o
+  ESP do trampoline: os mesmo 160B/tick da espiral NAO (idle mask cobre
+  schedule_frame), mas o park-loop do AP fora de schedule_frame pode re-entrar
+  por IPI de wake (`smp_wakeup_ipi_handler`): audit-lo quanto a reentrancia no
+  mesmo espirito do adendo 17.

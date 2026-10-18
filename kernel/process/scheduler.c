@@ -264,9 +264,15 @@ static void scheduler_overdue_scan(uint32_t tick) {
         rec->flagged = 1u;
         if (g_sched_overdue_budget != 0u) {
             g_sched_overdue_budget -= 1u;
-            kernel_debug_printf("sched-watch: overdue pid=%d state=%d deadline=%u tick=%u reachable=%d\n",
+            /* live vs ring: the printed `deadline` is the ring COPY. If
+             * live= closely tracks tick+grace the stream is a stale-ring
+             * artifact of fast re-arms; if live==the old deadline the wait
+             * is genuinely stuck. (adendo 25 discriminator) */
+            kernel_debug_printf("sched-watch: overdue pid=%d state=%d deadline=%u live=%u ch=%x tick=%u reachable=%d\n",
                                 task->pid, (int)task->state,
                                 (unsigned int)rec->deadline,
+                                (unsigned int)task->wait_deadline,
+                                (unsigned int)(uintptr_t)task->wait_channel,
                                 (unsigned int)tick,
                                 scheduler_walk_reaches(task));
         }
