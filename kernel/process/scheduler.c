@@ -295,6 +295,7 @@ static volatile uint32_t g_sched_tick_bottom_budget = 8u;
 static volatile uint32_t g_sched_tick_ctx_budget = 8u;
 static volatile uint32_t g_sched_rsp_idle_budget = 4u;
 static volatile uint32_t g_sched_rsp_idle_baseline = 2u;
+static volatile uint32_t g_sched_rsp_idle_boot_edge_baseline = 2u;
 
 static uintptr_t scheduler_current_rsp(void) {
     uintptr_t rsp;
@@ -354,16 +355,33 @@ void scheduler_rsp_witness(uint32_t cpu_index) {
                 int owner = scheduler_stack_overlap(rsp, rsp + 1u, &os, &oe, &ost);
 
                 if (owner >= 0 && g_sched_rsp_idle_baseline != 0u) {
-                    /* NOTE: "on live" is NOT automatically safe — if the
-                     * owner's state is BLOCKED/READY (not RUNNING on some
-                     * cpu), an idle CPU parked on its stack is a COLLISION:
-                     * both will push into the same pages. state is printed
-                     * for exactly this reason. */
-                    g_sched_rsp_idle_baseline--;
-                    kernel_debug_printf("sched-rsp: IDLE-TASK cpu=%u rsp=%x on live pid=%d state=%d stack=[%x,%x)\n",
-                                        (unsigned int)cpu_index,
-                                        (unsigned int)rsp, owner, ost,
-                                        (unsigned int)os, (unsigned int)oe);
+                    /* NOTE (adendo 33): the first capture —
+                     * IDLE-TASK pid=1 rsp=0x390be600 — was MY artifact:
+                     * the scheduler_stack_overlap half-open test
+                     * [lo,hi) accepts the stack TOP itself, and the
+                     * hlt-loop ESP at the bootstrap stack's top is the
+                     * designed idle state, not a collision. Half-open
+                     * windows where rsp==oe are the exact top edge;
+                     * treat only strict interior as "on live". */
+                    int top_edge = (rsp == oe);
+
+                    if (top_edge && owner == 1) {
+                        if (g_sched_rsp_idle_boot_edge_baseline != 0u) {
+                            g_sched_rsp_idle_boot_edge_baseline--;
+                            kernel_debug_printf("sched-rsp: IDLE-BOOT-EDGE cpu=%u rsp=%x init-top\n",
+                                                (unsigned int)cpu_index,
+                                                (unsigned int)rsp);
+                        }
+                    } else if (g_sched_rsp_idle_baseline != 0u) {
+                        /* "on live" with rsp strictly INSIDE a stack while
+                         * the CPU is idle = COLLISION: the hlt loop parked
+                         * on a task stack that may resume underneath. */
+                        g_sched_rsp_idle_baseline--;
+                        kernel_debug_printf("sched-rsp: IDLE-TASK cpu=%u rsp=%x on live pid=%d state=%d stack=[%x,%x)\n",
+                                            (unsigned int)cpu_index,
+                                            (unsigned int)rsp, owner, ost,
+                                            (unsigned int)os, (unsigned int)oe);
+                    }
                 } else if (owner < 0 && g_sched_rsp_idle_budget != 0u) {
                     g_sched_rsp_idle_budget--;
                     kernel_debug_printf("sched-rsp: IDLE-ORPHAN cpu=%u rsp=%x boot=[%x,%x) no live stack covers it\n",
@@ -594,6 +612,38 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
     }
 
     /*
+     * DISPATCH-CTX-MISMATCH (P4 classe #5, adendo 33): the rw2 capture
+     * showed the dispatch resuming pid=9 with frame=1 (context read under
+     * lock at selection) while the RECORD dump moments later (this function,
+     * after the lock dropped) showed the live context field = a VALID
+     * 0x392a0c94 — something rewrites the field inside the unlocked
+     * gap-to-sanitize window, and the rec-watch 100-tick cadence + save
+     * re-baselining hide exactly that transient. This check names the
+     * transient at the only instant it exists: frame here != next_task->
+     * context now (and the frame came FROM that field under lock, except in
+     * the legit fallback frame==trap-frame path where context was NULL —
+     * skip when context==frame or frame is the caller's trap on cpu stack).
+     */
+    if (next_task != NULL && next_task->context != NULL &&
+        next_task->context != frame) {
+        uintptr_t f = (uintptr_t)frame;
+        uintptr_t s = (uintptr_t)next_task->stack;
+
+        if (next_task->stack != NULL && next_task->stack_size != 0u &&
+            (f < s || f + sizeof(kernel_trap_frame_t) > s + next_task->stack_size)) {
+            static volatile uint32_t g_sched_ctxmismatch_budget = 8u;
+            if (g_sched_ctxmismatch_budget != 0u) {
+                g_sched_ctxmismatch_budget--;
+                kernel_debug_printf("sched-resume: CTX-MISMATCH pid=%d cpu=%u dispatched=%x live=%x sw=%u\n",
+                                    next_task->pid, (unsigned int)cpu_index,
+                                    (unsigned int)f,
+                                    (unsigned int)(uintptr_t)next_task->context,
+                                    (unsigned int)next_task->context_switches);
+            }
+        }
+    }
+
+    /*
      * Face-1 witness (COMPLETION_ACTION_PLAN P4, classe #5). The smp2 GP
      * `err=a5f0 eip=1fc3e4(.bss)` decodes as an iret whose selector words
      * still hold 0xA5 — the process-stack watermark fill (classe #1
@@ -818,6 +868,130 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
  */
 static volatile uint32_t g_sched_ctxsave_budget = 12u;
 
+/*
+ * RECORD-WATCH (P4 classe #5, adendo 33): the writer was narrowed (SSP 0/4,
+ * STALE-AT-ENTRY clean at deaths, CTX-DRIFT 0/6) to DIRECT field writes on
+ * live records through some alias — so shadow the fields that must NEVER
+ * change after creation (pid, stack pointer) plus the one field that changes
+ * ONLY through the centralized save wrapper (context), and diff them every
+ * 100 ticks in the timeout hook (which already walks the list under
+ * g_scheduler_lock). A mismatch names the field, old and new value, and the
+ * tick — the corruption event itself, instead of a downstream crash face.
+ * Side table (no process_t/ABI layout change); 64 slots vs ~30 tasks.
+ */
+typedef struct {
+    process_t *task;
+    uintptr_t pid;      /* stored as unsigned */
+    uintptr_t stack;
+    uintptr_t ctx;
+} sched_rec_shadow_t;
+static sched_rec_shadow_t g_rec_shadow[64];
+static volatile uint32_t g_rec_watch_budget = 12u;
+
+static sched_rec_shadow_t *rec_shadow_find(process_t *task) {
+    uint32_t i;
+
+    for (i = 0u; i < 64u; ++i) {
+        if (g_rec_shadow[i].task == task) {
+            return &g_rec_shadow[i];
+        }
+    }
+    return NULL;
+}
+
+static sched_rec_shadow_t *rec_shadow_slot(process_t *task) {
+    uint32_t i;
+    sched_rec_shadow_t *free_slot = NULL;
+
+    for (i = 0u; i < 64u; ++i) {
+        if (g_rec_shadow[i].task == task) {
+            return &g_rec_shadow[i];
+        }
+        if (free_slot == NULL && g_rec_shadow[i].task == NULL) {
+            free_slot = &g_rec_shadow[i];
+        }
+    }
+    return free_slot;
+}
+
+/* called with g_scheduler_lock held */
+static void rec_shadow_take(process_t *task) {
+    sched_rec_shadow_t *sh = rec_shadow_slot(task);
+
+    if (sh == NULL) {
+        return;
+    }
+    sh->task = task;
+    sh->pid = (uintptr_t)(uint32_t)task->pid;
+    sh->stack = (uintptr_t)task->stack;
+    sh->ctx = (uintptr_t)task->context;
+}
+
+/* save sites refresh ctx through the existing wrapper; execve refreshes
+ * explicitly (it legitimately moves stack+context). */
+void scheduler_rec_watch_refresh(process_t *task) {
+    uint32_t flags;
+    sched_rec_shadow_t *sh;
+
+    if (task == NULL) {
+        return;
+    }
+    flags = spinlock_lock_irqsave(&g_scheduler_lock);
+    sh = rec_shadow_find(task);
+    if (sh != NULL) {
+        sh->stack = (uintptr_t)task->stack;
+        sh->ctx = (uintptr_t)task->context;
+    }
+    spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
+}
+
+static void rec_watch_scan(void) {
+    process_t *t;
+    uint32_t steps = 0u;
+    static volatile uint32_t g_rec_watch_armed = 0u;
+
+    /* armability proof (campaign lesson: never read 0-hits as evidence
+     * before proving the instrument runs): first scan prints tracked count. */
+    if (g_rec_watch_armed == 0u) {
+        uint32_t i, n = 0u;
+
+        g_rec_watch_armed = 1u;
+        for (i = 0u; i < 64u; ++i) {
+            if (g_rec_shadow[i].task != NULL) {
+                n++;
+            }
+        }
+        kernel_debug_printf("rec-watch: armed tracked=%u\n", (unsigned int)n);
+    }
+
+    for (t = g_head; t != NULL; t = t->next) {
+        const sched_rec_shadow_t *sh;
+
+        if (!scheduler_node_sane(t) || ++steps > SCHED_LIST_WALK_CAP) {
+            break;
+        }
+        sh = rec_shadow_find(t);
+        if (sh == NULL) {
+            continue; /* born before table full: skip silently */
+        }
+        if ((uintptr_t)(uint32_t)t->pid != sh->pid ||
+            (uintptr_t)t->stack != sh->stack ||
+            (uintptr_t)t->context != sh->ctx) {
+            if (g_rec_watch_budget != 0u) {
+                g_rec_watch_budget--;
+                kernel_debug_printf("rec-watch: CORRUPT task=%x pid %u->%d stack %x->%x ctx %x->%x\n",
+                                    (unsigned int)(uintptr_t)t,
+                                    (unsigned int)sh->pid, t->pid,
+                                    (unsigned int)sh->stack,
+                                    (unsigned int)(uintptr_t)t->stack,
+                                    (unsigned int)sh->ctx,
+                                    (unsigned int)(uintptr_t)t->context);
+            }
+            rec_shadow_take(t); /* re-baseline; next delta is a NEW event */
+        }
+    }
+}
+
 
 static void scheduler_save_current_context(process_t *task,
                                            kernel_trap_frame_t *frame,
@@ -874,6 +1048,13 @@ static void scheduler_save_current_context(process_t *task,
         scheduler_ledger_note(kernel_cpu_index(), task, frame);
     }
     task->context = frame;
+    {
+        sched_rec_shadow_t *sh = rec_shadow_find(task);
+
+        if (sh != NULL) {
+            sh->ctx = (uintptr_t)frame;
+        }
+    }
 }
 
 /*
@@ -1845,6 +2026,7 @@ void scheduler_add_task(process_t *proc) {
             scheduler_list_diag("ADD-ABORTED", p->next, p);
         }
     }
+    rec_shadow_take(proc); /* RECORD-WATCH baseline (adendo 33) */
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
     if (!g_audio_task_added_trace_emitted &&
         proc->service_type == MK_SERVICE_AUDIO) {
@@ -2576,6 +2758,12 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
 
     if ((tick % 25u) == 0u) {
         scheduler_overdue_scan(tick);
+    }
+
+    /* RECORD-WATCH: diff the never-change fields of every linked record
+     * every ~100 ticks (adendo 33). */
+    if ((tick % 100u) == 0u) {
+        rec_watch_scan();
     }
 
     /*

@@ -2564,6 +2564,9 @@ static uint32_t sys_execve(uint32_t path_ptr, uint32_t argv_ptr,
      * and the next dispatch must land on the NEW stack, not the parked one. */
     kernel_tss_set_kernel_stack((uintptr_t)current->stack + current->stack_size);
     current->context = loaded->context;
+    /* RECORD-WATCH (P4 adendo 33): execve legitimately moves stack+context;
+     * refresh the shadow so the watchdog does not report the legit swap. */
+    scheduler_rec_watch_refresh(current);
     current->image_base = loaded->image_base;
     current->image_size = loaded->image_size;
     current->entry_point = loaded->entry_point;

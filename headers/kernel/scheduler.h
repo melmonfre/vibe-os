@@ -23,6 +23,9 @@ int scheduler_stack_overlap(uintptr_t lo, uintptr_t hi, uintptr_t *os_out,
  * adendo 17): pair with smp_tick_counts_dump to locate the stall stage. */
 uint32_t scheduler_frame_entry_count(uint32_t cpu_index);
 void scheduler_frame_counts_dump(void);
+/* RECORD-WATCH (P4 classe #5 adendo 33): refresh the shadow for a task whose
+ * context/stack changed legitimately outside the save wrapper (execve). */
+void scheduler_rec_watch_refresh(process_t *task);
 /* Last C gate before an IRQ epilogue irets: validate the frame CONTENT the
  * CPU is about to resume (eip/cs sanity per ring) — catches the corrupted-
  * content-in-legit-stack entry the STALE-AT-ENTRY witness proved it is not. */

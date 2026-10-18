@@ -1253,3 +1253,32 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   UP validate-phase6-boot-smoke rc=0; matrix modular-apps/validate nao
   reprocessada integral (mudanca de flags nao toca ABI; proxima rodada
   ampla re-roda se o escritor for nomeado).
+
+### P4 — adendo 33 de 18/10 (RECORD-WATCH armado com prova de alcançabilidade; auto-correção do falso-positivo IDLE-TASK=meu top-edge; CTX-MISMATCH PAGOU no 1o lote: context=1 selecionado sob lock vira VALIDO no gap unlock→sanitize — o escritor vive no GAP, não entre ticks)
+
+- RECORD-WATCH (shadow pid/stack/ctx por task, diff a cada 100 ticks, re-baseline no
+  evento, refresh no save-wrapper e no execve): ARMED provado (`rec-watch: armed
+  tracked=24` em todos os runs). CORRUPT 0 hits — explicacao medida (nao suposição):
+  a janela da corrupcao e SUB-tick e o save legitimo re-baselineia o shadow; cadencia
+  de 100 ticks nao pega transiente. Blind spot documentado, arma certa e a de baixo.
+- AUTO-CORRECAO honesta: o primeiro `IDLE-TASK pid=1 rsp=390be600` era FALSO-POSITIVO
+  MEU — janela half-open aceita o topo exato, e ESP do hlt-loop no topo da bootstrap
+  stack do AP e o estado PROJETADO. Ramo novo `IDLE-BOOT-EDGE` separa o topo legitimo
+  de colisao real. (Licao: witnesses tambem precisam do Q5 de verde-falso.)
+- CTX-MISMATCH (novo gate em sanitize: `dispatched=frame lido sob lock` vs
+  `task->context lido agora`, so quando o frame fora do stack): PAGOU no 1o lote
+  (cm2, run-hang): `pid=9 cpu=0 dispatched=1 live=392a1cc4 sw=219` — o resume de
+  pid=9 comecou com context=1 (IVT-garbage, o mesmo frame=1 das capturas rw2/wg7) e
+  no gap unlock->sanitize o campo ja era um ponteiro VALIDO dentro do proprio stack
+  (392a1cc4 ∈ [39261fe0,392a1fe0)). LEDGER do mesmo instante: saves legitimos de
+  pid=9 em t=1805 com frames validos (0x392a0c94) — no cpu CERTO. Conclusao:
+  entre a selecao e o iret, ALGUEM re-escreve context de volta para o valor legitimo
+  — a mesma mao que poe 1 la dentro age no microsegundo do gap. A corrupt-then-
+  restore e o porque de TODAS as testemunhas de estado estavel (rec-watch,
+  node_sane, FIELDS) ficarem mudas.
+- PROXIMA (1/rodada, check de custo zero no caminho quente existente): no
+  scheduler_save_current_context, a PREMISSA e task->current_cpu == cpu corrente
+  (so o dono da pilha salva nela). Adicionar invariant-check no wrapper:
+  `task->current_cpu != kernel_cpu_index()` => `sched-save: FOREIGN-CPU` com os
+  dois cpus + pid — se a dupla-execucao de pid=9 existe, o save do OUTRO cpu
+  dispara isso in-loco, nomeando o par no ato.
