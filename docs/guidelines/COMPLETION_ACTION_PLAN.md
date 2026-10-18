@@ -945,3 +945,30 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   timeout hook — o wake NAO deve marcar RUNNING se a task ja saiu da cpu
   (current_cpu>=0 mas g_current[cpu]!=task = ghost em formacao); (c) manter o
   GHOST-repair como rede de seguranca mas nomear a FORMACAO, nao o sintoma.
+
+### P4 — adendo 23 de 18/10 (WHO ainda sem flagrante (0/4 runs); w2-1 mostra o AVAL final da cadeia: ret deslocado para DADOS da stack do pid=5 executa garbage que ESCREVE em .text — W^X nega (PF err=3 cr2=238fb))
+
+- SAMPLING who5-8/w2-1..3 (build WHO-curto, budget 6->12): face poison 0 hits;
+  faces observadas: 2 hang, 5 crashes (eip=3/7/0x217/heap) — a janela de
+  dupla-posse do ctx-save e rara (~1/8), WHO continua armada.
+- w2-1 (PF em 418): `pf-text: err=3 eip=390e75bc cr2=238fb` — eip = DENTRO do
+  payload da stack do pid=5 ([390d8080,390e8080)) = o CPU estava EXECUTANDO
+  dados de stack (bytes empurrados como instrucoes); o window[-32..+12] do
+  CR2 mostra codigo real de .text (prologo/epilogos mov/movb/xor) — a escrita
+  foi NEGADA por W^X (CR0.WP), provando o instrumento e dando a primeira
+  imagem do AVAL: `ret` com return-address corrompida caindo em dados de
+  stack legitima. O PRIMEIRO salto deslocado continua sem flagrante (ele nao
+  passa pelos 4 saves nem pelo dispatch sanitize — senao WHO/CTX teriam
+  pegado): candidato remanescente = buffer de retorno corrompido no TOPO da
+  pilha por overflow de LOCAL (memcpy/strncpy de path/mensagem 276B em
+  buffer local menor no caminho storage). Proxima sonda (1/rodada): auditar
+  buffers locais do caminho do host storage (mk_service_request/
+  ipc_receive/sys_storage_load handlers): todo `char buf[N]`/`uint8_t
+  frame[..]` com copy de dados externos, checar bounds N vs fonte; o
+  `request_copy` de 276B em stack de task de 32K+ e visivel — os buffers
+  locais menores nos handlers do init sao os suspeitos.
+- ESTADO HONESTO: a parede da classe #5 reduziu a UMA assinatura final
+  (execucao-em-dados) com dois estagios: estagio-1 (ainda sem testemunha:
+  overflow de local corrompendo return/saved-esp) e estagio-2 (cascos: WHO/
+  CTX/WATERMARK pegam quando o dano toca context/salva; pf-text/W^X pegam
+  quando toca .text).

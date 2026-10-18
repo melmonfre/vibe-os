@@ -707,7 +707,7 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
  * the FIRST poisoning write (budgeted). frame==NULL saves (terminate paths)
  * pass through unchecked (they are cleared intentionally).
  */
-static volatile uint32_t g_sched_ctxsave_budget = 6u;
+static volatile uint32_t g_sched_ctxsave_budget = 12u;
 static void scheduler_save_current_context(process_t *task,
                                            kernel_trap_frame_t *frame,
                                            const char *site) {
