@@ -972,3 +972,29 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   overflow de local corrompendo return/saved-esp) e estagio-2 (cascos: WHO/
   CTX/WATERMARK pegam quando o dano toca context/salva; pf-text/W^X pegam
   quando toca .text).
+
+### P4 — adendo 24 de 18/10 (auditoria estatica do estagio-1 NEGATIVA — todos os caminhos de copy do storage/fs estao clampados; overflow do return-slot exige captura dinamica; WHO/CTX sao a aposta)
+
+- AUDITORIA NEGATIVA documentada (procura pelo escritor do return-address no
+  caminho storage, candidates de `char[N]` local): (1) `mk_transfer_copy_from/
+  to` clampam `size <= slot->size` E os syscalls validam a janela do usuario
+  via `sys_user_ptr_ok` — o dst kernel-side e heap slot, nunca stack local;
+  (2) fs paths viaam por transfers de tamanho dinamico (`strlen+1`) com
+  validacao host-side (`mk_fs_validate_path_transfer` checa tamanho+terminador
+  ANTES de usar) — sem buffer local fixo no caminho; (3) `tail_sector[512]` e
+  lido com exatamente 1 setor; `verify[512]` idem; `realpath_path` limita
+  `len>=256` antes do copy; (4) drivers ata/nvme/ahci: buffers locais casam
+  com o tamanho do setor/estrutura lida; (5) `ipc_receive` clampa `tocopy <=
+  bufsize`; `g_current[]` e mutado EXCLUSIVAMENTE sob g_scheduler_lock (grep
+  repo-wide: init/reuse/idle-null/terminate-clear) — inline_wake nao pode
+  criar RUNNING sem g_current correspondente na mesma janela.
+- CONCLUSAO: o estagio-1 (corrupcao do slot de retorno/ESP salvo ANTES do
+  primeiro iret ruim) NAO e reproduzivel estaticamente no caminho storage —
+  o escritor e dinamico (timing/estado), exatamente o dominio das testemunhas
+  WHO/CTX/WATERMARK. A taxa da face poison (~1/8 dos runs) manda o metodo:
+  amostrar em lote (6-8 runs por rodada) ate o WHO nomear owner+cur no
+  momento da save; a previsão da hipotese inline-wake e `owner=1 cur=1` com
+  `task pid != 1` na MESMA linha WHO.
+- GATES desta rodada: make -Werror verde; UP validate-phase6-boot-smoke rc=0
+  (WHO-curto build); smp2: 6 runs amostrados com budget 12 (0/6 poison; faces
+  2 hang + 4 crash, pf-text capturando a negacao W^X em w2-1).
