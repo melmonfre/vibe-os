@@ -764,15 +764,28 @@ uint32_t smp_cpu_count(void) {
     return g_smp_started_cpus;
 }
 
+/*
+ * Gating fix (P4 audit 18/10): the IPI vectors this kernel actually uses are
+ * 0x82 (wake) and 0x83 (per-CPU timer) — BOTH >= 32. The old guards were
+ * inverted: `vector < 32u` in dispatch meant a registered IPI handler could
+ * NEVER run, and `vector >= 32u` in register meant the public API rejected
+ * exactly the vectors that get sent. Today the wake/timer paths bypass this
+ * table via dedicated IDT stubs, so the bug is dormant — but any future
+ * `smp_register_ipi_handler(0x83, ...)` silently fails. CPU exception vectors
+ * (0-31) are not IPI-able by definition, so the correct domain is >= 32.
+ * Handlers EOI themselves; dispatch only EOIs when nothing consumed the
+ * vector (keeps the previous behaviour for the registered handler).
+ */
 void smp_ipi_dispatch(uint8_t vector) {
-    if (vector < 32u && g_smp_ipi_handlers[vector] != NULL) {
+    if (vector >= 32u && g_smp_ipi_handlers[vector] != NULL) {
         g_smp_ipi_handlers[vector]();
+        return;
     }
     local_apic_eoi();
 }
 
 int smp_register_ipi_handler(uint8_t vector, smp_ipi_handler_t handler) {
-    if (!g_smp_ipi_initialized || vector >= 32u || handler == NULL) {
+    if (!g_smp_ipi_initialized || vector < 32u || handler == NULL) {
         return -1;
     }
     g_smp_ipi_handlers[vector] = handler;

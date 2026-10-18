@@ -1053,3 +1053,41 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   schedule_frame), mas o park-loop do AP fora de schedule_frame pode re-entrar
   por IPI de wake (`smp_wakeup_ipi_handler`): audit-lo quanto a reentrancia no
   mesmo espirito do adendo 17.
+
+### P4 — adendo 27 de 18/10 (auditoria do park-loop do AP: reentrancia LIMPA; bug real encontrado = gating INVERTIDO na API de IPI (>=32 rejeitado no register, <32 exigido no dispatch) — corrigido; lote 4/4 sem stall pre-scheduler; WHO ainda 0/14)
+
+- AUDITORIA DO PARK (sonda do adendo 26): `smp_ap_entry` park = `sti;hlt` +
+  `schedule()` APENAS com scheduler-enabled; wake-via-IPI stub NAO chama
+  schedule_frame (so EOI); o tick ja esta coberto pela idle-mask do adendo 17.
+  Veredito: NENHUMA reentrancia no park. As estagnacoes pre-scheduler (ov2/
+  ov3) NAO se reproduziram no lote pos-fix (0/4) — eram faces de timing, nao
+  o park.
+- BUG REAL ENCONTRADO E CORRIGIDO (gating de API, dormente): `smp_ipi_dispatch`
+  exigia `vector < 32u` e `smp_register_ipi_handler` REJEITAVA `vector >= 32u`
+  — mas os unicos vetores IPI deste kernel sao 0x82/0x83 (>=32, por definicao:
+  0-31 sao excecoes de CPU). Consequencia: QUALQUER handler registrado via API
+  publica jamais rodaria, e o wake-handler direto (linha de init) so funcionava
+  por acidente de rota (IDT stub proprio). Corrigido para o dominio correto
+  (>=32 no dispatch; register rejeita <32) e EOI passa a ser de responsabilidade
+  do handler quando existe (sem duplo-EOI). Sem mudanca observavel de
+  comportamento (rota ativa nao passa pela tabela) — prova: UP smoke rc=0 +
+  4 runs smp2 sem regressao de wake/timer.
+- LOTE POS-FIX (4 runs): fix1 `desktop: session ready` em 16s (mais rapido
+  desta campanha), fix2-4 crashes no mesmo eixo com variantes NOVAS mapeadas:
+  (a) fix2 `Page Fault USER pid=9 eip=0xf000d957 cs=0x1b` = o context salvo de
+  pid=9 ganhou EIP do lixo da IVT (leitura em frame=8 — mesmo par de bytes das
+  capturas antigas), e o handler de PF de usuario ABATEU o task corretamente
+  (contencao de falha funcionando); (b) fix3 `GP err=3c0 eip=0x369
+  cs=0x390be1ac` — o ENDERECO-FAMILIA do init-ESP (0x390be1a0-30) aparece como
+  CS de um iret: frame lido com DESLOCAMENTO de ~64B abaixo do topo da pilha
+  do init, nao lixo randomico; (c) fix4 = #UD eip=3 f0 53 classico.
+- ESTADO: WHO/CTX 0 hits em 14 runs — os caminhos de morte atuais NAO passam
+  pelos 4 saves nem pelo dispatch de resume (sanitize so ve o frame no
+  momento do dispatch; o deslocamento acontece depois/entre). Proxima sonda
+  (1/rodada): medir O CONTEUDO do topo da pilha do init — witness no
+  `switch-out`/`block-save` do schedule_frame: apos gravar context, guardar o
+  VALOR do frame de todos os tasks num snapshot por-cpu (last-saved-frame +
+  tick) e comparar no momento do GP/#UD (dump via kernel_panic: "last-frame
+  cpu=N pid=.. frame=.. tick=..") — transforma "frame apareceu deslocado" em
+  "o ultimo save legitimo foi X em T; o resume usou Y != X" = nomeia a janela
+  entre-save e resume onde o conteudo some.
