@@ -4553,6 +4553,43 @@ void syscall_init(void) {
 /* dispatch routine called by ISR */
 uint32_t syscall_dispatch_internal(uint32_t num, uint32_t a, uint32_t b,
                                    uint32_t c, uint32_t d, uint32_t e) {
+    /*
+     * STALE-ESP0 witness (P4 classe #5, adendo 30): runs on EVERY ring3->ring0
+     * transition, before any handler can push. If the TSS esp0 this cpu just
+     * used to enter kernel mode differs from the CURRENT task's declared
+     * stack top, the trap frame was pushed onto somebody else's memory
+     * (dr4's WHO scene: pid=9 running on cpu0 with ESP inside INIT's stack).
+     * This is the in-loco moment: esp0 wrong + tss-ring history names which
+     * install left the stale value. Kernel-mode callers (execve from init's
+     * host loop, service locals) may legitimately differ in esp0 vs current
+     * when there is no user task; only check user-mode currents.
+     */
+    {
+        process_t *t = scheduler_current();
+
+        if (t != NULL && t->runs_in_user_mode != 0u &&
+            t->stack != NULL && t->stack_size != 0u) {
+            uintptr_t esp0 = kernel_tss_get_kernel_stack(kernel_cpu_index());
+            uintptr_t want = (uintptr_t)t->stack + t->stack_size;
+
+            if (esp0 != 0u && esp0 != want) {
+                static volatile uint32_t g_syscall_esp0_budget = 8u;
+                if (g_syscall_esp0_budget != 0u) {
+                    g_syscall_esp0_budget--;
+                    kernel_debug_printf("sys-esp0: STALE-AT-ENTRY pid=%d cpu=%u esp0=%x want=%x num=%u\n",
+                                        t->pid,
+                                        (unsigned int)kernel_cpu_index(),
+                                        (unsigned int)esp0, (unsigned int)want,
+                                        (unsigned int)num);
+                    /* Name which INSTALLS left this stale value while the
+                     * evidence is in place (se4 caught a transient one;
+                     * the harmful ones — dr4 class — must show the
+                     * preceding publish history here). */
+                    kernel_tss_install_ring_dump("stale-entry");
+                }
+            }
+        }
+    }
     if (num < MAX_SYSCALLS && syscall_table[num]) {
         return syscall_table[num](a, b, c, d, e);
     }

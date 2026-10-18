@@ -1167,3 +1167,30 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   de esp0 e do top esperado.
 - GATES: make -Werror verde; UP validate-phase6-boot-smoke rc=0 (build do
   CTX-DRIFT); 6 runs smp2 (1 desktop 18s; honesto-vermelho).
+
+### P4 — adendo 30 de 18/10 (STALE-AT-ENTRY armado no dispatcher de syscall + anel de instalacoes junto; primeira captura in-loco 1/9 runs (se4) = TRANSIENTE BENIGNO; nas MORTES atuais a testemunha fica muda -> a entrada nao-e-ring3: a corrente comeca de ESP ja errado (ret/iret com conteudo de frame corrompido), nao de esp0 velho)
+
+- ARMADO: check `esp0 == topo do stack de g_current[cpu]` no ENTRY de toda
+  syscall (antes de handler empurrar nada), so para tasks de usuario
+  (runs_in_user_mode) — com `kernel_tss_install_ring_dump("stale-entry")`
+  colado no hit: quem publicou o valor velho aparece na hora, sem esperar crash.
+- MEDICAO (lote se+st = 9 runs): 1 hit (se4): `pid=12 cpu=1 esp0=391426e0
+  want=39148078 num=11` = esp0 ainda no topo do pid=9 (dispatch anterior da
+  mesma cpu) no primeiro syscall do recem-chegado pid=12 — e o desktop
+  CONTINUOU (hit unico, transitario, inofensivo neste run). Nas 4 mortes do
+  lote (st2/st3/st4 + anteriores): STALE-AT-ENTRY 0 hits.
+- ESTREITAMENTO POR ELIMINACAO (registro o que ficou): se a morte precisa de
+  um ring3->ring0 com esp0 velho, o check teria pegado (ele ve TODA entrada de
+  usuario). Nao pega => a corrente fatidica comeca com ESP ja errado via
+  caminho NAO-ring3: `ret`/`iret` lendo CONTEUDO corrompido de frame na
+  propria pilha legitima (content-level, o ponteiro esta certo — CTX-DRIFT 0/6
+  mostrou o pointer estavel; WATERMARK pega so quando cai em agua de marcador).
+  E o envenenamento de CONTEUDO do frame e o mesmo que as faces antigas ja
+  mostravam (eip=1/cs=1 no dr4, err=0x514 no st3). Proxima sonda (1/rodada):
+  verificador de CONTEUDO do frame no epilogdo IRQ — na saida de handler de
+  IRQ (stub asm) ha um ponto universal: em vez de asm, usar o ultimo gate C
+  disponivel — `scheduler_sanitize` ja checa so no dispatch; adicionar no
+  PROPRIO timer-handler, antes de retornar frame: validar os 4 words do topo
+  do frame (eip em text/user-range OU 0? cs em {8,0x1b,0x23}) e budget-witness
+  FRAME-BAD-AT-IRQEXIT com os valores — flagra o primeiro retorno com frame
+  podre sem esperar iret.
