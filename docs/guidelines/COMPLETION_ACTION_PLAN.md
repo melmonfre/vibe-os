@@ -875,3 +875,42 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   instrumentos novos; smp2 7 runs: faces {crash eip-heap, hang tempestade,
   crash f0 53} — vermelho honesto, mas o mapa de candidatos encolheu de
   "wake-loss storage" para "livelock de pid=5 + escritor intra-stack".
+
+### P4 — adendo 21 de 18/10 (ctx-save PAGOU o primeiro write-site: pid=9 sendo salvo com ESP vivo dentro da stack do INIT; SUSPECT narrowing; sane pid-bound; veneno OSCILA no record)
+
+- nc1 (hang, 533 linhas) produziu a cadeia mais limpa da campanha:
+  (1) `WATERMARK-FRAME pid=9 cpu=0 frame=390be1b0 stack=[391026e0,391426e0)
+  outside=1 eip=390b5f80 cs=390e76b4` — resume de pid=9 com context apontando
+  para 0x390be1b0, que é o MEIO da stack do INIT (init=[390b6600,390be600),
+  topo 0x390be600; 0x390be1b0 = topo-0x450 = região de trap-frame VIVO do
+  init). eip=0x390b5f80 = payload do record do init (dados como código);
+  (2) `sanitize cpu=1 old=5 next=9 frame=390be1b0 eip=40842 cs=202` — o MESMO
+  frame envenenado reaparece num dispatch na OUTRA cpu — dois cpus resumes do
+  mesmo valor;
+  (3) `sched-ctx-save: OUTSIDE-OWN-STACK site=preempt-skip pid=9 frame=390be1b0`
+  — PRIMEIRO write-site nomeado: o tick em cpu=0 salvou `current->context =
+  frame` com frame=ESP vivo dentro da stack do init, OU SEJA, cpu0 EXECUTAVA
+  pid=9 COM ESP na stack do init antes do save (a save é só o mensageiro);
+  (4) O RECORD dump do MESMO momento mostra `ctx=391423e4` (VALIDO!) no offset
+  0xc — o campo foi reescrito com valor válido entre o dispatch envenenado e a
+  leitura. O veneno OSCILA: dois escritores com visões diferentes do record.
+- LEITURA UNIFICADORA: 0x390be1b0 é ESP de trap do init. Dois cpus resumindo
+  com o mesmo frame = DUPLA EXECUCAO de pid=9 (um dispatch legítimo + um
+  resume stale), e o "salvamento" de um cpu grava o ESP do OUTRO no context.
+  A janela de dupla posse sobreviveu ao fix da espiral: candidatos剩下的 que
+  criam RUNNING-sem-dono: (a) inline_wake do timeout hook (task->state=RUNNING
+  sem garantir que NINGUEM mais o despachou), (b) GHOST-RUNNING repair
+  (pid=10 cur=0 visto em nc3 era o SINTOMA), (c) wake que seta READY mas a task
+  ainda esta em mid-switch-out. Próxima sonda (1/rodada): no ctx-save OUTSIDE,
+  dumpar `g_current[cpu]`, eip/cs do frame, e o owner legitimo do range do ESP
+  (qual task tem stack cobrindo 0x390be1b0) — se o dono for pid=1 com
+  state=RUNNING na OUTRA cpu, está provado o par A/B: inline_wake do timeout
+  criando um segundo dono vivo.
+- INSTRUMENTOS DA RODADA: node_sane agora exige `pid < 65536` (hg3 passou um
+  `timeout pid=823182467` porque o bound só exigia pid>0); SUSPECT esp0
+  narrowed p/ `runs_in_user_mode` (pg4 pegou falso-positivo: kernel task com
+  esp0=boot-idle legitimo — tasks do kernel nunca fazem ring3->ring0).
+- GATES: make -Werror verde; UP phase6-boot-smoke rc=0 (bounds novos ativos);
+  3 runs smp2: 0 SUSPECT (narrowing limpo), 0 BAD-NODE, 1 CTX-OUTSIDE
+  capturado + cadeia WATERMARK/sanitize/preempt-save — a face de poison agora
+  tem WRITE-SITE e OSCILACAO documentados.

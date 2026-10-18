@@ -623,8 +623,17 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
         {
             uintptr_t hs = kernel_heap_start();
             uintptr_t he = kernel_heap_end();
-
-            if (hs != 0u && he != 0u && (esp0 <= hs || esp0 > he)) {
+            /*
+             * Narrowed (adendo 21): the pg4 SUSPECT (pid=12 kind=0
+             * runs_in_user_mode=0 ctx==frame esp0==boot idle top) was a
+             * FALSE POSITIVE — a kernel task never takes ring3->ring0, so
+             * its esp0 is legitimately whatever the idle/boot path set
+             * (0x391caad8 = a live kernel stack top). The poisoning mode
+             * this witness was built for is a USER task resuming onto a
+             * foreign kernel stack; require runs_in_user_mode.
+             */
+            if (hs != 0u && he != 0u && next_task->runs_in_user_mode != 0u &&
+                (esp0 <= hs || esp0 > he)) {
                 static volatile uint32_t g_sched_esp0_budget = 8u;
                 if (g_sched_esp0_budget != 0u) {
                     g_sched_esp0_budget--;
@@ -1245,7 +1254,17 @@ static int scheduler_node_sane(process_t *node) {
     if (!kernel_heap_is_block(node)) {
         return 0;
     }
-    return node->pid > 0 &&
+    /*
+     * pid bound (P4 adendo 21): hg3 printed `scheduler: timeout
+     * pid=823182467 class=-35526648 event=1979646058` — a node PASSES the
+     * is_block + `pid>0` checks when a live record's payload is trashed:
+     * `pid>0` accepted a 8-digit garbage pid. pids come from g_next_pid++,
+     * never exceed a few hundred in any boot; 65536 is a generous hard cap.
+     * Tightening membership converts "garbage record flows silently past
+     * every per-field guard" into a named BAD-NODE at the FIRST poisoned
+     * walk — earlier than any resume/timeout dereference.
+     */
+    return node->pid > 0 && node->pid < 65536 &&
            (int)node->kind <= (int)PROCESS_KIND_KERNEL_TASK &&
            (int)node->state <= (int)PROCESS_TERMINATED;
 }
