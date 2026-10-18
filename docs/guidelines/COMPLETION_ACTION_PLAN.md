@@ -998,3 +998,29 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - GATES desta rodada: make -Werror verde; UP validate-phase6-boot-smoke rc=0
   (WHO-curto build); smp2: 6 runs amostrados com budget 12 (0/6 poison; faces
   2 hang + 4 crash, pf-text capturando a negacao W^X em w2-1).
+
+### P4 — adendo 25 de 18/10 (lote 6/6 WHO: 0 poison; DESCOBERTA: WAKE ATRASADO ~220 TICKS ate nos runs que alcancam o desktop — o hang e o mesmo eixo com atraso maior)
+
+- LOTE (build WHO-curto budget 12, 6 runs): resultados: 2 DESKTOP READY (b3
+  60s, b6 44s), 1 hang, 3 crashes; WHO 0 hits (taxa poison cumulativa ~1/12).
+- NOVA MEDICAO (b3/b6 — os runs BONS): `sched-watch: overdue pid=9` em
+  stream continuo com `deadline` avancando de 4 em 4 e tick ~220 a frente do
+  deadline (ex: deadline=805 visto em tick=1025) — ou seja: a wait de pid=9
+  expira e e RE-ARMADA (~4 ticks por ciclo) mas o scan de overdue observa
+  expiracoes ~220 ticks ATRASADOS. Leitura: os wakes do timeout-hook do
+  storage-client estao SENDO processados com atraso de centenas de ticks
+  (o hook roda no tick da BSP; se o scan/`service: timeout` delay de pid=9 e
+  ~200ms, o handoff request→reply do fs fica 200ms por byte-ciclo — e nos
+  runs-HANG esse atraso vira INFINITO: mesmo eixo, duas magnitudes).
+- HIPOTESE UNIFICADA do hang atual: starvation do timeout-hook (varredura
+  por tick com ~20 schedule_frame calls/tick de pid=5 + locks disputados) →
+  wakes de `deadline` atrasam centenas de ticks (runs bons) ou nunca (hangs).
+  A classe #5 (poison/dupla-posse) pode ser CONSEQUENCIA colateral do mesmo
+  atraso: janelas longas sem schedule_frame na cpu = trap-frames stale.
+- PROXIMA SODA (1/rodada, barata): no trace de wake do timeout-hook,
+  imprimir DELTA `late=tick-deadline` (quantificar a distribuicao do atraso
+  por cpu/periodo) + checar custo da varredura do hook (SCHED_LIST_WALK_CAP,
+  cadencia 1000-tick do census) vs os ~20 calls/tick do pid=5.
+- GATES: make -Werror verde; UP smoke rc=0 (build ja amostrado); 6 runs
+  honestos documentados. NENHUMA mudanca de codigo desta rodada alem das
+  testemunhas existentes — proxima rodada instrumenta o delta de wake.
