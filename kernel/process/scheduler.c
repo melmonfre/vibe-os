@@ -719,13 +719,43 @@ static void scheduler_save_current_context(process_t *task,
 
         if (f < s || f + sizeof(kernel_trap_frame_t) > se) {
             if (g_sched_ctxsave_budget != 0u) {
+                uintptr_t os = 0u, oe = 0u;
+                int ost = -1;
+                int owner;
+                process_t *self_now;
+                uint32_t cpu_now = kernel_cpu_index();
+
                 g_sched_ctxsave_budget--;
+                owner = scheduler_stack_overlap(f, f + 1u, &os, &oe, &ost);
+                self_now = (cpu_now < 32u) ? g_current[cpu_now] : NULL;
                 kernel_debug_printf("sched-ctx-save: OUTSIDE-OWN-STACK site=%s pid=%d kind=%d cpu=%d frame=%x stack=[%x,%x) sw=%u\n",
                                     site, task->pid, (int)task->kind,
                                     task->current_cpu,
                                     (unsigned int)f, (unsigned int)s,
                                     (unsigned int)se,
                                     (unsigned int)task->context_switches);
+                /*
+                 * Double-ownership decider (P4 adendo 22, nc1 chain): the
+                 * poison value 0x390be1b0 was init's LIVE trap ESP saved as
+                 * pid=9's context. This second line names, at the save
+                 * moment: whose stack actually contains the frame (owner),
+                 * the owner's state, and what g_current holds for the
+                 * SAVING cpu. If owner == the cpu's real runner and differs
+                 * from `task`, the inline-wake/desync pair is proven; if
+                 * owner == -1 the frame sits in a free/non-stack block.
+                 */
+                /* Two SHORT lines: who4 proved a single 170-char line was
+                 * eaten by serial overrun under smp2 load (the WHO line
+                 * vanished, the OUTSIDE line arrived with a corrupted tail
+                 * "1055)" instead of the stack end). */
+                kernel_debug_printf("sched-ctx-save: WHO owner=%d st=%d rng=[%x,%x)\n",
+                                    owner, ost,
+                                    (unsigned int)os, (unsigned int)oe);
+                kernel_debug_printf("sched-ctx-save: WHO cpu=%u cur=%d eip=%x cs=%x\n",
+                                    (unsigned int)cpu_now,
+                                    self_now ? self_now->pid : -1,
+                                    (unsigned int)frame->eip,
+                                    (unsigned int)frame->cs);
             }
         }
     }

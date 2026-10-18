@@ -914,3 +914,34 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   3 runs smp2: 0 SUSPECT (narrowing limpo), 0 BAD-NODE, 1 CTX-OUTSIDE
   capturado + cadeia WATERMARK/sanitize/preempt-save — a face de poison agora
   tem WRITE-SITE e OSCILACAO documentados.
+
+### P4 — adendo 22 de 18/10 (DUPLA POSSE PROVENHA ao nivel do census: pid=1 RUNNING em cpu=1 no MESMO tick em que o preempt-skip de cpu=1 trata pid=5 como current; WHO-line foi comida por serial overrun — corrigida em 2 linhas curtas; 4 runs p/ amostrar o poison)
+
+- EVIDENCIA (who4, o run que ALCANCOU o desktop): linha 807 census t=4000:
+  `1:1:1:0:2:2` = pid=1 state=1 RUNNING current_cpu=1. Linha 809, mesmo
+  instante: `sched-ctx-save: OUTSIDE-OWN-STACK site=preempt-skip pid=5
+  kind=1 cpu=1 frame=390be1b0` = o tick de cpu=1 salvou ESP=0x390be1b0 (DENTRO
+  da stack do pid=1) como context de pid=5. Dois registros afirmam cpu=1 no
+  mesmo tick: pid=1 (state RUNNNING@cpu1) e pid=5 (g_current[1] que o tick
+  serviu). A DUPLA POSSE nao e mais teoria de rotacao de face — esta no
+  snapshot do census. sel5=11695/t4000 ~3/s = pid5 ativa; logo quem corrompeu
+  o ESP de cpu=1 para a pilha do init foi o RESUME de pid=5 com context ja
+  envenenado (0x390be1b0 reaparece identico em nc1 — o mesmo enderego entre
+  runs = offset estrutural do init-frame em pilha de ~2KB usados).
+- INSTRUMENTO CORRIGIDO: a WHO-line original (~170 chars) NAO CHEGOU ao
+  capture (serial overrun sob carga smp2 — mesmo mecanismo que truncou
+  `stack=[390d8080,1055)`); agora splitada em 2 linhas <=80 chars
+  (`WHO owner=.. st=.. rng=..` / `WHO cpu=.. cur=.. eip=.. cs=..`). LIÇÃO
+  gravada: testemunhas serial em smp2 devem caber em ~80 chars.
+- AMOSTRAGEM: who5-8 (build com WHO curto): 0 hits — a face poison e rara
+  (~1/8 runs ate hoje; nc1 1/3, who4 1/4). Os 4 runs: 2 hang + 2 crash sem
+  poison. WHO fica armada (budget 6) e o proximo flagrante virá com owner +
+  g_current da cpu salvadora nomeados.
+- ESTAD DA CAMPANHA (honesto): classe #5 reduzida a UM mecanismo: janela de
+  dupla posse entre o timeout inline-wake (`task->state = RUNNING` se
+  g_current[cpu]==task) e o dispatch legítimo na outra extremidade. Próximos
+  passos concretos: (a) capturar WHO com owner=1 e cur=5 (previsao da
+  hipotese) OU refutar; (b) auditar o par inline-wake vs switch-out no
+  timeout hook — o wake NAO deve marcar RUNNING se a task ja saiu da cpu
+  (current_cpu>=0 mas g_current[cpu]!=task = ghost em formacao); (c) manter o
+  GHOST-repair como rede de seguranca mas nomear a FORMACAO, nao o sintoma.
