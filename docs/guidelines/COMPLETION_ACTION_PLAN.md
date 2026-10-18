@@ -1220,3 +1220,36 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   invisivel e vira NOME. Se o -fstack-protector inteiro pesar/inflacionar,
   aplicar por-arquivo (microkernel/, drivers/storage/, ipc/) medindo boot-time.
   ABI/userland: nenhum efeito (protecao interna do kernel).
+
+### P4 — adendo 32 de 18/10 (SSP GLOBAL LIGADO (kernel+SDK+userland-main+desktop runtime), custo medido, 0/4 stack-chk nas faces — classe "local buffer overflow" ELIMINADA como mecanismo da classe #5; conserto de build pre-existente do ksh no caminho)
+
+- LIGADO: CFLAGS agora `-fstack-protector -mstack-protector-guard=global`
+  (com -fno-pic -fno-pie gera load DIRETO do simbolo — sem %gs/GOT, flat-safe;
+  verificado no -S do host gcc 16.2). Provedores do guard em cada grupo de
+  link: kernel/stackguard.c (panic com caller nm-avel), lang/sdk/app_runtime.c
+  (apps), userland/modules/ssp.c (userland-main), 
+  userland/applications/desktop_app_runtime.c (launchers desktop). Lua
+  vendored: -fno-stack-protector na regra propria (mesma politica do DOOM).
+  Todos usam o mesmo valor-marcador "VIBE".
+- CUSTO MEDIDO: kernel text 439113->439623 (~+0.1%), boot tempo real
+  inalterado (UP smoke rc=0, desktop sp/fe 16-22s como antes).
+- CONSERTO DE BUILD PRE-EXISTENTE (achado ao limpar build/ para rebuild
+  total — ksh nunca tinha compilado do zero desde o merge BSD-shell):
+  compat/bin/ksh/ksh_compat.h agora forca #include <time.h> (lex.c/c_sh.c
+  perdiam as declaracoes time/localtime/strftime/clock_gettime na cadeia
+  compat; os CLOCK_* macro da arvore vem DO time.h — meu define manual de
+  valor BSD 3 foi descartado ao colidir com o valor POSIX desta lib = 1).
+  `make full` nao e reproduzivel neste host (build/usb-guest root-owned —
+  limpar com sudo pela mantenedora; documentado).
+- MEDICAO DA SODA (4 runs smp2 com SSP total): stack-chk 0 hits; mortes
+  identicas as faces anteriores (eip=3 f0 53; PF err=3; sp3 WATERMARK com
+  context=1 e sw lidos do vetor nulo). Conclusao por eliminacao: o escritor
+  NAO estoura buffer local de funcao protegida (canary 100% coberto); escreve
+  DIRETAMENTE nos campos do record via ponteiro (context=1, next=0xa...) —
+  permanece unica familia de explicacoes: um segundo alias/uso-apos-freescrito
+  atraves de ponteiro que NAO passa pelos guards de heap (allocpc legitimo)
+  nem pelos saves (CTX 0/14). O LEDGER/WHO continuam as redes certas.
+- GATES: make completo verde (rebuild do zero dos objetos afetados);
+  UP validate-phase6-boot-smoke rc=0; matrix modular-apps/validate nao
+  reprocessada integral (mudanca de flags nao toca ABI; proxima rodada
+  ampla re-roda se o escritor for nomeado).

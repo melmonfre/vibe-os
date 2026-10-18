@@ -772,3 +772,23 @@ void setbuf(FILE *stream, char *buf) {
     (void)stream;
     (void)buf;
 }
+
+/*
+ * Stack-protector support for the desktop launcher link group (startx et
+ * al. link THIS runtime instead of lang/sdk/app_runtime.c, and
+ * userland/modules/ssp.c only rides USERLAND_SRCS). Shared CFLAGS enable
+ * -fstack-protector for every object, so this group needs its own guard
+ * provider: name the event through the module syscalls' debug channel, then
+ * park. P4 classe #5 probe.
+ */
+extern void sys_write_debug(const char *msg);
+extern void sys_yield(void);
+
+unsigned long __stack_chk_guard = 0x56494245UL; /* "VIBE" */
+
+__attribute__((noreturn)) void __stack_chk_fail(void) {
+    sys_write_debug("desktop runtime: stack check fail (local buffer overflow)\n");
+    for (;;) {
+        sys_yield();
+    }
+}

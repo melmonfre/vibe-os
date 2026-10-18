@@ -80,4 +80,12 @@ static inline int strnvis(char *dst, const char *src, size_t dlen, int flags) {
 extern const char *sys_signame[];
 extern const char *sys_siglist[];
 
+/* ksh's own files (lex.c, c_sh.c) were written expecting <time.h> to reach
+ * them through the legacy include chain; the compat split lost that edge, so
+ * the forced compat header restores it. The header itself provides the
+ * POSIX 199309 clock ids (CLOCK_MONOTONIC == 1 matching
+ * compat/src/posix/time.c) and the time/localtime/strftime/clock_gettime
+ * prototypes these files call — no hand-rolled duplicates here. */
+#include <time.h>
+
 #endif

@@ -589,6 +589,7 @@ USERLAND_SRCS := \
 	$(USERLAND_DIR)/modules/lang_loader.c \
 	$(USERLAND_DIR)/modules/utils.c \
 	$(USERLAND_DIR)/modules/syscalls.c \
+	$(USERLAND_DIR)/modules/ssp.c \
 	$(USERLAND_DIR)/modules/ui.c \
 	$(USERLAND_DIR)/modules/dirty_rects.c \
 	$(USERLAND_DIR)/modules/ui_clip.c \
@@ -844,7 +845,12 @@ USERLAND_MAIN_BIN := $(BUILD_DIR)/userland-main.bin
 BOOTLOADER_BG_BIN := $(BUILD_DIR)/bootloader-bg.bin
 IMAGE := $(BUILD_DIR)/boot.img
 
-CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -I. -idirafter headers -Iuserland -Ilang/include -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
+# P4 classe #5 (adendo 31 probe): kernel objects now carry GCC stack
+# protection. With -fno-pic -fno-pie, -mstack-protector-guard=global emits a
+# DIRECT load of __stack_chk_guard (no %gs TLS, no GOT) — flat-ring0 safe.
+# Symbol impl: kernel/stackguard.c; a guard hit panics with the offender's
+# return address (nm-resolvable). DOOM/vendored CFLAGS keep -fno-stack-protector.
+CFLAGS := -std=gnu17 -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fstack-protector -mstack-protector-guard=global -fno-builtin -fcf-protection=none -nostdlib -Wall -Wextra -Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -I. -idirafter headers -Iuserland -Ilang/include -Ilang/vendor/quickjs-ng -Ilang/vendor/mruby/include -Ilang/vendor/micropython
 CFLAGS += -I$(APP_CATALOG_GENERATED_DIR)
 CFLAGS += -MMD -MP
 LUA_CFLAGS := -Iuserland/lua/include -Iuserland/lua/vendor/lua-5.4.6/src
@@ -1508,7 +1514,12 @@ $(LUA_APP_BUILD_DIR):
 
 $(LUA_APP_BUILD_DIR)/%.o: %.c | $(BUILD_DIR) $(LUA_APP_BUILD_DIR)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(LUA_CFLAGS) -DVIBE_USERLAND_APP -c $< -o $@
+	# Vendored Lua VM + its shim link WITHOUT lang/sdk/app_runtime.c, so the
+	# shared-CFLAGS stack protector would reference symbols this binary has
+	# no provider for (same reasoning as DOOM_CFLAGS keeping
+	# -fno-stack-protector): the SSP probe targets our kernel and SDK, not
+	# the vendored interpreter.
+	$(CC) $(CFLAGS) -fno-stack-protector $(LUA_CFLAGS) -DVIBE_USERLAND_APP -c $< -o $@
 
 $(SECTORC_APP_BUILD_DIR)/app_entry.o: lang/sdk/app_entry.c | $(BUILD_DIR)
 	@mkdir -p $(dir $@)

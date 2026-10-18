@@ -603,6 +603,25 @@ void abort(void) {
     exit(1);
 }
 
+/*
+ * GCC stack protector support for userland apps (P4 classe #5 probe): the
+ * shared CFLAGS enable -fstack-protector for every object including the app
+ * SDK build, so the guard symbol and fail path live in the runtime linked
+ * into every app — same naming channel as abort() (host write_debug), then
+ * the normal exit path. The kernel-side counterpart is kernel/stackguard.c.
+ */
+unsigned long __stack_chk_guard = 0x56494245UL; /* "VIBE" */
+
+__attribute__((noreturn)) void __stack_chk_fail(void) {
+    if (g_app_ctx && g_app_ctx->host && g_app_ctx->host->write_debug) {
+        g_app_ctx->host->write_debug("vibe app: stack check fail (local buffer overflow)\n");
+    }
+    exit(1);
+    for (;;) {
+        vibe_app_yield();
+    }
+}
+
 static vibe_app_thread_t *vibe_find_thread(vibe_app_thread_t *thread) {
     int i;
 
