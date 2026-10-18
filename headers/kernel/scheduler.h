@@ -23,6 +23,9 @@ int scheduler_stack_overlap(uintptr_t lo, uintptr_t hi, uintptr_t *os_out,
  * adendo 17): pair with smp_tick_counts_dump to locate the stall stage. */
 uint32_t scheduler_frame_entry_count(uint32_t cpu_index);
 void scheduler_frame_counts_dump(void);
+/* Last-saved-frame ledger per cpu (adendo 28): dump at panic/#UD-halt to
+ * compare the poisoned resume value against the last legit saves. */
+void scheduler_save_ledger_dump(void);
 
 /* enter the scheduler cooperatively from the current CPU context */
 void schedule(void);

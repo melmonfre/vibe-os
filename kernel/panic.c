@@ -23,6 +23,7 @@ void kernel_panic(const char *msg) {
     kernel_tss_install_ring_dump("panic");
     smp_tick_counts_dump();
     scheduler_frame_counts_dump();
+    scheduler_save_ledger_dump();
     kernel_text_clear();
     kernel_text_puts("KERNEL PANIC:\n");
     if (msg) {

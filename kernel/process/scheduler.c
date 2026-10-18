@@ -523,6 +523,63 @@ static void scheduler_trace_switch(uint32_t cpu_index,
                         (int)next_task->state);
 }
 
+/*
+ * Last-saved-frame ledger (P4 classe #5, adendo 28): WHO/CTX are 0/14 — the
+ * death paths never touch the four saves, so the displacement happens in the
+ * WINDOW between the last legit save and the resume. This ledger records the
+ * last 4 (pid, frame, tick) saves per cpu (short entries; serial witnesses
+ * must stay <=80 chars). scheduler_resume_lastsave_cmp() is called at
+ * WATERMARK-FRAME time and prints the ledger row beside the poisoned resume
+ * value: "last legit save X@T; resume used Y!=X" names the disappearance
+ * window by comparison instead of sampling the writers.
+ */
+typedef struct {
+    volatile uint32_t pid;
+    volatile uint32_t frame;
+    volatile uint32_t tick;
+    volatile uint32_t valid;
+} sched_save_rec_t;
+static sched_save_rec_t g_sched_save_ledger[4][4];
+static volatile uint32_t g_sched_save_head[4];
+
+static void scheduler_ledger_note(uint32_t cpu_index, process_t *task,
+                                  const kernel_trap_frame_t *frame) {
+    sched_save_rec_t *rec;
+    uint32_t head;
+
+    if (cpu_index >= 4u) {
+        return;
+    }
+    head = g_sched_save_head[cpu_index] & 3u;
+    g_sched_save_head[cpu_index] = head + 1u;
+    rec = &g_sched_save_ledger[cpu_index][head & 3u];
+    rec->pid = (uint32_t)task->pid;
+    rec->frame = (uint32_t)(uintptr_t)frame;
+    rec->tick = kernel_timer_get_ticks();
+    rec->valid = 1u;
+}
+
+/* Dumped from panic/#UD-halt beside the esp0 ring (declared in scheduler.h). */
+void scheduler_save_ledger_dump(void) {
+    uint32_t cpu;
+
+    for (cpu = 0u; cpu < 2u; ++cpu) {
+        uint32_t i;
+
+        for (i = 0u; i < 4u; ++i) {
+            const sched_save_rec_t *rec = &g_sched_save_ledger[cpu][i];
+
+            if (rec->valid == 0u) {
+                continue;
+            }
+            kernel_debug_printf("save-ledger cpu=%u %u: pid=%u f=%x t=%u\n",
+                                (unsigned int)cpu, (unsigned int)i,
+                                (unsigned int)rec->pid, (unsigned int)rec->frame,
+                                (unsigned int)rec->tick);
+        }
+    }
+}
+
 static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
                                                             const process_t *old_task,
                                                             const process_t *next_task,
@@ -602,6 +659,26 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
                 }
                 kernel_debug_printf("} task=%x\n",
                                     (unsigned int)(uintptr_t)next_task);
+                /* Comparison against THIS cpu's last legit saves: the
+                 * resume frame `f` should equal one of them (the last one
+                 * for this pid) — if not, the delta names the window where
+                 * the saved value was displaced. */
+                {
+                    uint32_t li;
+
+                    for (li = 0u; li < 4u; ++li) {
+                        const sched_save_rec_t *sv =
+                            &g_sched_save_ledger[cpu_index & 3u][li];
+
+                        if (sv->valid != 0u && sv->pid == (uint32_t)next_task->pid) {
+                            kernel_debug_printf("sched-resume: LEDGER %u f=%x t=%u (resume f=%x)\n",
+                                                (unsigned int)li,
+                                                (unsigned int)sv->frame,
+                                                (unsigned int)sv->tick,
+                                                (unsigned int)f);
+                        }
+                    }
+                }
             }
         }
     }
@@ -714,6 +791,8 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
  * pass through unchecked (they are cleared intentionally).
  */
 static volatile uint32_t g_sched_ctxsave_budget = 12u;
+
+
 static void scheduler_save_current_context(process_t *task,
                                            kernel_trap_frame_t *frame,
                                            const char *site) {
@@ -764,6 +843,9 @@ static void scheduler_save_current_context(process_t *task,
                                     (unsigned int)frame->cs);
             }
         }
+    }
+    if (frame != NULL) {
+        scheduler_ledger_note(kernel_cpu_index(), task, frame);
     }
     task->context = frame;
 }
@@ -1287,7 +1369,17 @@ static int scheduler_node_sane(process_t *node) {
      * recycled block) — the refined SMP signature. Field-shape checks
      * alone accepted these because a wild pointer can carry any bytes.
      */
-    if (!kernel_heap_is_block(node)) {
+    if (kernel_heap_block_validate(node, NULL) != 0) {
+        /*
+         * is_block alone trusts the LOCAL header words at node-16, which an
+         * INTERIOR pointer can fake (lg3's woken node had pid=0x390e744c =
+         * an ESP value inside pid5's stack, owner field = the stack base):
+         * the trap-frame words at [node-16] happened to decode as a valid
+         * header. kernel_heap_block_validate adds the tail-canary check —
+         * an interior pointer's "block" end is arbitrary stack data, so it
+         * fails. Legit records keep their canary intact (a trashed one is
+         * exactly the corruption we want flagged).
+         */
         return 0;
     }
     /*
@@ -2380,6 +2472,17 @@ int scheduler_task_event_receive(process_t *subscriber,
 static void scheduler_timeout_tick_hook(uint32_t tick) {
     process_t *task;
     process_t *woke_tasks[16];
+    /* Snapshot the printed fields UNDER the lock: the old post-unlock
+     * re-dereference of woke_tasks[] printed whatever the poison had written
+     * in the meantime (lg3: `timeout pid=957248588 owner=957186176` = ESP
+     * values of pid5's stack region while the walk itself had collected the
+     * node while still sane). Snapshotting makes the trace truthful. */
+    struct {
+        int pid;
+        int cls;
+        int evt;
+        int owner;
+    } woke_snap[16];
     uint8_t woke_inline[16];
     uint32_t woke_count = 0u;
     uint32_t wake_sleepers = 0u;
@@ -2759,6 +2862,10 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
         if (woke_count < (sizeof(woke_tasks) / sizeof(woke_tasks[0]))) {
             woke_tasks[woke_count++] = task;
             woke_inline[woke_count - 1u] = (uint8_t)inline_wake;
+            woke_snap[woke_count - 1u].pid = task->pid;
+            woke_snap[woke_count - 1u].cls = (int)task->wait_event_class;
+            woke_snap[woke_count - 1u].evt = (int)task->wait_event_kind;
+            woke_snap[woke_count - 1u].owner = (int)task->wait_owner_service;
         }
     }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
@@ -2771,10 +2878,8 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
         if (g_scheduler_timeout_trace_budget > 0) {
             g_scheduler_timeout_trace_budget -= 1;
             kernel_debug_printf("scheduler: timeout pid=%d class=%d event=%d owner=%d inline=%d\n",
-                                woke_tasks[i]->pid,
-                                (int)woke_tasks[i]->wait_event_class,
-                                (int)woke_tasks[i]->wait_event_kind,
-                                (int)woke_tasks[i]->wait_owner_service,
+                                woke_snap[i].pid, woke_snap[i].cls,
+                                woke_snap[i].evt, woke_snap[i].owner,
                                 (int)woke_inline[i]);
         }
         scheduler_publish_task_event(MK_TASK_EVENT_WOKE, woke_tasks[i]);

@@ -1091,3 +1091,34 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   cpu=N pid=.. frame=.. tick=..") — transforma "frame apareceu deslocado" em
   "o ultimo save legitimo foi X em T; o resume usou Y != X" = nomeia a janela
   entre-save e resume onde o conteudo some.
+
+### P4 — adendo 28 de 18/10 (save-ledger armado + wakes agora sob lock (trafos eram MENTIRA de post-unlock: `timeout pid=957248588` era o print lendo record ja-poisoneado, nao o walk); node_sane endurecido p/ canary; 0x390be1b0 = ESP legitimo recorrente do init — o veneno COPIA ESPs vivos entre records)
+
+- TRUTHFULNESS: `scheduler: timeout pid=...` era impresso DEPOIS do unlock
+  re-dereferenciando woke_tasks[] — lg3 mostrava pid=957248588 (0x390e744c,
+  ESP do topo da stack do pid5) porque o record foi re-escrito na janela
+  unlock->print. FIX: snapshot {pid,class,evt,owner} sob o lock (hs1-6: todos
+  os wakes agora mostram pid=9/valores small-legit). A "face fantasma" era
+  artefato de TRACE — menos um candidato real.
+- NODE_SANE endurecido: kernel_heap_is_block aceitava INTERIOR-pointers (palavras
+  de trap-frame em [p-16] decodificam como header valido); agora usa
+  kernel_heap_block_validate (exige canary de cauda intacto). Lote 6 runs:
+  BAD-NODE 0, GHOST 0 — walk ainda nao achou interior-pointer; defensor fica.
+- SAVE-LEDGER ARMADO + PAGOU no 1o dump (hs4, morte aos 58s): cpu=0 salvou
+  pid=1 f=390be1b0 t=2198/2199/2200/2200 — **0x390be1b0 e o ESP de trap
+  VIVO e legitimo do init** (preempt-skip de init parado no mesmo ponto a
+  cada tick). RELEITURA das capturas nc1/who4: o "veneno" copiado nos
+  context/pid-fields de pid=5/pid=9 nao e endereco fabricado — alguem copia
+  o ESP vivo do init (ou de outra task) PARA OS CAMPOS DE OUTRO RECORD. O
+  ledger da a assinatura por-tick; a busca agora e o COPIADOR (strncpy/memcpy
+  que trata words[4] de record como buffer), nao mais "frame deslocado".
+- hs4 morte: `#UD cpu=0 eip=7 cs=390d7a00 b0=f0 b1=c3` + installs=55791
+  {cpu0=4793 cpu1=50998} = o storm IPC de pid=5 ja censitado (8-10 switches
+  por tick no caminho storage/lang: `lang: try_run begin` na janela da morte);
+  o ledger cpu1 fecha pid5 f=390e7644 (topo legitimo). Nada novo no storm;
+  a face de morte continua o COPIADOR cruzado.
+- PROXIMA (1/rodada): grep dos escritas de 4+ words em process_t* vindas de
+  fora do scheduler: todo `(uint32_t *)proc` / cast `process_t *` com writes
+  em offsets baixos (0..0x90 = pid..next..context) — especialmente handlers
+  que copiam STRUTURAS de task (ex: snapshot p/ /proc-like, event publish
+  que le e ESCREVE no record, mk_service_register que salva `process` pointers).

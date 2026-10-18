@@ -236,6 +236,7 @@ void invalid_opcode_handler(uint32_t eip, uint32_t cs) {
     kernel_tss_install_ring_dump("ud");
     smp_tick_counts_dump();
     scheduler_frame_counts_dump();
+    scheduler_save_ledger_dump();
     kernel_text_puts("\n#UD EIP="); kernel_text_puts(buf[0]);
     kernel_text_puts(" CS=");       kernel_text_puts(buf[1]);
     kernel_text_puts(" B0=");       kernel_text_puts(buf[2]);
