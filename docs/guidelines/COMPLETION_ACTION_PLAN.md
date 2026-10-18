@@ -1282,3 +1282,9 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   `task->current_cpu != kernel_cpu_index()` => `sched-save: FOREIGN-CPU` com os
   dois cpus + pid — se a dupla-execucao de pid=9 existe, o save do OUTRO cpu
   dispara isso in-loco, nomeando o par no ato.
+- FECHAMENTO DO LOTE cm1-5 (5/5): CTX-MISMATCH 1/5, e o unico hit caiu no run-HANG
+  (cm2), nenhum nos 2 runs-crash — o corrupt-then-restore do gap esta associado à
+  familia-HANG (a mao re-escreve o campo "a tempo" de o dispatch seguir vivo e o
+  startx stallar), enquanto as mortes #UD eip=3 parecem o caso em que a restauracao
+  NAO chega a tempo. Dado util para a sonda FOREIGN-CPU: instrumentar tambem o
+  caminho de stall do host (host-wait polls=256) para correlacionar.
