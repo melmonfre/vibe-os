@@ -688,6 +688,32 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
     frame_is_user_mode = process_frame_is_user_mode(frame);
     expected_cs = frame_is_user_mode ? USER_CS_SELECTOR : KERNEL_CS_SELECTOR;
 
+    /*
+     * CTX-DRIFT (P4 classe #5, adendo 29): the static hunt for a record
+     * copier came up empty (every pid/context writer is legit and
+     * bounds-checked; node_sane hardened with the canary test saw 0 hits
+     * across 6 runs). The remaining split: either the resume frame was
+     * ALREADY stale at selection time, or the record's context field is
+     * re-trampled between selection (under g_scheduler_lock) and this
+     * iret path (after the lock drops). Re-read the live context NOW and
+     * compare with the frame actually being resumed. equal => stale-saved
+     * (look upstream of the saves); different => live trampling inside
+     * the unlocked gap, i.e. a second execution context owns this record
+     * RIGHT NOW. Budgeted short lines.
+     */
+    if (next_task != NULL && next_task->context != NULL &&
+        next_task->context != frame) {
+        static volatile uint32_t g_sched_ctxdrift_budget = 8u;
+        if (g_sched_ctxdrift_budget != 0u) {
+            g_sched_ctxdrift_budget--;
+            kernel_debug_printf("sched-resume: CTX-DRIFT pid=%d cpu=%u frame=%x live=%x sw=%u\n",
+                                next_task->pid, (unsigned int)cpu_index,
+                                (unsigned int)(uintptr_t)frame,
+                                (unsigned int)(uintptr_t)next_task->context,
+                                (unsigned int)next_task->context_switches);
+        }
+    }
+
     if (next_task != NULL && next_task->stack != NULL) {
         uintptr_t esp0 = (uintptr_t)next_task->stack + next_task->stack_size;
 

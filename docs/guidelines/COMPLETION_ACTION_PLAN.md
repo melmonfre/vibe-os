@@ -1122,3 +1122,48 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   em offsets baixos (0..0x90 = pid..next..context) — especialmente handlers
   que copiam STRUTURAS de task (ex: snapshot p/ /proc-like, event publish
   que le e ESCREVE no record, mk_service_register que salva `process` pointers).
+
+### P4 — adendo 29 de 18/10 (CTX-DRIFT 0/6 = pointer NAO muda apos selecao; dr4 deu a CENA COMPLETA: cpu=0 entrou no kernel com pid=9 current mas ESP na stack do INIT = o ring3->ring0 carregou um esp0 velho; o "copiador" e a PROPRIA CPU empurrando frames no stack errado)
+
+- LOTE 6 runs (build com CTX-DRIFT): 1 desktop 18s, 3 hangs, 2 crashes;
+  CTX-DRIFT 0 hits EM TODOS — o `context` lido na selecao e o MESMO no
+  momento do iret. O pointer envenenado ja estava la ANTES da selecao; nao ha
+  trampling no gap. Combinado com CTX-OUTSIDE 0/14 (saves nunca salvaram frame
+  fora do proprio stack... ate agora).
+- dr4 QUEBROU O PADRAO E FECHOU A MECANICA (WHO curto pagou as 2 linhas):
+  `sched-ctx-save: OUTSIDE site=preempt-skip pid=9 cpu=0 frame=390be094
+  stack=[391026e0,391426e0) sw=2` + `WHO owner=1 st=1 rng=[390b6600,390be600)`
+  + `WHO cpu=0 cur=9 eip=1 cs=1`. Leitura: g_current[0]==pid=9 (cur=9) mas o
+  ESP real do cpu0 ao tick estava EM 0x390be094 = DENTRO da stack do INIT
+  (owner=1, init state=RUNNING simultaneo!). frame em [0x390be094] =
+  eip=1/cs=1 (lixo de dados de stack). pid=9 tinha sw=2 — no SEGUNDO switch
+  dele. Cadeia: o PRIMEIRO ring3->ring0 de pid=9 em cpu0 carregou um esp0
+  APONTANDO PARA A STACK DO INIT (o valor do task anterior do cpu0 NUNCA foi
+  reposto para pid9 em algum caminho), a syscall handler rodou e empurrou na
+  stack do init (destruindo frames do init — dai o init "RUNNING@cpu1/0"
+  fantasma do who4!), e o tick seguinte salvou aquele ESP como context do
+  pid=9. O mesmo esp0-velho explica: GP err=0x19aa (seletor-lixo lido do
+  frame empurrado no lugar errado) e as mortes eip=heap das faces antigas.
+- LOGICA FECHADA (reconcilia TUDO): nao existe "copiador misterioso" — a CPU
+  e o writers: ring3->ring0 com esp0 stale empurra 20-24B de frame no bloco
+  da vitima; handler+syscall empurram mais; os campos de record dos antigos
+  "envenenados" = trap frames empilhados no lugar errado. O DOUBLE-DISPATCH/
+  ESP0-MISMATCH/CTX-DRIFT ficam 0 porque o bug NAO e de ponteiro de task nem
+  de post-selecao: e de UM CAMINHO DE DISPATCH/SETUP que nao publica esp0
+  junto com g_current. Suspeitos onde esp0 nao e publicado: (1) o idle-mask
+  reject path (adendo 17) retorna SEM publicar — ok, nao muda current;
+  (2) scheduler_complete_wait inline_wake mantem RUNNING — ok, mesmo stack;
+  (3) o PRIMEIRO dispatch do pid=9 em cpu0: quem o despachou? pid=9 nasceu
+  no fork/execve do desktop host — `launch` -> scheduler_add_task (READY,
+  sem cpu) -> find_next o pega... publish sob lock faz kernel_tss_set_
+  kernel_stack(pid9 top) ✓ a menos que o dispatch tenha vindo pelo caminho
+  "reuse" (next==current, que NAO publica esp0 — assume que esp0 ja esta
+  certo... para um task que NUNCA rodou nesta cpu, esp0 aqui = do task
+  ANTERIOR = stack do init!!). O reuse path e o buraco: `next == current`
+  (timeout hook re-seleciona o mesmo task) pula o bloco de publish. Mas
+  current nunca rodou aqui... — sonda da proxima rodada: checar ESP0==top de
+  g_current[cpu] no ENTRY do handler de syscall (int 0x80/0x90): mismatch
+  ai = flagra o exato momento do ring3->ring0 armado errado, com valores
+  de esp0 e do top esperado.
+- GATES: make -Werror verde; UP validate-phase6-boot-smoke rc=0 (build do
+  CTX-DRIFT); 6 runs smp2 (1 desktop 18s; honesto-vermelho).
