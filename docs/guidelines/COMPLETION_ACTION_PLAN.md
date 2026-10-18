@@ -1194,3 +1194,29 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   do frame (eip em text/user-range OU 0? cs em {8,0x1b,0x23}) e budget-witness
   FRAME-BAD-AT-IRQEXIT com os valores — flagra o primeiro retorno com frame
   podre sem esperar iret.
+
+### P4 — adendo 31 de 18/10 (gate FRAME-BAD-AT-IRQEXIT no AP: 0/5 runs — as saidas do timer/reschedule IPI estao CLEAN mesmo nas mortes em cpu=1 eip=3 => o deslocamento acontece DENTRO da execucao (ret de funcao com slot local corrompido), nao num iretd de IRQ retornado errado)
+
+- ARMADO: `scheduler_irq_frame_check` roda no UNICO handler C do vetor 0x83
+  (LAPIC timer do AP E reschedule-IPI, mesmo vector) logo antes do iretd do
+  stub; valida CONTEUDO do frame (kernel: cs==8 e eip dentro de .text; user:
+  cs==USER_CS, eip>=0x1000, user_ss ok). Baseline one-shot por cpu prova
+  armamento (fe3: `irq-exit: check armed cpu=1` — so o AP passa por aqui; o
+  BSP usa PIT/irq0->timeout hook, caminho distinto).
+- MEDICAO (lote 5 runs, build verde, UP smoke rc=0): FRAME-BAD 0/5. fe1/fe4
+  MORRERAM em cpu=1 `eip=3 f0 53` com o gate ARMADO e MUDO nas saidas de IRQ
+  do proprio AP => o ultimo iretd limpo nao e o portador. fe2 hang e fe5 stall
+  pre-enable (gate corretamente mudo — caminho não alcançado).
+- CONSEQUENCIA LOGICA: se todas as saidas de timer/IPI entregam frames sadios
+  e nenhuma syscall-entry achou esp0 errado nas mortes, a instrucao que faz o
+  jump ruim e um RET/IRET INTERNO da execucao em curso — slot de retorno ou
+  frame empilhado na PILHA CERTA com CONTEUDO podre escrito por buffer-local
+  da MESMA pilha (o caso classico que o -fstack-protector do kernel captura).
+  O build atual compila com -fstack-protector DESATIVADO (flag documentada).
+- PROXIMA SODA (1/rodada, causa-raiz-tool honesto): ligar stack-protector nos
+  objetos do kernel que tocam o caminho storage/host (ou o kernel inteiro se o
+  boot sobreviver), implementar `__stack_chk_fail` como panic com PC do
+  falhador — overflow de buffer-local smashando return-slot deixa de ser
+  invisivel e vira NOME. Se o -fstack-protector inteiro pesar/inflacionar,
+  aplicar por-arquivo (microkernel/, drivers/storage/, ipc/) medindo boot-time.
+  ABI/userland: nenhum efeito (protecao interna do kernel).

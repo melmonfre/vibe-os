@@ -876,6 +876,63 @@ static void scheduler_save_current_context(process_t *task,
     task->context = frame;
 }
 
+/*
+ * FRAME-BAD-AT-IRQEXIT (P4 classe #5, adendo 31): the STALE-AT-ENTRY witness
+ * proved deaths do NOT enter via a stale esp0 ring3->ring0; the chain starts
+ * with an already-wrong ESP from ret/iret reading CORRUPTED CONTENT inside a
+ * legitimate stack (pointers are stable — CTX-DRIFT 0/6). This is the last C
+ * gate before the IRQ epilogue's iretd: validate what the frame ABOUT to be
+ * iret'd says. Kernel frame: eip must lie inside .text; user frame: cs==RPL3
+ * selector and eip above the null region (a tiny eip is always garbage — the
+ * eip=3/7/0x83 deaths). One-shot baseline per cpu proves the witness is
+ * armed; violations are budgeted short lines.
+ */
+extern char __kernel_text_start[];
+extern char __kernel_text_end[];
+static volatile uint32_t g_sched_irqframe_budget = 8u;
+static volatile uint8_t g_sched_irqframe_baseline[4];
+
+void scheduler_irq_frame_check(const kernel_trap_frame_t *frame, uint32_t cpu_index) {
+    uintptr_t ts = (uintptr_t)__kernel_text_start;
+    uintptr_t te = (uintptr_t)__kernel_text_end;
+    uintptr_t eip = (uintptr_t)frame->eip;
+    int bad = 0;
+
+    if (frame == NULL || cpu_index >= 32u) {
+        return;
+    }
+    if ((frame->cs & 3u) == 0u) {
+        if (frame->cs != KERNEL_CS_SELECTOR) {
+            bad = 1; /* kernel-mode frame with a foreign selector */
+        } else if (eip < ts || eip >= te) {
+            bad = 2; /* kernel return outside .text */
+        }
+    } else {
+        const kernel_user_trap_frame_t *uf =
+            (const kernel_user_trap_frame_t *)(const void *)frame;
+        if (frame->cs != USER_CS_SELECTOR) {
+            bad = 3;
+        } else if (eip < 0x1000u) {
+            bad = 4; /* null-page/IVT-class garbage eip */
+        } else if (uf->user_ss != (USER_DS_SELECTOR | 3u) && uf->user_ss != USER_DS_SELECTOR) {
+            bad = 5;
+        }
+    }
+
+    if (cpu_index < 4u && g_sched_irqframe_baseline[cpu_index] == 0u) {
+        g_sched_irqframe_baseline[cpu_index] = 1u;
+        kernel_debug_printf("irq-exit: check armed cpu=%u eip=%x cs=%x\n",
+                            (unsigned int)cpu_index, (unsigned int)eip,
+                            (unsigned int)frame->cs);
+    }
+    if (bad != 0 && g_sched_irqframe_budget != 0u) {
+        g_sched_irqframe_budget--;
+        kernel_debug_printf("irq-exit: FRAME-BAD cpu=%u rc=%d eip=%x cs=%x fl=%x\n",
+                            (unsigned int)cpu_index, bad, (unsigned int)eip,
+                            (unsigned int)frame->cs, (unsigned int)frame->eflags);
+    }
+}
+
 static uint32_t scheduler_online_cpu_count(void) {
     if (!smp_scheduler_enabled()) {
         return 1u;

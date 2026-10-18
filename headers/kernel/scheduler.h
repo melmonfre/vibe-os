@@ -23,6 +23,11 @@ int scheduler_stack_overlap(uintptr_t lo, uintptr_t hi, uintptr_t *os_out,
  * adendo 17): pair with smp_tick_counts_dump to locate the stall stage. */
 uint32_t scheduler_frame_entry_count(uint32_t cpu_index);
 void scheduler_frame_counts_dump(void);
+/* Last C gate before an IRQ epilogue irets: validate the frame CONTENT the
+ * CPU is about to resume (eip/cs sanity per ring) — catches the corrupted-
+ * content-in-legit-stack entry the STALE-AT-ENTRY witness proved it is not. */
+void scheduler_irq_frame_check(const kernel_trap_frame_t *frame,
+                               uint32_t cpu_index);
 /* Last-saved-frame ledger per cpu (adendo 28): dump at panic/#UD-halt to
  * compare the poisoned resume value against the last legit saves. */
 void scheduler_save_ledger_dump(void);

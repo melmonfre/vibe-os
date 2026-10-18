@@ -710,6 +710,8 @@ void smp_wakeup_ipi_handler(void) {
  * preemption tick for every CPU that armed its LAPIC timer.
  */
 kernel_trap_frame_t *smp_timer_irq_handler(kernel_trap_frame_t *frame) {
+    kernel_trap_frame_t *ret;
+
     local_apic_eoi();
     smp_tick_count_bump(kernel_cpu_index());
     if (g_smp_scheduler_enabled == 0u) {
@@ -718,7 +720,10 @@ kernel_trap_frame_t *smp_timer_irq_handler(kernel_trap_frame_t *frame) {
     /* Face-1 witness (P4): ESP of THIS cpu vs the stack bounds of the task
      * g_current claims for it. Budgeted + baselined inside the helper. */
     scheduler_rsp_witness(kernel_cpu_index());
-    return scheduler_schedule_frame(frame, 1);
+    ret = scheduler_schedule_frame(frame, 1);
+    /* Last C gate before the iretd (P4 adendo 31). */
+    scheduler_irq_frame_check(ret, kernel_cpu_index());
+    return ret;
 }
 
 uint32_t smp_cpu_stage(uint32_t cpu_index) {
