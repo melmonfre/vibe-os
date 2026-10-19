@@ -109,9 +109,9 @@ Aceitação mudou: **boot, usb, video, audio, rede e posix precisam funcionar em
 
 ## Prioridade 4: SMP de verdade
 
-- [ ] Chamar `smp_scheduler_enable()` depois do bring-up dos APs (kernel/smp.c:464 — hoje zero callers; APs ficam em `sti; hlt` para sempre)
+- [x] Chamar `smp_scheduler_enable()` depois do bring-up dos APs — item STALE: `kernel/entry.c:826` chama (linha conferida 19/10); o loop do AP (`kernel/smp.c:493-497`) roda `schedule()` a cada wakeup quando habilitado; wake IPI cobre as transicoes BLOCKED->READY (ver adendo 43)
 - [x] LAPIC timer por-CPU no AP (calibrado contra PIT, vetor 0x83, stub smp_timer_stub); AP dorme em hlt e preempcao vem do tick
-- [ ] Handler de IPI de reschedule (smp.c:484 so faz EOI; hlt+tick cobre, mas reschedule imediato ainda nao)
+- [ ] Handler de IPI de reschedule (smp.c:803 so faz EOI; hlt+tick cobre, mas reschedule imediato ainda nao) — ADENDO 43: o broadcast de wake agora cobre TODOS os pontos BLOCKED->READY (faltavam sys_exit/sys_kill); o que continua ausente e PREEMPCAO imediata de um cpu que esta RODANDO uma task (o IPI 0x82 so tira do hlt; trocar um cpu ocupado ainda espera yield/tick)
 - [ ] IOAPIC: rotear IRQs por afinidade em vez de tudo no BSP (ioapic.c:526)
 - [x] Respeitar o gate existente: `BOOTINFO_FLAG_EXPERIMENTAL_SMP` — VERIFICADO 15/10 que o kernel JA LE o flag (`kernel/entry.c:699` e `:788` testam contra ele). A nota anterior ("nenhum codigo do kernel o le") estava STALE; AGENTS.md:190 esta correto ("SMP so liga com o flag; padrao BSP-only").
 - [x] `tools/validate_smp.py` reescrito (marcadores reais, espera todos, timeout configuravel). fallback-no-toggle PASS; smp2/smp4: bring-up markers PASS, mas stall em `fs: sys_storage_load` (race de wakeup no AP — ver P4 open abaixo)
@@ -1531,3 +1531,40 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   20->60 com a medicao no comentario do Makefile. Provas: rc=0 nas duas
   matrizes apos fix (boot-smoke 6/6 e validate-phase6 6/6), relatorios em
   build/phase6-validation-boot-smoke.md e build/phase6-validation.md.
+
+### P4 — adendo 43 de 19/10 (auditoria do caminho app-image: carga NAO e o gargalo; `mk_storage_local_handler` e codigo morto — sonda em caminho morto quase virou negativo falso; fix: wake IPI em sys_exit/sys_kill)
+
+- CAMINHO REAL MAPEADO (medido, nao teorizado): lang_storage_read_bytes
+  (chunks de 128 setores) -> syscall 20 -> mk_storage_service_read_sectors.
+  Ramificacao: `mk_storage_current_prefers_kernel_hot_path()` (context==0 ou
+  BOOTSTRAP/CRITICAL) = branch HOT direto no kernel (e o que o loader faz?
+  NAO — pid11 e pid12 caem no SVC-PATH); clientes ring3 vao por
+  transfer+mensagem ao host VIVO: `userland/bootstrap_service.c:617
+  storage_service_handle_request` -> syscall 20-backend -> PIO no kernel ->
+  sys_transfer_write -> copy-out. A whole 634-sector startx image:
+  `arena ok` aos ~19s, `image read ok` aos ~20s (UP, full boot) = ~1s total.
+- MEDICAO NO CHOKEPOINT VIVO (sys_storage_backend_read_sectors):
+  `storage: pio n=64 dur=0 cpu=0` x6 — custo de PIO do host por chunk =
+  SUB-TICK (<=10ms). Consequencia: o app-image load NAO e o motor da face
+  LIVELOCK; o stall dos hangs mora na corrente de esperas de servico, ja
+  acobertada pelo supervisor-wedge (0/10) e pela cadeia do adendo 39.
+- SONDA EM CAMINHO MORTO (licao de instrumentacao, registrada antes de
+  qualquer claim): `mk_storage_local_handler` (kernel/microkernel/storage.c)
+  NAO roda em steady state — o launch do servico STORAGE executa a ENTRY
+  userland (bootstrap), nao o handler local; os `bulk=0` de rodadas
+  anteriores mediram codigo morto. A disciplina "provar alcancabilidade antes
+  de ler 0 como evidencia" pegou isso ANTES de virar negativo falso.
+- FIX DE WAKE (2 lacunas reais encontradas pela auditoria): sys_exit (wake do
+  parent) e sys_kill (wake do alvo) transicionavam BLOCKED->READY SEM
+  smp_wake_sleeping_cpus(); num cpu em hlt o wakes so era pego no proximo
+  tick do cpu (<=10ms de latencia adicional por evento). Agora broadcast nos
+  dois sitios (padrao identico a event.c). O restante ja era coberto:
+  ipc_send/waitable-signal (event.c:317/348), scheduler_add_task (2429),
+  timeout-hook (3664).
+- PLANOS: linha "zero callers smp_scheduler_enable" estava STALE (entry.c:826
+  chama; item fechado com evidencia). Linha do IPI reescrita honesta: wake do
+  hlt coberto em todos os pontos; PREEMPCAO imediata de cpu RODANDO continua
+  aberta (IPI 0x82 nao forca reschedule de task em execucao).
+- PROVAS: make -Werror verde; UP full-boot com `storage: pio dur=0` (6 prints,
+  budget); validate-phase6-boot-smoke rc=0 6/6; lote smp2 x3 (EXCEPTION faces
+  28/10/16s) sem regressao de testemunhas: CTX-MISMATCH 0, ESP0-ORPHAN 0.

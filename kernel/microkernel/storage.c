@@ -8,6 +8,8 @@
 #include <kernel/microkernel/storage.h>
 #include <kernel/microkernel/transfer.h>
 #include <kernel/scheduler.h>
+#include <kernel/cpu/cpu.h>
+#include <kernel/smp.h>
 #include <kernel/userland_service.h>
 
 static struct mk_message g_last_storage_request;
@@ -128,6 +130,12 @@ static int mk_storage_local_handler(const struct mk_message *request,
 
     switch (request->type) {
     case MK_MSG_BLOCK_READ: {
+        static uint32_t g_hostbr_budget = 4u;
+        if (g_hostbr_budget != 0u) {
+            g_hostbr_budget--;
+            kernel_debug_printf("storage: HOST-BREAD sz=%u\n",
+                                (unsigned int)request->payload_size);
+        }
         if (request->payload_size == sizeof(struct mk_storage_sectors_request)) {
             const struct mk_storage_sectors_request *payload;
             uint32_t byte_count;
@@ -290,7 +298,22 @@ int mk_storage_service_read_sectors(uint32_t lba, void *dst, uint32_t sector_cou
     }
     if (mk_storage_current_process_is_service_worker() ||
         mk_storage_current_prefers_kernel_hot_path()) {
-        return kernel_storage_read_sectors(lba, dst, sector_count);
+        /* The boot loader (init/lang tasks have NO mk_launch_context, so
+         * context==0 selects THIS branch) reads app images here, NOT through
+         * the host round-trip. Adendo 43 measurement lives on this side:
+         * per-chunk host cost in ticks, 6 prints. */
+        static uint32_t g_hot_dur_budget = 6u;
+        uint32_t hcpu = kernel_cpu_index();
+        uint32_t ht0 = smp_tick_count(hcpu);
+        int hrc = kernel_storage_read_sectors(lba, dst, sector_count);
+        if (g_hot_dur_budget != 0u && sector_count > 1u) {
+            g_hot_dur_budget -= 1u;
+            kernel_debug_printf("storage: hot n=%u dur=%u cpu=%u\n",
+                                (unsigned int)sector_count,
+                                (unsigned int)(smp_tick_count(hcpu) - ht0),
+                                (unsigned int)hcpu);
+        }
+        return hrc;
     }
 
     if (sector_count > MK_STORAGE_MAX_SECTORS_PER_REQUEST) {

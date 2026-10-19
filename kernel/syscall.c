@@ -19,6 +19,7 @@
 #include <kernel/memory/heap.h>
 #include <kernel/memory/physmem.h>
 #include <kernel/cpu/cpu.h>
+#include <kernel/smp.h>
 #include <lang/include/vibe_app.h>
 #include <stdint.h>
 #include <include/userland_api.h> /* syscall IDs */
@@ -651,7 +652,25 @@ static uint32_t sys_storage_backend_read_sectors(uint32_t lba, uint32_t ptr, uin
     if (!sys_user_ptr_ok((uintptr_t)ptr, (size_t)sector_count * 512u)) {
         return (uint32_t)-1;
     }
-    return (uint32_t)kernel_storage_read_sectors(lba, (void *)(uintptr_t)ptr, sector_count);
+    {
+        /* P4 adendo 43: THE live host-side PIO chokepoint (the bootstrap
+         * storage task calls this per chunk; mk_storage_local_handler is
+         * dead code in steady state — probes there were unreachable).
+         * Duration in local CPU ticks, 6 budget prints. */
+        static uint32_t g_be_dur_budget = 6u;
+        uint32_t bcpu = kernel_cpu_index();
+        uint32_t bt0 = smp_tick_count(bcpu);
+        int64_t brc = kernel_storage_read_sectors(lba, (void *)(uintptr_t)ptr,
+                                                  sector_count);
+        if (g_be_dur_budget != 0u && sector_count > 1u) {
+            g_be_dur_budget -= 1u;
+            kernel_debug_printf("storage: pio n=%u dur=%u cpu=%u\n",
+                                (unsigned int)sector_count,
+                                (unsigned int)(smp_tick_count(bcpu) - bt0),
+                                (unsigned int)bcpu);
+        }
+        return (uint32_t)brc;
+    }
 }
 
 static uint32_t sys_storage_backend_write_sectors(uint32_t lba, uint32_t ptr, uint32_t sector_count,
@@ -2661,8 +2680,17 @@ static uint32_t sys_exit(uint32_t status, uint32_t b, uint32_t c,
             parent->child_exit_pid = current->pid;
             parent->child_exit_status = (int)packed_status;
             if (parent->wait_channel != 0) {
-                scheduler_complete_wait(parent, TASK_WAIT_RESULT_SIGNALED);
+                int woke = 0;
+                if (scheduler_complete_wait(parent,
+                        TASK_WAIT_RESULT_SIGNALED) == 0) {
+                    woke = 1;
+                }
                 scheduler_wake_task(parent);
+                /* wake IPI (adendo 43 gap): without this a CPU idling in
+                 * hlt picks the parent up only at its next tick. */
+                if (woke != 0) {
+                    smp_wake_sleeping_cpus();
+                }
             }
         }
     }
@@ -3027,8 +3055,15 @@ static uint32_t sys_kill(uint32_t pid, uint32_t sig, uint32_t c,
     if (sig < 32u) {
         target->signal_pending |= (1u << (sig - 1u));
         if (target->state == PROCESS_BLOCKED) {
-            scheduler_complete_wait(target, TASK_WAIT_RESULT_SIGNALED);
+            int woke = 0;
+            if (scheduler_complete_wait(target,
+                    TASK_WAIT_RESULT_SIGNALED) == 0) {
+                woke = 1;
+            }
             scheduler_wake_task(target);
+            if (woke != 0) {
+                smp_wake_sleeping_cpus();
+            }
         }
     }
 

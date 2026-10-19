@@ -26,6 +26,7 @@ int smp_ap_stack_bounds(uint32_t cpu_index, uintptr_t *lo_out, uintptr_t *hi_out
  * "schedule_frame ran but returned early". */
 void smp_tick_count_bump(uint32_t cpu_index);
 void smp_tick_counts_dump(void);
+uint32_t smp_tick_count(uint32_t cpu_index);
 void smp_persist_trace_arm(void);
 void smp_persist_trace_mark(uint8_t code);
 void smp_persist_trace_disarm(void);

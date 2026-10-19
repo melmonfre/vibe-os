@@ -123,6 +123,13 @@ void smp_tick_count_bump(uint32_t cpu_index) {
     }
 }
 
+uint32_t smp_tick_count(uint32_t cpu_index) {
+    if (cpu_index < 4u) {
+        return g_smp_tick_count[cpu_index].n;
+    }
+    return 0u;
+}
+
 void smp_tick_counts_dump(void) {
     kernel_debug_printf("smp-ticks: cpu0=%u cpu1=%u cpu2=%u cpu3=%u\n",
                         (unsigned int)g_smp_tick_count[0].n,
