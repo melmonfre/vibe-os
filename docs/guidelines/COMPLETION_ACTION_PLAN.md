@@ -1454,3 +1454,36 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   (appfs read → qual waitable?); se o pid9 em hang está de fato RODANDO
   (spin) e não bloqueado, o stall é CPU-bound no loader (loop sem yield) e a
   cadeia de hosts é CONSEQUENCIA (esperam o desktop subir), nao causa.
+
+### P4 — adendo 40 de 19/10 (congelamento total CAPTURADO via monitor do QEMU com registradores das duas vCPUs: um cpu sai dos trilhos em EIP fora do .text/ESP lixo com IF=0 segurando spinlock; outro spinna em spinlock_lock — classe #5 agora tem retrato estático fora do serial; ferramenta diagnose_smp_freeze.py commitada)
+
+- FERRAMENTA: tools/diagnose_smp_freeze.py — boot smp2 realtime, detecta
+  FREEZE como >40s sem novo "timer: tick=" (sem exceção), e para CADA vCPU
+  numa UNICA sessao do socket do monitor (a versao multi-conexao misturava
+  os dumps — licao: 'cpu N' nao persiste entre conexoes), despeja info
+  registers + x/10i $pc + x/24wx $esp em /tmp/vg/fz2_cpu{0,1}.txt.
+- CAPTURAS (2 freezes independentes):
+  * fz-a (dumps do probe1, sessoes separadas — estado confuso mas revelador):
+    um cpu em spinlock_lock+0x3b (spin, EFLAGS IF=0) ESP em pilha de task;
+  * fz-b (probe2, sessoes unicas): cpu0 EIP=sys_yield+0x15 EFL=0x246(IF=1)
+    com pilha mostrando mk_video_service_clear (laco do worker de video
+    saudável); cpu1 EIP=0xfd5fd (FORA de .text, = regiao do blob),
+    ESP=0x6d58 (lixo), EFLAGS=0x2 (IF=0, apenas bit reserved) => cpu1 saiu
+    dos trilhos com interrupcoes DESLIGADAS e a pilha destruida — neste
+    estado ele pode segurar QUALQUER spinlock; um segundo spin-worker trava
+    o sistema inteiro (tick morre quando e o dono daIRQ).
+- LIGACAO COM A CAMPANHA: e o mesmo crime ja nomeado pelas testemunhas
+  (context/frames corrompidos => ret deslizado => exec fora do texto com
+  IF=0), agora capturado com registradores COMPLETOS altem do serial. O
+  padrao deterministico antigo "tick 4000" era artefato do DETECTOR do
+  probe1 (tick=4000 e o ultimo impresso ANTES do censur budget...); no
+  probe2 o tick chegou a 12000 — dois modos distintos: FREEZE (tick morre)
+  vs LIVELOCK (tick vive, nada avanca — cadeia de esperas 6->5->4->3->2->1
+  no g1, sel* crescendo = tasks rodando quentes, app load avancando lento).
+- PROXIMO PASSO CONCRETO (1/rodada): o FREEZE com IF=0 pilha-destruida
+  provavelmente comeca com ret-slot corrompido DENTRO do caminho de request
+  do VIDEO worker (pilha do cpu0 do fz-b mostra o worker vivo la; o cpu1
+  morto pode ser o produtor de jobs envenenando a fila do mailbox). Auditar
+  kernel_mailbox_send do video-present: quem produz jobs e se a fila pode
+  corromper-se com dois produtores (present_rect_fast_lfb apareceu no dump
+  misto — presente de framebuffer rodando CONCORRENTE com clear do worker).
