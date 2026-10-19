@@ -34,7 +34,7 @@ struct itimerspec {
    legacy stage2 dispatch is still compiled into the image; eventually we
    will migrate completely to this table-driven approach. */
 
-#define MAX_SYSCALLS 231
+#define MAX_SYSCALLS 232
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 static syscall_fn syscall_table[MAX_SYSCALLS];
 static uint8_t g_audio_boot_trace_launch_info = 0u;
@@ -1360,6 +1360,20 @@ static uint32_t sys_transfer_write(uint32_t transfer_id, uint32_t src_ptr, uint3
         return (uint32_t)-1;
     }
     return mk_transfer_copy_from(transfer_id, (const void *)(uintptr_t)src_ptr, size) == 0 ? 0u : (uint32_t)-1;
+}
+
+/* TEMP isolation probe (adendo 36): enable #DB record watchpoints from the
+ * CALLING task context (kernel stack of the caller) instead of the tick
+ * hook, to A/B the QEMU arm-freeze location. Remove once the freeze is
+ * located. */
+static uint32_t sys_debug_watch(uint32_t on, uint32_t b, uint32_t c,
+                                uint32_t d, uint32_t e) {
+    (void)b; (void)c; (void)d; (void)e;
+    scheduler_db_enable(on);
+    kernel_debug_printf("syscall: debug_watch on=%u caller-pid=%d\n",
+                        (unsigned int)on,
+                        scheduler_current() ? scheduler_current()->pid : -1);
+    return 0u;
 }
 
 static uint32_t sys_shutdown(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e) {
@@ -4550,6 +4564,8 @@ void syscall_init(void) {
     syscall_table[SYSCALL_GETNAMEINFO] = sys_getnameinfo_stub;
     syscall_table[SYSCALL_SENDMSG] = sys_sendmsg_stub;
     syscall_table[SYSCALL_RECVMSG] = sys_recvmsg_stub;
+    /* TEMP probe (adendo 36 arm-freeze isolation) — removed with the probe */
+    syscall_table[231u] = sys_debug_watch;
     syscall_table[SYSCALL_SOCKET_SHUTDOWN] = sys_shutdown_stub;
     syscall_table[SYSCALL_CLOCK_GETTIME] = sys_clock_gettime;
     syscall_table[SYSCALL_CLOCK_SETTIME] = sys_clock_settime;

@@ -928,41 +928,59 @@ static volatile uintptr_t g_db_dr1;
 static volatile uint32_t g_db_budget = SCHED_DB_BUDGET;
 static volatile uint32_t g_db_off;
 static volatile uint32_t g_db_disarm_mask;
-#define DB_EVT_RING 12u
+#define DB_EVT_RING 8u
 typedef struct {
     uint32_t dr6;
     uint32_t eip;
     uint32_t cs;
-    uint32_t cpu;
     uint32_t kind;
-    volatile uint32_t reported;
 } db_evt_t;
-static void db_drain_events(void);
-static spinlock_t g_db_evt_lock;
-static db_evt_t g_db_evt_ring[DB_EVT_RING];
-static volatile uint32_t g_db_evt_count;
-static volatile uint32_t g_db_evt_drop_slot;
+typedef struct {
+    db_evt_t slots[DB_EVT_RING];
+    volatile uint32_t seq;       /* producer bumps: odd=mid-write, even=committed */
+    volatile uint32_t reported;  /* consumer cursor */
+} db_evt_cpu_t;
+static db_evt_cpu_t g_db_evt_per_cpu[4];
 static uint32_t g_db_in_save[4];
 
-static void db_set_regs(uintptr_t a0, uintptr_t a1) {
-    /* DR0: pid+stack window [rec, rec+8); DR1: size+context [rec+8, rec+16).
-     * L0|L1, RW=write for both, LEN=8B each.
-     *
-     * ORDERING (Intel SDM Vol3B): writing DR0..DR7 while the corresponding
-     * local-enable bits are set raises a debug exception ON THE MOV itself.
-     * First write therefore DISARMS (DR7=0), then loads addresses, then
-     * enables — the enabling MOV has the "already active" exception only if
-     * a bit was live, and clearing guarantees none are. */
-    uint32_t zero = 0u;
-    uint32_t on = 0x00000005u | (1u << 16) | (2u << 18) | (1u << 20) | (2u << 22);
+static void db_drain_events(void);
 
-    __asm__ volatile("movl %0, %%dr7\n\t" : : "r"(zero) : "memory");
-    __asm__ volatile("movl %0, %%dr0\n\t"
-                     "movl %1, %%dr1\n\t"
-                     "movl %2, %%dr7\n\t"
+/*
+ * SINGLE-WATCHPOINT POLICY (measured QEMU-TCG isolation ladder, adendo 36
+ * follow-ups): writing DR0/DR1 with DR7=0 survives; DR7 with BOTH L0|L1
+ * enabled freezes the guest before any trap reaches the handler (GDB-stub
+ * watchpoint interaction in TCG); L0-only enabled survives. So the tool
+ * runs exactly ONE watchpoint: DR0 = rec+8, LEN 8B, write-only — covering
+ * {stack_size, context}, the slots every capture shows being rewritten.
+ * ORDERING (Intel SDM Vol3B): a MOV to DR with live enable bits raises #DB
+ * on the MOV itself, hence DR7 is cleared first.
+ */
+static void db_set_regs(uintptr_t a0, uintptr_t a1) {
+    uint32_t zero = 0u;
+    /* L0 | RW0=write | LEN0=8 */
+    uint32_t on = 0x00000001u | (1u << 16) | (2u << 18);
+    uint32_t dr7v = 0u, dr6v = 0u, dr5v = 0u;
+    static volatile uint32_t g_db_arm_proof;
+
+    (void)a0;
+    __asm__ volatile("movl %0, %%dr7\n\t"
+                     "movl %1, %%dr0\n\t"
+                     "movl %2, %%dr7"
                      :
-                     : "r"((uint32_t)a0), "r"((uint32_t)a1), "r"(on)
+                     : "r"(zero), "r"((uint32_t)a1), "r"(on)
                      : "memory");
+    __asm__ volatile("mov %%dr7, %0\n\t"
+                     "mov %%dr6, %1\n\t"
+                     "mov %%dr5, %2"
+                     : "=r"(dr7v), "=r"(dr6v), "=r"(dr5v)
+                     :
+                     : "memory");
+    if (g_db_arm_proof == 0u) {
+        g_db_arm_proof = 1u;
+        kernel_debug_printf("db: armed w=%x dr7=%x dr6=%x dr5=%x\n",
+                            (unsigned int)a1, (unsigned int)dr7v,
+                            (unsigned int)dr6v, (unsigned int)dr5v);
+    }
 }
 
 static void db_clear_dr7(void) {
@@ -970,7 +988,6 @@ static void db_clear_dr7(void) {
 }
 
 extern volatile uint32_t g_db_trap_count;
-static uint32_t g_db_trap_reported;
 
 /*
  * ARMING IS DISABLED BY DEFAULT (adendo 36): measured — on QEMU x86 even an
@@ -984,6 +1001,55 @@ static uint32_t g_db_trap_reported;
  * resume. Do not "fix" by removing the instruments — the data they will
  * produce is the whole point.
  */
+
+/* Hardware debug support probe (adendo 36): this QEMU/TCG build has NO
+ * hw-breakpoint implementation (G0+L0 DR7 writes accepted but a #DB never
+ * arrives; the L0|L1 memory-watch config additionally hung the guest).
+ * Enable the watchpoint tool only if a GLOBAL-exec breakpoint at a scratch
+ * label actually traps. Cheap, one-shot, fail-closed. */
+static volatile uint32_t g_db_probe_fired;
+static volatile uint32_t g_db_probe_active;
+
+extern void db_probe_target(void);
+asm(".text\n.type db_probe_target,@function\ndb_probe_target:\n\tnop\n\tret\n.size db_probe_target,.-db_probe_target\n");
+
+int scheduler_db_supported(void) {
+    uint32_t zero = 0u;
+    uint32_t g0_exec = 0x00000001u | (0x00000003u << 16);
+    int supported;
+    uintptr_t addr = (uintptr_t)&db_probe_target;
+
+    __asm__ volatile("movl %0, %%dr7\n\t"
+                     "movl %1, %%dr0\n\t"
+                     "movl %2, %%dr7"
+                     :
+                     : "r"(zero), "r"(addr), "r"(g0_exec)
+                     : "memory");
+    g_db_probe_fired = 0u;
+    g_db_probe_active = 1u;
+    __asm__ volatile("call *%0" : : "g"(addr) : "memory");
+    g_db_probe_active = 0u;
+    supported = (g_db_probe_fired != 0u);
+    __asm__ volatile("movl %0, %%dr7\n\t"
+                     "movl %0, %%dr0"
+                     :
+                     : "r"(zero)
+                     : "memory");
+    if (!supported) {
+        kernel_debug_printf("db: unsupported (probe silent) - tool disabled\n");
+    }
+    return supported;
+}
+
+/* returns 1 when the trap belongs to the probe (consumed, no ring push) */
+int scheduler_db_probe_capture(uint32_t eip) {
+    if (g_db_probe_active != 0u && eip == (uint32_t)(uintptr_t)&db_probe_target + 1u) {
+        g_db_probe_fired = 1u;
+        return 1;
+    }
+    return 0;
+}
+
 static volatile uint32_t g_db_arm_enable;
 
 void scheduler_db_enable(int on) {
@@ -996,13 +1062,8 @@ void scheduler_dr_maintain(uint32_t cpu_index) {
     uintptr_t a0 = 0u, a1 = 0u;
 
     db_drain_events(); /* tick context: safe to print from here */
-    if (g_db_trap_count != g_db_trap_reported) {
-        g_db_trap_reported = g_db_trap_count;
-        kernel_debug_printf("db: traps=%u (empty handler experiment)\n",
-                            (unsigned int)g_db_trap_count);
-    }
 
-    if (g_db_arm_enable == 0u || g_db_off != 0u) {
+    if (g_db_arm_enable != 1u || g_db_off != 0u) {
         if ((g_db_disarm_mask & (1u << (cpu_index & 31u))) == 0u) {
             g_db_disarm_mask |= (1u << (cpu_index & 31u));
             db_clear_dr7();
@@ -1062,71 +1123,78 @@ void scheduler_db_save_end(const process_t *task) {
 
 void scheduler_db_event(uint32_t dr6, uint32_t eip, uint32_t cs,
                        uint32_t cpu_index) {
-    /* LOCK-FREE trap context only: classification + ring push, no I/O.
-     * Printing from inside the handler deadlocked the USB BOT timing loop
-     * (measured: ide-path scenarios PASS with the same events; usb-boot
-     * freezes at the first serial write from a #DB nested into the
-     * interrupt-disabled storage spin). Reports are drained by
-     * scheduler_dr_maintain from the tick, in normal context. */
-    const char *kind = NULL;
+    /* LOCK-FREE trap-context push (seqcounted per-CPU ring). A spinlock
+     * here self-deadlocked when the #DB landed on the BSP drain already
+     * holding the ring lock during its printf — measured: empty handler
+     * survived the USB boot, lock-using handler froze it. Rule of the
+     * trap context: no I/O, no locks. */
+    uint32_t cidx = cpu_index & 3u;
+    db_evt_cpu_t *ring = &g_db_evt_per_cpu[cidx];
+    uint32_t seq;
     uint32_t slot;
-    uint32_t flags;
+    uint32_t kind;
 
-    (void)kind;
+    if (cpu_index >= 4u) {
+        return;
+    }
+    if ((dr6 & 3u) == 0u) {
+        return; /* BS/step/other: not ours */
+    }
+    if (g_db_in_save[cidx] != 0u) {
+        return; /* bracketed store: wrapper ctx save / execve size+ctx */
+    }
+    /* single-watchpoint policy: any live match is the {size,context} window */
+    kind = 2u;
 
-    if ((dr6 & 1u) != 0u) {
-        if (cpu_index < 4u && g_db_in_save[cpu_index] != 0u) {
-            return; /* execve stack-store inside the DR0 window */
-        }
-        kind = "PID-WRITE";
-    } else if ((dr6 & 2u) != 0u) {
-        if (cpu_index < 4u && g_db_in_save[cpu_index] != 0u) {
-            return; /* save wrapper / execve store */
-        }
-        kind = "CTX-WRITE";
-    } else {
-        return; /* BS/step/etc: not ours */
-    }
-
-    flags = spinlock_lock_irqsave(&g_db_evt_lock);
-    if (g_db_evt_count < DB_EVT_RING) {
-        slot = g_db_evt_count;
-    } else {
-        slot = g_db_evt_drop_slot;
-        g_db_evt_drop_slot = (g_db_evt_drop_slot + 1u) % DB_EVT_RING;
-    }
-    if (g_db_evt_count < DB_EVT_RING) {
-        g_db_evt_count++;
-    }
-    g_db_evt_ring[slot].dr6 = dr6;
-    g_db_evt_ring[slot].eip = eip;
-    g_db_evt_ring[slot].cs = cs;
-    g_db_evt_ring[slot].cpu = cpu_index;
-    g_db_evt_ring[slot].kind = (kind != NULL && kind[0] == 'P') ? 1u : 2u;
-    spinlock_unlock_irqrestore(&g_db_evt_lock, flags);
+    seq = ring->seq + 1u;
+    ring->seq = seq;                       /* odd: writing */
+    __asm__ volatile("" ::: "memory");
+    slot = seq & (DB_EVT_RING - 1u);
+    ring->slots[slot].dr6 = dr6;
+    ring->slots[slot].eip = eip;
+    ring->slots[slot].cs = cs;
+    ring->slots[slot].kind = kind;
+    __asm__ volatile("" ::: "memory");
+    ring->seq = seq + 1u;                  /* even: committed */
 }
 
 static void db_drain_events(void) {
-    uint32_t i;
+    uint32_t c;
 
-    /* print every captured event not yet reported (idempotent flag) */
-    for (i = 0u; i < g_db_evt_count && i < DB_EVT_RING; ++i) {
-        db_evt_t *e = &g_db_evt_ring[i];
+    for (c = 0u; c < 4u; ++c) {
+        db_evt_cpu_t *ring = &g_db_evt_per_cpu[c];
 
-        if (e->reported != 0u) {
-            continue;
-        }
-        e->reported = 1u;
-        if (g_db_budget != 0u) {
-            g_db_budget--;
-            kernel_debug_printf("db: %s eip=%x cs=%x cpu=%u a0=%x a1=%x\n",
-                                (e->kind == 1u) ? "PID-WRITE" : "CTX-WRITE",
-                                (unsigned int)e->eip, (unsigned int)e->cs,
-                                (unsigned int)e->cpu,
-                                (unsigned int)g_db_dr0, (unsigned int)g_db_dr1);
-        } else {
-            g_db_off = 1u;
-            return;
+        for (;;) {
+            uint32_t seq = ring->seq;
+            uint32_t idx, eip, cs, kind;
+
+            if ((seq & 1u) != 0u) {
+                break;                    /* producer mid-write */
+            }
+            if (seq == ring->reported) {
+                break;                    /* nothing new */
+            }
+            if (seq - ring->reported > DB_EVT_RING) {
+                ring->reported = seq - 1u; /* overflow: skip to newest */
+            }
+            idx = (ring->reported + 1u) & (DB_EVT_RING - 1u);
+            eip = ring->slots[idx].eip;
+            cs = ring->slots[idx].cs;
+            kind = ring->slots[idx].kind;
+            if (ring->seq != seq) {
+                continue;                 /* raced during snapshot: retry */
+            }
+            ring->reported = ring->reported + 1u;
+            (void)kind;
+            if (g_db_budget != 0u) {
+                g_db_budget--;
+                kernel_debug_printf("db: CTX-WRITE eip=%x cs=%x cpu=%u w=%x\n",
+                                    (unsigned int)eip, (unsigned int)cs,
+                                    (unsigned int)c, (unsigned int)g_db_dr0);
+            } else {
+                g_db_off = 1u;
+                return;
+            }
         }
     }
 }
@@ -2332,6 +2400,12 @@ void scheduler_add_task(process_t *proc) {
         }
     }
     rec_shadow_take(proc); /* RECORD-WATCH baseline (adendo 33) */
+    /* Watchpoint tool auto-arms once the victim record is linked (task
+     * context, no tick-side surprise): the #DB ring is lock-free and one
+     * 8-byte window, per the TCG isolation ladder in db_set_regs. */
+    if (proc->pid == SCHED_DB_TARGET_PID && g_db_arm_enable == 0u) {
+        g_db_arm_enable = scheduler_db_supported() ? 1u : 0xFFFFu; /* CLOSED */
+    }
     spinlock_unlock_irqrestore(&g_scheduler_lock, flags);
     if (!g_audio_task_added_trace_emitted &&
         proc->service_type == MK_SERVICE_AUDIO) {

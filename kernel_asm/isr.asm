@@ -28,6 +28,7 @@ global smp_timer_stub
 
 global divide_error_stub
 global debug_stub
+global int3_stub
 global invalid_opcode_stub
 global invalid_tss_stub
 global segment_not_present_stub
@@ -47,6 +48,7 @@ extern smp_timer_irq_handler
 
 extern divide_error_handler
 extern debug_handler
+extern int3_handler
 extern invalid_opcode_handler
 extern invalid_tss_handler
 extern segment_not_present_handler
@@ -222,6 +224,19 @@ divide_error_stub:
     push edx
     push eax
     call divide_error_handler
+    add esp, 8
+    popa
+    iretd
+
+int3_stub:
+    pusha
+    cld
+    LOAD_KERNEL_DATA_SEGMENTS
+    mov eax, [esp + 32]    ; saved EIP (no error code for INT3)
+    mov edx, [esp + 36]    ; saved CS
+    push edx
+    push eax
+    call int3_handler
     add esp, 8
     popa
     iretd

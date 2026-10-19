@@ -36,6 +36,10 @@ void scheduler_rec_watch_refresh(process_t *task);
  * the wrapper (execve); db_event classifies/reports #DB hits. */
 void scheduler_dr_maintain(uint32_t cpu_index);
 void scheduler_db_enable(int on);
+/* adendo 36: G0-exec-breakpoint support probe (fail-closed on emulators
+ * without hw breakpoints); probe traps route here before ring push. */
+int scheduler_db_supported(void);
+int scheduler_db_probe_capture(uint32_t eip);
 void scheduler_db_save_begin(const process_t *task);
 void scheduler_db_save_end(const process_t *task);
 void scheduler_db_event(uint32_t dr6, uint32_t eip, uint32_t cs,

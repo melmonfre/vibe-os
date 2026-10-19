@@ -42,6 +42,7 @@ extern void smp_timer_stub(void);
 
 extern void divide_error_stub(void);
 extern void debug_stub(void);
+extern void int3_stub(void);
 extern void invalid_opcode_stub(void);
 extern void invalid_tss_stub(void);
 extern void segment_not_present_stub(void);
@@ -86,6 +87,9 @@ void kernel_idt_init(void) {
     /* exception handlers */
     idt_set_gate(0,  (uint32_t)divide_error_stub,        0x8E);
     idt_set_gate(1,  (uint32_t)debug_stub,               0x8E);
+    /* Probe vector: a G0-only DR7 enable traps IFF the CPU supports hw
+     * breakpoints; with the gate present the probe is safe everywhere. */
+    idt_set_gate(3,  (uint32_t)int3_stub,                0x8E);
     idt_set_gate(6,  (uint32_t)invalid_opcode_stub,       0x8E);
     idt_set_gate(10, (uint32_t)invalid_tss_stub,          0x8E);
     idt_set_gate(11, (uint32_t)segment_not_present_stub,  0x8E);
@@ -151,6 +155,19 @@ static void exception_kill_user_task(const char *name,
 }
 
 /* simple handlers that just panic */
+/* INT3 vector-3: no error code pushed (matches divide_error's zero);
+ * used by the debug-support probe and as a tripwire for accidental int3
+ * execution (logged, never fatal). */
+void int3_handler(uint32_t eip, uint32_t cs) {
+    static volatile uint32_t g_int3_seen;
+
+    if (g_int3_seen < 4u) {
+        g_int3_seen++;
+        kernel_debug_printf("int3: eip=%x cs=%x\n", (unsigned int)eip,
+                            (unsigned int)cs);
+    }
+}
+
 void divide_error_handler(uint32_t eip, uint32_t cs) {
     if (exception_is_user_mode(cs)) {
         exception_kill_user_task("Divide Error", 0u, eip, cs, 0u);
@@ -171,8 +188,6 @@ void divide_error_handler(uint32_t eip, uint32_t cs) {
  * kernel-mode writers are named and execution continues (budget/disarm in
  * scheduler.c keeps it finite).
  */
-volatile uint32_t g_db_trap_count;
-
 void debug_handler(uint32_t error_code, uint32_t eip, uint32_t cs) {
     uint32_t dr6;
     uint32_t dr6_clear;
@@ -190,8 +205,9 @@ void debug_handler(uint32_t error_code, uint32_t eip, uint32_t cs) {
                      :
                      : "r"(dr6_clear)
                      : "memory");
-    g_db_trap_count++;
-    (void)dr6; (void)eip; (void)cs;
+    if (scheduler_db_probe_capture(eip) == 0) {
+        scheduler_db_event(dr6, eip, cs, kernel_cpu_index());
+    }
     if (exception_is_user_mode(cs)) {
         exception_kill_user_task("Debug watchpoint (user writer)", 0u, eip, cs,
                                  dr6);

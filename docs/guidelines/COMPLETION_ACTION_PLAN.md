@@ -1369,3 +1369,38 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   principium registrado no codigo: trap context = zero I/O.
 - ESTADO: instruments anteriores intactos; UP gate 6/6 PASS; smp2 pos-revert:
   1 desktop 30s + 1 morte-face (idêntico a 18n, sem regressao).
+
+### P4 — adendo 37 de 18/10 (QEMU/TCG NAO implementa hardware breakpoints — medido por probe G0-exec com armadilha int3; tool de watchpoints sobrevive em arvore FAIL-CLOSED: autodesarma no emulador, VIVE no hardware real T61. A campanha chegou literalmente na decisao hardware-first)
+
+- ESCADA DE ELIMINACAO ate aqui: o escritor do context/size do record nao e
+  save concorrente (FOREIGN-CPU 0/6), nao e overflow de buffer local (SSP
+  0/4), nao e escrita pos-selecao no gap (CTX-DRIFT 0), nao passa por heap
+  dupla-posse (recalias 0/4), e as saidas de IRQ entregam frames sadios
+  (IRQEXIT 0/5). Sobra UM meio de nomear o autor: watchpoint de hardware no
+  proprio campo.
+- MEDICAO NO EMULADOR (ladder TCG): (i) DR7 L0|L1 com memoria-watch => guest
+  CONGELA antes de qualquer trap chegar ao handler; (ii) L0-only memory-watch
+  => sobrevive mas trap NUNCA chega (0 eventos, mesmo com CTX-MISMATCH
+  provando que o campo mudou); (iii) probe G0-exec-breakpoint num rotulo
+  scratch + INT3 => NENHUM #DB chega, vector int3 visto diretamente tambem
+  mudo de conteudo — esta build do QEMU/TCG nao implementa hardware debug
+  traps para o guest (dr7 readback 0x90401 aceito, silencia funcional).
+- FIX FINAL DO TOOL: probe fail-closed (`scheduler_db_supported()` usa G0-exec
+  + INT3 vector gateado; se nao trap => `db: unsupported ... tool disabled` e
+  maintain NUNCA arma). Auto-arm no link do alvo passa pelo probe. Ring agora
+  LOCK-FREE por-CPU seqcount (a versao com spinlock deadlockava no proprio
+  handler; medido: handler vazio sobrevivia, handler com lock congelava).
+- PROVAS: UP phase6-boot-smoke 6/6 PASS no build final (5/6 com probe
+  silent-fail + usb re-testado session=1); smp2 3 runs: unsupported=1/armed=0
+  em TODOS, faces identicas ao baseline 18n (1 desktop 20s, 1 hang, 1 crash)
+  => zero regressao. O tool fica ARMADO e VIVO no hardware real (P0): la o
+  probe passa e o primeiro CTX-WRITE nomeia eip/cs do escritor no ato —
+  exatamente a familia de bug que so silicio mostra (DMA/SMM/errata no
+  reloginho de timers do i8254 vs LAPIC, ja documentada em KNOWN_BUGS A20).
+- PROXIMA SODA QEMU-POSSIVEL (1/rodada, ultima antes do hardware): como o
+  trap de memoria nao dispara no TCG, usar SW-WATCHPOINT barato: no
+  `scheduler_save_current_context` registrar tambem o VALOR do ctx anterior;
+  no primeiro WRITE externo o rec-watch ja pega... mas o transiente escapa.
+  Opcao real: gravar o record inteiro (16 words) a cada tick%4 p/ pid-alvo e
+  diff no proximo tick — janela de 4 ticks em vez de 100; custo ~200 bytes
+  copy/tick, budget de relatorio identico. Fazer se nada melhor emergir.
