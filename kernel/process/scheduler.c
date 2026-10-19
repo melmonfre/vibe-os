@@ -458,6 +458,43 @@ int scheduler_stack_overlap(uintptr_t lo, uintptr_t hi, uintptr_t *os_out,
     return -1;
 }
 
+/*
+ * Record-overlap twin of scheduler_stack_overlap (P4 classe #5, adendo 34):
+ * a process_t record is kernel_malloc'd and ONLY ever owned by the task
+ * itself; a heap block handed out (or released) that overlaps the record
+ * range of a still-LINKED task is double-ownership caught at the moment of
+ * the (re)allocation — the stale-typed-pointer writer (mailbox/transfer/
+ * subscription whose block became a record, or a record freed while linked)
+ * can no longer act silently. Read-only capped walk, no locks (diagnostic).
+ */
+int scheduler_record_overlap(uintptr_t lo, uintptr_t hi, uintptr_t *os_out,
+                             uintptr_t *oe_out, int *state_out) {
+    const process_t *task;
+    uint32_t guard = 0u;
+
+    for (task = g_head; task != NULL && guard < 256u; task = task->next, ++guard) {
+        uintptr_t s = (uintptr_t)task;
+        uintptr_t e = s + sizeof(process_t);
+
+        if (task->state == PROCESS_TERMINATED) {
+            continue;
+        }
+        if (s < hi && lo < e) {
+            if (os_out != NULL) {
+                *os_out = s;
+            }
+            if (oe_out != NULL) {
+                *oe_out = e;
+            }
+            if (state_out != NULL) {
+                *state_out = (int)task->state;
+            }
+            return task->pid;
+        }
+    }
+    return -1;
+}
+
 static spinlock_t g_task_event_lock;
 static int g_scheduler_boot_trace_emitted = 0;
 static int g_scheduler_head_trace_done = 0;

@@ -265,6 +265,7 @@ void *kernel_malloc(size_t size) {
         uintptr_t os = 0u, oe = 0u;
         int ost = -1;
         int victim = scheduler_stack_overlap(blo, bhi, &os, &oe, &ost);
+        int rec_victim;
 
         if (victim >= 0) {
             static volatile uint32_t g_heap_alias_budget = 6u;
@@ -273,6 +274,23 @@ void *kernel_malloc(size_t size) {
                 kernel_debug_printf("heap-alias: alloc=[%x,%x) overlaps live pid=%d state=%d stack=[%x,%x) allocpc=%x\n",
                                     (unsigned int)blo, (unsigned int)bhi,
                                     victim, ost,
+                                    (unsigned int)os, (unsigned int)oe,
+                                    (unsigned int)call_pc);
+            }
+        }
+        /* RECORD twin (P4 adendo 34): a block handed out overlapping the
+         * process_t record of a still-linked task is stale-typed-pointer
+         * double-ownership at its birth instant. Self-matches cannot occur
+         * (the new owner is linked only later), so ANY hit is a finding. */
+        ost = -1;
+        rec_victim = scheduler_record_overlap(blo, bhi, &os, &oe, &ost);
+        if (rec_victim >= 0) {
+            static volatile uint32_t g_heap_recalias_budget = 6u;
+            if (g_heap_recalias_budget != 0u) {
+                g_heap_recalias_budget--;
+                kernel_debug_printf("heap-recalias: alloc=[%x,%x) overlaps live pid=%d state=%d rec=[%x,%x) allocpc=%x\n",
+                                    (unsigned int)blo, (unsigned int)bhi,
+                                    rec_victim, ost,
                                     (unsigned int)os, (unsigned int)oe,
                                     (unsigned int)call_pc);
             }
@@ -439,6 +457,28 @@ void kernel_free(void *ptr) {
                                     (unsigned int)os, (unsigned int)oe,
                                     (unsigned int)block->reserved,
                                     (unsigned int)(uintptr_t)__builtin_return_address(0));
+            }
+        }
+        /* RECORD twin (P4 adendo 34): releasing a block that overlaps a
+         * still-linked task's process_t record = freeing a live record
+         * through some path the STILL-LINKED guard does not police. */
+        ost = -1;
+        {
+            int rec_victim = scheduler_record_overlap((uintptr_t)block,
+                                                      (uintptr_t)block + free_size,
+                                                      &os, &oe, &ost);
+
+            if (rec_victim >= 0) {
+                static volatile uint32_t g_heap_free_rec_budget = 6u;
+                if (g_heap_free_rec_budget != 0u) {
+                    g_heap_free_rec_budget--;
+                    kernel_debug_printf("heap-free-live-record: free=[%x,%x) live pid=%d state=%d rec=[%x,%x) freepc=%x\n",
+                                        (unsigned int)(uintptr_t)block,
+                                        (unsigned int)((uintptr_t)block + free_size),
+                                        rec_victim, ost,
+                                        (unsigned int)os, (unsigned int)oe,
+                                        (unsigned int)(uintptr_t)__builtin_return_address(0));
+                }
             }
         }
     }

@@ -1315,3 +1315,31 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   kernel_free (liberacao de bloco que sobrepoe record de task VIVA).
 - GATES: make -Werror verde; UP smoke rc=0; 6 runs fc (1 stall, 4 mortes,
   2 hangs nos dois TIMEOUTs) + face-stats atualizados.
+
+### P4 — adendo 35 de 18/10 (heap-recalias/heap-free-live-record: 0/4 — dupla-posse de record AO NIVEL DO HEAP tambem ELIMINADA; o escritor toca o record legitimo diretamente; sonda final nomeada: watchpoint de hardware DR0-DR7 no campo context)
+
+- ARMADO: `scheduler_record_overlap` + hooks em kernel_malloc (heap-recalias:
+  bloco entregue sobrepondo record de task LINKED viva) e kernel_free
+  (heap-free-live-record). Self-match impossivel por construcao (o dono so e
+  linkado APOS o malloc do record; free legitimo so acontece pos-TERMINATED,
+  e TERMINATED e skipado) => QUALQUER hit seria um achado real.
+- MEDICAO: UP smoke rc=0, 0 hits no boot inteiro (ausencia de falso-positivo);
+  lote ro1-4 smp2: 0 hits (faces: 1 stall, 1 hang, 2 mortes). Combinando com
+  FOREIGN-CPU 0/6 (18m) e WATCHED-FREE 0/10+: o escritor NAO opera por
+  bloco-reinvestido nem por save-concorrente — ele escreve o ENDERECO
+  legitimo do record por uma mao sem huellno no heap.
+- ELIMINACAO FINAL por instrumentos de posse: restam duas familias —
+  (i) escrita por ponteiro valido a OUTRO objeto com delta de offset que
+  cai em [rec+0..rec+0x90) (ex.: waitable/mailbox embutido em bloco vizinho
+  cujo base pointer esta off-by-struct), e (ii) writer desconhecido via
+  registradores/ponteiros de dados (DMA? — AHCI/ATA DMA buffers sao estaticos
+  e alinhados; E1000 RX/TX rings mallocados — o RX ring do e1000/rtl8139 e
+  heap: se um ring-size/pointer divergir, o NIC escreve nos vizinhos!).
+- PROXIMA SODA (1/rodada, definitiva): watchpoint de hardware — DR0 =
+  endereco do campo `context` do record vitima (pid-alvo fixado no boot
+  debug), DR7 write-watch, handler #DB (vector 1) ja pode ser adicionado ao
+  IDT com print de eip/eax + budget. Um #DB com eip dentro de driver DMA/
+  mailbox NOMEIA o autor no ato da escrita, sem amostragem. Se #DB nunca
+  dispara mas context continua mudando, a escrita e via outro endereco
+  fisico aliasado (DMA sem IOMMU = caso real T61 tambem!) — o que e, ele
+  mesmo, o alvo hardware-first da P0.

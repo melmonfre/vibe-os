@@ -19,6 +19,10 @@ void scheduler_rsp_witness(uint32_t cpu_index);
  * Called from kernel_malloc; read-only, capped walk, no locks. */
 int scheduler_stack_overlap(uintptr_t lo, uintptr_t hi, uintptr_t *os_out,
                             uintptr_t *oe_out, int *state_out);
+/* Record-range twin (P4 adendo 34): overlaps against the process_t blocks
+ * of still-linked tasks; called from kernel_malloc/kernel_free. */
+int scheduler_record_overlap(uintptr_t lo, uintptr_t hi, uintptr_t *os_out,
+                             uintptr_t *oe_out, int *state_out);
 /* Face-1 per-cpu schedule_frame entry counter + death dump (class #5,
  * adendo 17): pair with smp_tick_counts_dump to locate the stall stage. */
 uint32_t scheduler_frame_entry_count(uint32_t cpu_index);
