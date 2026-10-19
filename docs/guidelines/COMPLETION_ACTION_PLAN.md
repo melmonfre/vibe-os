@@ -1487,3 +1487,32 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   kernel_mailbox_send do video-present: quem produz jobs e se a fila pode
   corromper-se com dois produtores (present_rect_fast_lfb apareceu no dump
   misto — presente de framebuffer rodando CONCORRENTE com clear do worker).
+
+### P4 — adendo 41 de 19/10 (auditoria do mailbox de video = LIMPA; testemunha ESP0-ORPHAN armada com prova de alcancabilidade e NEGATIVA 0/8; camada steady-state das testemunhas COMPLETA)
+
+- AUDITORIA VIDEO-MAILBOX (passo concreto do adendo 40): auditado o
+  kernel_mailbox_send do caminho video-present — HÁ APENAS UM produtor por
+  fila, sob lock (video.c:393); a hipotese "dois produtores envenando a
+  fila do mailbox MORREU HONESTAMENTE. Os frames de worker de video vistos
+  nos dumps do monitor (fz-b cpu0) eram o LACO SAUDAVEL do worker, nao o
+  veneno — o veneno mora no cpu1 fora dos trilhos, e o produtor do slot
+  corrompido continua anonimo em QEMU (steady-state limpo).
+- TESTEMUNHA ESP0-ORPHAN (fecha o ultimo ponto-cego do TSS): varredura a
+  cada tick, dentro do mesmo lock do tick-guard: para cada cpu 0..1, se
+  esp0 != 0 ele DEVE casar com o topo de pilha de uma task viva (inclui
+  TERMINATED — licao do adendo 38) OU com o topo do AP boot stack
+  (smp_ap_stack_bounds); senao: "tick-guard: ESP0-ORPHAN cpu=%u esp0=%x".
+  Motivo geometrico: no FREEZE do adendo 40 o cpu morto esta em CPL0 com
+  IF=0; se o ESP dele escorregou para uma pilha ALHEIA, todo push/ret poisona
+  a vitima — e a unica fixacao do TSS que nunca foi observada em repouso.
+- LICAO DE ARMABILIDADE (reincidencia, corrigida na hora): a 1a verso imprimia
+  "armed cpu0=0 cpu1=0" no PRIMEIRO tick — um 0-nao-verifica-nada e portanto
+  nao provava nada; um lote inteiro (ep1-6+ea1-2) lido como negativo SEM
+  prova de que a varredura via esp0 nao-zero. Corrigido: o armed agora so
+  dispara na PRIMEIRA observacao de esp0 NAO-ZERO. Lotes refeitos:
+  eb1/eb2 com o armed real ("esp0-sweep armed cpu=0 e0=39247980 tick=453/474")
+  + ep/ea = 8 boots smp2, ESP0-ORPHAN = 0/8. Classe "esp0 idle corrompido"
+  ELIMINADA POR OBSERVACAO; camada steady-state das testemunhas COMPLETA.
+- O que sobra: o escritor transiente de fields de record — invisivel a TODAS
+  as testemunhas em QEMU; o instrumento que o nomeia (watchpoint de hardware
+  DR0/DR7, ja autobarra pela sonda G0) SO EXISTE no T61 — P0.

@@ -3410,6 +3410,65 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
                 }
             }
         }
+
+        /* ESP0-ORPHAN: every cpu's TSS esp0 must be 0, a live task's stack
+         * top, or an AP boot stack top — anything else and a ring3->ring0
+         * on that cpu writes a trap frame into unknown memory. Idle cpus
+         * keep the last task's top legitimately; this runs per tick for ALL
+         * cpus so the blind spot (esp0 corrupted while g_current==NULL) is
+         * covered within one tick. (P4 adendo 41) */
+        {
+            static volatile uint32_t g_sched_esp0_orphan_budget = 6u;
+            uint32_t c;
+
+            for (c = 0u; c < 2u; ++c) {
+                uintptr_t e0 = kernel_tss_get_kernel_stack(c);
+                const process_t *tt;
+                uint32_t guard = 0u;
+                int found = 0;
+
+                if (e0 == 0u) {
+                    continue;
+                }
+                /* reachability proof: print ONCE, at the first observation
+                 * of a NON-ZERO esp0 (0 proves nothing — adendo 41 lesson) */
+                if (g_sched_esp0_orphan_budget == 6u) {
+                    g_sched_esp0_orphan_budget = 5u;
+                    kernel_debug_printf("tick-guard: esp0-sweep armed cpu=%u e0=%x tick=%u\n",
+                                        (unsigned int)c, (unsigned int)e0,
+                                        (unsigned int)tick);
+                }
+                for (tt = g_head; tt != NULL && guard < 256u;
+                     tt = tt->next, ++guard) {
+                    uintptr_t s0 = (uintptr_t)tt->stack;
+
+                    if (s0 == 0u || tt->stack_size < 1024u ||
+                        tt->stack_size > (4u * 1024u * 1024u)) {
+                        continue;
+                    }
+                    /* TERMINATED tasks are NOT skipped here: an idle cpu's
+                     * esp0 legitimately holds the last (possibly since
+                     * terminated) task's top (lesson adendo 38). */
+                    if (e0 == s0 + tt->stack_size) {
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    uintptr_t lo = 0u, hi = 0u;
+
+                    if (smp_ap_stack_bounds(c, &lo, &hi) == 0 && e0 == hi) {
+                        found = 1;
+                    }
+                }
+                if (!found && g_sched_esp0_orphan_budget != 0u) {
+                    g_sched_esp0_orphan_budget--;
+                    kernel_debug_printf("tick-guard: ESP0-ORPHAN cpu=%u esp0=%x tick=%u\n",
+                                        (unsigned int)c, (unsigned int)e0,
+                                        (unsigned int)tick);
+                }
+            }
+        }
     }
 
     /*
