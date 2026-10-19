@@ -2558,12 +2558,17 @@ static uint32_t sys_execve(uint32_t path_ptr, uint32_t argv_ptr,
         current->pending_stack_free = current->stack;
     }
 
+    /* Watchpoint bracket: execve legitimately rewrites {stack,stack_size,
+     * context} — the DR0/DR1 write trap must classify this as benign (P4
+     * adendo 36). */
+    scheduler_db_save_begin(current);
     current->stack = loaded->stack;
     current->stack_size = loaded->stack_size;
     /* Close the esp0 window NOW: any ring3->ring0 trap between this return
      * and the next dispatch must land on the NEW stack, not the parked one. */
     kernel_tss_set_kernel_stack((uintptr_t)current->stack + current->stack_size);
     current->context = loaded->context;
+    scheduler_db_save_end(current);
     /* RECORD-WATCH (P4 adendo 33): execve legitimately moves stack+context;
      * refresh the shadow so the watchdog does not report the legit swap. */
     scheduler_rec_watch_refresh(current);

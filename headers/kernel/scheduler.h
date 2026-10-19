@@ -30,6 +30,16 @@ void scheduler_frame_counts_dump(void);
 /* RECORD-WATCH (P4 classe #5 adendo 33): refresh the shadow for a task whose
  * context/stack changed legitimately outside the save wrapper (execve). */
 void scheduler_rec_watch_refresh(process_t *task);
+/* Hardware write-watchpoints on the victim record (P4 adendo 36):
+ * maintain arms DR0(pid field)/DR1(stack_size+context window) on the calling
+ * CPU; *_save_begin/_end bracket the ONE legitimate context writer outside
+ * the wrapper (execve); db_event classifies/reports #DB hits. */
+void scheduler_dr_maintain(uint32_t cpu_index);
+void scheduler_db_enable(int on);
+void scheduler_db_save_begin(const process_t *task);
+void scheduler_db_save_end(const process_t *task);
+void scheduler_db_event(uint32_t dr6, uint32_t eip, uint32_t cs,
+                        uint32_t cpu_index);
 /* Last C gate before an IRQ epilogue irets: validate the frame CONTENT the
  * CPU is about to resume (eip/cs sanity per ring) — catches the corrupted-
  * content-in-legit-stack entry the STALE-AT-ENTRY witness proved it is not. */

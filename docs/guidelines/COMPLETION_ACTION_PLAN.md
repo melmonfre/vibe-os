@@ -1343,3 +1343,29 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   dispara mas context continua mudando, a escrita e via outro endereco
   fisico aliasado (DMA sem IOMMU = caso real T61 tambem!) — o que e, ele
   mesmo, o alvo hardware-first da P0.
+
+### P4 — adendo 36 de 18/10 (infra de hardware-watchpoint DR0/DR1+#DB+ring entregue em arvore, ARMING gated OFF por bloqueio medido no QEMU; 3 subcausas mortas no caminho: xadd-%gs, recursao de handler, e o armamento em si)
+
+- ENTREGUE: debug_stub (vector 1, macro error-code) + debug_handler (clear
+  DR6/DR7, contador g_db_trap_count), ring lock-free de eventos capturado no
+  trap, DRAIN no tick (contexto seguro p/ print), brackets de save (wrapper +
+  execve), classificacao PID/CTX-WRITE, budget 8, disarm-self.
+- ARMING (escrever DR0/1/7 do tick-hook) CONGELA o TCG/QEMU no boot USB —
+  medido com handler VAZIO (zero I/O no trap): freeze na mesma linha
+  "host: startx start", sem NENHUMA linha de trap reportada => o tick morre
+  no primeiro arm. Nao e o conteudo do handler; e o arm. Gated por
+  `g_db_arm_enable` (scheduler_db_enable(1) liga; default OFF) com o
+  comentario de blocker no codigo. Proximos passos ANTES de ligar:
+  (a) armar UMA vez de contexto de task (nao do tick hook), (b) testar
+  under `-accel kvm` vs TCG para isolar emulador, (c) checar se o freeze e o
+  MOV-to-DR em si (QEMU check_dr_intercept) e nao os watchpoints ativos.
+- DURANTE o debug do arm, duas fixas colaterais reais foram encontradas e
+  sao mantidas: (1) o GS-base=slot-4 do slot SSP colidia com o `lock
+  xaddl` TLS-abiado do process_alloc_pid (%gs:20), que com GS não-rebaseado
+  escrevia em 0x14 (IVT!) — o GS remap foi REVERTIDO (o global-guard nao
+  precisa dele; %gs flat volta ao estado 18n; nota: o xadd %gs:20 ainda
+  existe — alvo de auditoria futura, o valor em 0x14 nunca foi consumido);
+  (2) I/O de serial DENTRO do handler #DB mata timing do USB-BOT —
+  principium registrado no codigo: trap context = zero I/O.
+- ESTADO: instruments anteriores intactos; UP gate 6/6 PASS; smp2 pos-revert:
+  1 desktop 30s + 1 morte-face (idêntico a 18n, sem regressao).

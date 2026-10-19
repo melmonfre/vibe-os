@@ -27,6 +27,7 @@ global smp_wakeup_stub
 global smp_timer_stub
 
 global divide_error_stub
+global debug_stub
 global invalid_opcode_stub
 global invalid_tss_stub
 global segment_not_present_stub
@@ -45,6 +46,7 @@ extern smp_wakeup_ipi_handler
 extern smp_timer_irq_handler
 
 extern divide_error_handler
+extern debug_handler
 extern invalid_opcode_handler
 extern invalid_tss_handler
 extern segment_not_present_handler
@@ -258,6 +260,7 @@ invalid_opcode_stub:
 EXCEPTION_ERROR_CODE_STUB invalid_tss_stub, invalid_tss_handler
 EXCEPTION_ERROR_CODE_STUB segment_not_present_stub, segment_not_present_handler
 EXCEPTION_ERROR_CODE_STUB stack_fault_stub, stack_fault_handler
+EXCEPTION_ERROR_CODE_STUB debug_stub, debug_handler
 EXCEPTION_ERROR_CODE_STUB general_protection_stub, general_protection_handler
 EXCEPTION_ERROR_CODE_STUB page_fault_stub, page_fault_handler
 EXCEPTION_ERROR_CODE_STUB double_fault_stub, double_fault_handler

@@ -714,6 +714,8 @@ kernel_trap_frame_t *smp_timer_irq_handler(kernel_trap_frame_t *frame) {
 
     local_apic_eoi();
     smp_tick_count_bump(kernel_cpu_index());
+    /* per-AP arming of the record write-watchpoints (P4 adendo 36) */
+    scheduler_dr_maintain(kernel_cpu_index());
     if (g_smp_scheduler_enabled == 0u) {
         return frame;
     }

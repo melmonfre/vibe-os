@@ -8,6 +8,9 @@
 #include <kernel/smp.h>
 
 #define IDT_ENTRIES 256
+
+/* lock-free raw serial (panic path) — declared locally; see kernel/panic.c */
+extern void kernel_serial_puts_raw(const char *s);
 #define IRQ0_VECTOR 0x20
 #define IRQ15_VECTOR 0x2F
 #define SYSCALL_VECTOR 0x80
@@ -38,6 +41,7 @@ extern void smp_wakeup_stub(void);
 extern void smp_timer_stub(void);
 
 extern void divide_error_stub(void);
+extern void debug_stub(void);
 extern void invalid_opcode_stub(void);
 extern void invalid_tss_stub(void);
 extern void segment_not_present_stub(void);
@@ -81,6 +85,7 @@ void kernel_idt_init(void) {
 
     /* exception handlers */
     idt_set_gate(0,  (uint32_t)divide_error_stub,        0x8E);
+    idt_set_gate(1,  (uint32_t)debug_stub,               0x8E);
     idt_set_gate(6,  (uint32_t)invalid_opcode_stub,       0x8E);
     idt_set_gate(10, (uint32_t)invalid_tss_stub,          0x8E);
     idt_set_gate(11, (uint32_t)segment_not_present_stub,  0x8E);
@@ -151,6 +156,46 @@ void divide_error_handler(uint32_t eip, uint32_t cs) {
         exception_kill_user_task("Divide Error", 0u, eip, cs, 0u);
     }
     kernel_panic("Divide Error");
+}
+
+/*
+ * #DB — hardware write-watchpoints on the victim process_t record
+ * (P4 classe #5, adendo 36). DR0/DR1 are armed by scheduler_dr_maintain;
+ * every debug exception is classified (and possibly printed) by the
+ * scheduler, which owns the legit-writer brackets. The store has already
+ * completed when #DB fires (x86 write watchpoints trigger after the
+ * instruction), so classification only names — it cannot suppress.
+ * USER-mode writers must NOT iret back: the error-code stubs do not restore
+ * data segments, so resuming into user code would leave kernel ds/es
+ * installed — user-mode writers are reported and the writer task is killed;
+ * kernel-mode writers are named and execution continues (budget/disarm in
+ * scheduler.c keeps it finite).
+ */
+volatile uint32_t g_db_trap_count;
+
+void debug_handler(uint32_t error_code, uint32_t eip, uint32_t cs) {
+    uint32_t dr6;
+    uint32_t dr6_clear;
+
+    (void)error_code;
+    __asm__ volatile("mov %%dr6, %0" : "=r"(dr6));
+    dr6_clear = 0u;
+    /* SELF-PROTECTION (measured: 9 legit bracketed events then a silent
+     * freeze — a nested #DB over an already-deep handler stack dies in
+     * double fault). Disarm this CPU's watchpoints at entry BEFORE doing
+     * anything else that touches the stack: scheduler_dr_maintain re-arms
+     * idempotently from the next tick, and the budget caps the round-trip. */
+    __asm__ volatile("movl %0, %%dr6\n\t"
+                     "movl %0, %%dr7"
+                     :
+                     : "r"(dr6_clear)
+                     : "memory");
+    g_db_trap_count++;
+    (void)dr6; (void)eip; (void)cs;
+    if (exception_is_user_mode(cs)) {
+        exception_kill_user_task("Debug watchpoint (user writer)", 0u, eip, cs,
+                                 dr6);
+    }
 }
 
 /*

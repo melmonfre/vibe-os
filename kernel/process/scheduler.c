@@ -904,6 +904,233 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
  * pass through unchecked (they are cleared intentionally).
  */
 static volatile uint32_t g_sched_ctxsave_budget = 12u;
+
+/*
+ * HARDWARE WRITE-WATCHPOINTS on the victim record (P4 classe #5, adendo 36).
+ * The elimination ladder (SSP 0/4, STALE-AT-ENTRY, IRQEXIT-gate 0/5,
+ * FOREIGN-CPU 0/6, heap-recalias/free-record 0/4) leaves a writer touching
+ * the LEGITIMATE record with no heap fingerprint and no save/concurrency
+ * trace. DR0/DR1 watch the target record's pid field and context field
+ * (the two observed corruption slots); the CPU itself then reports the
+ * WRITING eip at the store instruction — naming the author directly,
+ * including a user-mode writer (cs 0x1b/0x23) if one exists.
+ *
+ * Legit context writers are bracketed by scheduler_db_save_begin/end (the
+ * save wrapper and execve); the pid field has no legitimate writer after
+ * arming (creation precedes linking, arming follows linking), so ANY
+ * bit-0 event is a finding. Budget SCHED_DB_BUDGET reports, then the watch
+ * disarms itself on every CPU (keeps the epilogue cheap and avoids floods).
+ */
+#define SCHED_DB_TARGET_PID 9
+#define SCHED_DB_BUDGET     8u
+static volatile uintptr_t g_db_dr0;
+static volatile uintptr_t g_db_dr1;
+static volatile uint32_t g_db_budget = SCHED_DB_BUDGET;
+static volatile uint32_t g_db_off;
+static volatile uint32_t g_db_disarm_mask;
+#define DB_EVT_RING 12u
+typedef struct {
+    uint32_t dr6;
+    uint32_t eip;
+    uint32_t cs;
+    uint32_t cpu;
+    uint32_t kind;
+    volatile uint32_t reported;
+} db_evt_t;
+static void db_drain_events(void);
+static spinlock_t g_db_evt_lock;
+static db_evt_t g_db_evt_ring[DB_EVT_RING];
+static volatile uint32_t g_db_evt_count;
+static volatile uint32_t g_db_evt_drop_slot;
+static uint32_t g_db_in_save[4];
+
+static void db_set_regs(uintptr_t a0, uintptr_t a1) {
+    /* DR0: pid+stack window [rec, rec+8); DR1: size+context [rec+8, rec+16).
+     * L0|L1, RW=write for both, LEN=8B each.
+     *
+     * ORDERING (Intel SDM Vol3B): writing DR0..DR7 while the corresponding
+     * local-enable bits are set raises a debug exception ON THE MOV itself.
+     * First write therefore DISARMS (DR7=0), then loads addresses, then
+     * enables — the enabling MOV has the "already active" exception only if
+     * a bit was live, and clearing guarantees none are. */
+    uint32_t zero = 0u;
+    uint32_t on = 0x00000005u | (1u << 16) | (2u << 18) | (1u << 20) | (2u << 22);
+
+    __asm__ volatile("movl %0, %%dr7\n\t" : : "r"(zero) : "memory");
+    __asm__ volatile("movl %0, %%dr0\n\t"
+                     "movl %1, %%dr1\n\t"
+                     "movl %2, %%dr7\n\t"
+                     :
+                     : "r"((uint32_t)a0), "r"((uint32_t)a1), "r"(on)
+                     : "memory");
+}
+
+static void db_clear_dr7(void) {
+    __asm__ volatile("movl %0, %%dr7\n\t" : : "r"((uint32_t)0u) : "memory");
+}
+
+extern volatile uint32_t g_db_trap_count;
+static uint32_t g_db_trap_reported;
+
+/*
+ * ARMING IS DISABLED BY DEFAULT (adendo 36): measured — on QEMU x86 even an
+ * EMPTY #DB handler that only clears DR6/DR7 freezes the guest at the USB
+ * boot scenario the instant maintain first writes the watch DRs (same
+ * freeze line as armed runs; no trap ever reported: the tick hook itself
+ * dies). The #DB infrastructure (gate/stub/handler/ring/drain) stays in the
+ * tree inert; next steps before enabling: (a) arm once from a thread
+ * context instead of the tick hook, (b) reproduce under KVM vs TCG to
+ * isolate the emulator interaction, (c) try RF-protected single-step
+ * resume. Do not "fix" by removing the instruments — the data they will
+ * produce is the whole point.
+ */
+static volatile uint32_t g_db_arm_enable;
+
+void scheduler_db_enable(int on) {
+    g_db_arm_enable = (on != 0) ? 1u : 0u;
+}
+
+void scheduler_dr_maintain(uint32_t cpu_index) {
+    process_t *t;
+    uint32_t steps = 0u;
+    uintptr_t a0 = 0u, a1 = 0u;
+
+    db_drain_events(); /* tick context: safe to print from here */
+    if (g_db_trap_count != g_db_trap_reported) {
+        g_db_trap_reported = g_db_trap_count;
+        kernel_debug_printf("db: traps=%u (empty handler experiment)\n",
+                            (unsigned int)g_db_trap_count);
+    }
+
+    if (g_db_arm_enable == 0u || g_db_off != 0u) {
+        if ((g_db_disarm_mask & (1u << (cpu_index & 31u))) == 0u) {
+            g_db_disarm_mask |= (1u << (cpu_index & 31u));
+            db_clear_dr7();
+        }
+        return;
+    }
+    /*
+     * NO heap-lock here: this runs from the timeout hook every tick while
+     * holding g_scheduler_lock, and scheduler->heap per-tick would widen a
+     * lock-order race with any heap->scheduler window into a hard deadlock
+     * (measured: the first per-tick node_sane version froze UP usb-boot
+     * with zero output). The walk is therefore plain: bounded steps,
+     * pid equality only; a list corrupted enough to send this walk into a
+     * wild pointer would fault the tick handler, which is a far noisier
+     * (and acceptable) failure than silent global lock-up.
+     */
+    for (t = g_head; t != NULL && steps < 64u; t = t->next, ++steps) {
+        if (t->pid == SCHED_DB_TARGET_PID) {
+            a0 = (uintptr_t)t;                              /* pid field */
+            a1 = (uintptr_t)t + 8u;                         /* size+context */
+            break;
+        }
+    }
+    if (a0 == 0u) {
+        return;
+    }
+    /*
+     * Idempotent per-tick re-arm: the #DB handler disarms its own CPU's
+     * DR7 at entry (recursion self-protection — a nested #DB over a deep
+     * handler stack double-faulted silently in measurement); rewriting the
+     * three debug registers costs a few cycles and guarantees at most one
+     * tick of blind window. g_db_dr0/g_db_dr1 track the LAST published
+     * target so a record move still re-arms immediately.
+     */
+    g_db_dr0 = a0;
+    g_db_dr1 = a1;
+    db_set_regs(a0, a1);
+}
+
+void scheduler_db_save_begin(const process_t *task) {
+    uint32_t cpu = kernel_cpu_index();
+
+    if (task != NULL && task->pid == SCHED_DB_TARGET_PID && cpu < 4u) {
+        g_db_in_save[cpu] = 1u;
+        __asm__ volatile("" ::: "memory");
+    }
+}
+
+void scheduler_db_save_end(const process_t *task) {
+    uint32_t cpu = kernel_cpu_index();
+
+    if (task != NULL && task->pid == SCHED_DB_TARGET_PID && cpu < 4u) {
+        __asm__ volatile("" ::: "memory");
+        g_db_in_save[cpu] = 0u;
+    }
+}
+
+void scheduler_db_event(uint32_t dr6, uint32_t eip, uint32_t cs,
+                       uint32_t cpu_index) {
+    /* LOCK-FREE trap context only: classification + ring push, no I/O.
+     * Printing from inside the handler deadlocked the USB BOT timing loop
+     * (measured: ide-path scenarios PASS with the same events; usb-boot
+     * freezes at the first serial write from a #DB nested into the
+     * interrupt-disabled storage spin). Reports are drained by
+     * scheduler_dr_maintain from the tick, in normal context. */
+    const char *kind = NULL;
+    uint32_t slot;
+    uint32_t flags;
+
+    (void)kind;
+
+    if ((dr6 & 1u) != 0u) {
+        if (cpu_index < 4u && g_db_in_save[cpu_index] != 0u) {
+            return; /* execve stack-store inside the DR0 window */
+        }
+        kind = "PID-WRITE";
+    } else if ((dr6 & 2u) != 0u) {
+        if (cpu_index < 4u && g_db_in_save[cpu_index] != 0u) {
+            return; /* save wrapper / execve store */
+        }
+        kind = "CTX-WRITE";
+    } else {
+        return; /* BS/step/etc: not ours */
+    }
+
+    flags = spinlock_lock_irqsave(&g_db_evt_lock);
+    if (g_db_evt_count < DB_EVT_RING) {
+        slot = g_db_evt_count;
+    } else {
+        slot = g_db_evt_drop_slot;
+        g_db_evt_drop_slot = (g_db_evt_drop_slot + 1u) % DB_EVT_RING;
+    }
+    if (g_db_evt_count < DB_EVT_RING) {
+        g_db_evt_count++;
+    }
+    g_db_evt_ring[slot].dr6 = dr6;
+    g_db_evt_ring[slot].eip = eip;
+    g_db_evt_ring[slot].cs = cs;
+    g_db_evt_ring[slot].cpu = cpu_index;
+    g_db_evt_ring[slot].kind = (kind != NULL && kind[0] == 'P') ? 1u : 2u;
+    spinlock_unlock_irqrestore(&g_db_evt_lock, flags);
+}
+
+static void db_drain_events(void) {
+    uint32_t i;
+
+    /* print every captured event not yet reported (idempotent flag) */
+    for (i = 0u; i < g_db_evt_count && i < DB_EVT_RING; ++i) {
+        db_evt_t *e = &g_db_evt_ring[i];
+
+        if (e->reported != 0u) {
+            continue;
+        }
+        e->reported = 1u;
+        if (g_db_budget != 0u) {
+            g_db_budget--;
+            kernel_debug_printf("db: %s eip=%x cs=%x cpu=%u a0=%x a1=%x\n",
+                                (e->kind == 1u) ? "PID-WRITE" : "CTX-WRITE",
+                                (unsigned int)e->eip, (unsigned int)e->cs,
+                                (unsigned int)e->cpu,
+                                (unsigned int)g_db_dr0, (unsigned int)g_db_dr1);
+        } else {
+            g_db_off = 1u;
+            return;
+        }
+    }
+}
+
 static volatile uint32_t g_sched_foreign_cpu_budget = 10u;
 
 /*
@@ -1031,6 +1258,23 @@ static void rec_watch_scan(void) {
 }
 
 
+/* the one legitimate ctx writer besides execve; bracketed so the hardware
+ * watchpoint classifies the owner as benign and only unknown eips report */
+static void store_ctx(process_t *task, kernel_trap_frame_t *frame) {
+    uint32_t cpu = kernel_cpu_index();
+    int guarded = (task->pid == SCHED_DB_TARGET_PID && cpu < 4u);
+
+    if (guarded) {
+        g_db_in_save[cpu] = 1u;
+        __asm__ volatile("" ::: "memory");
+    }
+    task->context = frame;
+    if (guarded) {
+        __asm__ volatile("" ::: "memory");
+        g_db_in_save[cpu] = 0u;
+    }
+}
+
 static void scheduler_save_current_context(process_t *task,
                                            kernel_trap_frame_t *frame,
                                            const char *site) {
@@ -1108,7 +1352,7 @@ static void scheduler_save_current_context(process_t *task,
     if (frame != NULL) {
         scheduler_ledger_note(kernel_cpu_index(), task, frame);
     }
-    task->context = frame;
+    store_ctx(task, frame);
     {
         sched_rec_shadow_t *sh = rec_shadow_find(task);
 
@@ -2826,6 +3070,11 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
     if ((tick % 100u) == 0u) {
         rec_watch_scan();
     }
+
+    /* Hardware write-watchpoints on the victim record (adendo 36): the BSP
+     * arms its own DR set here; the AP arms from its LAPIC tick handler.
+     * Cheap (two compares when unchanged). */
+    scheduler_dr_maintain(kernel_cpu_index());
 
     /*
      * INTRA-EXECUTION stack guard (face-1, P4 adendo 7 candidate #1 — the
