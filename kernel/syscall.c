@@ -2578,6 +2578,7 @@ static uint32_t sys_execve(uint32_t path_ptr, uint32_t argv_ptr,
     scheduler_db_save_begin(current);
     current->stack = loaded->stack;
     current->stack_size = loaded->stack_size;
+    scheduler_rec_watch_refresh(current); /* shadow: stack moved too */
     /* Close the esp0 window NOW: any ring3->ring0 trap between this return
      * and the next dispatch must land on the NEW stack, not the parked one. */
     kernel_tss_set_kernel_stack((uintptr_t)current->stack + current->stack_size);

@@ -943,6 +943,10 @@ typedef struct {
 static db_evt_cpu_t g_db_evt_per_cpu[4];
 static uint32_t g_db_in_save[4];
 
+/* forward: shadow update helper lives with RECORD-WATCH below, used by
+ * store_ctx and execve (adendo 38) */
+static void store_ctx(process_t *task, kernel_trap_frame_t *frame);
+
 static void db_drain_events(void);
 
 /*
@@ -1327,16 +1331,25 @@ static void rec_watch_scan(void) {
 
 
 /* the one legitimate ctx writer besides execve; bracketed so the hardware
- * watchpoint classifies the owner as benign and only unknown eips report */
+ * watchpoint classifies the owner as benign and only unknown eips report.
+ * The shadow ctx is updated HERE (the only dynamic ctx writer): every save
+ * site holds g_scheduler_lock and rec_watch_scan runs under that same lock,
+ * so store+shadow are one atomic step — a CORRUPT line can then only be an
+ * UNKNOWN write (adendo 38; pre-integration rc1 fired 12x on legit saves). */
 static void store_ctx(process_t *task, kernel_trap_frame_t *frame) {
     uint32_t cpu = kernel_cpu_index();
     int guarded = (task->pid == SCHED_DB_TARGET_PID && cpu < 4u);
+    sched_rec_shadow_t *sh;
 
     if (guarded) {
         g_db_in_save[cpu] = 1u;
         __asm__ volatile("" ::: "memory");
     }
     task->context = frame;
+    sh = rec_shadow_find(task);
+    if (sh != NULL) {
+        sh->ctx = (uintptr_t)frame;
+    }
     if (guarded) {
         __asm__ volatile("" ::: "memory");
         g_db_in_save[cpu] = 0u;
@@ -1421,13 +1434,6 @@ static void scheduler_save_current_context(process_t *task,
         scheduler_ledger_note(kernel_cpu_index(), task, frame);
     }
     store_ctx(task, frame);
-    {
-        sched_rec_shadow_t *sh = rec_shadow_find(task);
-
-        if (sh != NULL) {
-            sh->ctx = (uintptr_t)frame;
-        }
-    }
 }
 
 /*

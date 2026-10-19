@@ -1404,3 +1404,31 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   Opcao real: gravar o record inteiro (16 words) a cada tick%4 p/ pid-alvo e
   diff no proximo tick — janela de 4 ticks em vez de 100; custo ~200 bytes
   copy/tick, budget de relatorio identico. Fazer se nada melhor emergir.
+
+### P4 — adendo 38 de 19/10 (rec-watch CORRUPT era corrida COM O SAVE legitimo: rc1 disparou 12x com valores plausíveis porque o shadow era atualizado DEPOIS do store_ctx; integrado no próprio store_ctx => 0/4 runs; a janela restante de execve (store sem lock + refresh) fica documentada)
+
+- DIAGNOSTICO (medido, não suposto): a build do adendo 33 atualizava
+  `sh->ctx` no tail do wrapper, mas o rc1 (mesma classe de build, com o tail
+  removido por engano na refatoração do store_ctx) disparou 12 CORRUPT com
+  `pid` e `stack` IMUTADOS e ctx mudando de frame-top legitimo p/ frame-
+  inside legitimo = assinatura exata de save legitimo corrido, NAO do
+  escritor anônimo. Um falso-positivo desses na witness-chave teria
+  DESVIADO a campanha inteira — por isso a regra Q5 (verde-falso proibido)
+  vale tambem p/ testemunhas.
+- FIX: `store_ctx` e agora o UNICO ponto onde ctx legitimo muda
+  (wrapper chama so ele; execve mantem refresh explicito pois tambem move
+  stack/stack_size); o update do shadow acontece dentro do mesmo
+  passo-sob-g_scheduler_lock do store — o scan (mesmo lock) nao consegue
+  ver estado meio-sincronizado. Janela conhecida que sobra: o store de ctx
+  do execve roda SEM o scheduler lock (refresh atomic depois); se um CORRUPT
+  de pid-alvo aparecer casado com execve (o log mostra pid/stack estaveis +
+  ctx = frame novo do loaded), essa e a causa, nao o escritor anonimo.
+- PROVA: build -Werror verde; UP validate-phase6-boot-smoke rc=0 no build
+  integrado (build/phase6-validation-boot-smoke.md); 4 runs smp2:
+  `rec-watch: CORRUPT` 0/4 (antes: 12 num run com a regressao de build +
+  2 em z1 com o tail antigo) e faces identicas ao baseline (2 hang + 2
+  crash). A witness agora so reportaria o escritor desconhecido.
+- ESTAD DA CAMPANHA: witnesses de steady-state completas e sem falso-
+  positivo; transientes continuam invisiveis ao tick%100 (limitacao aceita,
+  hardware fecha o buraco no T61); face final da parede = writer anonimo de
+  campos do record com hw-watchpoint nomeando eip/cs no silicio real.
