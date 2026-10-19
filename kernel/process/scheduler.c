@@ -867,6 +867,7 @@ static kernel_trap_frame_t *scheduler_sanitize_resume_frame(uint32_t cpu_index,
  * pass through unchecked (they are cleared intentionally).
  */
 static volatile uint32_t g_sched_ctxsave_budget = 12u;
+static volatile uint32_t g_sched_foreign_cpu_budget = 10u;
 
 /*
  * RECORD-WATCH (P4 classe #5, adendo 33): the writer was narrowed (SSP 0/4,
@@ -996,6 +997,29 @@ static void rec_watch_scan(void) {
 static void scheduler_save_current_context(process_t *task,
                                            kernel_trap_frame_t *frame,
                                            const char *site) {
+    /*
+     * FOREIGN-CPU invariant (P4 classe #5, adendo 34): every save site is
+     * only reachable when the saving CPU owns the task (switch-out/preempt-
+     * skip/block-save demand current->current_cpu == cpu_index; the reuse
+     * branch assigns current_cpu right before saving). A save where
+     * task->current_cpu disagrees with THIS cpu is, by definition, the
+     * double-execution signature the CTX-MISMATCH gap hinted at (cm2: the
+     * hang run's field was rewritten DURING the unlock->sanitize window).
+     * One compare on an already-hot path.
+     */
+    if (task != NULL) {
+        uint32_t cpu_now = kernel_cpu_index();
+
+        if ((int)cpu_now != task->current_cpu && g_sched_foreign_cpu_budget != 0u) {
+            g_sched_foreign_cpu_budget--;
+            kernel_debug_printf("sched-save: FOREIGN-CPU site=%s pid=%d task-cpu=%d here=%u frame=%x ctx=%x\n",
+                                site, task->pid, task->current_cpu,
+                                (unsigned int)cpu_now,
+                                (unsigned int)(uintptr_t)frame,
+                                (unsigned int)(uintptr_t)task->context);
+        }
+    }
+
     if (task != NULL && frame != NULL && task->stack != NULL &&
         task->stack_size != 0u) {
         uintptr_t f = (uintptr_t)frame;

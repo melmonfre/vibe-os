@@ -1288,3 +1288,30 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   startx stallar), enquanto as mortes #UD eip=3 parecem o caso em que a restauracao
   NAO chega a tempo. Dado util para a sonda FOREIGN-CPU: instrumentar tambem o
   caminho de stall do host (host-wait polls=256) para correlacionar.
+
+### P4 — adendo 34 de 18/10 (FOREIGN-CPU 0/6 = dupla-execucao-VIA-SAVE ELIMINADA por observacao; 2o CTX-MISMATCH na face de MORTE (fc2, dispatched=2) => o restaurador do gap NAO e o save-wrapper: e escrita tipada por ponteiro stale)
+
+- BATCH fc1-6 (build com FOREIGN-CPU, gate UP rc=0): foreign=0/6. O check e
+  valido por construcao (todo save exige current_cpu==cpu salvente nas 4
+  chamadas) e ficou mudo inclusive no run fc2 que PEDIU CTX-MISMATCH — ou
+  seja, o valor re-escrito no gap unlock->sanitize nao passou por nenhum
+  save de CPU nenhuma. Familia "double-dispatch com saves concorrentes":
+  MORTA por observacao (se existir dupla-execucao, ela nao salva).
+- fc2 (morte PF err=3 eip=2fb62 escrevendo .text 4a2e0 — W^X negou):
+  `CTX-MISMATCH pid=9 cpu=1 dispatched=2` = primeiro MISMATCH na face de
+  MORTE (cm2 fora na face de HANG) com o garbage pequeno-classico (2), ao
+  lado do LEDGER mostrando saves validos. Mapeamento final atual das faces:
+  o escritor do gap age em AMBAS as faces (hang restaura a tempo, morte nao)
+  e seu estilo de escrita = VALORES DE MENSAGEM/ESTRUTURA em offsets de
+  record, nao frames (frames teriam retaddrs de .text plausiveis em cadeia
+  ascendente; aqui sao inteiros pequenos + ponteiros esparsos).
+- PROXIMA SODA (1/rodada, nomeada): o candidato que sobra e ESCrita TIPADA
+  por ponteiro STALE de OUTRO objeto cujo bloco foi reinvestido como record
+  (mailbox/transfer slot/subscription com `process` ou `data` antigo):
+  kernel_malloc/free ja tem heap-alias para STACKS; falta o simetrico para
+  RECORDS — `scheduler_record_overlap(lo,hi)` (walk g_head, range
+  [rec, rec+sizeof(process_t)) e hook em kernel_malloc (allocacao que
+  sobrepoe record vivo = dupla posse no ato, nomeando par + allocpc) e em
+  kernel_free (liberacao de bloco que sobrepoe record de task VIVA).
+- GATES: make -Werror verde; UP smoke rc=0; 6 runs fc (1 stall, 4 mortes,
+  2 hangs nos dois TIMEOUTs) + face-stats atualizados.
