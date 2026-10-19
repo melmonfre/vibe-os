@@ -35,6 +35,12 @@ class Scenario:
     must_have: List[str]
     must_have_any: Optional[List[str]] = None
     notes: str = ""
+    # Some firmware paths burn a fixed wall-clock budget before the kernel
+    # emits anything (SeaBIOS usb-storage reset/get-max-lun retries measured
+    # at ~11 s before the first serial byte, kernel itself reaches shell in
+    # 4-6 s after). Such scenarios set a per-scenario budget so the global
+    # cap does not judge BIOS emulation speed as a boot failure.
+    timeout_seconds: Optional[int] = None
 
 
 @dataclass
@@ -104,6 +110,8 @@ def run_scenario(
         timed_out = False
         exit_code = 0
         output = ""
+        if scenario.timeout_seconds is not None:
+            timeout_seconds = scenario.timeout_seconds
 
         # Stream serial output and stop as soon as every expected marker has
         # been observed; only burn the full timeout when the boot is broken.
@@ -266,6 +274,11 @@ def build_scenarios() -> List[Scenario]:
                 "storage: init returned",
                 "shell: session start",
             ],
+            # Measured 2026-10-19: first serial byte lands at ~27 s (SeaBIOS
+            # usb-storage probe ~11 s + normal boot preamble); all three
+            # markers complete by ~31 s. The old global 20 s cap timed a
+            # BIOS-side constant and produced a deterministic false FAIL.
+            timeout_seconds=60,
             notes="Boot path validated through BIOS USB emulation; runtime storage stays unavailable until a native USB mass-storage backend exists.",
         ),
     ]

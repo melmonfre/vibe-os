@@ -86,7 +86,15 @@ QEMU := qemu-system-i386
 endif
 QEMU_MEMORY_MB ?= 3072
 # per-scenario timeout for QEMU validation matrices; slow/TCG-only hosts can raise it:
-PHASE6_TIMEOUT ?= 20
+# Raised 20->60 (2026-10-19, measured): scenarios stop EARLY once all markers
+# are seen, so the cap only bites broken boots. On this 2-core TCG host the
+# fixed cost is firmware-side, not kernel: SeaBIOS usb-storage probe burns
+# ~11 s before the first serial byte (USB markers land ~29-31 s), and
+# ahci-q35 storage smoke reaches ~30 s under host contention. Both boots
+# completed every marker; the 20 s cap was reporting firmware speed as a boot
+# failure. usb-bios-boot also carries an explicit per-scenario budget in
+# tools/validate_phase6.py documenting the BIOS constant.
+PHASE6_TIMEOUT ?= 60
 QEMU_SERIAL_LOG ?= build/qemu-serial.log
 QEMU_AUDIO_CAPTURE_WAV ?= build/qemu-audio.wav
 QEMU_IMAGE_OPTS ?= format=raw,file=$(IMAGE),snapshot=on

@@ -1516,3 +1516,18 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - O que sobra: o escritor transiente de fields de record — invisivel a TODAS
   as testemunhas em QEMU; o instrumento que o nomeia (watchpoint de hardware
   DR0/DR7, ja autobarra pela sonda G0) SO EXISTE no T61 — P0.
+
+### P4 — adendo 42 de 19/10 (phase6: usb-bios-boot/ahci-q35 FAIL nao era boot quebrado — era o teto de 20s medindo a velocidade do FIRMWARE; orcamento por cenario + global 20->60 com a medicao no Makefile; rc=0 nas duas matrizes)
+
+- PHASE6: FAIL deterministico do usb-bios-boot (e flaky do ahci-q35) nao e
+  regressao do kernel: medido com timestamps no serial, o marcador USB mais
+  rapido e o SeaBIOS queima ~11s APENAS na enumera usb-storage (init entra aos
+  ~27s; IDE entra aos ~16s — os ~12s de diferenca NAO sao kernel); ahci chega
+  a storage-smoke aos ~30s com host de 2 nucleos carregado. O teto global
+  PHASE6_TIMEOUT=20 estava medindo velocidade de firmware como falha de boot
+  (cenario para cedo quando todos os marcadores caem, entao o teto so pune
+  boot quebrado... mas nenhum dos dois estava quebrado). Fix: orcamento por
+  cenario (usb=60, documentado em tools/validate_phase6.py) + default global
+  20->60 com a medicao no comentario do Makefile. Provas: rc=0 nas duas
+  matrizes apos fix (boot-smoke 6/6 e validate-phase6 6/6), relatorios em
+  build/phase6-validation-boot-smoke.md e build/phase6-validation.md.
