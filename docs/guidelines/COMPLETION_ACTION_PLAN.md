@@ -1432,3 +1432,25 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   positivo; transientes continuam invisiveis ao tick%100 (limitacao aceita,
   hardware fecha o buraco no T61); face final da parede = writer anonimo de
   campos do record com hw-watchpoint nomeando eip/cs no silicio real.
+
+### P4 — adendo 39 de 19/10 (supervisor-wedge armado e NEGATIVO: 0 wake-lost de fila no host em 4 runs (incl 1 desktop-14s); hang mudou de endereco de novo — wd5 mostra uma CADEIA de dependencias 6->5->4->3->2->1 no census com nobody wedged)
+
+- WITNESS: `supervisor-wedge` (host BLOCKED na propria queue com fila nao-vazia
+  por >=4 ticks consecutivos => wake perdido). Arm proof em todo run; 0 eventos.
+  A familia de hang "storage worker wake race" do enunciado P4 NAO se manifesta
+  como wake-lost de fila nesta build — o ultimo hang (wd5) e outra coisa.
+- CADEIA (census t=1025 de wd5): `5:1:1` RUNNING cpu1; pid1 BLOCKED owner=2
+  (init espera storage), 2/3/4 BLOCKED owner=4 (esperam service 4), 6->owner5,
+  7->owner6, 8->owner7 — uma corrente de supervision-waits onde cada host
+  espera o ANTERIOR enquanto lang (pid9) roda o loop de boot do runtime no
+  cpu0. Ninguém com fila cheia: a corrente nao esta presa por IPC lost, esta
+  presa por espera de EVENTO/level que nao chega (wake-chain).
+- FACE-ROTATION honesta: distribuição por build muda com qualquer perturbacao
+  (o tick%4 do wedge scan já perturba). Lotes não-comparaveis entre builds;
+  so comparações dentro do mesmo build valem (regra de método a registrar).
+- PROXIMA (1/rodada): decifrar a corrente wd5 pelo lado do LANG loader — pid9
+  roda em userland (lang_loader no modulo fs.c do init?) e para entre "arena
+  ok" e "image read ok": auditar o caminho de leitura do binario do app
+  (appfs read → qual waitable?); se o pid9 em hang está de fato RODANDO
+  (spin) e não bloqueado, o stall é CPU-bound no loader (loop sem yield) e a
+  cadeia de hosts é CONSEQUENCIA (esperam o desktop subir), nao causa.
