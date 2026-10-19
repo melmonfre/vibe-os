@@ -9,6 +9,7 @@
 #include <kernel/lock.h>
 #include <kernel/cpu/cpu.h>
 #include <kernel/smp.h>
+#include <kernel/ipc.h>
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/drivers/video/video.h>
@@ -3119,6 +3120,59 @@ int scheduler_task_event_receive(process_t *subscriber,
     }
 }
 
+static volatile uint32_t g_wedge_budget = 6u;
+static volatile uint32_t g_wedge_armed;
+static uint32_t g_wedge_ticks;
+
+static void supervisor_wedge_scan(uint32_t tick) {
+    process_t *t = g_head;
+    process_t *host = NULL;
+    uint32_t steps = 0u;
+
+    /* Every early task may be a service host (extracted workers get pids
+     * beyond 4 — measured: storage/console hosts live at 1..8). Scan ALL
+     * BLOCKED-with-wait-channel tasks up to the walk cap; ask each one's
+     * OWN queue. Armability proof first (campaign rule Q5/lesson 38:
+     * never read 0-hits before proving the witness runs). */
+    if (g_wedge_armed == 0u) {
+        g_wedge_armed = 1u;
+        kernel_debug_printf("supervisor-wedge: armed scan=%u\n",
+                            (unsigned int)tick);
+    }
+    for (; t != NULL && steps < 16u; t = t->next, ++steps) {
+        if (!scheduler_node_sane(t)) {
+            break;
+        }
+        if (t->state == PROCESS_BLOCKED && t->wait_channel != 0) {
+            host = t;
+            break;
+        }
+    }
+    if (host == NULL) {
+        g_wedge_ticks = 0u;
+        return;
+    }
+    {
+        int depth = -1, waiters = -1;
+        uint32_t pend = 0u, wake = 0u, tmo = 0u;
+
+        ipc_queue_stats(host, &depth, &pend, &wake, &tmo, &waiters);
+        if (depth > 0) {
+            g_wedge_ticks++;
+            if (g_wedge_ticks >= 4u && g_wedge_budget != 0u) {
+                g_wedge_budget--;
+                kernel_debug_printf("supervisor-wedge: pid=%d host-blocked q=%d pend=%u waiters=%d wake=%u tmo=%u tick=%u\n",
+                                    host->pid, depth, (unsigned int)pend,
+                                    waiters, (unsigned int)wake,
+                                    (unsigned int)tmo, (unsigned int)tick);
+                g_wedge_ticks = 0u;
+            }
+        } else {
+            g_wedge_ticks = 0u;
+        }
+    }
+}
+
 static void scheduler_timeout_tick_hook(uint32_t tick) {
     process_t *task;
     process_t *woke_tasks[16];
@@ -3149,6 +3203,22 @@ static void scheduler_timeout_tick_hook(uint32_t tick) {
      * every ~100 ticks (adendo 33). */
     if ((tick % 100u) == 0u) {
         rec_watch_scan();
+    }
+
+    /*
+     * SUPERVISOR-WEDGE witness (P4, KNOWN_BUGS "sessao interativa trava no
+     * meio"/0.6): a request sitting in the queue of a BLOCKED-with-no-
+     * deadline host for >=4 consecutive ticks is a lost wake — the host
+     * cannot be waiting AND have work enqueued at once for that long under
+     * correct signalling. Prints the host waitable stats (depth/pending/
+     * waiters) so the loss localizes by measurement:
+     *   depth>0 waiters=1 pending=0 => signal lost in handoff (send saw an
+     *     empty wait_head, block-enqueue then raced past the pending check);
+     *   depth>0 pending>0          => signalled but block aborted/ignored;
+     *   depth=0                    => not a wedge, just idle (no print).
+     */
+    if ((tick % 4u) == 0u) {
+        supervisor_wedge_scan(tick);
     }
 
     /* Hardware write-watchpoints on the victim record (adendo 36): the BSP
