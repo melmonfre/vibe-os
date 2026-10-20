@@ -680,7 +680,6 @@ void smp_init(void) {
     kernel_debug_printf("smp: online cpus=%d/%d\n",
                         (int)g_smp_started_cpus,
                         (int)kernel_cpu_count());
-    kernel_debug_puts("smp: aps online and parked until per-cpu scheduler bring-up is implemented\n");
 }
 
 uint32_t smp_started_cpu_count(void) {

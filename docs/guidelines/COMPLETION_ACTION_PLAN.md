@@ -188,7 +188,7 @@ Watchpoint de HW em `g_head` (0x1f84a0, .bss) e no par de words `0x391d5CE0` —
   - **PROXIMO PROBE CONCRETO (desenhado, nao executado):** registro de 4-8 slots com os ponteiros de process_t ATUALMENTE LINKED (adicionados em scheduler_add_task, removidos so em terminate-definitivo); `kernel_free` verifica contra o registro e, em hit, imprime ORCAMENTO-ZERO `"free: TASK-BLOCK 0x.. pid=.. caller=0x%x"` com o PC do chamador. Isto distingue em UMA linha free-ilicito vs escrita-alias e nomeia o writer sem gdb (gdb suprimia a corrida).
 - [ ] Nota de telemetria: `g_timer_trace_budget` esta de novo em 8 prints (edit antigo perdido) — subir para 64 quando for diagnosticar boot lento.
 - [ ] UP nao regressou: `validate-phase6-boot-smoke` 6/6 PASS com esses fixes; smoke UP atinge `shell: ready`.
-- [ ] smp4: bring-up dos 3 APs nao fecha (`smp: online cpus=4/4` ausente) — o boot ainda assim avanca (degradado para os CPUs que online-aram) e chega no desktop (`desktop.app: launch startx`, tick=918). Provavel corrida no caminho INIT/SIPI com multiplos APs em paralelo (g_smp_boot_lock segura o BSP, mas `smp_wait_for_cpu` + retry resetam `g_smp_started_cpus = i` por indice). Precisa de trace do trampoline stage por AP.
+- [x] smp4: bring-up dos 3 APs fecha — item STALE (verificado 20/10, adendo 46): `smp: online cpus=4/4` + `[16] smp: done, 4 cpus online` + `smp: scheduler enabled cpus=4` + `smp: ap lapic timer armed apic=3` observados em runs smp4 com toggle real (e 2/2 + enabled=2 nos faces smp2); a corrida de `g_smp_started_cpus = i` do retry NAO impede o fechamento no estado atual (retry bem-sucedido conta via ap_entry). O `make validate-smp` de hoje: fallback PASS; smp2/smp4 FAIL EXCLUSIVAMENTE no marcador `userland.app: shell start` (missing list NAO contem mais nenhum marcador de bring-up) — o vermelho restante e a face de stall/EXCEPTION da classe #5 em tempo-real, ja rastreada na campanha (e nao um defeito de bring-up). Corrigido junto: linha de console `smp: aps online and parked until per-cpu scheduler bring-up is implemented` era MENTIRA (o scheduler existia e era habilitado logo em seguida, na linha seguinte ao `online cpus=`); removida.
 
 ## Prioridade 5: audio fechamento hardware
 
@@ -1636,4 +1636,32 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   prova aqui e o mecanismo + contagem de trocas + zero regressao. Na T61
   real a medição correta e `make run` responsivo em 2 CPUs (linha 118,
   [!] default da mantenedora) e as contagens `ipi-resched` no serial.
+
+### P4 — adendo 46 de 20/10 (linha 191 fechada com reproducao: bring-up smp2/smp4 fecha no estado atual; o vermelho do validate-smp esta CONFINADO ao stall da classe #5; mentira de console 'aps parked' removida)
+
+- REPRODUCAO (build atual, com toggle `m` real e captura serial COMPLETA, nao
+  so o tail do relatorio): smp4 -> `online cpus=4/4`, `done, 4 cpus online`,
+  `scheduler enabled cpus=4`, `ap lapic timer armed apic=3 vector=83`, e o
+  boot avanca ate os deferreds do desktop; smp2 -> `online cpus=2/2` +
+  `enabled=2` + `ipi-resched eval=1` em ambos cpus no MESMO boot.
+- A hipotese do item (corrida no retry com `g_smp_started_cpus = i`) existe
+  no codigo MAS nao e o que trava: o caminho de contagem fecha porque o AP
+  que acorda tarde incrementa via ap_entry e o retry re-tenta com SIPI
+  idempotente; os 4/4 aparecem. O que impede o validate-smp de ficar verde
+  e a marca de tempo `userland.app: shell start` — a face #5 (stall/EXCEPTION
+  10-28s) que a campanha ja rastreia (hardware-bound; watchpoint no T61).
+  Confirmado pela FERRAMENTA: `build/smp-validation.md` hoje so lista
+  `userland.app: shell start` como ausente em smp2/smp4 (antes tambem
+  `init: entered builtin entry`/`ap lapic timer armed`).
+- HIGIENE: `smp: aps online and parked...` era a UNICA linha de console
+  negando uma funcionalidade que o proprio bootloader ja tinha implementado
+  (impressao unconditional em kernel/smp.c:683, um debug_puts antes do
+  `smp_scheduler_enable()`). REMOVIDA; honestidade > decoracao de log
+  (regra-universal nao e afetada: nenhuma ABI/marcador de validacao depende
+  dela — grep nos tools antes do commit).
+- PROVAS: make -Werror verde; validate-phase6-boot-smoke rc=0 6/6 com o
+  build novo; probe smp2 com o build novo: bring-up 2/2 + enabled + IPI vivo
+  (EXCEPTION face rotacionada como baseline); smp4 run pos-edicao: 4/4 +
+  enabled sem a linha removida; validate-smp rc=2 = vermelho HONESTO e
+  confinado ao marcador de shell (relatorio em build/smp-validation.md).
 
