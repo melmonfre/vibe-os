@@ -6,6 +6,18 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
 
 ## Abertos
 
+- **[latent, avoided] SMP bring-up: `g_smp_cpu_stage` pode ficar OBSOLETO por corrida de escrita.**
+  O BSP grava `SIPI2_SENT(4)` no slot i APOS enviar o SIPI, sem barreira contra o AP, que ja
+  escreve `AP_ENTER(5)/AP_LAPIC(6)/AP_MARKED(7)/AP_SCHED(8)` no MESMO slot; com retry entao, o
+  BSP pisca 4 POR CIMA do 8 do AP vivo (medido 20/10: `ioapic: affskip cnt=2 en=1 st1=4` com
+  `smp: online cpus=2/2` e ap idx=1 rodando). Nao ha dano funcional hoje porque a contagem
+  (`g_smp_started_cpus`/`smp_wait_for_cpu`) e o `started` da topologia (setado pelo proprio AP em
+  `kernel_cpu_mark_started` depois do LAPIC init, nunca re-limpo) sao as fontes usadas; o array
+  serve apenas diagnostico (`smp_dump_cpu_stages`, traco de affskip). Afirmar "online" por stage
+  e proibido: consumidores novos devem ler `kernel_cpu_state(i)->started`. (A afinidade IOAPIC da
+  rodada 19i nasceu deste teste e usa `started`.)
+
+
 - **Classe #5 (SMP real-time, nao-gating)**: em `smp2` com o flag experimental
   ON e sem `-icount`, o kernel corrompe periodicamente estado de tarefa/lista
   de escalonamento e o boot nao chega ao shell (`BAD-HEAD`/`WILD`/`#UD` com

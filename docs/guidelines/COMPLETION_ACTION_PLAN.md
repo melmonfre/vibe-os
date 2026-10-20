@@ -112,7 +112,7 @@ Aceitação mudou: **boot, usb, video, audio, rede e posix precisam funcionar em
 - [x] Chamar `smp_scheduler_enable()` depois do bring-up dos APs — item STALE: `kernel/entry.c:826` chama (linha conferida 19/10); o loop do AP (`kernel/smp.c:493-497`) roda `schedule()` a cada wakeup quando habilitado; wake IPI cobre as transicoes BLOCKED->READY (ver adendo 43)
 - [x] LAPIC timer por-CPU no AP (calibrado contra PIT, vetor 0x83, stub smp_timer_stub); AP dorme em hlt e preempcao vem do tick
 - [x] Handler de IPI de reschedule — ADENDO 45: o stub 0x82 agora usa o MESMO padrao de frame-swap do tick (smp_timer_stub) e chama `smp_wakeup_ipi_irq_handler(frame)`, que EOI + `scheduler_schedule_frame(frame,1)` quando o scheduler SMP esta ligado. CPU ocupado reavalia a fila imediatamente no wake; prova medida: `ipi-resched: cpu=1 evals=64 switches=3` (3 trocas de task REAL causadas por IPI), `eval=1` em ambos cpus (alcancabilidade), UP imune (A/B HEAD-vs-novo IDENTICO linha 689/690; handler gated por enabled). Seguranca por simetria com o tick: regioes de spinlock rodam com IF=0, entao o IPI nunca preemepta o interior do scheduler
-- [ ] IOAPIC: rotear IRQs por afinidade em vez de tudo no BSP (ioapic.c:526)
+- [x] IOAPIC: rotear IRQs por afinidade (P4 adendo 47, 20/10): politica estatica pos-`smp_scheduler_enable()` — IRQ1 (keyboard) e IRQ12 (mouse PS/2) vao para o PRIMEIRO AP online (fonte autoritaria `kernel_cpu_state(i)->started`, NAO o array de stage — ver KNOWN_BUGS nova entrada "stage pode ficar obsoleto"); IRQ0/8/13/14/15 (timer/RTC/FPU/ATA) ficam no BSP — storage ja roda sob lock global, timer e BSP-side. UP NUNCA toca IOAPIC (medido: `ioapic: local apic not enabled, skipping` = PIC puro no boot fisico default), entao a superficie de regressao do boot real e so a lock nova de PS/2. Prova funcional smp2: `ioapic: affinity irq1+irq12 -> apic=1` + smoke `session: True` + `input-diag scancodes=8 produced=4 consumed=4 drops=0` com as teclas mandadas por HMP APOS a afinidade. Pre-requisito de seguranca construido junto: lock GLOBAL `g_ps2_port_lock` em TODO acesso ao porta 0x60/0x64 (ISRs kbd+mouse, polls do inputsvc, accessors de estado) — `irq_save` local nao serializa entre CPUs e a ISR no AP + poll no BSP rasgariam scancode/pacote. Limitacao honesta: politica estatica (1 AP), sem migranca dinamica; redirecionamento confirmado por setter OK + traco de aplicacao + consumo end-to-end (a atribuicao ISR-vs-poll do consumo nao e separavel — ambos compartilham porta+lock)
 - [x] Respeitar o gate existente: `BOOTINFO_FLAG_EXPERIMENTAL_SMP` — VERIFICADO 15/10 que o kernel JA LE o flag (`kernel/entry.c:699` e `:788` testam contra ele). A nota anterior ("nenhum codigo do kernel o le") estava STALE; AGENTS.md:190 esta correto ("SMP so liga com o flag; padrao BSP-only").
 - [x] `tools/validate_smp.py` reescrito (marcadores reais, espera todos, timeout configuravel). fallback-no-toggle PASS; smp2/smp4: bring-up markers PASS, mas stall em `fs: sys_storage_load` (race de wakeup no AP — ver P4 open abaixo)
 - [ ] Retornar `QEMU_RUN_SMP` default para 2 (Makefile:94, item aberto do FINALIZATION) e provar `make run` responsivo em 2 CPUs
@@ -1664,4 +1664,40 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   (EXCEPTION face rotacionada como baseline); smp4 run pos-edicao: 4/4 +
   enabled sem a linha removida; validate-smp rc=2 = vermelho HONESTO e
   confinado ao marcador de shell (relatorio em build/smp-validation.md).
+
+### P4 — adendo 47 de 20/10 (linha 115: afinidade IOAPIC p/ IRQs interativos no primeiro AP online; hazard de PS/2 cross-CPU fechado por lock global ANTES de virar bug; corrida de escrita no stage achada por teste e neutralizada com fonte autoritaria)
+
+- O item existia desde sempre como "tudo no BSP". Politica implementada em
+  `smp_scheduler_enable()` (smp.c): IRQ1/12 -> APIC do primeiro AP com
+  `started` na topologia; fixed/edge/active-high; vetores 0x21/0x2C (mesma
+  base da mesa ISA atual). Falha do setter = mensagem explicita
+  `REDIRECT FAILED (kept BSP)` — sem estado falso.
+- HAZARD ENCONTRADO ANTES DO COMMIT (auditoria de seguranca de rota): o
+  teclado/mouse compartilham a porta 8042 com os POLLS do servico de input;
+  `kernel_irq_save` so desliga IF do proprio CPU — com a ISR no AP e o poll
+  no BSP, bytes de pacote/pacote-pode ser rasgado entre os dois. Corrigido na
+  causa raiz: `g_ps2_port_lock` global envolve todo acesso de status/data e
+  os accessors de estado em keyboard.c/mouse.c (UP preserva a semantica:
+  lock tambem desliga IF local; ordem de lock: ps2->interno, nenhum caminho
+  interno pega ps2 de dentro).
+- CORRIDA REAL MEDIDA (virou KNOWN_BUGS): o accessor leu stage=4 com AP
+  rodando — BSP re-carimba SIPI2_SENT em cima do AP_SCHED do retry. Fonte
+  correta = `kernel_cpu_state(i)->started` (setada pelo AP depois do LAPIC
+  init). Teste POSITIVO do redirecionamento: smp2 smoke, `session: True`,
+  `affinity: True`, `input-diag scancodes=8 produced=4 consumed=4 drops=0`
+  com sendkeys APOS a afinidade.
+- UP: IOAPIC nem existe no boot default (PIC), logado; a unica superficie UP
+  nova e a lock. Gates: make -Werror verde; validate-phase6-boot-smoke 6/6
+  (build da lock/afinidade); keys-smoke UP: session ok; lote smp2 full-img
+  x5 (redo HONESTO apos o 1o lote contar grep de SKIP — a licao "nunca
+  claimar por grep ambiguo"): 4/5 com toggle efetivo e em TODOS os 4
+  `ioapic: affinity irq1+irq12 -> apic=1`, skip 0, faces 3x EXCEPTION
+  10-16s + 1x DESKTOP READY 66s = rotacao do baseline; testemunhas todas 0
+  (CTX, ESP0-ORPHAN, wedge, PREV). O 5o run perdeu o toggle no menu (UP
+  puro, desktop 24s) — nao conta para afinidade.
+- LIMITACOES HONESTAS: politica estatica single-AP; atribuir o consumo de
+  teclas a ISR-do-AP (e nao ao poll que tambem drena a porta) nao e
+  separavel por serial — o que se prova e redirecionamento aplicado +
+  input end-to-end vivo + zero drops. Na T61, o checklist do runbook
+  (linha 6 do adendo 44) cobre o resto.
 

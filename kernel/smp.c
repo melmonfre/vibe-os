@@ -6,6 +6,7 @@
 #include <kernel/hal/io.h>
 #include <kernel/interrupt.h>
 #include <kernel/lock.h>
+#include <kernel/ioapic.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/physmem.h>
 #include <kernel/memory/paging.h>
@@ -686,17 +687,83 @@ uint32_t smp_started_cpu_count(void) {
     return g_smp_started_cpus;
 }
 
+static void smp_apply_ioapic_affinity(void);
+
 void smp_scheduler_enable(void) {
     g_smp_scheduler_enabled = 1u;
     kernel_debug_printf("smp: scheduler enabled cpus=%u\n",
                         (unsigned int)g_smp_started_cpus);
     if (g_smp_started_cpus > 1u && local_apic_enabled()) {
+        smp_apply_ioapic_affinity();
         (void)local_apic_broadcast_ipi((uint8_t)SMP_WAKE_VECTOR);
     }
 }
 
 int smp_scheduler_enabled(void) {
     return g_smp_scheduler_enabled != 0u;
+}
+
+/*
+ * First AP that reached AP_MARKED (its local APIC is initialized, so
+ * IOAPIC-routed IRQs addressed to it will be delivered). Adendo 47.
+ */
+uint32_t smp_first_online_ap_apic(void) {
+    if (g_smp_scheduler_enabled == 0u) {
+        return 0xFFFFFFFFu;
+    }
+    /* NOT g_smp_cpu_stage: the BSP's bring-up writes SIPI2_SENT into the
+     * same slot while the AP is ALREADY running and writes AP_SCHED — last
+     * writer wins, and a retry re-stamps 4 over the AP's 8 (measured:
+     * st1=4 with cpu_index=1 online; adendo 47). `started` is set by the AP
+     * itself in kernel_cpu_mark_started(), after its local APIC init, and
+     * never re-cleared: exactly the invariant affinity needs. */
+    for (uint32_t i = 1u; i < kernel_cpu_count() && i < 32u; ++i) {
+        const struct kernel_cpu_state *cpu = kernel_cpu_state(i);
+        if (cpu != NULL && cpu->started != 0u) {
+            return cpu->apic_id;
+        }
+    }
+    return 0xFFFFFFFFu;
+}
+
+/*
+ * IRQ affinity policy (P4 adendo 47): interactive ISA IRQs (keyboard 1,
+ * aux PS/2 mouse 12) move to the first online AP once the per-CPU
+ * scheduler is live. Storage (14/15) and timer/RTC/FPU (0/8/13) stay on
+ * the BSP — the tested steady-state paths, and ATA already runs under a
+ * global lock. Cross-CPU port safety: every PS/2 status/data touch (ISRs
+ * AND service polls AND state accessors) now holds g_ps2_port_lock, so a
+ * scancode cannot be torn between a BSP poll and an AP ISR.
+ * UP boots NEVER reach this code (no smp flag) -> physical default boot
+ * path bit-for-bit unchanged.
+ */
+static void smp_apply_ioapic_affinity(void) {
+    uint32_t ap;
+
+    if (!ioapic_active()) {
+        return;
+    }
+    ap = smp_first_online_ap_apic();
+    if (ap == 0xFFFFFFFFu) {
+        kernel_debug_printf("ioapic: affskip cnt=%u en=%u st1=%u\n",
+                            (unsigned int)kernel_cpu_count(),
+                            (unsigned int)g_smp_scheduler_enabled,
+                            (unsigned int)g_smp_cpu_stage[1]);
+        /* keep the stage-debug line: if affinity ever fails again the
+         * started-vs-stage divergence is the first thing to rule out */
+        return;
+    }
+    if (ioapic_set_irq_redirect(1u, ap, 0x21u, IOAPIC_DELIVERY_FIXED,
+                                IOAPIC_TRIGGER_EDGE |
+                                IOAPIC_POLARITY_ACTIVE_HIGH) != 0 ||
+        ioapic_set_irq_redirect(12u, ap, 0x2Cu, IOAPIC_DELIVERY_FIXED,
+                                IOAPIC_TRIGGER_EDGE |
+                                IOAPIC_POLARITY_ACTIVE_HIGH) != 0) {
+        kernel_debug_puts("ioapic: affinity REDIRECT FAILED (kept BSP)\n");
+        return;
+    }
+    kernel_debug_printf("ioapic: affinity irq1+irq12 -> apic=%x\n",
+                        (unsigned int)ap);
 }
 
 void smp_wake_sleeping_cpus(void) {

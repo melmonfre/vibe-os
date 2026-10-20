@@ -14,6 +14,7 @@ uint32_t smp_cpu_count(void);
 void smp_ap_entry(void);
 void smp_scheduler_enable(void);
 int smp_scheduler_enabled(void);
+uint32_t smp_first_online_ap_apic(void);
 kernel_trap_frame_t *smp_wakeup_ipi_irq_handler(kernel_trap_frame_t *frame);
 void smp_wake_sleeping_cpus(void);
 uint32_t smp_cpu_stage(uint32_t cpu_index);
