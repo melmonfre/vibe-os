@@ -43,7 +43,7 @@ extern kernel_mouse_irq_handler
 extern kernel_irq_dispatch
 extern scheduler_schedule_frame
 extern syscall_dispatch_internal
-extern smp_wakeup_ipi_handler
+extern smp_wakeup_ipi_irq_handler
 extern smp_timer_irq_handler
 
 extern divide_error_handler
@@ -153,11 +153,19 @@ yield_stub:
     popa
     iretd
 
+; Wake/reschedule IPI (vector 0x82). Adendo 45: same frame-swap pattern as
+; smp_timer_stub — the handler may return a DIFFERENT frame (context switch)
+; when a boosted wake lands on a running CPU. Before this change the IPI
+; only broke hlt; a CPU executing a task waited for yield/tick.
 smp_wakeup_stub:
     pusha
     cld
     LOAD_KERNEL_DATA_SEGMENTS
-    call smp_wakeup_ipi_handler
+    mov eax, esp
+    push eax
+    call smp_wakeup_ipi_irq_handler
+    add esp, 4
+    mov esp, eax
     LOAD_RETURN_DATA_SEGMENTS
     popa
     iretd

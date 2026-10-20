@@ -2,6 +2,7 @@
 #define KERNEL_SMP_H
 
 #include <stdint.h>
+#include <kernel/process.h>
 
 #define SMP_IPI_WAKE_VECTOR 0x82u
 #define SMP_IPI_SCHED_VECTOR 0x83u
@@ -13,7 +14,7 @@ uint32_t smp_cpu_count(void);
 void smp_ap_entry(void);
 void smp_scheduler_enable(void);
 int smp_scheduler_enabled(void);
-void smp_wakeup_ipi_handler(void);
+kernel_trap_frame_t *smp_wakeup_ipi_irq_handler(kernel_trap_frame_t *frame);
 void smp_wake_sleeping_cpus(void);
 uint32_t smp_cpu_stage(uint32_t cpu_index);
 uint8_t smp_trampoline_debug_stage(void);

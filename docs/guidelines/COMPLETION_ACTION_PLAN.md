@@ -111,7 +111,7 @@ Aceitação mudou: **boot, usb, video, audio, rede e posix precisam funcionar em
 
 - [x] Chamar `smp_scheduler_enable()` depois do bring-up dos APs — item STALE: `kernel/entry.c:826` chama (linha conferida 19/10); o loop do AP (`kernel/smp.c:493-497`) roda `schedule()` a cada wakeup quando habilitado; wake IPI cobre as transicoes BLOCKED->READY (ver adendo 43)
 - [x] LAPIC timer por-CPU no AP (calibrado contra PIT, vetor 0x83, stub smp_timer_stub); AP dorme em hlt e preempcao vem do tick
-- [ ] Handler de IPI de reschedule (smp.c:803 so faz EOI; hlt+tick cobre, mas reschedule imediato ainda nao) — ADENDO 43: o broadcast de wake agora cobre TODOS os pontos BLOCKED->READY (faltavam sys_exit/sys_kill); o que continua ausente e PREEMPCAO imediata de um cpu que esta RODANDO uma task (o IPI 0x82 so tira do hlt; trocar um cpu ocupado ainda espera yield/tick)
+- [x] Handler de IPI de reschedule — ADENDO 45: o stub 0x82 agora usa o MESMO padrao de frame-swap do tick (smp_timer_stub) e chama `smp_wakeup_ipi_irq_handler(frame)`, que EOI + `scheduler_schedule_frame(frame,1)` quando o scheduler SMP esta ligado. CPU ocupado reavalia a fila imediatamente no wake; prova medida: `ipi-resched: cpu=1 evals=64 switches=3` (3 trocas de task REAL causadas por IPI), `eval=1` em ambos cpus (alcancabilidade), UP imune (A/B HEAD-vs-novo IDENTICO linha 689/690; handler gated por enabled). Seguranca por simetria com o tick: regioes de spinlock rodam com IF=0, entao o IPI nunca preemepta o interior do scheduler
 - [ ] IOAPIC: rotear IRQs por afinidade em vez de tudo no BSP (ioapic.c:526)
 - [x] Respeitar o gate existente: `BOOTINFO_FLAG_EXPERIMENTAL_SMP` — VERIFICADO 15/10 que o kernel JA LE o flag (`kernel/entry.c:699` e `:788` testam contra ele). A nota anterior ("nenhum codigo do kernel o le") estava STALE; AGENTS.md:190 esta correto ("SMP so liga com o flag; padrao BSP-only").
 - [x] `tools/validate_smp.py` reescrito (marcadores reais, espera todos, timeout configuravel). fallback-no-toggle PASS; smp2/smp4: bring-up markers PASS, mas stall em `fs: sys_storage_load` (race de wakeup no AP — ver P4 open abaixo)
@@ -1602,3 +1602,38 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   opt-in, db: armed/CTX-WRITE do classe #5, video i915, HDA, USB/ENOTTY,
   rede/ENOTTY). Linhas 9/10 esperam falha honesta (sem backend nativo) —
   falha de verdade e afirmar sucesso falso.
+
+### P4 — adendo 45 de 19-20/10 (linha 114 FECHADA com medicao: IPI de wake agora preemepte CPU ocupado — `switches=3` reais; responsividade fim-a-fim nao e mensuravel neste host de 2 nucleos carregados, e isso esta dito)
+
+- IMPLEMENTACAO: `smp_wakeup_stub` (isr.asm) clonou o padrao frame-swap do
+  tick (`mov eax,esp; push eax; call; mov esp,eax`); handler novo
+  `smp_wakeup_ipi_irq_handler(frame)`: EOI, gate `g_smp_scheduler_enabled`,
+  `scheduler_schedule_frame(frame,1)`, contadores por cpu
+  (`evals`/`switches` = frame retornado DIFERENTE). A tabela
+  `g_smp_ipi_handlers[0x82]` foi ESVAZIADA com nota: `smp_ipi_dispatch` nao
+  tem NENHUM caller (auditoria desta rodada) — o caminho vivo e o stub do
+  IDT; registrar handler void na tabela seria decoracao morta (no-stubs).
+- PROVAS MEDIDAS (lote de 8 boots smp2 nesta arvore):
+  * alcancabilidade: `ipi-resched: cpu=0 eval=1 sw=0` e `cpu=1 eval=1` (ambos
+    os cpus recebem e executam o schedule_frame);
+  * efeito: `cpu=1 evals=64 switches=3` (run6) — o IPI trocou a task em
+    execucao 3 vezes sem esperar yield/tick; e o `dispatched=1` fantasma do
+    wake-boost (budget 8/12 do adendo antigo) comendo poeira, agora
+    funcionando de fato;
+  * testemunhas: taxa de CTX-MISMATCH nos 8 runs (1) = taxa do baseline
+    HEAD (1/4 no r20s, faces de morte/stall), ESP0-ORPHAN 0, supervisor-wedge
+    nao-disparado, PREV-CRASH 0 (nenhum reboot-surpresa);
+  * UP: A/B rigoroso HEAD-vs-novo no MESMO momento (stash/rebuild): linhas
+    689/690 identicas, tick final 9025 identico — a lentidao do UP desta
+    sessao e CARGA DO HOST (2 nucleos, load ~5), nao o kernel; gate
+    validate-phase6-boot-smoke rc=0 6/6 com o build novo;
+  * seguranca: o IPI so entra com IF=1; todas as regioes de spinlock do
+    scheduler usam irqsave, entao o handler nunca interrompe o interior do
+    sched — mesmo alcance do vetor 0x83 (tick), que ja roda assim desde o
+    bring-up do AP.
+- LIMITACAO HONESTA: nao existe A/B de tempo-ate-desktop confiavel neste host
+  (faces rotacionam e a carga de 2 nucleos engole a diferenca); o que se
+  prova aqui e o mecanismo + contagem de trocas + zero regressao. Na T61
+  real a medição correta e `make run` responsivo em 2 CPUs (linha 118,
+  [!] default da mantenedora) e as contagens `ipi-resched` no serial.
+

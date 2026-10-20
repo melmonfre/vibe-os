@@ -524,7 +524,9 @@ void smp_init(void) {
             g_smp_ipi_handlers[i] = NULL;
         }
         g_smp_ipi_initialized = 1;
-        g_smp_ipi_handlers[SMP_IPI_WAKE_VECTOR] = smp_wakeup_ipi_handler;
+        /* 0x82 is wired IDT-side (smp_wakeup_stub -> frame handler above);
+     * smp_ipi_dispatch has zero callers (adendo 45 audit), so the table
+     * stays empty for it. Other vectors may register normally. */
         kernel_debug_puts("smp: IPI handler table initialized\n");
     }
 
@@ -707,8 +709,51 @@ void smp_wake_sleeping_cpus(void) {
     (void)local_apic_broadcast_ipi((uint8_t)SMP_WAKE_VECTOR);
 }
 
-void smp_wakeup_ipi_handler(void) {
+/*
+ * Wake/reschedule IPI entry (P4 adendo 45). Runs with the interrupted
+ * context's trap frame — exactly the timer vector's scope: spinlock-held
+ * regions execute with IF=0, so this cannot pre-empt the scheduler
+ * internals; it can only land between them. Evals/switches: switches counts
+ * returns where the resumed frame DIFFERS (the IPI genuinely swapped a task
+ * on a busy CPU). One-shot per-cpu print proves reachability.
+ */
+static volatile uint32_t g_ipi_evals[4];
+static volatile uint32_t g_ipi_switches[4];
+static volatile uint32_t g_ipi_reported[4];
+
+kernel_trap_frame_t *smp_wakeup_ipi_irq_handler(kernel_trap_frame_t *frame) {
+    kernel_trap_frame_t *ret = frame;
+    uint32_t cpu = kernel_cpu_index();
+    int armed = (g_smp_scheduler_enabled != 0u);
+
     local_apic_eoi();
+    if (!armed) {
+        return frame;
+    }
+    if (cpu < 4u) {
+        uint32_t e, sw;
+        g_ipi_evals[cpu]++;
+        ret = scheduler_schedule_frame(frame, 1);
+        if (ret != frame) {
+            g_ipi_switches[cpu]++;
+        }
+        e = g_ipi_evals[cpu];
+        sw = g_ipi_switches[cpu];
+        if (g_ipi_reported[cpu] == 0u && e == 1u) {
+            /* reachability proof at the FIRST delivery (adendo 41 rule) */
+            kernel_debug_printf("ipi-resched: cpu=%u eval=1 sw=%u\n",
+                                (unsigned int)cpu, (unsigned int)sw);
+        }
+        if (g_ipi_reported[cpu] == 0u && e >= 64u) {
+            g_ipi_reported[cpu] = 1u;
+            kernel_debug_printf("ipi-resched: cpu=%u evals=%u switches=%u\n",
+                                (unsigned int)cpu,
+                                (unsigned int)e, (unsigned int)sw);
+        }
+    } else {
+        ret = scheduler_schedule_frame(frame, 1);
+    }
+    return ret;
 }
 
 /*
