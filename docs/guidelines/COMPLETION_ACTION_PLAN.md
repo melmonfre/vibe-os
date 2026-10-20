@@ -116,7 +116,7 @@ Aceitação mudou: **boot, usb, video, audio, rede e posix precisam funcionar em
 - [x] Respeitar o gate existente: `BOOTINFO_FLAG_EXPERIMENTAL_SMP` — VERIFICADO 15/10 que o kernel JA LE o flag (`kernel/entry.c:699` e `:788` testam contra ele). A nota anterior ("nenhum codigo do kernel o le") estava STALE; AGENTS.md:190 esta correto ("SMP so liga com o flag; padrao BSP-only").
 - [x] `tools/validate_smp.py` reescrito (marcadores reais, espera todos, timeout configuravel). fallback-no-toggle PASS; smp2/smp4: bring-up markers PASS, mas stall em `fs: sys_storage_load` (race de wakeup no AP — ver P4 open abaixo)
 - [ ] Retornar `QEMU_RUN_SMP` default para 2 (Makefile:94, item aberto do FINALIZATION) e provar `make run` responsivo em 2 CPUs
-- [ ] Hardware real: documento de campanha T61/T400 com trampoline/SIPI rastreados (sem isso, README segue honesto em "SMP em estabilizacao")
+- [x] Hardware real: campanha T61/T400 FECHADA no lado software (19/10, adendo 44): runbook end-to-end em docs/hw_validation.md "T61/T400 Physical Campaign Runbook" (artefato `make imb` 256MiB validado 6/6 na matriz phase6 contra o proprio vibe-os-usb.img; flash por QEMU-passthrough resgatado em tools/usb_flash_guest com fail-closed; mapa de codigos bootdebug trampoline/SIPI `P I 1 2 a l g i m O F D`; regra warm-reset Ctrl+Alt+Del). O mecanismo de rastreio foi FECHADO de verdade: hang em silicon nao tem HMP e o re-arm do stage1 destruia a evidencia anterior — agora stage1 faz stash PREV (offsets 64+, apos KEY_HI/EXT/ACT do stage2 — 55-58 pertencem ao stage2, descoberto por aliasing real em teste) e o kernel reporta `PREV-CRASH trace=...` em serial+VGA uma unica vez. Provas: POS (reset em janela aberta -> boot2 mostra trace parcial len=29), NEG (boot estavel -> reset -> PREV=0 em 2 boots), limpo smp2 x2 (prev=0 sem falso positivo; DESKTOP READY 22s em um deles). Execucao fisica na maquina continua com a mantenedora (P0 por definicao).
 
 ### P4 open (evidencia 2026-10-11)
 
@@ -1568,3 +1568,37 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
 - PROVAS: make -Werror verde; UP full-boot com `storage: pio dur=0` (6 prints,
   budget); validate-phase6-boot-smoke rc=0 6/6; lote smp2 x3 (EXCEPTION faces
   28/10/16s) sem regressao de testemunhas: CTX-MISMATCH 0, ESP0-ORPHAN 0.
+
+### P0 — adendo 44 de 19/10 (campanha T61/T400 fechada no lado software: PREV-CRASH readback, mapa trampoline/SIPI, runbook + scripts de flash na arvore; o gap existencial era "hang em silicon nao tem HMP e a re-arm apagava a propria evidencia")
+
+- O LOOP DE EVIDENCIA estava aberto no ultimo elo: stage1 ate imprimia o trace
+  anterior na VGA, mas ESPERAVA TECLA (`int 0x16`) — maquina desacompanhada
+  fica presa no boot seguinte — e ninguem punha o trace no serial; o re-arm do
+  proprio stage1 zerava a janela. Agora: stage1 faz STASH (plen/plast/prev) e
+  o kernel reporta `PREV-CRASH` (serial COM1 + VGA) uma unica vez por crash.
+- LICAO DE ALIASING (a versao 1 era falso-positiva e eu nao teria visto sem
+  o teste de controle): os offsets 55-58 do BOOTDEBUG pertencem ao stage2
+  (KEY_HI/KEY_LO/EXT/ACT) — o stash em 55 leu a BUFFER DE KEYS do boot
+  corrente em todos os boots (plen=47 magico = byte de key). O controle
+  NEGATIVO (boot estavel + reset -> PREV=0) pegou a incoerencia ANTES do
+  commit; stash movido para 64+. Regra nascida aqui: offset novo em regiao
+  compartilhada exige inventario dos donos (grep em TODOS os consumidores),
+  nao so o layout do proprio arquivo.
+- PROVAS (todas executadas nesta rodada, nesta arvore): make -Werror verde;
+  validate-phase6-boot-smoke rc=0 6/6; validate-storage-persist rc=0
+  (dois boots reais sem snapshot na MESMA imagem — o caminho de leitura do
+  region 0x1000 nao pode quebrar durabilidade); MATRIZ CONTRA O ARTEFATO
+  GRAVAVEL: `python3 tools/validate_phase6.py --image build/vibe-os-usb.img`
+  rc=0 6/6 (report build/phase6-validation-usb-artifact.md); POS/NEG do
+  readback acima; smp2 x2 sem PREV falso (um com DESKTOP READY 22s).
+- SCRIPTS DE FLASH NA ARVORE: tools/usb_flash_guest/{flash_stick.sh,
+  init_guest.sh} (receita de 13/10 resgatada de build/ perdido no clean;
+  fail-closed demonstrado: sem imagem/sem stick recusa com erro claro;
+  verifica /sys/block/sda usb-link ANTES de escrever; MBR byte-compare).
+  Build do artefato: `make imb` (256MiB fixo; limitacao honesta de geometria
+  documentada no runbook).
+- O QUE A CAMPANHA PHYSICAL PROVA QUANDO A MAQUINE EXISTE: checklist 10
+  linhas (desktop UP default, storage smoke, durabilidade, A20 IBM, SMP
+  opt-in, db: armed/CTX-WRITE do classe #5, video i915, HDA, USB/ENOTTY,
+  rede/ENOTTY). Linhas 9/10 esperam falha honesta (sem backend nativo) —
+  falha de verdade e afirmar sucesso falso.

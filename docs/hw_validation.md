@@ -111,3 +111,111 @@ python3 tools/validate-boot-chain.py --image build/boot.img --report /tmp/boot-r
 - Hotplug (USB, PCIe): not implemented; all devices must be present at boot
 - Audio capture: not validated on real hardware
 - Wi-Fi: no real wireless support at all (placeholder UI only); see COMPLETION_ACTION_PLAN P3
+
+## T61/T400 Physical Campaign Runbook (P0, added 2026-10-19)
+
+The machine itself is the only missing dependency for P0. This section is the
+end-to-end procedure; nothing here needs QEMU beyond the artifact check.
+
+### 1. Artifact
+
+```
+make          # full green build (validated in-tree by phase6 matrices)
+make imb      # -> build/vibe-os-usb.img (raw, FIXED 256 MiB geometry:
+              #    MBR + FAT32 boot part LBA 2048 x131072 + raw AppFS LBA 133120 x391168)
+```
+
+Honest limitation: on a 32 GiB stick the remaining ~29 GiB stay unallocated;
+full-device geometry needs a rebuild with larger total sectors or the
+`tools/patch_boot_sectors.py` low-wear flow (see AGENTS.md).
+
+### 2. Prove the exact artifact boots (QEMU, necessary gate)
+
+```
+python3 tools/validate_phase6.py --image build/vibe-os-usb.img \
+    --report build/phase6-validation-usb-artifact.md \
+    --qemu qemu-system-i386 --memory-mb 2048 --timeout 60
+```
+
+The `usb-bios-boot` scenario boots this raw image through BIOS USB emulation;
+all six scenarios must pass before the image is worth flashing.
+
+### 3. Flash the stick (tvzinha recipe)
+
+The dev host runs stale kernel 6.18.52 whose modules tree was removed by an
+in-place upgrade without reboot: `usb-storage` will not load host-side and
+there is no `/dev/kvm` (TCG only). Flashing therefore goes through QEMU USB
+passthrough with the host's installed 6.18.55 kernel as the guest:
+
+```
+sudo -E bash tools/usb_flash_guest/flash_stick.sh build/vibe-os-usb.img
+```
+
+The runner FAILS CLOSED unless exactly one Alcor `058f:6387` stick is on the
+bus; the guest verifies `/sys/block/sda/device` resolves through a `usb`
+path before any write, does `dd bs=1M conv=fsync`, byte-compares the MBR and
+prints `RESULT WRITE_OK`. Expect ~4 minutes for 256 MiB under TCG. Once the
+host is rebooted into 6.18.55, plain `dd` works and this script is obsolete.
+Known gotcha: `build/usb-guest/` is a stale root-owned tree; `make full`
+fails on its clean step — ask the maintainer to `sudo rm -rf` it once.
+
+### 4. Boot the T61
+
+- Default posture: boot USB (legacy BIOS), stage2 menu appears. **The
+  physical acceptance target #1 is the DEFAULT menu (single CPU)** — SMP is
+  opt-in with `M` (BOOTINFO_FLAG_EXPERIMENTAL_SMP) and stays experimental.
+- Evidence channels: the kernel debug console writes to VGA text AND COM1
+  (0x3F8, 115200 8N1). For logs, either record the screen or attach a
+  DB9-USB serial adapter; every line below appears on both.
+- **On a hang: press Ctrl+Alt+Del (warm reset), NOT the power button.**
+  The bootdebug window at physical 0x1000 survives a warm reset and the
+  next kernel boot reports it as `PREV-CRASH`; a cold power cut destroys
+  the evidence with the RAM.
+
+### 5. Bootdebug trace codes (the campaign's crash evidence)
+
+The window records a key per phase; on the next warm boot the kernel prints
+(serial + VGA):
+
+```
+bootdebug: PREV-CRASH len=<n> last=<code> trace=<keys>
+```
+
+| Code | Meaning |
+|------|---------|
+| `S R L` + method chars (`2 F A V B a Q`...) | stage2 init, A20 enable: methods probed/OK (see loader audit above) |
+| `M 1 2 C m 3..7` | media reset, disk read attempts/retries, menu, stage2 load steps |
+| `n o p q r s t u` | stage2 pre-kernel actions (EDD, handoff) |
+| `0..9 A-F` | kernel early stages (BOOTINFO, paging, CPU, video, IDT, timer, input, storage...) |
+| `B` `R` | smp bring-up start / smp_init returned |
+| `S` `T` | smp_init / trampoline prepared |
+| `P` `I` `1` `2` | per-AP: boot-lock, attempt, INIT sent, SIPI sent |
+| `a` `l` `g` `i` `m` | AP side: ap_entry, LAPIC, GDT, IDT, AP marked online |
+| `O` `F` `D` | AP online confirmed / AP FAILED after 3 retries / bring-up done |
+
+Interpretation: a trace ending at `2` (SIPI sent) without `a` means the AP
+never took the trampoline (real-hardware trampoline/SIPI problem — exactly
+what this campaign tracks). `m` without `O` = AP entered but stalled before
+being counted. `db:` lines: on real silicon the class-#5 watchpoint tool
+auto-arms (`db: armed ...`) — QEMU prints `db: unsupported (probe silent)`;
+if the T61 shows `db: CTX-WRITE eip=%x cs=%x`, that eip/cs IS the transient
+record-field writer the QEMU campaign could never name — capture that line.
+
+### 6. Pass/fail checklist per surface (fill with logs/photos)
+
+| # | Surface | Pass marker | Fail evidence to collect |
+|---|---------|-------------|--------------------------|
+| 1 | Boot to desktop (UP default) | `desktop: session start`/shell ready | last screen text + PREV-CRASH on warm reboot |
+| 2 | Storage write path | `init: storage smoke ok (read+write+restore)` | `storage smoke read/write failed` + trace tail |
+| 3 | Cross-boot durability | boot 2: `persistent image valid` WITHOUT rebuild | both screenshots |
+| 4 | A20 on IBM BIOS | no `a20_error` halt; loader exits first probe (`2FAVBaQ`) | screen text if halted |
+| 5 | SMP (opt-in `M`) | `smp: done, 2 cpus online` | trace tail per table above |
+| 6 | Class-#5 writer | (expected on smp only) `db: armed` + `db: CTX-WRITE eip= cs=` if it fires | the exact db: line |
+| 7 | Video i915 (gated experimental) | handoff line `video: handoff stage=... backend=drm` | `video:` lines, mode tried |
+| 8 | Audio HDA | `hda:` init lines without hang | last audio line + reboot trace |
+| 9 | USB runtime | honest failure expected: no native mass-storage backend yet (ENOTTY path) | diagnostic line |
+| 10 | Network | honest failure expected: T61's 82567/e1000 has no wired backend (P3 [!]) | diagnostic line |
+
+Rows 9/10 are EXPECTED to report "not supported" — that is the honest
+contract (`ENOTTY`/`ENOSYS`, never fake state); they become failures only if
+the kernel claims success falsely.

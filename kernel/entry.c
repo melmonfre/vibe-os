@@ -44,6 +44,15 @@ struct bootdebug_persist {
     uint8_t len;
     uint8_t last;
     char trace[BOOTDEBUG_TRACE_MAX];
+    /* 55..58 belong to stage2 (KEY_HI/KEY_LO/EXT/ACT) — do not alias. */
+    uint8_t stage2_keys[4];
+    uint8_t reserved[5];
+    /* adendo 44: stage1 stashes the crashed window at PLEN@64/PLAST@65/
+     * PREV@66 before re-arming; the kernel reports it once (serial + VGA)
+     * and clears PLEN. Offsets are contractual with boot/stage1.asm. */
+    uint8_t plen;
+    uint8_t plast;
+    char prev[BOOTDEBUG_TRACE_MAX];
 };
 
 static volatile struct bootdebug_persist *const bootdebug_persist =
@@ -86,6 +95,68 @@ static void kernel_bootdebug_append(uint8_t code) {
     bootdebug_persist->trace[bootdebug_persist->len] = (char)code;
     bootdebug_persist->len++;
     bootdebug_persist->trace[bootdebug_persist->len] = '\0';
+}
+
+/*
+ * P0 campaign evidence loop (adendo 44): a hang on real silicon has no HMP
+ * to read 0x1000, and smp_persist_trace_arm() would re-arm (CLEAR) the
+ * window on the next attempt — without this readback, every crash destroys
+ * its own trace. Snapshot the dirty window at kernel start, then reset it so
+ * each boot owns a fresh window; report at the first console point.
+ */
+static char g_bootdebug_prev[BOOTDEBUG_TRACE_MAX + 1u];
+static uint32_t g_bootdebug_prev_len;
+static uint8_t g_bootdebug_prev_last;
+static int g_bootdebug_prev_valid;
+
+static void kernel_bootdebug_capture_prev(void) {
+    uint32_t i;
+
+    /* stage1 re-arms magic/dirty every boot, so the LIVE window is always
+     * this boot's; only the PREV stash identifies a crashed attempt. */
+    if (bootdebug_persist->magic != BOOTDEBUG_MAGIC) {
+        return;
+    }
+    if (bootdebug_persist->plen == 0u) {
+        return;
+    }
+    g_bootdebug_prev_len = bootdebug_persist->plen;
+    if (g_bootdebug_prev_len >= BOOTDEBUG_TRACE_MAX) {
+        g_bootdebug_prev_len = BOOTDEBUG_TRACE_MAX - 1u;
+    }
+    g_bootdebug_prev_last = bootdebug_persist->plast;
+    for (i = 0u; i < g_bootdebug_prev_len; ++i) {
+        g_bootdebug_prev[i] = (char)bootdebug_persist->prev[i];
+    }
+    g_bootdebug_prev[g_bootdebug_prev_len] = '\0';
+    g_bootdebug_prev_valid = 1;
+    bootdebug_persist->plen = 0u; /* report exactly once */
+}
+
+static void kernel_bootdebug_report_prev(void) {
+    char line[80];
+    uint32_t i;
+    uint32_t n;
+
+    if (g_bootdebug_prev_valid == 0 || g_bootdebug_prev_len == 0u) {
+        return;
+    }
+    kernel_debug_printf("bootdebug: PREV-CRASH len=%u last=%c trace=%s\n",
+                        (unsigned int)g_bootdebug_prev_len,
+                        (int)(g_bootdebug_prev_last != 0u ?
+                              g_bootdebug_prev_last : '?'),
+                        g_bootdebug_prev);
+    /* the physical campaign may have no serial cable: mirror to VGA text */
+    n = 0u;
+    line[n++] = 'P'; line[n++] = 'R'; line[n++] = 'E'; line[n++] = 'V';
+    line[n++] = '-'; line[n++] = 'C'; line[n++] = 'R'; line[n++] = 'A';
+    line[n++] = 'S'; line[n++] = 'H'; line[n++] = ':'; line[n++] = ' ';
+    for (i = 0u; i < g_bootdebug_prev_len && n < 76u; ++i) {
+        line[n++] = g_bootdebug_prev[i];
+    }
+    line[n] = '\0';
+    kernel_text_puts(line);
+    kernel_text_puts("\n");
 }
 
 static void kernel_bootdebug_mark_stable(void) {
@@ -348,6 +419,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
         *p = 0;
     }
     kernel_early_mark(0x11u, 0x02u);
+    kernel_bootdebug_capture_prev();
     kernel_debug_init(); /* registers debug driver */
     mk_launch_init();
     mk_service_init();
@@ -383,6 +455,7 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_early_post(boot_seq);
     kernel_debug_printf("[%u] boot: VIBE OS starting\n", (unsigned int)boot_seq);
     kernel_text_puts("VIBE OS Booting...\n");
+    kernel_bootdebug_report_prev();
 
     boot_seq++;
     kernel_early_post(boot_seq);

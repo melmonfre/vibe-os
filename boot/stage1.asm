@@ -20,6 +20,14 @@ times 90-($-$$) db 0
 %define BOOTDEBUG_LAST 6
 %define BOOTDEBUG_TRACE 7
 %define BOOTDEBUG_TRACE_MAX 48
+; P0 adendo 44: crashed-trace stash slot (kernel reads + clears PLEN).
+; 55-58 belong to stage2 (KEY_HI/KEY_LO/EXT/ACT); stash starts at 64.
+; stage1 used to PRINT the previous trace itself and wait for a keypress --
+; the keypress gate blocks unattended real-hardware boots, so the reporting
+; moved to the kernel, which has serial + space).
+%define BOOTDEBUG_PLEN 64
+%define BOOTDEBUG_PLAST 65
+%define BOOTDEBUG_PREV 66
 
 boot_start:
     cli
@@ -117,20 +125,16 @@ bootdebug_prepare:
     cmp byte [BOOTDEBUG_ADDR + BOOTDEBUG_LEN], 0
     je .reset
 
-    mov ax, 0x0003
-    int 0x10
-    mov si, prev_boot_msg
-    call print_string
-    mov si, BOOTDEBUG_ADDR + BOOTDEBUG_TRACE
-    call print_string
-    mov si, prev_last_msg
-    call print_string
+    ; stash the crashed window for the kernel to report (serial + VGA),
+    ; then re-arm a fresh window below. No keypress gate: unattended boot.
+    mov al, [BOOTDEBUG_ADDR + BOOTDEBUG_LEN]
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_PLEN], al
     mov al, [BOOTDEBUG_ADDR + BOOTDEBUG_LAST]
-    call print_char
-    mov si, continue_msg
-    call print_string
-    xor ah, ah
-    int 0x16
+    mov [BOOTDEBUG_ADDR + BOOTDEBUG_PLAST], al
+    mov si, BOOTDEBUG_ADDR + BOOTDEBUG_TRACE
+    mov di, BOOTDEBUG_ADDR + BOOTDEBUG_PREV
+    mov cx, BOOTDEBUG_TRACE_MAX
+    rep movsb
 
 .reset:
     mov dword [BOOTDEBUG_ADDR], BOOTDEBUG_MAGIC
