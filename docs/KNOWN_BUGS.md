@@ -318,6 +318,30 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
 
 ## Bugs corrigidos
 
+### [x] 17. USB mass-storage: pipeline de enumeracao/execucao MORTO NO MEIO (duas funcoes `unused`, probe_extra sem USB) — CORRIGIDO (20/10)
+
+- **Comportamento observado:** boot de stick USB (BIOS INT13) chegava ao shell
+  fallback com `sys_storage_load failed`; log dizia `usb: init complete (1
+  controllers, 1 devices)` mas nenhum read/write por USB existia; nota do
+  phase6 ("runtime storage unavailable until native backend exists") era
+  tomada como verdade ha rodadas.
+- **Causa raiz:** `kernel_usb_host_execute_all_pending()` (stepper
+  SET_ADDRESS->GET_DESCRIPTOR->SET_CONFIGURATION) e
+  `kernel_usb_host_build_probe_snapshots()` marcadas `__attribute__((unused))`
+  sem NENHUM caller; `kernel_storage_probe_extra()` tentava so NVMe/AHCI.
+  Logo: nenhum snapshot CONFIGURED existia e o backend "usb" (que ja tinha
+  BOT/SCSI completo e registrava block device primario) nunca era tentado.
+- **Correcao:** build->execute no fim de `kernel_usb_host_init()` (ordem
+  importa: executor consome dispatches derivados dos snapshots) + tentativa
+  USB no probe_extra antes de NVMe/AHCI. Cache BOT 4->8 setores (limite do
+  pool de TDs). Diagnostico explicito nos caminhos de rejeicao.
+- **Provas:** stick emulado sem disco ATA: `storage: usb backend ready
+  idx=0 total=524288 start=133120 sectors=391168`; fs/AppFS carregados;
+  `init: storage smoke ok (read+write+restore)`; desktop host launched;
+  validate-phase6-boot-smoke 6/6 e validate-phase6 6/6 (cenario usb
+  redefinido honestamente). Falta: EHCI/xHCI + validacao fisica (P0).
+
+
 ### [x] 1. Teclado estava saindo do modo de vídeo para o shell e causando piscar de tela
 
 - Comportamento observado: no boot para desktop, o sistema lançava `startx`, mas o `userland.app` seguia entrando em `shell_start()`, deixando shell e desktop consumirem teclado ao mesmo tempo.

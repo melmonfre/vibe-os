@@ -732,7 +732,7 @@ static void kernel_usb_host_register_root_device(struct kernel_usb_host_state *s
     }
 }
 
-__attribute__((unused)) static void kernel_usb_host_build_probe_snapshots(struct kernel_usb_host_state *state) {
+static void kernel_usb_host_build_probe_snapshots(struct kernel_usb_host_state *state) {
     if (state == 0) {
         return;
     }
@@ -3445,7 +3445,7 @@ static int kernel_usb_host_probe_cb(const struct kernel_pci_device_info *info, v
     return 0;
 }
 
-__attribute__((unused)) static void kernel_usb_host_execute_all_pending(void) {
+static void kernel_usb_host_execute_all_pending(void) {
     struct kernel_usb_probe_execution execution;
 
     while (kernel_usb_probe_execute_next(0u, &execution) == 0) {
@@ -3494,6 +3494,17 @@ void kernel_usb_host_init(void) {
     if (found > 0u) {
         kernel_debug_puts("usb: starting BSD UHCI driver (deferred)\n");
         bsd_usb_init();
+        /* P0 adendo 48: bsd_usb_init only sets up controllers and sees
+         * ports; the control-transfer enumeration (SET_ADDRESS -> GET
+         * DESCRIPTOR -> SET_CONFIGURATION) is driven by the pending
+         * executor, and the mass-storage/audio consumers read the SNAPSHOT
+         * table the builder produces. Both existed marked (unused) and were
+         * never called -- the pipeline was dead in the middle. */
+        kernel_usb_host_build_probe_snapshots(&g_kernel_usb_host_state);
+        kernel_usb_host_execute_all_pending();
+        kernel_debug_printf("usb: enumeration pass done, snaps=%u devices=%u\n",
+                            (unsigned int)kernel_usb_probe_snapshot_count(),
+                            (unsigned int)kernel_usb_device_count());
     }
 
     kernel_text_puts("usb: OK\n");
@@ -3688,14 +3699,28 @@ int kernel_usb_mass_storage_probe_first_configured(struct kernel_usb_probe_snaps
         return -1;
     }
 
+    /* P4 adendo 48 diagnostics: a silent -1 here once cost a whole debug
+     * round. One short line per rejected snapshot, 4-print budget. */
+    static uint32_t g_ms_pred_budget = 4u;
     for (i = 0u; i < g_kernel_usb_host_state.probe_snapshots; ++i) {
         const struct kernel_usb_probe_snapshot *snapshot = &g_kernel_usb_host_state.probe_snapshot_entries[i];
 
         if (!snapshot->mass_storage_detected) {
+            if (g_ms_pred_budget != 0u) {
+                g_ms_pred_budget--;
+                kernel_debug_printf("usb-ms: snap%u ms_det=0 st=%u\n",
+                                    (unsigned int)i, (unsigned int)snapshot->status);
+            }
             continue;
         }
         if (snapshot->status != KERNEL_USB_PROBE_STATUS_CONFIGURED_READY &&
             snapshot->status != KERNEL_USB_PROBE_STATUS_ATTACHED_READY) {
+            if (g_ms_pred_budget != 0u) {
+                g_ms_pred_budget--;
+                kernel_debug_printf("usb-ms: snap%u det=1 st=%u proto=%u\n",
+                                    (unsigned int)i, (unsigned int)snapshot->status,
+                                    (unsigned int)snapshot->mass_storage_protocol);
+            }
             continue;
         }
         if (!snapshot->config_valid ||
@@ -3703,6 +3728,14 @@ int kernel_usb_mass_storage_probe_first_configured(struct kernel_usb_probe_snaps
             snapshot->mass_storage_interface_number == 0xffu ||
             snapshot->mass_storage_bulk_in_endpoint_address == 0xffu ||
             snapshot->mass_storage_bulk_out_endpoint_address == 0xffu) {
+            if (g_ms_pred_budget != 0u) {
+                g_ms_pred_budget--;
+                kernel_debug_printf("usb-ms: snap%u cfg=%d if=%u in=%u out=%u\n",
+                                    (unsigned int)i, (int)snapshot->config_valid,
+                                    (unsigned int)snapshot->mass_storage_interface_number,
+                                    (unsigned int)snapshot->mass_storage_bulk_in_endpoint_address,
+                                    (unsigned int)snapshot->mass_storage_bulk_out_endpoint_address);
+            }
             continue;
         }
 

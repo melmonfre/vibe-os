@@ -100,7 +100,7 @@ Aceitação mudou: **boot, usb, video, audio, rede e posix precisam funcionar em
 
 - [x] Cadeia de boot em BIOS real: auditoria feita (docs/hw_validation.md "Real-Hardware Boot Chain Audit"). **Bug fatal encontrado e corrigido**: sondas de A20 em boot/stage2.asm eram código morto (`xor ax,ax` setando ZF antes do `je`) — em BIOS IBM sem int 15h 2401h/2402h o loader pararia em `a20_error` mesmo com A20 habilitado via port-92/KBC. Prova: trace do loader lido vivo do guest (HMP xp 0xa02f) — `2FAVBaQ...` (sai na 1a checagem) vs `2FAVBabcdq...` (antes). validate-phase6-boot-smoke em execução com stage2 corrigido (relatório build/phase6-validation-boot-smoke.md).
 - [x] Leitura de disco pós-power-on hardened (rodada 13/10 parte 2): MBR (leitura do VBR) e stage1 (leitura da stage2) agora fazem retry limitado 3x com media reset entre tentativas — CF transiente no primeiro acesso é normal em mídia real (spin-up/PLL/bridge USB) e invisível ao QEMU; mesma disciplina que stage2 já tinha. ATA do kernel auditado: já possui retry limitado, soft-reset, re-seleção de device por attempt e waits com deadline de ticks — nada a mudar. stage1 continua exigindo EDD (pré-EDD halt com erro claro) — aceito para a era T61/T400, documentado. Prova: make verde; boot UP `desktop: session ready`; stage1 montado em 512B exatos com assinatura AA55; validate-phase6-boot-smoke (relatório build/).
-- [ ] USB storage runtime no kernel: backend nativo de massa-storage USB não existe (notas do phase6); boot USB via emulação BIOS funciona, mas "usb funcionando em hw real" exige driver real (EHCI/xHCI + BOT) — campanha com hardware físico (bloqueado: precisa máquina real + logs).
+- [~] USB storage runtime no kernel — ADENDO 48 (20/10): o backend NATIVO existe e FUNCIONA em QEMU. A stack (kernel/drivers/usb/usb_host.c, 5072 linhas) já tinha controle (SET_ADDRESS/GET_DESCRIPTOR/SET_CONFIGURATION em TD/ED chain), BOT+SCSI (INQUIRY/TEST UNIT READY/READ CAPACITY/READ10/WRITE10) e o probe+registro do block device "usb" — mas o pipeline estava MORTO NO MEIO: `kernel_usb_host_execute_all_pending()` e `kernel_usb_host_build_probe_snapshots()` estavam `__attribute__((unused))` (zero callers) e `kernel_storage_probe_extra()` nunca tentava USB. Wiring: build->execute no fim de `kernel_usb_host_init()` + tentativa USB (primeira) no probe_extra. PROVA QEMU (stick emulado, ZERO disco ATA): `storage: usb backend ready idx=0 total=524288 start=133120 sectors=391168` (geometria EXATA do make imb: partição de dados LBA 133120), `fs: sys_storage_load returned` (fs/AppFS carregados DO STICK), assets do AppFS lidos, `init: storage smoke ok (read+write+restore)` = escrita no stick via BOT, `desktop host launched`. Cache 4->8 setores (= limite do pool de TDs 64x64B). Marcos temporizados (TCG lento): init entry ~38s, backend ready ~37s, smoke ~198s. Matrizes: validate-phase6-boot-smoke 6/6 e validate-phase6 6/6 com cenário usb-bios-boot redefinido honestamente (must_have backend ready; must_have_any = smoke read+write OU shell/desktop; teto 320s). FALTA (honesto): EHCI/xHCI (T61/T400 têm EHCI; UHCI cobre portas USB1/companion), validação em stick FÍSICO e throughput em hw real — P0 mantenedora.
 - [x] CPU caches em hw real (rodada 13/10 parte 6): CR0.CD/NW nunca eram limpos em lugar nenhum da cadeia — habilitar paging com CD=1 forca TODO o mapa uncacheable (framebuffer WC + heap em velocidade de barramento) em Core2 real; QEMU/TCG ignora os bits (no-op), entao o boot passava. Corrigido nos 3 sitios: `paging_init` (limpa CD+NW + WBINVD ANTES de setar PG, per SDM), AP trampoline (limpa CD+NW no MESMO write de PG — pos-RESET CR0=0x60100010 tem CD=1/NW=1, o clear do BSP nao vale para o AP), stage2 entrada PM (CD/NW off; paging ainda off = janela segura). Tambem endurecido o layout do trampoline: dados ancorados em offset FIXO 0x100 + magicas por campo + read-back + guarda de tamanho (antes: `align 8` acoplava os offsets ao tamanho do codigo — uma edicao de 5 bytes deslocou tudo e pendurou o AP em sipi1). Evidencia: make verde; validate-phase6-boot-smoke 6/6 PASS (no-op no TCG, como esperado); icount smp2 `smp: ap online apic=1`; magicas verificadas byte-a-byte no build/ap_trampoline.bin (5/5 OK em 0x11a/0x11e/0x124/0x128/0x12c). FALTA: validacao em maquina real (o ganho de cache so se prova em hw).
 - [ ] Video hw real: i915 experimental gateado; campanha T61 (GM965)/T400 (4-series) exige máquina física — checklist em docs/hw_validation.md; sem ela, README/hw docs ficam honestos como estão.
 - [ ] Áudio hw real: HDA validado só em QEMU; matriz AUDIO_HARDWARE_VALIDATION_MATRIX.md precisa das linhas físicas (codec verbs, power states, link training) — bloqueado: hardware.
@@ -1700,4 +1700,42 @@ Cada item concluido atualiza este plano + ACTION_PLAN + FINALIZATION no mesmo co
   separavel por serial — o que se prova e redirecionamento aplicado +
   input end-to-end vivo + zero drops. Na T61, o checklist do runbook
   (linha 6 do adendo 44) cobre o resto.
+
+### P0 — adendo 48 de 20/10 (linha 103: backend USB mass-storage NATIVO ligado e provado em QEMU — o pipeline existia mas estava morto no meio (duas funcoes `unused` e probe_extra sem USB); stick emulado boota, carrega fs/AppFS DO STICK e escreve via BOT)
+
+- ACHADO: `kernel_usb_host_execute_all_pending()` (stepper de enumeracao:
+  SET_ADDRESS->GET_DESCRIPTOR->SET_CONFIGURATION) e
+  `kernel_usb_host_build_probe_snapshots()` estavam marcadas
+  `__attribute__((unused))` — ZERO callers; e `kernel_storage_probe_extra()`
+  so tentava NVMe/AHCI. Resultado: o USB era enumerado superficialmente
+  ("usb: init complete (1 controllers, 1 devices)") mas nenhum snapshot
+  configuravel existia e o backend nunca era tentado — o boot caia no
+  fallback de shell com "runtime storage unavailable" (nota de phase6
+  DESATUALIZADA desde entao).
+- FIX (causa raiz): no fim de `kernel_usb_host_init()`: build_probe_snapshots
+  ANTES de execute_all_pending (o executor consome dispatches derivados dos
+  snapshots; a ordem inversa roda zero passos — medido: snaps=1 st=2 sem
+  execucao). Em `kernel_storage_probe_extra()`: USB primeiro (este caminho so
+  roda sem ATA/AHCI/NVMe; o meio de boot e o proprio stick).
+- PROVA (stick emulado usb-storage + UHCI, sem NENHUM disco ATA):
+  `storage: usb backend ready idx=0 total=524288 start=133120
+  sectors=391168 lun=0 in=129/64 out=2/64`;
+  `fs: sys_storage_load returned` + assets AppFS lidos do stick;
+  `init: storage smoke ok (read+write+restore)` = READ10 e WRITE10 reais;
+  `init: desktop host launched`. Sinais de honestidade: `usb-ms: snap...`
+  diagnosticos no predicado (antes era -1 mudo), `storage: usb no configured
+  ms device (snaps=..)` no init.
+- PERFORMANCE (honesta): cache 4->8 setores (8x512=4096 = pool UHCI de 64
+  TDs x 64B MPS); mesmo assim o boot completo sob TCG leva minutos porque o
+  BOT e tick-bound na emulacao (smoke funcional aos ~198s). Em hw real os
+  TDs completam em <1 frame; throughput real so se mede no T61 (P0).
+  Persistencia: rebuild/writeback de 32KB no stick roda (loop
+  "persistent image invalid, rebuilding" observado); ciclo completo de
+  writeback em TCG e lento — validacao de durabilidade em midia real segue
+  na campanha fisica.
+- GATES: make -Werror verde; validate-phase6-boot-smoke rc=0 6/6;
+  validate-phase6 rc=0 6/6 (cenario usb-bios-boot redefinido: must_have
+  [init entry, storage init returned, storage: usb backend ready],
+  must_have_any [smoke ok | shell | desktop], teto 320s); relatorios em
+  build/phase6-validation*.md.
 

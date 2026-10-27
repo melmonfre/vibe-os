@@ -36,10 +36,23 @@ void kernel_storage_init(void) {
 }
 
 /* Called after USB init to probe USB/NVMe/AHCI storage */
+int kernel_usb_mass_storage_init(void);
+
 void kernel_storage_probe_extra(void) {
     if (kernel_storage_ready()) return;
 
     kernel_block_device_reset();
+
+    /* USB first: this path only runs when no ATA/AHCI disk answered, and
+     * on a stick-booted machine (P0) the boot medium IS the USB device the
+     * host layer just enumerated. P4 adendo 48. */
+    kernel_debug_puts("storage: probing usb mass-storage...\n");
+    if (kernel_usb_mass_storage_init() == 0) {
+        kernel_debug_puts("storage: usb OK\n");
+        kernel_text_puts("storage: usb OK\n");
+        return;
+    }
+    kernel_debug_puts("storage: usb none\n");
 
     kernel_debug_puts("storage: probing nvme...\n");
     if (kernel_nvme_init() == 0) {

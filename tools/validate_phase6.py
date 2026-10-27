@@ -272,14 +272,29 @@ def build_scenarios() -> List[Scenario]:
             must_have=[
                 "init: entered builtin entry",
                 "storage: init returned",
-                "shell: session start",
+                # adendo 48: the native UHCI+BOT backend brought up against
+                # this emulated stick, with the resolved AppFS partition.
+                "storage: usb backend ready",
             ],
-            # Measured 2026-10-19: first serial byte lands at ~27 s (SeaBIOS
-            # usb-storage probe ~11 s + normal boot preamble); all three
-            # markers complete by ~31 s. The old global 20 s cap timed a
-            # BIOS-side constant and produced a deterministic false FAIL.
-            timeout_seconds=60,
-            notes="Boot path validated through BIOS USB emulation; runtime storage stays unavailable until a native USB mass-storage backend exists.",
+            # Measured 2026-10-20 with the runtime backend enabled: init
+            # entry ~38 s, usb backend ready ~37 s, and the init write-path
+            # smoke (read+write+restore through BOT) ~198 s under TCG (BOT is
+            # tick/poll bound in emulation; real UHCI hardware is far
+            # faster). Timeout covers the smoke with host-load headroom.
+            timeout_seconds=320,
+            # Adendo 48 (2026-10-20): the NATIVE USB mass-storage runtime
+            # backend (UHCI+BOT+SCSI, kernel/drivers/usb/usb_host.c wired
+            # via kernel_storage_probe_extra) now loads fs/AppFS from this
+            # same emulated stick, so the boot may pass the shell fallback
+            # marker and reach desktop instead. Either outcome is a pass;
+            # a hard failure is no longer expected but is still what a
+            # missing marker means. EHCI/xHCI backends remain unimplemented
+            # (COMPLETION_ACTION_PLAN P0 line, [~]).
+            must_have_any=[
+                # functional read+write proof through the USB backend
+                "init: storage smoke ok",
+            ] + SHELL_OR_DESKTOP_READY_MARKERS,
+            notes="Boot path validated through BIOS USB emulation; runtime storage now served by the native UHCI/BOT mass-storage backend (adendo 48), proven by the init read+write+restore smoke on the stick; EHCI/xHCI still missing.",
         ),
     ]
 
