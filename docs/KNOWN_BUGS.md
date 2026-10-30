@@ -301,6 +301,26 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   que mostre o request que NUNCA recebe reply sem timeout. 0.6 permanece ABERTO;
   nada aqui foi claimado como corrigido.
 
+- **[ABERTO, nomeado 30/10] #19 netmgrd `status` trava no meio do print — item 0.6 modo-iii / P3.**
+  Apos o fix do #18 a shell nasce, faz flush de type-ahead e RODA `netmgrd status`; o app
+  (pid=13, ring3) lancar correto (`lang: chunk0 verify match`, `app: runtime init ok`) e imprime
+  ate a linha 1238 de `netmgrd_command_status` (`socket rx capacity: 4096`) — e PARA. As linhas
+  1239+ (`event queue depth` ... `state file`) nunca saem e `shell: command exit netmgrd rc=0`
+  nunca chega; o shell (pid=11) fica em `scheduler: timeout pid=11 class=9 event=2` (o wait de
+  4 ticks do host) re-armando para sempre. Census: pid=13 `state=0 (READY)` em TODAS as amostras
+  de t=2000..13025, `lastcur` nunca e 13 — o filho esta pronto mas nunca mais despachado, e o
+  envelhecimento do #18 (que deveria resgatar um tier-6 faminto em ~512 ticks) NAO o resgata.
+  NAO e regressao do #18 (A/B: com o scheduler original a shell nem alcancava
+  `shell: command netmgrd`). Hipoteses vivas (medir antes de escolher, regra da rodada):
+  (a) o clamp do score (`base_score < 0 → 0`) limita o envelhecimento a um EMPATE em 0 com o
+  task tier-0 ocupado — mas o cursor da varredura (`g_cursor = next->next`, scheduler.c:2760)
+  gira apos cada escolha, entao um empate deveria rodar round-robin e o pid=13 receberia CPU; o
+  fato de nao receber em 11 s NAO bate com esse modelo; (b) o write path de stdout do runtime do
+  app (write→host→console) com retry que mantem a task READY sem progresso. PROXIMO PASSO:
+  medir — census com `sel13` + score e `last_start_tick` por task no momento do census (e nao
+  apos o unlock, regra 18g) para discriminar (a) de (b); so depois tocar o write relay.
+  `validate-network-surface` fica vermelho por esta causa ate la.
+
 ## Status geral
 
 - Migração para microkernel: concluída
@@ -437,3 +457,14 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
 - **Causa raiz (lida no layout real):** uma task ring3 pode ser trocada FORA do modo usuario tambem — quando a preempcao/block ocorre no meio de um syscall `int $0x80`, o frame salvo e um frame KERNEL (cs=0x8, eip=0x59bc3=`syscall_stub`, esp_dummy na stack do kernel), mas o `ebp` DENTRO dele e o ebp do APP (stack do usuario): `pusha` em `syscall_stub` preserva os registradores do chamador, e a volta pelo `iretd` do stub ira restaurar o modo usuario a partir das palavras extras do frame. O `scheduler_dispatch_forensics` tinha exatamente esse caso no branch de `cs==USER_CS` (fix do bug #10, 15/10) mas o branch `else` exigia `ebp`/`esp_dummy` na janela do kernel — falso positivo sistematico em task ring3 mid-syscall. NAO ha corrupcao: o mesmo boot nao tinha nenhuma outra testemunha ativa (CTX-DRIFT/CTX-MISMATCH/OUTSIDE-OWN-STACK/user-frame mismatch = 0 linhas), e app rodou normal.
 - **Correcao aplicada (minima, cirurgica):** no branch kernel do witness, `ebp`/`esp_dummy` passam a ser aceitos tambem na janela do usuario quando `task->runs_in_user_mode=1` (a task E uma task de usuario — decide a janela, nao o cs do frame). Task de kernel (`runs_in_user_mode=0`) permanece ESTRITA — o alvo original do witness (frame corrompido do host storage pid=1, classe #3) continua 100% alcancavel; os checks de `frame_in_window` (ctx na stack propria), `eip_sane` e `cs_sane` seguem valendo para todos. Branch `cs==USER_CS` esta intacto byte-a-byte.
 - **Provas (mesma imagem antes/depois, mesmo perfil run-headless-debug):** pre-fix: 6 linhas `BAD-FORENSICS` (budget esgotado) com `ctx=0x39267678 in_win=1 ebp=0x37ffdf24 esp=0x39267698 eip=0x59bc3 cs=0x8`; pos-fix: **0 linhas**, com o MESMO app pid=12 lancado e vivo (tick=7343, `service: first-of-kind req svc=2 type=17 src=12 dst=1 kind=0 user=1`, `storage smoke ok (read+write+restore)`, `desktop host launched`). Gate: `make` -Werror rc=0; `make validate-phase6` 6/6 PASS (build/phase6-validation.md) apos o fix. Item 0.8 FEITO no DEFINITIVE_CLOSURE_PLAN; o 0.7 fica integralmente FEITO (as duas faces do mesmo witness).
+
+### [x] 18. Escalonamento: o anti-inanicao era codigo MORTO e o teto era menor que o span real de tiers — sessao interativa (rescue shell) nunca rodava comando — CORRIGIDO (30/10, item 0.6 modo-i)
+
+- **Comportamento observado (reproduzido com harness closed-loop, `/tmp/vg/06_repro.py`, boot rescue em core2duo/smp2):** o shell (host tier APP=6) ficava **READY eterno atras do host do init (pid=5, tier DESKTOP_USER=0)** que roda `poll(timeout=0)+sys_yield()` na supervise — um concorrente READY permanente. Census medidos: `sel5=147457` subindo rápido enquanto `sel10` (shell) congelava em 4 por 40k ticks; `shell: ready` nunca chegava, nenhum comando digitado era processado. NAO era o wait de 4 ticks da shell (hipotese antiga do plano) nem deadline perdido.
+- **Causa raiz (tres defeitos encadeados no `kernel/process/scheduler.c`):**
+  1. `scheduler_account_runtime` zerava `task->last_start_tick` a CADA switch-out. Esse campo e o "tick em que a task comecou a rodar" que o termo de envelhecimento le — zerar significava que toda task READY via `last_start_tick==0` e o guard NAO PODIA disparar para exatamente as tasks que ele protegia. O envelhecimento era codigo morto.
+  2. Mesmo vivo, o teto era 64 pontos, justificado como "> span de 4 tiers". Falso: o enum de tiers vai de DESKTOP_USER(0) a BACKGROUND(7) = 112 pontos + ate 3 de afinidade. Um host tier-6 (base 96) atras de um task tier-0 ocupado NUNCA ultrapassaria com 64 — o guard era estruturalmente fraco demais.
+  3. `find_next` tinha `if (score == 0) break;` — curto-circuito da varredura que e invalido: o score PODE ser negativo, pelos early-returns de bootstrap/wake-boost do `scheduler_task_score` (-40+tier service fresco, -36/-34/-26 user/app fresco, -32/-24 IPC sinalizado), que contornam o clamp do termo de envelhecimento; parar a varredura no primeiro task zero deixaria a CPU com um task merely-zero enquanto um task de score negativo (ex.: app acabado de lancar) espera mais adiante na lista.
+- **Correcao aplicada (minima, sem tocar ABI nem semantica de prioridade):** (1) `scheduler_account_runtime` para de zerar o carimbo — o re-dispatch sempre re-carimba (`scheduler_schedule_frame`), e o guard `state!=RUNNING` impede dupla contagem; (2) divisor do envelhecimento 8→4 com teto 128 (> 112+3): boost pleno apos ~512 ticks (~5,1 s) sem rodar; (3) removido o `break` de `score==0`.
+- **Provas executadas:** apos o fix, mesmo harness/perfil: `sel10` de 4→**116028** (shell volta a ser despachada), `sel5` congela em 3485 (init para de ganhar toda rodada), `shell: ready` chega e o shell processa comandos. Cmd `js` completo: `host: argv js` → `lang: image read ok` → `lang: chunk0 verify match` → `app: runtime init ok` → `js: NOT IMPLEMENTED (ENOSYS)` (diagnostico honesto, sem stub) → **`shell: command exit js rc=0`** (`/tmp/vg/06_run7`). Gate `make validate-phase6` 6/6 PASS (build/phase6-validation.md). A shell tambem ganhou flush de type-ahead no start (os scancodes resido do menu de boot do stage2 caíam na fila do PS/2 e prefixavam o primeiro comando — o gate viu `netmgrd` chegar como `ssetmgrd`; flush estilo login-shell, so userland, sem tocar ABI), necessario para os gates de sessao chegarem limpos.
+- **Escopo honesto:** isto fecha o MODO (i) do item 0.6 (a inanicao que impedia a sessao de nascer). O gate `validate-network-surface` avanca mas fica VERMELHO num modo NOVO e distinto (bug #19: stall do `netmgrd status` no meio do print) — NAO e regressao deste commit: o A/B (scheduler original re-stashado) mostra que antes do fix a shell nem chegava a rodar `netmgrd` (FAIL em `shell: command netmgrd`), ou seja, o gate ja estava vermelho por esta causa-raiz.

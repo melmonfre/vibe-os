@@ -559,7 +559,20 @@ static void scheduler_account_runtime(process_t *task, uint32_t now_ticks) {
     if (now_ticks >= task->last_start_tick) {
         task->runtime_ticks += (now_ticks - task->last_start_tick);
     }
-    task->last_start_tick = 0u;
+    /*
+     * 0.6 (26/10): DO NOT clear last_start_tick here. It is the "tick this
+     * task last started running" stamp that the starvation guard in
+     * scheduler_task_score ages by — clearing it on every switch-out left
+     * every READY task with last_start_tick==0, so the guard could never
+     * fire for exactly the tasks it was written to protect. Measured: the
+     * init host (tier DESKTOP_USER, timeout-0 supervision poll + yield)
+     * re-won every selection round and the rescue shell host (tier APP,
+     * +96 base points) sat READY with sel frozen at 4 for 40k ticks —
+     * "shell: ready" never arrived. Re-dispatch always re-stamps the field
+     * (scheduler_schedule_frame), so keeping it here cannot double-count
+     * runtime: the state!=RUNNING guard blocks a second account until the
+     * next dispatch resets the stamp.
+     */
 }
 
 static void scheduler_trace_switch(uint32_t cpu_index,
@@ -1702,9 +1715,16 @@ static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
      * task stayed READY forever. Reproduced deterministically: the rescue
      * shell host (tier APP) and the lang loader sat READY (census: state=0)
      * for 16k ticks while a tier-service pid kept the CPU — hard livelock at
-     * interactive app launch. Age the score by time since the task last ran,
-     * bounded to 64 points (> the 4x16 tier span) so any starving runnable
-     * task eventually outranks a busy task of a much better tier.
+     * interactive app launch. Age the score by time since the task last ran.
+     *
+     * Bound re-measured 26/10 (0.6 close): the original cap of 64 points was
+     * justified as "> the 4x16 tier span", but the tier enum spans 0..7
+     * (DESKTOP_USER..BACKGROUND) = 112 points plus up to 3 affinity points.
+     * A tier-6 shell host (96) behind a tier-0 busy task could NEVER
+     * overtake on 64 — the guard was structurally too weak even after the
+     * dead-field bug (account_runtime used to zero last_start_tick on every
+     * switch-out, see above) was fixed. Cap 128 (> 112+3) with divisor 4:
+     * full boost after 512 ticks (~5.1s) of not running.
      */
     if (task->last_start_tick != 0u) {
         uint32_t waited = (uint32_t)(kernel_timer_get_ticks() - task->last_start_tick);
@@ -1712,7 +1732,7 @@ static int scheduler_task_score(const process_t *task, uint32_t cpu_index) {
         if (waited > 512u) {
             waited = 512u;
         }
-        base_score -= (int)(waited / 8u);
+        base_score -= (int)(waited / 4u);
     }
     if (base_score < 0) {
         base_score = 0;
@@ -2547,9 +2567,18 @@ static process_t *find_next(uint32_t cpu_index, process_t *current) {
                 if (best == NULL || score < best_score) {
                     best = task;
                     best_score = score;
-                    if (score == 0) {
-                        break;
-                    }
+                    /*
+                     * No early "floor" break (0.6, 26/10): 0 is not a floor.
+                     * The aging term above is clamped to >= 0, but
+                     * scheduler_task_score's bootstrap/wake-boost early
+                     * returns hand back negative scores directly (-40+tier
+                     * fresh service, -36/-34/-26 fresh user/app, -32/-24
+                     * signaled IPC waiter) and those bypass the clamp. A
+                     * break at the first 0-score task would stop the walk
+                     * before reaching a negative-score task sitting later in
+                     * the list — exactly the freshly-launched app task the
+                     * boost was written to protect.
+                     */
                 }
             }
 

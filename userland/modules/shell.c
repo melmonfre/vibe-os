@@ -297,10 +297,50 @@ static int read_line(char *buf, int maxlen, const char *prompt) {
     }
 }
 
+/*
+ * 0.6 (30/10): a freshly-started interactive shell must not execute
+ * keystrokes typed before its prompt existed. The stage2 boot-menu selector
+ * (and the harnesses that drive it) pulses s,s,<ret>; the trailing scancodes
+ * land in the PS/2 queue just after the shell reaches "ready" and the old
+ * code ran them as commands: "ss" -> unknown command, and worse they prefix
+ * the first real command (the network-surface gate saw "netmgrd" arrive as
+ * "ssetmgrd"). Drain the queue until it stays quiet for a short window so a
+ * late-arriving menu byte cannot be mistaken for user input. Bounded by a
+ * poll guard so a stuck key can never wedge the shell. This is the same
+ * type-ahead flush a real login shell performs; it is userland-only and
+ * touches no ABI.
+ */
+static void shell_flush_typeahead(void) {
+    uint32_t start = sys_ticks();
+    uint32_t last_key_tick = start;
+    int saw_key = 0;
+
+    /* Drain until 30 ticks (~300 ms) pass with no key arriving; bounded to
+     * 500 ticks (~5 s) so a stuck key can never wedge the shell. A key
+     * resets the quiet window, so a slow in-flight menu byte is still
+     * caught. */
+    while (sys_ticks() - start < 500u) {
+        if (sys_poll_key() > 0) {
+            last_key_tick = sys_ticks();
+            saw_key = 1;
+            continue;
+        }
+        if (sys_ticks() - last_key_tick >= 30u) {
+            break;
+        }
+        sys_sleep();
+    }
+    if (saw_key) {
+        sys_write_debug("shell: flushed typeahead\n");
+    }
+}
+
 void shell_start_ready(void) {
     char line[LINE_MAX];
     char *argv[SHELL_MAX_ARGS + 1];
     char prompt[96];
+
+    shell_flush_typeahead();
 
     for (;;) {
         int argc;
