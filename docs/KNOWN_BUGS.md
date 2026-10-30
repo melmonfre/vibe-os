@@ -339,7 +339,7 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   idx=0 total=524288 start=133120 sectors=391168`; fs/AppFS carregados;
   `init: storage smoke ok (read+write+restore)`; desktop host launched;
   validate-phase6-boot-smoke 6/6 e validate-phase6 6/6 (cenario usb
-  redefinido honestamente). Falta: EHCI/xHCI + validacao fisica (P0).
+  redefinido honestamente). Falta: xHCI + validacao fisica (P0). EHCI resolvido em ADENDO 49 (COMPLETION_ACTION_PLAN linha 103): transporte nativo EHCI provado q35+ich9-usb-ehci1 sem disco ATA; causa raiz da estourada de QH (flush_qh 11 dwords vs slot 8) corrigida com passo 64B.
 
 
 ### [x] 1. Teclado estava saindo do modo de vídeo para o shell e causando piscar de tela

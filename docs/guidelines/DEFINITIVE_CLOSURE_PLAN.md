@@ -285,7 +285,7 @@ Fonte: `hw_validation.md`, `AUDIO_HARDWARE_VALIDATION_MATRIX.md`, P0, `usb_boot.
 | # | Item | DoD | Prova | Bloqueio |
 | --- | --- | --- | --- | --- |
 | 8.1 | Boot BIOS real com log serial | boot + desktop na máquina | log serial anexado | **HW** |
-| 8.2 | USB mass-storage runtime nativo (EHCI/xHCI + BOT) | storage USB monta e lê | log | **HW** + Onda 0 |
+| 8.2 | USB mass-storage runtime nativo (EHCI/xHCI + BOT) | storage USB monta e lê; UHCI+**EHCI provados em QEMU** (ADENDO 48/49, linha 103 do plano; EHCI q35+ich9-usb-ehci1, read+write+restore) | log | **HW** (xHCI/stick físico) + Onda 0 |
 | 8.3 | Áudio HDA/AC97 real | playback audível + captura | matriz HW preenchida | **HW** |
 | 8.4 | Vídeo i915/radeon real | modeset nativo | log + snapshot | **HW** |
 | 8.5 | Rede NIC real (T61/T400) | link + DHCP + ping | log | **HW** + Onda 1 |
