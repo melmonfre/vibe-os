@@ -155,10 +155,12 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   processo filho termina (caminho `host_wait_for_task_exit` em
   bootstrap_hosts.c + assinatura de task-event). Isso também reinterpreta o
   netmgrd: ele provavelmente TERMINOU; a shell e que nunca acordou. OBSERVAR
-  TAMBEM: `sched-dispatch: BAD-FORENSICS ... ctx=0x13fff...` ainda dispara em
-  app ring3 saudavel (o fix de 15/10 cobriu ebp/esp, mas nao o check de
-  frame/ctx quando o contexto salva na janela da stack de usuario) — trace e
-  ruido a calibrar em passada propria.
+  TAMBEM: `sched-dispatch: BAD-FORENSICS` ainda dispara em app ring3 saudavel
+  — HIPOTESE ORIGINAL (contexto em `ctx=0x13fff...` na janela da stack de
+  usuario, check `frame_in_window`/ctx) estava ERRADA; corrigida na medicao
+  (o ctx estava na stack do KERNEL, `in_win=1`; o que falhava era `ebp`). FECHADO
+  em 30/10 como KNOWN_BUGS #16 / item 0.8 (frame KERNEL mid-syscall de task
+  ring3). Este trace era ruido, nao prova do stall 0.6.
   DECISAO DE RAMO MEDIDA (15/10 parte 6 — trace 'host-wait: stalled'
   adicionado em userland/bootstrap_hosts.c host_wait_for_task_exit): no stall
   re-produzido com o binario novo, a shell (pid=10) NAO esta no loop de polling
@@ -223,7 +225,8 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   antes do stall e 'service: storage request type=17 from pid=12 to pid=1').
   0.6 permanece ABERTO; nada aqui foi claimado como corrigido. Nota: os
   'sched-dispatch: BAD-FORENSICS' reapareceram para pid=12 (frame ring3 com
-  regs_in_win=0) — mesma familia do bug #10, ruidoso mas nao fatal.
+  regs_in_win=0) — mesma familia do bug #10; FECHADO em 30/10 como #16
+  (frame KERNEL mid-syscall de task ring3 — ruido, nao prova do stall 0.6).
   WAIT NOMEADO + TASK-EVENT DROP (15/10 parte 9 — o mecanismo do stall ficou
   nomeado). Estendido o census com dois campos por no:
   wait_event_kind (0=NONE 1=WAITABLE 2=QUEUE 3=SIGNAL 4=COMPLETION) e
@@ -427,3 +430,10 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
 - **Comportamento (latent bug encontrado na auditoria de face-1/P4, nao reproduzido):** `sys_execve` (kernel/syscall.c) fazia `kernel_free(current->stack)` e so depois atribuia a nova stack — com o Codigo DO PROPRIO SYSCALL EXECUTANDO sobre a stack liberada, e o TSS esp0 deste cpu ainda apontando para o topo velho ate o proximo dispatch. O bloco voltava ao allocator e qualquer frame de IRQ/trap posterior (ou um ring3->ring0 no meio da janela) escrevia memoria libjada que outro dono podia ter recebido — exatamente a assinatura de "escrita-alias viva" que a classe #5 mostra. So e latente porque NENHUM userland compilado chama SYSCALL_EXECVE (grep: unicos 'execve' em arvores vendored de links2/breakpad, nao buildadas).
 - **Correcao (liberacao adiada, sem nunca tocar stack em uso):** campo novo `process_t.pending_stack_free` (append do struct, interno-kernel, ABI intata); execve estaciona a stack velha ali (e libera a anterior, se existir) e REPOOE o esp0 imediatamente (`kernel_tss_set_kernel_stack(nova_stack+size)`) para fechar a janela de trap; a liberacao real acontece no proximo switch-away do task (scheduler_schedule_frame) ou no terminate — ambos executam FORA da stack estacionada. `pending_stack_free` e zerado nos dois memcpy-wholesale de process_t (fork child, thread create) para nao duplicar posse. Ordem de locks scheduler->heap ja estabelecida.
 - **Provas:** make -Werror verde; UP `validate-phase6-boot-smoke` 6/6 com o fix (relatorio build/); smp2 real-time sem regressao (ver commit). A face-1 da classe #5 segue ABERTA: este UAF e latente (execve nao executado no boot), portanto NAO e a causa das assinaturas de escrita-alias medidas — o proximo passo (trace de kernel_tss_set_kernel_stack + auditoria stale g_current/service->process pos-terminate) continua valdo.
+
+### [x] 16. BAD-FORENSICS resíduo: task ring3 pré-emptada NO MEIO de um syscall int-0x80 disparava o witness — segundo defeito do bug #10 (fechamento do item 0.8) — CORRIGIDO (30/10)
+
+- **Comportamento observado:** no boot desktop, o app ring3 saudavel (pid=12, `syscall: TASK-CREATE pid=12 ... mode=ring3`) disparava `sched-dispatch: BAD-FORENSICS ... regs_in_win=0` em dispatches sucessivos ate esgotar o budget (medido: 6 linhas). A hipotese registrada no item 0.8 (`ctx` salvo dentro da janela da stack do USUARIO) estava ERRADA e foi corrigida pela medicao: a linha real trazia `in_win=1` (o `ctx=0x39267678` estava na stack do KERNEL da propria task) e o campo que falhava era `ebp=0x37ffdf24`.
+- **Causa raiz (lida no layout real):** uma task ring3 pode ser trocada FORA do modo usuario tambem — quando a preempcao/block ocorre no meio de um syscall `int $0x80`, o frame salvo e um frame KERNEL (cs=0x8, eip=0x59bc3=`syscall_stub`, esp_dummy na stack do kernel), mas o `ebp` DENTRO dele e o ebp do APP (stack do usuario): `pusha` em `syscall_stub` preserva os registradores do chamador, e a volta pelo `iretd` do stub ira restaurar o modo usuario a partir das palavras extras do frame. O `scheduler_dispatch_forensics` tinha exatamente esse caso no branch de `cs==USER_CS` (fix do bug #10, 15/10) mas o branch `else` exigia `ebp`/`esp_dummy` na janela do kernel — falso positivo sistematico em task ring3 mid-syscall. NAO ha corrupcao: o mesmo boot nao tinha nenhuma outra testemunha ativa (CTX-DRIFT/CTX-MISMATCH/OUTSIDE-OWN-STACK/user-frame mismatch = 0 linhas), e app rodou normal.
+- **Correcao aplicada (minima, cirurgica):** no branch kernel do witness, `ebp`/`esp_dummy` passam a ser aceitos tambem na janela do usuario quando `task->runs_in_user_mode=1` (a task E uma task de usuario — decide a janela, nao o cs do frame). Task de kernel (`runs_in_user_mode=0`) permanece ESTRITA — o alvo original do witness (frame corrompido do host storage pid=1, classe #3) continua 100% alcancavel; os checks de `frame_in_window` (ctx na stack propria), `eip_sane` e `cs_sane` seguem valendo para todos. Branch `cs==USER_CS` esta intacto byte-a-byte.
+- **Provas (mesma imagem antes/depois, mesmo perfil run-headless-debug):** pre-fix: 6 linhas `BAD-FORENSICS` (budget esgotado) com `ctx=0x39267678 in_win=1 ebp=0x37ffdf24 esp=0x39267698 eip=0x59bc3 cs=0x8`; pos-fix: **0 linhas**, com o MESMO app pid=12 lancado e vivo (tick=7343, `service: first-of-kind req svc=2 type=17 src=12 dst=1 kind=0 user=1`, `storage smoke ok (read+write+restore)`, `desktop host launched`). Gate: `make` -Werror rc=0; `make validate-phase6` 6/6 PASS (build/phase6-validation.md) apos o fix. Item 0.8 FEITO no DEFINITIVE_CLOSURE_PLAN; o 0.7 fica integralmente FEITO (as duas faces do mesmo witness).

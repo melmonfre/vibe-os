@@ -1,8 +1,8 @@
 # Plano de Fechamento Definitivo — VibeOS (Revisão 3)
 
-last: 2026-10-15 — revisão de TODOS os planos contra o código verificado (HEAD: ver git log; revisão v3 incorpora a caçada ao 0.6)
-doing: backlog definitivo, organizado em ondas, com regra anti-stub e prova obrigatória
-next: Onda 0 — 0.6 (segundo fator medido: wait infinito pós-comando OU preempção off) + 0.2/0.3/0.8
+last: 2026-10-30 — 0.8 FEITO (BAD-FORENSICS resíduo: task ring3 pré-emptada no meio de um syscall int-0x80 carrega frame KERNEL com ebp do usuário; fix ciente de runs_in_user_mode, KNOWN_BUGS #16; boot 0 linhas vs 6 pré-fix; phase6 6/6)
+doing: backlog definitivo, organizado em ondas, com regra anti-stub e prova obrigatória (revisão v3 de 15/10)
+next: Onda 0 — 0.6 (segundo fator medido: wait infinito pós-comando OU preempção off) + 0.2/0.3
 state: active
 intent: execution-backlog
 
@@ -25,7 +25,7 @@ intent: execution-backlog
 | --- | --- | --- |
 | 0.1 contagem do host USB | ✅ | `ddb1a26ef` — `kernel_usb_host_probe_cb` era código morto; `[14] usb: init complete (1 controllers, 0 devices)` |
 | 0.5 gate/selector dos harnesses interativos | ✅ (parte harness) | `13ae59214` — selector closed-loop + cold-restart; gate exige `shell: command exit X rc=0`; o validador passou a **alcançar** o shell |
-| 0.7 `BAD-FORENSICS` falso p/ frame ring3 | ⚠️ parcial | `13ae59214` — `ebp`/`esp_dummy` validados na janela de usuário; **resíduo**: ainda dispara por `frame/ctx` (novo item 0.8) |
+| 0.7 `BAD-FORENSICS` falso p/ frame ring3 | ✅ FEITO | `13ae59214` (face cs=0x1b) + fechamento do resíduo em **0.8** (face frame-kernel mid-syscall) — as duas faces do mesmo witness fechadas, KNOWN_BUGS #10/#16 |
 | P7 placeholders falsos de js/ruby/python | ✅ | `918376735` — eco-REPL e a mentira "maps to JS engine" removidos; diagnóstico `NOT IMPLEMENTED (ENOSYS)` |
 | P9 honestidade documental (README/KNOWN_BUGS/painel) | ✅ (parte) | `8560a0d97` — tabela Project Status, header do KNOWN_BUGS, claims de Wi-Fi/USB corrigidos |
 | 0.6 stall de sessão interativa | ❌ re-localizado | `7c5852dff`+`ecb589097`+`918376735` — ver 0.6 (não é app/console/storage) |
@@ -138,8 +138,8 @@ correr em paralelo depois de 2; **8** só depois de 0–7.
 | 0.4 | Consolidação de planos (pointers) | ✅ feito na v1; reverificar a cada revisão | cada plano antigo aponta para cá | grep | — |
 | 0.5 | Gate dos harnesses interativos | ✅ harness (selector + gate + timeout); `network-surface` alcança o shell | gates verdes **repetidos** | depende de 0.6 | 0.6 |
 | 0.6 | **Sessão interativa trava no meio** | ❌ ABERTO — **ramo decidido por medição**: a shell (pid=10) NÃO está no loop de polling (trace novo `host-wait: stalled` ausente em ~10s, quando 256 polls o imprimiriam) nem retorna do wait — presa num único `kernel_waitable_wait_timeout` com deadline de 4 ticks que NUNCA dispara (antes do launch os mesmos waits venciam: deadlines 8522→8562 avançando). Caveat medido: budget do trace `scheduler: block` (24) esgotou antes do launch, então silêncio de block-trace não prova nada sozinho. Dois modos seguem: (i) rescue sem `shell: ready`; (ii) comando nunca completa. Eliminados: input saudável, IPC-timeout ausente, console host inocentado. **Parte 8 (medido):** a inanição foi **falsificada** — census em duas fases prova `ts0` decrementando (2/3/4) e preempção 1x/tick; `g_sched_sel_count` mostra a shell despachada ~1831x. O stall é o par **wait/exit-notify** (`host-wait: stalled pid=10/11 polls=4096 alive=1` + pids BLOCKED com deadline re-armando); o filho bloqueia e não termina. Próximo instrumento: lado do FILHO / storage service pid=1. |
-| 0.7 | `BAD-FORENSICS` falso p/ frame ring3 | ⚠️ parcial (`13ae59214` corrigiu `ebp`/`esp_dummy`) | — | `validate-network-datapath` PASS + `phase6` 6/6 | 0.8 |
-| 0.8 | **`BAD-FORENSICS` resíduo em app ring3 saudável** (novo) | dispara com `ctx=0x13fff…` (contexto salvo na janela da stack de usuário; o check de `frame_in_window`/ctx não foi coberto pelo fix de 0.7) — ruído que ainda polui o serial | check de frame ciente de contexto ring3 (janela de usuário também) ou budget honesto | log de boot de app sem `BAD-FORENSICS` espúrio | — |
+| 0.7 | `BAD-FORENSICS` falso p/ frame ring3 | ✅ FEITO (`13ae59214` face `cs=0x1b` + 0.8 face mid-syscall) | — | `validate-network-datapath` PASS + `phase6` 6/6 | — |
+| 0.8 | **`BAD-FORENSICS` resíduo em app ring3 saudável** | ✅ FEITO (30/10, KNOWN_BUGS #16) — a hipótese do `ctx=0x13fff…` estava ERRADA: a linha real trazia `in_win=1` (ctx na stack do KERNEL da task) e o que falhava era `ebp=0x37ffdf24`. Causa: uma task ring3 pré-emptada **no meio de um `int $0x80`** guarda um frame KERNEL (`cs=0x8`, `eip=0x59bc3`=`syscall_stub`) cujo `ebp` é o do app (stack de usuário) — `pusha` preserva os registradores do chamador e o `iretd` restaura o modo usuário adiante. Fix: o branch kernel do witness aceita `ebp`/`esp` na janela de usuário quando `runs_in_user_mode=1`; **task de kernel permanece estrita** (classe #3 inalterada). | check de frame ciente do contexto da TASK (não só do `cs`) | boot pré-fix 6 linhas / pós-fix **0** com o mesmo pid=12 vivo; `phase6` 6/6 | — |
 
 > 0.5/0.6 são o destravador silencioso de várias ondas: **três validadores**
 > (`network-surface`, `abi-compat-surface`, `audio-stack`) não valem como gate
@@ -370,4 +370,4 @@ classe #4, P2 persistência cross-boot, P3 datapath IPv4 (TX/ARP/ICMP/loopback/
 roundtrip/cache/TX-ring), `kernel_debug_printf` width, 0.1 (USB count), P7
 placeholders falsos, passagem P9 de honestidade documental.
 
-Aberto hoje, por ordem de entrada nas ondas: **0.2, 0.3, 0.6, 0.8**, depois 1.x, 2.x, ...
+Aberto hoje, por ordem de entrada nas ondas: **0.2, 0.3, 0.6**, depois 1.x, 2.x, ... (0.8 FEITO em 30/10, ver linha própria na Onda 0 e KNOWN_BUGS #16)

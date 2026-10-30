@@ -2276,8 +2276,31 @@ static void scheduler_dispatch_forensics(uint32_t cpu_index,
                      (esp_dummy >= stack && esp_dummy < stack_end);
         regs_in_window = ebp_ok && esp_ok;
     } else {
-        regs_in_window = (ebp == 0u || (ebp >= stack && ebp < stack_end)) &&
-                         (esp_dummy >= stack && esp_dummy < stack_end);
+        /*
+         * 0.8 (closure-plan wave 0): a ring3 task (runs_in_user_mode=1) is
+         * ALSO switched out MID int-0x80 syscall. That saved frame is a
+         * KERNEL frame (cs=0x8, eip in the syscall path) but its ebp/esp
+         * still hold the APP's user-stack values — pusha in syscall_stub
+         * preserves the app registers, and the frame resumes the kernel
+         * path and irets back to the app. Measured healthy (desktop
+         * pid=12): ctx on its own kernel stack (in_win=1), eip=0x59bc3
+         * (syscall_stub), cs=0x8, ebp=0x37ffdf24 (user window),
+         * esp=0x39267698 (kernel window). The old strict kernel-window
+         * check fired BAD-FORENSICS on every such dispatch (budget 6).
+         * Accept the user window for user tasks here too; kernel tasks
+         * (runs_in_user_mode=0) stay strict, and the eip/cs sanity below
+         * plus the window checks keep the real teeth (a corrupted frame
+         * with a wild eip/cs or out-of-window esp is still caught).
+         */
+        uintptr_t ustack_top = (uintptr_t)task->user_stack_top;
+        uintptr_t ustack_low = (ustack_top > VIBE_APP_STACK_SIZE)
+                                   ? (ustack_top - VIBE_APP_STACK_SIZE) : 0u;
+        int user_win = (task->runs_in_user_mode != 0u && ustack_top != 0u);
+        int ebp_ok = (ebp == 0u) || (ebp >= stack && ebp < stack_end) ||
+                     (user_win && ebp >= ustack_low && ebp < ustack_top);
+        int esp_ok = (esp_dummy >= stack && esp_dummy < stack_end) ||
+                     (user_win && esp_dummy >= ustack_low && esp_dummy < ustack_top);
+        regs_in_window = ebp_ok && esp_ok;
     }
 
     /*
