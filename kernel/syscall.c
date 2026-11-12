@@ -4818,6 +4818,15 @@ uint32_t syscall_dispatch_internal(uint32_t num, uint32_t a, uint32_t b,
         }
     }
     if (num < MAX_SYSCALLS && syscall_table[num]) {
+        /*
+         * KNOWN_BUGS #27 probes run and RETIRED 12/11 (negative results,
+         * documented in KNOWN_BUGS): per-syscall ESP-DRIFT and CPU-frame
+         * sampling (ss/esp/eflags/cs/eip before/after the handler) both
+         * fired ZERO times across GP reproductions -- the displaced-iret
+         * theory is REFUTED with measurement; the ring0 jump into the
+         * net child window comes from a kernel `call *ptr` carrying a
+         * user value, next probe is the full ud-bt of the GP itself.
+         */
         return syscall_table[num](a, b, c, d, e);
     }
     return (uint32_t)-1;
