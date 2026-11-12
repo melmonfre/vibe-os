@@ -597,6 +597,24 @@ static int is_in_sel(struct terminal_state *t, int abs_row, int col) {
 }
 
 
+/*
+ * KNOWN_BUGS #27: the forked ksh child continues on the MIRRORED copy of
+ * the parent's stack window (kernel/syscall.c::sys_fork). Anything the
+ * child dereferences through an absolute pointer INTO the parent's window
+ * reads the parent's live frames -- which the parent immediately reuses
+ * (measured: ksh_main's `argv` slot read as `1`, `set_editmode` saw 0x13d,
+ * `ksh_getopt` stale state -- all parent-frame data, not our copy). The
+ * child branch below therefore touches ONLY static objects: the pipe fds
+ * via these two statics (set before fork, consumed by the child as its
+ * first statements; the parent only overwrites them on the NEXT terminal
+ * launch, long after) and a static argv array. Grandchild forks inside
+ * ksh (pipelines/background jobs) keep the same hazard and stay documented
+ * in #27; simple foreground commands run on this safe path.
+ */
+static volatile int g_ksh_child_fd_in = -1;
+static volatile int g_ksh_child_fd_out = -1;
+static char *g_ksh_argv[] = {"ksh", "-i", (char *)0};
+
 void terminal_init_ksh(struct terminal_state *t) {
     int in_pipe[2], out_pipe[2];
     t->ksh_pid = -1;
@@ -606,21 +624,37 @@ void terminal_init_ksh(struct terminal_state *t) {
 
     if (pipe(in_pipe) < 0 || pipe(out_pipe) < 0) return;
 
+    g_ksh_child_fd_in = in_pipe[0];
+    g_ksh_child_fd_out = out_pipe[1];
+
     pid_t pid = fork();
     if (pid < 0) { close(in_pipe[0]); close(in_pipe[1]); close(out_pipe[0]); close(out_pipe[1]); return; }
 
     if (pid == 0) {
-        close(in_pipe[1]);
-        close(out_pipe[0]);
-        dup2(in_pipe[0], 0);
-        dup2(out_pipe[1], 1);
-        dup2(out_pipe[1], 2);
-        close(in_pipe[0]);
-        close(out_pipe[1]);
+        /*
+         * Child: NO locals of this frame are touched from here on (they are
+         * mirrored copies whose addresses the parent reuses). t is the
+         * g_terms slot -- global -- and the fd values come from the statics.
+         * dup2/close take only constants and t fields; ksh_main gets the
+         * static argv. We never return into the desktop loop.
+         */
+        int fd_in = g_ksh_child_fd_in;
+        int fd_out = g_ksh_child_fd_out;
 
-        extern int ksh_main(int, char **);
-        char *argv[] = {"ksh", "-i", NULL};
-        ksh_main(2, argv);
+        sys_write_debug("ksh: child enter\n");
+        if (fd_in >= 0) {
+            dup2(fd_in, 0);
+        }
+        if (fd_out >= 0) {
+            dup2(fd_out, 1);
+            dup2(fd_out, 2);
+        }
+        sys_write_debug("ksh: child fds wired\n");
+        {
+            extern int ksh_main(int, char **);
+            ksh_main(2, g_ksh_argv);
+        }
+        sys_write_debug("ksh: child ksh returned\n");
         _exit(0);
     }
 

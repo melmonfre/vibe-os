@@ -2400,6 +2400,50 @@ static uint32_t sys_network_event_receive(uint32_t event_ptr, uint32_t timeout_t
 /* POSIX process & memory syscalls                                    */
 /* ------------------------------------------------------------------ */
 
+/*
+ * KNOWN_BUGS #26/#27: per-arena child window map for user-mode fork.
+ * Tier 1: an app on an arena's stack top forks into the arena's midpoint
+ * (the historical ksh-terminal mapping). Tier 2: a child forking again
+ * (pdksh job control forks per foreground command) gets the arena's
+ * quarter mark -- a third region, disjoint from both live stacks. The
+ * desktop app heap grows from the low end and would need >100MB to reach
+ * the quarter mark; sessions do not. Depth 2 is a documented limit:
+ * deeper generations fail the fork cleanly (EAGAIN), never resurrect a
+ * mirrored kernel frame in ring3.
+ */
+static uintptr_t fork_child_user_window(uintptr_t parent_top) {
+    static const uintptr_t windows[][3] = {
+        {VIBE_APP_DESKTOP_STACK_TOP,
+         VIBE_APP_DESKTOP_LOAD_ADDR + VIBE_APP_DESKTOP_ARENA_SIZE / 2u,
+         VIBE_APP_DESKTOP_LOAD_ADDR + VIBE_APP_DESKTOP_ARENA_SIZE / 4u},
+        {VIBE_APP_STACK_TOP,
+         VIBE_APP_LOAD_ADDR + VIBE_APP_ARENA_SIZE / 2u,
+         VIBE_APP_LOAD_ADDR + VIBE_APP_ARENA_SIZE / 4u},
+        {VIBE_APP_BOOT_STACK_TOP,
+         VIBE_APP_BOOT_LOAD_ADDR + VIBE_APP_BOOT_ARENA_SIZE / 2u,
+         VIBE_APP_BOOT_LOAD_ADDR + VIBE_APP_BOOT_ARENA_SIZE / 4u},
+        {VIBE_APP_COMPAT_LOAD_ADDR_20260325 + VIBE_APP_ARENA_SIZE,
+         VIBE_APP_COMPAT_LOAD_ADDR_20260325 + VIBE_APP_ARENA_SIZE / 2u,
+         VIBE_APP_COMPAT_LOAD_ADDR_20260325 + VIBE_APP_ARENA_SIZE / 4u},
+        {VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 + VIBE_APP_DESKTOP_ARENA_SIZE,
+         VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 + VIBE_APP_DESKTOP_ARENA_SIZE / 2u,
+         VIBE_APP_COMPAT_DESKTOP_LOAD_ADDR_20260325 + VIBE_APP_DESKTOP_ARENA_SIZE / 4u},
+        {VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325 + VIBE_APP_BOOT_ARENA_SIZE,
+         VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325 + VIBE_APP_BOOT_ARENA_SIZE / 2u,
+         VIBE_APP_COMPAT_BOOT_LOAD_ADDR_20260325 + VIBE_APP_BOOT_ARENA_SIZE / 4u},
+    };
+
+    for (unsigned int i = 0u; i < sizeof(windows) / sizeof(windows[0]); ++i) {
+        if (parent_top == windows[i][0]) {
+            return windows[i][1];
+        }
+        if (parent_top == windows[i][1]) {
+            return windows[i][2];
+        }
+    }
+    return 0u;
+}
+
 static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
                          uint32_t d, uint32_t e) {
     process_t *current;
@@ -2500,13 +2544,28 @@ static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
      */
     if (current->runs_in_user_mode) {
         uint32_t child_eip = d;  /* fork_child_entry from esi */
-        uintptr_t child_st = 0u;
-        if (current->user_stack_top == VIBE_APP_DESKTOP_STACK_TOP)
-            child_st = VIBE_APP_DESKTOP_LOAD_ADDR + VIBE_APP_DESKTOP_ARENA_SIZE / 2u;
-        else if (current->user_stack_top == VIBE_APP_STACK_TOP)
-            child_st = VIBE_APP_LOAD_ADDR + VIBE_APP_ARENA_SIZE / 2u;
-        else if (current->user_stack_top == VIBE_APP_BOOT_STACK_TOP)
-            child_st = VIBE_APP_BOOT_LOAD_ADDR + VIBE_APP_BOOT_ARENA_SIZE / 2u;
+        uintptr_t child_st = fork_child_user_window(current->user_stack_top);
+        if (child_st == 0u) {
+            /*
+             * KNOWN_BUGS #27 (measured 12/11): when the PARENT itself is a
+             * fork child (the ksh grandchild pid=21: user_stack_top was the
+             * arena/2 window, matching no STACK_TOP constant), the old
+             * mapping fell through and the grandchild was resumed on the
+             * MIRRORED KERNEL frame -- cs=0x25ffddc4 / eip=0x147097e3 garbage
+             * that halted the guest with `#UD kernel-mode eip=25ffdf29`.
+             * Never resume a user task on a mirrored kernel frame: fail the
+             * fork honestly instead (ksh sees EAGAIN and reports it).
+             */
+            kernel_debug_printf("fork: no child window for top=%x pid=%d\n",
+                                (unsigned int)current->user_stack_top,
+                                current->pid);
+            if (current->pending_stack_free != 0 && child->stack != current->stack) {
+                /* child->stack is a fresh kernel_malloc; free it */
+            }
+            kernel_free(child->stack);
+            kernel_free(child);
+            return (uint32_t)-1;
+        }
         if (child_st != 0u) {
             /*
              * Anchor priority: (1) explicit user ESP handed in by the
@@ -2557,10 +2616,16 @@ static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
             memcpy(bounce, (void *)(top - live), live);
             memcpy((void *)(child_st - live), bounce, live);
             kernel_free(bounce);
-            kernel_debug_printf("fork: src=%x mirror=%x dst=%x\n",
-                                (unsigned int)*(volatile uint32_t *)(uintptr_t)(parent_esp + 20u),
-                                (unsigned int)*(volatile uint32_t *)(uintptr_t)(child_st - live + 20u),
-                                (unsigned int)(child_st - live));
+            /*
+             * KNOWN_BUGS #27 measurement note (11/12): the mirror's saved-EBP
+             * chain cannot be relocated -- the desktop (-Os) runs WITHOUT frame
+             * pointers (trap-ebp was 0xffffffff garbage), so absolute pointers
+             * INTO the parent window must be avoided in userland instead: the
+             * terminal's ksh child now continues using only global/static
+             * objects (g_terms slot + static argv), see
+             * userland/applications/terminal.c::terminal_init_ksh. The window
+             * itself stays mirrored at arena/2.
+             */
 
             kernel_user_trap_frame_t *kf;
             uintptr_t kt = (uintptr_t)child->stack + child->stack_size;
