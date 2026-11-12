@@ -334,10 +334,11 @@ void
 rtrav(void)				/* read travel table		*/
 {
 	int     locc;
-	struct travlist *t;
+	struct travlist *t = NULL;
 	char   *s;
 	char    buf[12];
-	int     len, m, n, entries;
+	int     len, m, n;
+	int     entries = 0;
 
 	for (oldloc = -1;;) {		/* get another line		*/
 		if ((locc = rnum()) != oldloc && oldloc >= 0) { /* end of entry */
@@ -546,7 +547,7 @@ void
 pspeak(int m, int skip) 
 {
 	char   *s, nonfirst;
-	char   *numst, save;
+	char   *numst;
 	struct text *msg;
 	char   *tbuf;
 
@@ -562,8 +563,8 @@ pspeak(int m, int skip)
 		for (numst = s; (*s ^= *tape++) != TAB; s++)
 			; /* get number	*/
 
-		save = *s; /* Temporarily trash the string (cringe)	*/
-		*s++ = 0; /* deobfuscation number within the string	*/
+		*s++ = 0; /* deobfuscation: trash the delimiter (upstream
+		              * `save` was dead -- never restored -- removed) */
 
 		if (atoi(numst) != 100 * skip && skip >= 0) {
 			while ((*s++ ^ * tape++) != LF) /* flush the line */

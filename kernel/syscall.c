@@ -1458,9 +1458,13 @@ static uint32_t sys_service_receive(uint32_t message_ptr, uint32_t b, uint32_t c
     if (!sys_user_ptr_ok((uintptr_t)message_ptr, sizeof(struct mk_message))) {
         return (uint32_t)-1;
     }
-    return (uint32_t)ipc_receive_wait(current,
-                                      (void *)(uintptr_t)message_ptr,
-                                      sizeof(struct mk_message));
+    /* KNOWN_BUGS #25: bounded repoll defense against host-side lost wake;
+     * the caller loop treats a timeout as "no message" and re-peeks, so a
+     * stranded queue drains without waiting for the (lost) signal. */
+    return (uint32_t)ipc_receive_wait_timeout(current,
+                                              (void *)(uintptr_t)message_ptr,
+                                              sizeof(struct mk_message),
+                                              MK_SERVICE_HOST_REPOLL_TICKS);
 }
 
 static uint32_t sys_service_send(uint32_t message_ptr, uint32_t b, uint32_t c,
@@ -2480,9 +2484,20 @@ static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
     child->child_exit_pid = 0;
     child->child_exit_status = 0;
 
-    /* For user-mode forks: copy parent's entire used user stack to
-     * the child's new stack area, then set child EIP to fork_child_entry
-     * which does jmp *%edi (where edi = return address from parent). */
+    /*
+     * KNOWN_BUGS #26: user-mode fork must mirror the LIVE stack region.
+     * The stack grows DOWN from user_stack_top, so the live frames are
+     * [ESP, top] -- the original code copied [top - 8KB, top] anchored at
+     * the stack TOP: for the desktop app (arena 0x14000000..0x38000000,
+     * stack top 0x38000000) that window sat ~8KB below the real ESP and the
+     * child's `ret` popped a stale startup value, crashing with
+     * `exception: Page Fault user eip=37ffe044` right after `fork:
+     * child_pid=...` -- every typed ksh command died before execve() could
+     * even be reached. Copy the actual live window (bounded, via a kernel
+     * bounce so overlapping parent/child ranges cannot corrupt each other),
+     * and keep the +20 return-address slot arithmetic (5 saved regs pushed
+     * by the fork prologue) against the mirrored ESP, not against top.
+     */
     if (current->runs_in_user_mode) {
         uint32_t child_eip = d;  /* fork_child_entry from esi */
         uintptr_t child_st = 0u;
@@ -2493,16 +2508,60 @@ static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
         else if (current->user_stack_top == VIBE_APP_BOOT_STACK_TOP)
             child_st = VIBE_APP_BOOT_LOAD_ADDR + VIBE_APP_BOOT_ARENA_SIZE / 2u;
         if (child_st != 0u) {
-            /* Copy parent's user stack (top 8KB) to child's stack */
-            uint32_t copy_sz = 8192u;
-            uintptr_t parent_bot = current->user_stack_top - copy_sz;
-            uintptr_t child_bot = child_st - copy_sz;
-            if (parent_bot >= VIBE_APP_LOAD_ADDR && child_bot >= VIBE_APP_LOAD_ADDR) {
-                memcpy((void *)child_bot, (void *)parent_bot, copy_sz);
+            /*
+             * Anchor priority: (1) explicit user ESP handed in by the
+             * fork() stub at the trap -- the int-0x80 ABI is
+             * (num=eax, a=ebx, b=ecx, c=edx, d=esi, e=edi) and the stub
+             * carries ESP in ECX, i.e. `b`; (2) process_saved_esp(current)
+             * as fallback for other callers.
+             */
+            uintptr_t parent_esp = (uintptr_t)b;
+            uintptr_t top = current->user_stack_top;
+            uint32_t live;
+            uint8_t *bounce = 0;
+
+            if (parent_esp == 0u || parent_esp > top) {
+                parent_esp = process_saved_esp(current);
             }
-            /* Build user trap frame. Child EIP = fork_child_entry.
-             * It jumps to edi which holds the parent's return address.
-             * Child ESP = parent's ESP relative position. */
+            if (parent_esp == 0u || parent_esp > top) {
+                parent_esp = top;
+            }
+            live = (uint32_t)(top - parent_esp);
+            if (live > 0u && live >= 24u) {
+                kernel_debug_printf("fork: esp=%x retslot=%x expect=%x live=%u\n",
+                                    (unsigned int)parent_esp,
+                                    (unsigned int)*(uint32_t *)(uintptr_t)(parent_esp + 20u),
+                                    (unsigned int)e,
+                                    (unsigned int)live);
+            }
+            kernel_debug_printf("fork: esp=%x top=%x live=%u\n",
+                                (unsigned int)parent_esp,
+                                (unsigned int)top,
+                                (unsigned int)live);
+            if (live > 65536u) {
+                kernel_debug_puts("fork: user stack live window too deep\n");
+                kernel_free(child->stack);
+                kernel_free(child);
+                return (uint32_t)-1;
+            }
+            if (live >= 24u && live <= 65536u) {
+                bounce = (uint8_t *)kernel_malloc(live);
+            }
+            if (bounce == 0) {
+                kernel_debug_printf("fork: bounce alloc failed live=%u\n",
+                                    (unsigned int)live);
+                kernel_free(child->stack);
+                kernel_free(child);
+                return (uint32_t)-1;
+            }
+            memcpy(bounce, (void *)(top - live), live);
+            memcpy((void *)(child_st - live), bounce, live);
+            kernel_free(bounce);
+            kernel_debug_printf("fork: src=%x mirror=%x dst=%x\n",
+                                (unsigned int)*(volatile uint32_t *)(uintptr_t)(parent_esp + 20u),
+                                (unsigned int)*(volatile uint32_t *)(uintptr_t)(child_st - live + 20u),
+                                (unsigned int)(child_st - live));
+
             kernel_user_trap_frame_t *kf;
             uintptr_t kt = (uintptr_t)child->stack + child->stack_size;
             kf = (kernel_user_trap_frame_t *)(kt - sizeof(*kf));
@@ -2512,11 +2571,18 @@ static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
             kf->base.cs = USER_CS_SELECTOR;
             kf->base.eflags = 0x00000202u;
             kf->base.eax = 0u;
-            /* ESP offset: return address at ESP + 20.
-             * fork prologue: push ebp, push edi, push esi, push ebx, push ecx
-             * EBP = ESP + 16 → return_addr at EBP+4 = ESP + 20.
-             * Child ret pops [ESP] = return_address. */
-            kf->user_esp = (uint32_t)(child_st - copy_sz + 20u);
+            /*
+             * KNOWN_BUGS #26: start the child at the MIRROR of the parent's
+             * trap ESP (the five pushed registers), NOT at the return-address
+             * slot. fork_child_entry then pops ecx/ebx/esi/edi/ebp exactly as
+             * the parent's own epilogue will after its `int` returns, and its
+             * final `ret` pops the mirrored return address. Starting +20 made
+             * the pops eat the return address and the ret jump to caller-frame
+             * garbage (measured: `exception: Page Fault user err=5
+             * eip=142628c0` = terminal_init_ksh's own return-address value,
+             * fetched as code from a non-executed frame position).
+             */
+            kf->user_esp = (uint32_t)(child_st - live);
             kf->user_ss = USER_DS_SELECTOR;
             child->context = &kf->base;
             child->runs_in_user_mode = 1u;

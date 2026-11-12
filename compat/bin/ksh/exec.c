@@ -1017,6 +1017,37 @@ search(const char *name, const char *path,
 		if (*sp++ == '\0')
 			sp = NULL;
 	}
+
+	/*
+	 * VibeOS (KNOWN_BUGS #24): PATH-style lookup cannot see AppFS apps -
+	 * the kernel's LAUNCH_APP resolves BARE names from its own app catalog
+	 * (this is exactly how busybox runs `audiosvc`/`soundctl`). Without
+	 * this, ksh's TEXEC never reaches execve() and every typed command
+	 * dies as "not found" INSIDE ksh, invisible to the serial witnesses.
+	 * Hand bare names through; if the kernel does not know the name the
+	 * compat execve wrapper fails with ENOENT and ksh reports it there.
+	 */
+	if (!strchr(name, '/')) {
+		/* Witness kept deliberately: one line per typed bare-name command
+		 * proves the AppFS registry fallback fired (KNOWN_BUGS #24). */
+		{
+			char line[80];
+			int i = 0;
+			const char *t = "ksh: search-fallback ";
+			while (t[i]) line[i] = t[i], i++;
+			t = name;
+			while (*t && i < 70) line[i++] = *t++;
+			line[i++] = '\n';
+			line[i] = '\0';
+			__asm__ volatile("int $0x80" :
+			    : "a"(11), "b"((int)(uintptr_t)line), "c"(0), "d"(0),
+			      "S"(0), "D"(0) : "memory");
+		}
+		XcheckN(xs, xp, namelen);
+		memcpy(xp, name, namelen);
+		return Xclose(xs, xp + namelen);
+	}
+
 	Xfree(xs, xp);
 	return NULL;
 }

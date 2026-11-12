@@ -40,7 +40,7 @@ int vibe_app_main(int argc, char **argv) {
     return g_bsdgame_exit_status;
 }
 
-void vibe_bsdgame_exit(int status) {
+__attribute__((noreturn)) void vibe_bsdgame_exit(int status) {
     g_bsdgame_exit_status = status;
     if (g_bsdgame_exit_active) {
         vibe_bsdgame_longjmp(g_bsdgame_exit_env);

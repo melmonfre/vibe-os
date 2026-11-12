@@ -710,7 +710,9 @@ static void mk_service_worker_step(const struct mk_service_record *service) {
         return;
     }
 
-    if (ipc_receive_wait(current, &request, sizeof(request)) != (int)sizeof(request)) {
+    /* KNOWN_BUGS #25: bounded repoll defense against host-side lost wake. */
+    if (ipc_receive_wait_timeout(current, &request, sizeof(request),
+                                 MK_SERVICE_HOST_REPOLL_TICKS) != (int)sizeof(request)) {
         return;
     }
 

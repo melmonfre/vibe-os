@@ -204,6 +204,7 @@ linkdata(void)			/* secondary data manipulation */
 void
 trapdel(int n)			/* come here if he hits a del	*/
 {
+	(void)n;
 	delhit = 1;		/* main checks, treats as QUIT	*/
 	signal(SIGINT, trapdel);/* catch subsequent DELs	*/
 }

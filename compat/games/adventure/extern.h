@@ -35,7 +35,7 @@ unsigned long crc(const char *, int);
 
 /* done.c */
 int score(void);
-void done(int);
+void done(int) __dead;
 void die(int);
 
 /* init.c */

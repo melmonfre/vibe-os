@@ -102,7 +102,7 @@ ciao(void)
 	char    fname[PATH_MAX];
 
 	printf("What would you like to call the saved version?\n");
-	for (c = fname; c - fname < sizeof(fname); c++) {
+	for (c = fname; (size_t)(c - fname) < sizeof(fname); c++) {
 		if ((ch = getchar()) == '\n' || ch == EOF)
 			break;
 		*c = ch;

@@ -141,27 +141,41 @@ class QemuMonitorSession:
         keystroke); no growth for 30 s raises named-key freeze."""
         s = self._mon_sock()
 
+        def key_acks() -> int:
+            # 11/11 lesson from the hda-smoke input run: GROWTH-based pacing is
+            # NOT enough on the desktop — background witnesses (fs assets,
+            # audiosvc apply, evt-rec) keep the serial growing while QEMU's
+            # PS/2 queue silently DROPS the keys that are racing it (19_ns10
+            # redux): the typed command reached ksh truncated and no ack ever
+            # came. The authoritative per-keystroke receipt signal is the
+            # desktop's own `desktop: key <n>` dispatch witness — pace on a
+            # NEW occurrence of it, not on byte growth.
+            try:
+                return self.read_log().count("desktop: key ")
+            except OSError:
+                return 0
+
         def type_one(key: str) -> None:
-            before = self.serial_log.stat().st_size if self.serial_log.exists() else 0
+            before = key_acks()
             t_send = time.time()
             s.sendall(f"sendkey {key}\n".encode("utf-8"))
-            deadline = time.time() + 60.0
+            # 120 s cap / 90 s stall-raise: the desktop background startup
+            # (audio apply-settings, storage boot burst) can hold the input
+            # batch for tens of seconds under TCG while the guest is
+            # demonstrably alive; 30 s produced false stalls (11/11).
+            deadline = time.time() + 120.0
             quiet = 0
             while time.time() < deadline:
-                try:
-                    after = self.serial_log.stat().st_size
-                except OSError:
-                    after = 0
-                if after > before:
+                if key_acks() > before:
                     self.key_latencies.append(round(time.time() - t_send, 2))
                     return
                 time.sleep(0.1)
                 quiet += 1
-                if quiet >= 300:
+                if quiet >= 900:
                     raise RuntimeError(
-                        f"serial frozen sending {key!r}: no guest output "
-                        "for 30 s (freeze, not slowness)")
-            self.key_latencies.append(">=60")
+                        f"desktop key dispatch silent sending {key!r}: no "
+                        "`desktop: key` witness for 90 s (PS/2 stall or freeze)")
+            self.key_latencies.append(">=120")
 
         for ch in text:
             if ch == " ":
@@ -547,15 +561,19 @@ def wait_for_any_marker(session: QemuMonitorSession, markers: List[str], timeout
 def wait_for_terminal_command_done(session: QemuMonitorSession,
                                    command: str,
                                    timeout: float = 12.0) -> None:
-    done_marker = f"terminal: command done {command}"
+    # ksh-era completion contract (KNOWN_BUGS #24): the compat execve wrapper
+    # emits `ksh: exec <cmd>` at dispatch and `ksh: exit <cmd>` once the app
+    # TERMINATED — the busybox-era `terminal: command done`/`shell: command`
+    # markers never existed in the typed-ksh path.
+    done_marker = f"ksh: exit {command}"
     if log_contains(session, done_marker):
         return
     try:
         session.wait_for_log(done_marker, timeout=timeout)
     except RuntimeError:
-        if log_contains(session, f"terminal: command start {command}") or \
-           log_contains(session, f"shell: command {command}"):
-            raise RuntimeError(f"Timed out waiting for marker: {done_marker}")
+        if log_contains(session, f"ksh: exec {command}"):
+            raise RuntimeError(f"Timed out waiting for marker: {done_marker} "
+                               "(app dispatched but never exited)")
         raise
 
 
@@ -563,15 +581,15 @@ def wait_for_terminal_command_done_since(session: QemuMonitorSession,
                                          command: str,
                                          start_offset: int,
                                          timeout: float = 12.0) -> None:
-    done_marker = f"terminal: command done {command}"
+    done_marker = f"ksh: exit {command}"
     if log_contains(session, done_marker, start_offset):
         return
     try:
         wait_for_all_since(session, [done_marker], timeout=timeout, start_offset=start_offset)
     except RuntimeError:
-        if log_contains(session, f"terminal: command start {command}", start_offset) or \
-           log_contains(session, f"shell: command {command}", start_offset):
-            raise RuntimeError(f"Timed out waiting for marker: {done_marker}")
+        if log_contains(session, f"ksh: exec {command}", start_offset):
+            raise RuntimeError(f"Timed out waiting for marker: {done_marker} "
+                               "(app dispatched but never exited)")
         raise
 
 
@@ -587,7 +605,7 @@ def run_command(session: QemuMonitorSession,
     session.type_batch(command)
     if command_marker:
         wait_for_all_since(session,
-                           [f"shell: command {command_marker}"],
+                           [f"ksh: exec {command_marker}"],
                            timeout=max(timeout, 25.0),
                            start_offset=start_offset)
     return start_offset
@@ -812,8 +830,8 @@ def run_audio_capture_smoke(qemu_binary: str,
                                          "audiosvc export-state /runtime/audio-validation.state",
                                          timeout=8.0)
             wait_for_all_since(session,
-                               ["shell: command audiosvc", "audiosvc: export ok"],
-                               timeout=15.0,
+                               ["ksh: exec audiosvc", "audiosvc: export ok"],
+                               timeout=30.0,
                                start_offset=command_offset)
             wait_for_any_marker_since(session, backend_markers, timeout=15.0, start_offset=command_offset)
             wait_for_any_marker_since(session,

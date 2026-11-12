@@ -36,6 +36,7 @@ c_shift(char **wp)
 	int64_t val;
 	char *arg;
 
+	ksh_getopt_reset(&builtin_opt, 0);
 	if (ksh_getopt(wp, &builtin_opt, null) == '?')
 		return 1;
 	arg = wp[builtin_opt.optind];
@@ -68,6 +69,7 @@ c_umask(char **wp)
 	mode_t old_umask;
 	int optc;
 
+	ksh_getopt_reset(&builtin_opt, 0);
 	while ((optc = ksh_getopt(wp, &builtin_opt, "S")) != -1)
 		switch (optc) {
 		case 'S':
@@ -195,6 +197,7 @@ c_dot(char **wp)
 	int i;
 	int err;
 
+	ksh_getopt_reset(&builtin_opt, 0);
 	if (ksh_getopt(wp, &builtin_opt, null) == '?')
 		return 1;
 
@@ -230,6 +233,7 @@ c_wait(char **wp)
 	int rv = 0;
 	int sig;
 
+	ksh_getopt_reset(&builtin_opt, 0);
 	if (ksh_getopt(wp, &builtin_opt, null) == '?')
 		return 1;
 	wp += builtin_opt.optind;
@@ -262,6 +266,7 @@ c_read(char **wp)
 	struct tbl *vp;
 	char *xp = NULL;
 
+	ksh_getopt_reset(&builtin_opt, 0);
 	while ((optc = ksh_getopt(wp, &builtin_opt, "prsu,")) != -1)
 		switch (optc) {
 		case 'p':
@@ -428,6 +433,7 @@ c_eval(char **wp)
 	int savef;
 	int rv;
 
+	ksh_getopt_reset(&builtin_opt, 0);
 	if (ksh_getopt(wp, &builtin_opt, null) == '?')
 		return 1;
 	s = pushs(SWORDS, ATEMP);
@@ -476,6 +482,7 @@ c_trap(char **wp)
 	char *s;
 	Trap *p;
 
+	ksh_getopt_reset(&builtin_opt, 0);
 	if (ksh_getopt(wp, &builtin_opt, null) == '?')
 		return 1;
 	wp += builtin_opt.optind;
@@ -519,6 +526,7 @@ c_exitreturn(char **wp)
 	int n;
 	char *arg;
 
+	ksh_getopt_reset(&builtin_opt, 0);
 	if (ksh_getopt(wp, &builtin_opt, null) == '?')
 		return 1;
 	arg = wp[builtin_opt.optind];
@@ -561,6 +569,7 @@ c_brkcont(char **wp)
 	struct env *ep, *last_ep = NULL;
 	char *arg;
 
+	ksh_getopt_reset(&builtin_opt, 0);
 	if (ksh_getopt(wp, &builtin_opt, null) == '?')
 		return 1;
 	arg = wp[builtin_opt.optind];
@@ -649,6 +658,7 @@ c_unset(char **wp)
 	char *id;
 	int optc, unset_var = 1;
 
+	ksh_getopt_reset(&builtin_opt, 0);
 	while ((optc = ksh_getopt(wp, &builtin_opt, "fv")) != -1)
 		switch (optc) {
 		case 'f':

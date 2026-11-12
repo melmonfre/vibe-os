@@ -213,6 +213,25 @@ x_mode(bool onoff)
 void
 set_editmode(const char *ed)
 {
+	/*
+	 * KNOWN_BUGS #27 (11/11): pdksh startup on this platform reaches
+	 * set_editmode with non-string pointers (measured 0x13d -- a small
+	 * integer read off a tbl union, i.e. an unset/typed-wrong VISUAL or
+	 * EDITOR default when environ is empty). Upstream strrchr would walk
+	 * from a bogus base and page-fault the shell child to death during
+	 * terminal init. Guard the impossible value and SAY SO on the serial
+	 * instead of silently proceeding -- the underlying initvar/environ
+	 * assumption is the actual fix and belongs to the pdksh startup
+	 * campaign (#27), not here.
+	 */
+	if (ed == 0 || (unsigned int)(uintptr_t)ed < 0x1000u) {
+		__asm__ volatile("int $0x80"
+			:
+			: "a"(11), "b"((int)(uintptr_t)"ksh: editmode refused (bad ptr)\n"),
+			  "c"(0), "d"(0), "S"(0), "D"(0)
+			: "memory");
+		return;
+	}
 	static const enum sh_flag edit_flags[] = {
 #ifdef EMACS
 		FEMACS, FGMACS,

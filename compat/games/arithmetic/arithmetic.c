@@ -141,6 +141,7 @@ main(int argc, char *argv[])
 void
 intr(int dummy)
 {
+	(void)dummy;
 	showstats();
 	_exit(0);
 }
@@ -172,7 +173,7 @@ problem(void)
 {
 	char *p;
 	time_t start, finish;
-	int left, op, right, result;
+	int left = 0, op, right = 0, result = 0;
 	char line[80];
 
 	op = keys[arc4random_uniform(nkeys)];

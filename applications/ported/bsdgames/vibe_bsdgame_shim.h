@@ -93,7 +93,7 @@ void errc(int eval, int code, const char *fmt, ...);
 void verrc(int eval, int code, const char *fmt, va_list ap);
 void errx(int eval, const char *fmt, ...);
 void verrx(int eval, const char *fmt, va_list ap);
-void vibe_bsdgame_exit(int status);
+__attribute__((noreturn)) void vibe_bsdgame_exit(int status);
 int bsdgame_printf(const char *fmt, ...);
 int bsdgame_fprintf(FILE *stream, const char *fmt, ...);
 int bsdgame_vprintf(const char *fmt, va_list ap);

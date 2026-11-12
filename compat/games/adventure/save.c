@@ -153,7 +153,7 @@ restore(const char *infile)
 	FILE   *in;
 	struct savestruct *p;
 	char   *s;
-	long    sum, cksum;
+	long    sum, cksum = 0;   /* uninitialized on an empty save_array was read */
 	int     i;
 
 	if ((in = fopen(infile, "rb")) == NULL) {

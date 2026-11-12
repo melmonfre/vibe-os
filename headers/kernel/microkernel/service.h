@@ -9,6 +9,18 @@ struct process;
 struct mk_message;
 struct task_snapshot_entry;
 
+/*
+ * KNOWN_BUGS #25 defense (11/11): service host receive loops wait with a
+ * BOUNDED repoll instead of an infinite wait. The audio host wedged BLOCKED
+ * with its request queued and the wake counters silent (hostQ=1
+ * hostW{pend=0 wake=305 tmo=0 waiters=1}, `service: request timeout svc=5
+ * type=67 src=14 dst=8`) — the lost-wake family of bug #19, this time on the
+ * HOST side of the handshake, exposed by the audio host finally running at
+ * all (#22 fix). The normal fast path stays signal-driven; the bounded wait
+ * only guarantees a stranded queue is drained within the repoll budget.
+ */
+#define MK_SERVICE_HOST_REPOLL_TICKS 50u
+
 #define MK_SERVICE_NAME_MAX 16u
 #define MK_SERVICE_SLOTS 32u
 #define MK_SERVICE_EVENT_SUBSCRIBERS 8u
