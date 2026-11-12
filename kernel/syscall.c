@@ -2656,8 +2656,9 @@ static uint32_t sys_fork(uint32_t a, uint32_t b, uint32_t c,
         }
     }
 
-    kernel_debug_printf("fork: child_pid=%d eip=%x cs=%x user_esp=%x user_ss=%x runs_user=%d\n",
+    kernel_debug_printf("fork: child_pid=%d stack_size=%u eip=%x cs=%x user_esp=%x user_ss=%x runs_user=%d\n",
         child->pid,
+        (unsigned int)child->stack_size,
         child->context ? child->context->eip : 0,
         child->context ? child->context->cs : 0,
         (current->runs_in_user_mode && child->context) ?
