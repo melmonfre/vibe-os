@@ -246,10 +246,12 @@ SOURCE_CONTRACTS = [
     ),
     SourceContract(
         name="nouveau-lifecycle",
-        description="nouveau should stay wired into the shared lifecycle even while modeset remains probe-only",
+        description="nouveau publishes the shared lifecycle hooks and its set_mode is a real PCRTC commit path (snapshot before, write, readback after, rollback on mismatch; NOT probe-only — see KNOWN_BUGS #27-era docs pass 12/11)",
         path="kernel/drivers/video/drm/nouveau.c",
         must_have=[
-            "probe-only backend, native modeset still pending",
+            "kernel_drm_nouveau_set_mode,",
+            "NV_PCRTC_CONFIG_ENABLE",
+            "kernel_drm_nouveau_restore_display(candidate, &before);",
             "static int kernel_drm_nouveau_revert_last_modeset(void)",
             "static void kernel_drm_nouveau_forget_last_modeset(void)",
             "static void kernel_drm_nouveau_prepare_for_bios_modeset(void)",

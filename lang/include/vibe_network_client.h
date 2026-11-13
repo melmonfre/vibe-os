@@ -1,9 +1,6 @@
 #ifndef VIBE_LANG_VIBE_NETWORK_CLIENT_H
 #define VIBE_LANG_VIBE_NETWORK_CLIENT_H
 
-#ifndef VIBE_SHARED_NETWORK_EVENT_ABI_DEFINED
-#define VIBE_SHARED_NETWORK_EVENT_ABI_DEFINED
-
 #include <stdint.h>
 
 #define MK_NETWORK_IF_NAME_MAX 16
@@ -58,20 +55,6 @@ enum mk_network_interface_kind {
 enum mk_network_security_kind {
     MK_NETWORK_SECURITY_OPEN = 0,
     MK_NETWORK_SECURITY_WPA_PSK = 1
-};
-
-enum mk_network_event_type {
-    MK_NETWORK_EVENT_NONE = 0,
-    MK_NETWORK_EVENT_STATUS = 1,
-    MK_NETWORK_EVENT_SOCKET_RECV = 2,
-    MK_NETWORK_EVENT_SOCKET_ACCEPT = 3,
-    MK_NETWORK_EVENT_SOCKET_SEND = 4,
-    MK_NETWORK_EVENT_SOCKET_CLOSED = 5,
-    MK_NETWORK_EVENT_BACKEND_RX = 6,
-    MK_NETWORK_EVENT_BACKEND_TX = 7,
-    MK_NETWORK_EVENT_OVERFLOW = 8,
-    MK_NETWORK_EVENT_LEASE = 9,
-    MK_NETWORK_EVENT_DNS = 10
 };
 
 struct mk_network_info {
@@ -134,7 +117,6 @@ struct mk_network_socket_list_entry {
     uint32_t owner_pid;
 };
 
-
 struct mk_network_scan_info {
     uint32_t index;
     uint32_t signal_strength;
@@ -157,6 +139,33 @@ struct mk_network_ethernet_config {
     char dns_server[MK_NETWORK_ADDR_MAX];
 };
 
+/*
+ * Shared ABI block (closure 13/11): headers/include/userland_api.h defines
+ * the SAME mk_network_event_type enum and mk_network_event struct under
+ * VIBE_SHARED_NETWORK_EVENT_ABI_DEFINED. Some TUs (compat/src/posix/select.c)
+ * include BOTH headers; the guard may cover ONLY these two definitions —
+ * every app-facing type in this file lives outside it. A previous layout
+ * wrapped the whole file in the shared guard, so whichever header defined
+ * it first silently deleted the other's types and the clean build died in
+ * vibe_app_runtime.h on `struct mk_network_socket_list_entry *` (declared
+ * inside parameter list). ABI-neutral: same definitions, different order.
+ */
+#ifndef VIBE_SHARED_NETWORK_EVENT_ABI_DEFINED
+#define VIBE_SHARED_NETWORK_EVENT_ABI_DEFINED
+enum mk_network_event_type {
+    MK_NETWORK_EVENT_NONE = 0,
+    MK_NETWORK_EVENT_STATUS = 1,
+    MK_NETWORK_EVENT_SOCKET_RECV = 2,
+    MK_NETWORK_EVENT_SOCKET_ACCEPT = 3,
+    MK_NETWORK_EVENT_SOCKET_SEND = 4,
+    MK_NETWORK_EVENT_SOCKET_CLOSED = 5,
+    MK_NETWORK_EVENT_BACKEND_RX = 6,
+    MK_NETWORK_EVENT_BACKEND_TX = 7,
+    MK_NETWORK_EVENT_OVERFLOW = 8,
+    MK_NETWORK_EVENT_LEASE = 9,
+    MK_NETWORK_EVENT_DNS = 10
+};
+
 struct mk_network_event {
     uint32_t abi_version;
     uint32_t event_type;
@@ -168,7 +177,5 @@ struct mk_network_event {
     uint32_t dropped_events;
     uint32_t tick;
 };
-
-#endif
-
+#endif /* VIBE_SHARED_NETWORK_EVENT_ABI_DEFINED */
 #endif

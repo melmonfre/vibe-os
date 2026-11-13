@@ -1573,7 +1573,14 @@ void kernel_video_init(void) {
     }
 
     kernel_video_detect_cpu_features();
-    kernel_drm_log_candidates();
+    /* KNOWN_BUGS P6 (12/11): kernel_drm_log_candidates() used to run HERE,
+     * inside kernel_video_init() — which entry.c calls BEFORE pci_bus_init()
+     * — so the PCI device list was always empty and every boot serial lied
+     * `drm: no native candidate detected on PCI display class` even with a
+     * display device present (validate-gpu-backends scenarios all failing).
+     * The enumeration now runs right after PCI enumeration in entry.c;
+     * boot backend choice never consulted DRM detection (it only checks
+     * fast-path usability), so moving the call changes diagnostics only. */
     if (vesa_init(&boot_mode) == 0 && kernel_video_mode_usable(&boot_mode)) {
         g_video_perf.heap_free_before = kernel_heap_free();
         boot_backend = kernel_video_choose_boot_backend(&boot_mode);

@@ -17,6 +17,7 @@
 #include <kernel/mtrr.h>
 #include <kernel/drivers/debug/debug.h>
 #include <kernel/drivers/video/video.h>
+#include <kernel/drivers/video/drm/drm.h>
 #include <kernel/drivers/storage/ata.h>
 #include <kernel/drivers/timer/timer.h>
 #include <kernel/drivers/usb/usb_host.h>
@@ -713,6 +714,13 @@ __attribute__((noreturn, section(".entry"))) void kernel_entry(void) {
     kernel_text_puts("pci: init...\n");
     pci_bus_init();
     pci_log_devices();
+    /* P6 (12/11): DRM candidate enumeration needs the PCI list — it ran
+     * pre-PCI inside kernel_video_init() and could only report "no native
+     * candidate" (see kernel/drivers/video/video.c). Honest detection +
+     * `drm: candidate backend=... probe=...` serial now reflect hardware,
+     * feeding the gpu-backends gate, the handoff `native=` field and the
+     * Task Manager backend label. */
+    kernel_drm_log_candidates();
     kernel_debug_printf("[%u] pci: done\n", (unsigned int)boot_seq);
     kernel_text_puts("pci: OK\n");
 

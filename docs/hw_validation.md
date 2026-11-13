@@ -106,7 +106,7 @@ python3 tools/validate-boot-chain.py --image build/boot.img --report /tmp/boot-r
 
 ### Real Hardware Limitations
 
-- NVIDIA GPU: nouveau driver is probe-only; no scanout/modeset support yet
+- NVIDIA GPU: nouveau backend implements a REAL PCRTC (NV40-class) modeset in code — snapshot-before / register write / readback-after / rollback on mismatch, boot-framebuffer handoff via `bootinfo->vesa`, revert through the shared DRM lifecycle, modeset enabled by default (`g_nouveau_modeset_enabled = 1`, `kernel_drm_nouveau_enable_modeset()` on probe). QEMU cannot emulate an NVIDIA display device, so this path is CODED-UNTESTED on silicon: bring-up happens with the T400/NVIDIA physical campaign (P0/P6), using the serial witnesses `nouveau: modeset dev=...` / `nouveau: modeset ok` / `nouveau: revert ok`
 - Suspend/resume: not implemented
 - Hotplug (USB, PCIe): not implemented; all devices must be present at boot
 - Audio capture: not validated on real hardware
