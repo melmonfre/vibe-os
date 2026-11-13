@@ -2020,6 +2020,14 @@ void fs_init(void) {
     (void)fs_create("/docs", 1);
     (void)fs_create("/config", 1);
     (void)fs_create("/trash", 1);
+    /*
+     * KNOWN_BUGS P3-91 (13/11): /runtime e a convencao de estado de runtime
+     * (netmgrd /runtime/netmgrd-status.txt, taskmgr, applets de som/rede do
+     * desktop, wget) mas NUNCA foi criada aqui — todo write em /runtime (qualquer arquivo)
+     * falhava silenciosamente (medido: netmgrd 'failed to write', wget
+     * write-fail rc=-1 no boot resgate). Mesmo padrao de /config /tmp /dev.
+     */
+    (void)fs_create("/runtime", 1);
     (void)fs_write_file("/README", "SISTEMA DE ARQUIVOS VFS", 0);
     (void)fs_write_file("/teste.lua",
                         "print(\"hello from lua\")\n"

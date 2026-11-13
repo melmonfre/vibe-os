@@ -49,7 +49,7 @@ Nada de rebuild obrigatório do userland.
 ### [x] 1.6 Fazer CLI tools funcionarem de verdade
 
 - [x] `ping`, `ifconfig`, `route`, `netstat`, `host`, `dig` — todos funcionais
-- [x] `ftp`, `curl` — transferência real
+- [x] `ftp`, `curl`, `wget` — transferência real (wget 13/11: gate `tools/probe_wget.py` → `build/wget-probe-runtime.md` — HTTP na stack propria + persistencia comprovada por readback fs in-tree; KNOWN_BUGS #28 corrigido, #29 aberto)
 
 ### [x] 1.7 Drivers de rede BSD integrados
 

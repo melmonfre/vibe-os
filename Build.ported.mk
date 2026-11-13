@@ -693,6 +693,7 @@ $(eval $(call DEFINE_PORTED_APP,HOST,host,applications/ported/host/host.c,65536u
 $(eval $(call DEFINE_PORTED_APP,DIG,dig,applications/ported/dig/dig.c,65536u))
 $(eval $(call DEFINE_PORTED_APP,FTP,ftp,applications/ported/ftp/ftp.c,65536u))
 $(eval $(call DEFINE_PORTED_APP,CURL,curl,applications/ported/curl/curl.c,65536u))
+$(eval $(call DEFINE_PORTED_APP,WGET,wget,applications/ported/wget/wget_main.c,65536u))
 
 # General rules
 build:
