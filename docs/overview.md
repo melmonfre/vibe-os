@@ -43,13 +43,19 @@ The kernel now includes a comprehensive set of hardware drivers:
 - `paging.c`: 4KB page support with `paging_map_page()`/`paging_unmap_page()`, page table allocation
 - `memory_init.c`: improved bootinfo detection
 
-## GUI Rewrite
+## GUI Rewrite (corrected 13/11)
 
-The desktop GUI has been completely rewritten:
+Historical claim vs build reality: the GUI FEATURES (dynamic menu from the app
+registry, taskbar, sound/network applets, window management) run in production
+— but on `userland/applications/desktop.c` (11k lines), the engine validated by
+the gates. The microui-based rewrite was NEVER integrated:
 
-- **microui.h/c**: 840-line embedded immediate-mode UI library integrated
-- **mu_renderer.h/c**: VibeOS-specific renderer backend
-- **desktop_new.c**: Dynamic desktop (492 lines vs 7000+ legacy), menu from app registry, taskbar, sound/network applets
+- **microui.h/c**: 840-line embedded immediate-mode UI library — in tree, removed
+  from the desktop runtime build on 13/11 (P8) because no built file consumed it
+- **mu_renderer.h/c**: VibeOS renderer backend for microui — same status
+- **desktop_new.c**: the 497-line dynamic desktop — never entered any Makefile
+  source list; kept, together with the libs, as a documented future path
+  (see `docs/ACTION_PLAN.md` P12 retification and COMPLETION_ACTION_PLAN P8)
 
 ## Microkernel Improvements
 

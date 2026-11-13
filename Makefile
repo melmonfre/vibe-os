@@ -1060,6 +1060,15 @@ LUA_APP_OBJS := $(patsubst %.c,$(LUA_APP_BUILD_DIR)/%.o,$(LUA_APP_SRCS))
 LUA_APP_ELF := $(BUILD_DIR)/lang/lua.elf
 LUA_APP_BIN := $(BUILD_DIR)/lang/lua.app
 
+# P8 (13/11): microui.c + mu_renderer.c SAEM do runtime. The plan itself said
+# "hoje compila e nao serve a ninguem": the only consumer (desktop_new.c) was
+# never in any source list, and desktop.c - the real 11059-line engine - has
+# ZERO mu_* references. Removing from the build is the plan's explicit branch
+# ("a lib sai do runtime"); the sources stay in-tree as a documented future
+# path (precedent: js_main_real.c), labeled in docs/README.md + ACTION_PLAN
+# P12. Wiring desktop_new.c without a product decision would replace the
+# entire gate-validated UI with never-compiled code - forbidden by
+# regra-universal/zero-regression.
 DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/modules/shell.c \
 	$(USERLAND_DIR)/modules/busybox.c \
@@ -1075,8 +1084,6 @@ DESKTOP_RUNTIME_BASE_SRCS := \
 	$(USERLAND_DIR)/modules/dirty_rects.c \
 	$(USERLAND_DIR)/modules/ui_clip.c \
 	$(USERLAND_DIR)/modules/ui_cursor.c \
-	$(USERLAND_DIR)/modules/microui.c \
-	$(USERLAND_DIR)/modules/mu_renderer.c \
 	$(USERLAND_DIR)/applications/desktop_math_compat.c \
 	$(USERLAND_DIR)/applications/desktop.c \
 	$(USERLAND_DIR)/applications/terminal.c \

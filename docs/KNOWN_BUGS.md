@@ -488,7 +488,7 @@ exige evidencia executada; o estado corrente da fila de trabalho vive em
   modulo WPA2 (PBKDF2/PTK/4-way) tem cripto real mas esta orfao
 - Jogos: corrigidos — Doom com resolução de assets via aliases, todos os ports BSD com launch correto
 - Memória: heap com free-list allocator, physmem até 4GB, paging com suporte a 4KB pages
-- GUI: reescrita com microui — desktop dinâmico, modular, 492 linhas (vs 7000+ antes)
+- GUI: desktop dinâmico VALIDADO roda no motor `desktop.c` (11k linhas); a reescrita microui (`desktop_new.c`, 497 linhas) nunca foi integrada ao build e `microui.c`/`mu_renderer.c` sairam do runtime em 13/11 (P8) — permanecem na arvore como caminho futuro documentado
 - USB: discovery de controladores funciona; runtime mass-storage (BOT)/NVMe tem
   codigo mas sem relatorio de validacao
 - POSIX/Compat: camada BSD integrada (libc, pthreads, socket); X11/X-Like em andamento

@@ -393,9 +393,22 @@ Nada de rebuild obrigatório do userland.
 
 ---
 
-## [x] Prioridade 12: GUI Moderna com MicroUI — CONCLUÍDA
+## [x] Prioridade 12: GUI Moderna com MicroUI — CONCLUÍDA (com retificação 13/11)
 
 **Objetivo:** Substituir GUI monolítica de 7000+ linhas por interface dinâmica baseada em microui.
+
+> **RETIFICAÇÃO HONESTA (13/11, auditoria P8/P9).** As FUNCIONALIDADES desta
+> prioridade (menu dinâmico via app registry, taskbar, applets de som/rede,
+> temas, gerenciamento de janelas, ícones) estão vivas e validadas pelos gates
+> — mas no motor REAL, `userland/applications/desktop.c` (11059 linhas), NÃO
+> via microui. A "reescrita" baseada em microui (`desktop_new.c`, 497 linhas)
+> nunca entrou em nenhuma source list do Makefile; `microui.c`/`mu_renderer.c`
+> compilavam sem NENHUM consumidor no build (zero referências mu_* no motor).
+> 13/11: as duas libs foram REMOVIDAS do runtime (linha P8 do
+> COMPLETION_ACTION_PLAN) e permanecem na árvore, com `desktop_new.c`, como
+> caminho futuro documentado (precedente `js_main_real.c`). Integrar a reescrita
+> exige decisão de produto — trocar a UI validada por código nunca compilado
+> violaria zero-regression/regra-universal.
 
 ### [x] 12.1 Integração do microui
 

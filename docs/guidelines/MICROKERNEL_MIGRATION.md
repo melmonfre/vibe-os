@@ -976,7 +976,7 @@ Completed:
 - Storage/filesystem backend ownership tightened with dedicated user-space loops
 - Built-in `uname` stub and boot-app-only `startx`/editor fallback gaps resolved
 - Memory subsystem: free-list allocator, 4GB physmem, 4KB paging, improved bootinfo detection
-- GUI rewrite: microui integrated, dynamic desktop (492 lines vs 7000+), mu_renderer backend
+- GUI rewrite: microui-based `desktop_new.c` + `mu_renderer` were authored but NEVER integrated into any build; the shipped GUI remained `desktop.c` (retified 13/11 — microui/mu_renderer removed from the runtime, sources kept as documented future path; see ACTION_PLAN P12 / COMPLETION P8)
 
 ## First Implementation Slice
 

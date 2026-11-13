@@ -27,7 +27,7 @@ dead code) with the gap tracked in the open-work backlog:
 | Input: PS/2 keyboard, mouse | ✅ Desktop session validated in QEMU |
 | Video: LFB, VESA | ✅ QEMU validated |
 | Video: native DRM (BGA, i915, radeon, nouveau) | ⚠️ i915 commit gated by `INTEL_I915_EXPERIMENTAL_COMMIT`; real-silicon campaigns open (P6) |
-| Desktop GUI (microui, dynamic desktop, taskbar, applets) | ✅ QEMU validated |
+| Desktop GUI (dynamic desktop, taskbar, applets) | ✅ QEMU validated — engine: `desktop.c`; the microui-based rewrite (`desktop_new.c` + `microui.c`) is NOT in any build (P8 13/11: libs removed from runtime; sources kept as documented future path) |
 | Microkernel services (IPC, restart, events, async) | ✅ Phases A-G |
 | ABI compatibility (BSD/POSIX shapes, ELF32, sockets, termios) | ✅ `validate-abi-compat-surface` / `validate-abi-final` |
 | USB substrate (UHCI/OHCI/EHCI/XHCI discovery, device descriptors) | ⚠️ UHCI discovery+init runs in QEMU; controller-count query reports 0 (inconsistent) |
