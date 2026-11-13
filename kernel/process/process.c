@@ -356,6 +356,25 @@ process_t *process_create_with_stack(void (*entry)(void),
                                             launch_flags,
                                             effective_task_class);
     p->stack_size = normalized_stack_size;
+    {
+        /* KNOWN_BUGS #27: name the creator of every small-stack task. The
+         * neto GP panic runs on a kind=USER class=DESKTOP task holding a
+         * 4096-byte kernel stack (panic-task witness) whose base abuts the
+         * victim's saved frames; this trace pins which call site created
+         * it. Bounded; remove once #27 closes. */
+        static uint32_t create_trace_budget = 48u;
+        process_t *cr = scheduler_current();
+        if (create_trace_budget != 0u && normalized_stack_size <= 4096u) {
+            create_trace_budget--;
+            kernel_debug_printf("task-created: pid=%d stack=%u kind=%d class=%u by=%d entry=%x\n",
+                                p->pid,
+                                (unsigned int)normalized_stack_size,
+                                (int)kind,
+                                (unsigned int)effective_task_class,
+                                cr ? cr->pid : -1,
+                                (unsigned int)(uintptr_t)entry);
+        }
+    }
     p->runtime_ticks = 0u;
     p->last_start_tick = 0u;
     p->context_switches = 0u;

@@ -3951,6 +3951,35 @@ static uint32_t sys_thread_create(uint32_t entry_ptr, uint32_t arg_ptr, uint32_t
     }
     memcpy(thread, current, sizeof(process_t));
     thread->pending_stack_free = 0;  /* owned by the task that execv/created it */
+    /*
+     * Privilege guard, same class #4 rule already enforced by
+     * sys_task_create (and the reason this one existed as a hole):
+     * a ring3 caller must NEVER mint a ring0 task. KNOWN_BUGS #27
+     * measurement: the ksh terminal child (pid 16) called
+     * SYSCALL_THREAD_CREATE with entry=0x25ffdf14 — an address INSIDE
+     * its own user stack window — and sys_thread_create happily set the
+     * thread up executing user stack data at CPL0 (`process_setup_initial
+     * _context_arg`, user=0 kind=USER class=DESKTOP stack 4096), which is
+     * exactly the `GP err=ff50 eip=<window> cs=8` guest-halting panic that
+     * was being chased across four probe rounds. The entry-based check was
+     * NOT enough: 0x25ffdf14 sits INSIDE the desktop arena, so it looked
+     * like a legitimate ring3 entry while sys_thread_create unconditionally
+     * initialised the thread via process_setup_initial_context_arg (RING0)
+     * — every ring3 thread_create was a privilege mint, measured. Reject
+     * ring3 callers outright (the per-arena single user stack cannot host a
+     * second task anyway); real threads need per-task user stacks — named
+     * follow-up in #27. The corrupted-ksh caller (shared-address-space fork
+     * racing the parent's heap) is the PRIMARY root cause also recorded.
+     */
+    if (current->runs_in_user_mode != 0u) {
+        static uint32_t thread_priv_reject_budget = VIBE_TRACE_BUDGET(8u);
+        if (thread_priv_reject_budget != 0u) {
+            thread_priv_reject_budget--;
+            kernel_debug_printf("syscall: THREAD-CREATE-PRIV-REJECT entry=0x%x caller_pid=%d\n",
+                                (unsigned int)entry_ptr, current->pid);
+        }
+        return (uint32_t)-1;
+    }
     normalized_stack = stack_size;
     if (normalized_stack == 0u) {
         normalized_stack = 4096u;
@@ -3995,6 +4024,19 @@ static uint32_t sys_thread_create(uint32_t entry_ptr, uint32_t arg_ptr, uint32_t
     kernel_waitable_init(&thread->thread_join_waitable);
     stack_top = (uintptr_t)thread->stack + normalized_stack;
     process_setup_initial_context_arg(thread, (uintptr_t)entry_ptr, stack_top, (uintptr_t)arg_ptr);
+    {
+        /* KNOWN_BUGS #27: name every thread creator — the GP victim
+         * (kind=USER, user=0, class=DESKTOP, stack 4096) matches ONLY
+         * this path; nothing else mints 4096-byte user-class stacks. */
+        static uint32_t thread_trace_budget = 8u;
+        if (thread_trace_budget != 0u) {
+            thread_trace_budget--;
+            kernel_debug_printf("thread-created: pid=%d by=%d entry=%x stack=%u\n",
+                                thread->pid, current->pid,
+                                (unsigned int)entry_ptr,
+                                (unsigned int)normalized_stack);
+        }
+    }
     scheduler_add_task(thread);
     return (uint32_t)thread->pid;
 }

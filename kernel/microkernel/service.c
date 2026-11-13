@@ -302,12 +302,24 @@ void mk_service_init(void) {
                             TASK_WAIT_EVENT_WAITABLE,
                             TASK_WAIT_CLASS_SUPERVISION,
                             0u);
+    /*
+     * KNOWN_BUGS #27 (12/11): this worker ran mk_service_retry_scheduled ->
+     * mk_service_launch_deferred -> azalia probe + capture smoke + app
+     * launch -- a deep printf/logging chain -- on a ONE-PAGE kernel stack.
+     * Measured at the neto GP panic: `panic-task: pid=28 stack=... size=4096
+     * user=0` with its base adjacent to the ksh grandchild's saved frames,
+     * and `tick-guard: BOTTOM-TOUCHED pid=17 ... size=4096` spam on every
+     * audio-boot gate. The overflow rewrote the neighbour's saved context,
+     * whose iret then executed the neighbour's user window in ring0
+     * (`General Protection err=ff50 eip=<window> cs=8`) and halted the
+     * guest. 16 KiB matches the launch default; no ABI surface.
+     */
     retry_worker = process_create_with_stack(mk_service_retry_worker_entry,
                                              PROCESS_KIND_KERNEL_TASK,
                                              MK_SERVICE_NONE,
                                              0u,
                                              MK_TASK_CLASS_SUPERVISION,
-                                             4096u);
+                                             16384u);
     if (retry_worker != 0) {
         g_service_retry_worker = retry_worker;
         scheduler_add_task(retry_worker);

@@ -46,6 +46,46 @@ static void panic_stack_backtrace(void) {
     }
 }
 
+/*
+ * KNOWN_BUGS #27 parte 5: name the victim task's kernel-stack window vs its
+ * saved context. The ksh grandchild GP panic showed `save-ledger` frames for
+ * the victim ABOVE its esp0 -- if `panic-task:` shows ctx or esp0 outside
+ * [stack, stack+size), the context pointer left the task's allocated window
+ * (class #5 context/esp0 family), which reclassifies the neto death away
+ * from any LAUNCH/ksh userland cause.
+ */
+
+static void panic_task_dump(void) {
+    process_t *t = scheduler_current();
+
+    if (t == 0) {
+        kernel_debug_printf("panic-task: (no current)\n");
+        return;
+    }
+    {
+        uintptr_t esp0 = kernel_tss_get_kernel_stack(kernel_cpu_index());
+        uintptr_t lo = (uintptr_t)t->stack;
+        uintptr_t hi = lo + (uintptr_t)t->stack_size;
+        uintptr_t ctx = (uintptr_t)t->context;
+        int ctx_in = (ctx >= lo && ctx <= hi) ? 1 : 0;
+        int esp0_in = (esp0 >= lo && esp0 <= hi) ? 1 : 0;
+
+        kernel_debug_printf("panic-task: pid=%d stack=%x size=%u ctx=%x ctx_in=%d esp0=%x esp0_in=%d user=%d kind=%d class=%u svc=%u cpu=%d\n",
+                            t->pid,
+                            (unsigned int)lo,
+                            (unsigned int)t->stack_size,
+                            (unsigned int)ctx,
+                            ctx_in,
+                            (unsigned int)esp0,
+                            esp0_in,
+                            (int)t->runs_in_user_mode,
+                            (int)t->kind,
+                            (unsigned int)t->task_class,
+                            (unsigned int)t->service_type,
+                            t->current_cpu);
+    }
+}
+
 void kernel_panic(const char *msg) {
     /* Raw first (survives any lock state), then the formatted paths. */
     kernel_serial_puts_raw("kernel_panic: ");
@@ -55,6 +95,7 @@ void kernel_panic(const char *msg) {
      * corrupt); a silent panic in a QEMU headless run is undebuggable. */
     kernel_debug_printf("kernel_panic: %s\n", msg != 0 ? msg : "(null)");
     /* #27 caller-chain scan BEFORE the other dumps may relocate ESP. */
+    panic_task_dump();
     panic_stack_backtrace();
     /* Face-1: which esp0 installations armed this death? (class #5, P4) */
     kernel_tss_install_ring_dump("panic");

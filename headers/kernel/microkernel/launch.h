@@ -10,7 +10,21 @@ struct process;
 #define MK_LAUNCH_ARGC_MAX 8u
 #define MK_LAUNCH_ARGV_BYTES 192u
 #define MK_LAUNCH_SLOTS 32u
-#define MK_LAUNCH_STACK_SIZE_DEFAULT 4096u
+/*
+ * KNOWN_BUGS #27 (12/11): 4096 was a death sentence, not a size. A desktop
+ * background helper launched via sys_launch_app_argv with no explicit
+ * stack_size got exactly one page of KERNEL stack; the launch/service path
+ * (trap frame + printf buffers + ELF read) touched the bottom repeatedly
+ * (witnesses: `tick-guard: BOTTOM-TOUCHED pid=17 stack=... size=4096` spam,
+ * and the neto GP panic where the VICTIM task pid=27 had stack=399e4358
+ * size=4096, its base glued to the ksh grandchild's saved frames at
+ * 399e31fc -- the overflow rewrote the neighbour's context, whose iret then
+ * executed the neto's user window in ring0 (`GP err=ff50 eip=1cffdd66
+ * cs=8`). 16 KiB matches the explicit stacks already used for hosts
+ * (lang_loader 16384, service hosts 32768); internal allocation only, no
+ * ABI surface.
+ */
+#define MK_LAUNCH_STACK_SIZE_DEFAULT 16384u
 
 enum mk_launch_kind {
     MK_LAUNCH_KIND_NONE = 0,
