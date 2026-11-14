@@ -388,9 +388,13 @@ static int fs_deserialize_persistent_image(uint8_t *buffer, uint32_t capacity) {
 
     header = (struct fs_persist_header *)buffer;
     if (header->magic != FS_PERSIST_MAGIC || header->version != FS_PERSIST_VERSION) {
+        extern void kernel_debug_puts(const char *);
+        kernel_debug_puts("fs: deser fail magic/version\n");
         return -1;
     }
     if (header->used_bytes < fs_persist_inline_base() || header->used_bytes > capacity) {
+        extern void kernel_debug_puts(const char *);
+        kernel_debug_puts("fs: deser fail used_bytes\n");
         return -1;
     }
 
@@ -398,6 +402,8 @@ static int fs_deserialize_persistent_image(uint8_t *buffer, uint32_t capacity) {
     header->checksum = 0u;
     if (checksum != fs_checksum_bytes(buffer, (int)header->used_bytes)) {
         header->checksum = checksum;
+        extern void kernel_debug_puts(const char *);
+        kernel_debug_puts("fs: deser fail checksum\n");
         return -1;
     }
     header->checksum = checksum;
@@ -454,7 +460,12 @@ static int fs_deserialize_persistent_image(uint8_t *buffer, uint32_t capacity) {
 
     g_fs_root = header->root;
     g_fs_cwd = header->cwd;
-    return fs_validate_loaded_tree() ? 0 : -1;
+    if (!fs_validate_loaded_tree()) {
+        extern void kernel_debug_puts(const char *);
+        kernel_debug_puts("fs: deser fail tree structure\n");
+        return -1;
+    }
+    return 0;
 }
 
 static int fs_storage_read_sector_verified(uint32_t lba, uint8_t *dst) {

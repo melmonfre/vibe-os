@@ -2,6 +2,10 @@
 #define SYS_WAIT_H
 #include <sys/types.h>
 extern pid_t waitpid(pid_t, int *, int);
+/* POSIX: wait() is the options==0 specialization; select.c reaps children
+ * in a loop through EINTR and calls exactly this. libcompat implements it
+ * next to waitpid(). */
+extern pid_t wait(int *);
 #define WNOHANG 1
 #define WUNTRACED 2
 #define WIFEXITED(s) (((s) & 0x7f) == 0)

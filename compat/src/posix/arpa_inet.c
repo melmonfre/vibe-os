@@ -104,3 +104,37 @@ const char *inet_ntop(int af, const void *src, char *dst, socklen_t size) {
             (unsigned int)bytes[2], (unsigned int)bytes[3]);
     return dst;
 }
+
+/*
+ * Byte-order primitives: declared in the POSIX headers since the first
+ * import but never defined anywhere in the tree — the only users so far
+ * were the DNS client apps that open-coded the swaps. links2's connect.c
+ * hits them directly. Host is little-endian i386.
+ *
+ * headers/netinet/in.h (kernel-tree side) provides these as macros;
+ * userspace headers that declare plain functions need the real symbols,
+ * so drop the macro names before defining them.
+ */
+#undef htons
+#undef ntohs
+#undef htonl
+#undef ntohl
+
+unsigned short htons(unsigned short x) {
+    return (unsigned short)((x >> 8) | (x << 8));
+}
+
+unsigned short ntohs(unsigned short x) {
+    return htons(x);
+}
+
+unsigned int htonl(unsigned int x) {
+    return ((x & 0x000000FFu) << 24) |
+           ((x & 0x0000FF00u) << 8) |
+           ((x & 0x00FF0000u) >> 8) |
+           ((x & 0xFF000000u) >> 24);
+}
+
+unsigned int ntohl(unsigned int x) {
+    return htonl(x);
+}

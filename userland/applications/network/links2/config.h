@@ -1,4 +1,10 @@
 #define HAVE_STRING_H 1
+/* Upstream, configure injects VERSION and DEBUGLEVEL into config.h; the
+ * hand-maintained vendored copy omitted both, so setup.h's VERSION_STRING
+ * and menu.c's about-box (DEBUGLEVEL) failed to compile. Release default
+ * (config-vibeos.h: "2.29", DEBUG undefined). */
+#define VERSION "2.29"
+#define DEBUGLEVEL 0
 #define HAVE_STRINGS_H 1
 #define HAVE_STDLIB_H 1
 #define HAVE_STDLIB_H_X 1
@@ -14,6 +20,10 @@
 #define HAVE_SYS_SELECT_H 1
 #define HAVE_SYS_SOCKET_H 1
 #define HAVE_SYS_IOCTL_H 1
+/* links.h includes <sys/wait.h> only when this is defined; the compat tree
+ * ships the header (wait/waitpid + W macros) so links.c's select.c reaper
+ * got an implicit-decl instead of a declaration. */
+#define HAVE_SYS_WAIT_H 1
 #define HAVE_NETINET_IN_H 1
 #define HAVE_NETDB_H 1
 #define HAVE_ARPA_INET_H 1
@@ -86,6 +96,7 @@
 #define HAVE_STRERROR 1
 #define HAVE_STRTOUL 1
 #define HAVE_STRTOLL 1
+#define HAVE_STRTOD 1
 #define HAVE_ATOI 1
 #define HAVE_ATOL 1
 #define HAVE_ATOF 1
@@ -138,60 +149,64 @@
 #define HAVE_PWD_H 1
 #define HAVE_GRP_H 1
 #define HAVE_TERMIOS_H 1
-#define HAVE_SYS_MMAN_H 0
-#define HAVE_MMAP 0
-#define HAVE_SHMAT 0
-#define HAVE_OPENPTY 0
-#define HAVE_GRX 0
-#define HAVE_LIBGRX20 0
-#define HAVE_LIBGRX20DLL 0
-#define HAVE_LIBGPM 0
-#define HAVE_LIBSSL 0
-#define HAVE_LIBCRYPTO 0
-#define HAVE_OPENSSL_SSL_H 0
-#define HAVE_OPENSSL_EVP_H 0
-#define HAVE_OPENSSL_PEM_H 0
-#define HAVE_OPENSSL_ERR_H 0
-#define HAVE_OPENSSL_RAND_H 0
-#define HAVE_OPENSSL_SHA_H 0
-#define HAVE_OPENSSL_ECDH_H 0
-#define HAVE_OPENSSL_ECDSA_H 0
-#define HAVE_OPENSSL_OBJECTS_H 0
-#define HAVE_OPENSSL_X509_H 0
-#define HAVE_TIFF 0
-#define HAVE_LIBTIFF 0
-#define HAVE_LIBPNG 0
-#define HAVE_PNG_H 0
-#define HAVE_LIBZ 0
-#define HAVE_ZLIB_H 0
-#define HAVE_LIBJPEG 0
-#define HAVE_JPEG_H 0
-#define HAVE_LIBGIF 0
-#define HAVE_GIF_H 0
-#define HAVE_LIBWEBP 0
-#define HAVE_WEBP_H 0
-#define HAVE_LIBAVIF 0
-#define HAVE_AVIF_H 0
-#define HAVE_LIBSVGA 0
-#define HAVE_LIBVGA 0
-#define HAVE_LIBVGA_CONFIG 0
-#define HAVE_DIRECTFB 0
-#define HAVE_FONTCONFIG 0
-#define HAVE_FREETYPE 0
-#define HAVE_LIBFREETYPE 0
-#define HAVE_FT2BUILD_H 0
-#define HAVE_FRIBIDI 0
-#define HAVE_LIBFRIBIDI 0
-#define HAVE_IPV6 0
-#define HAVE_GETHOSTBYNAME2 0
-#define HAVE_SOCKS5 0
+#define HAVE_SYS_MMAN_H 1
+#define HAVE_MMAP 1
+#define HAVE_SHMAT 1
+#undef HAVE_OPENPTY
+#undef HAVE_GRX
+#undef HAVE_LIBGRX20
+#undef HAVE_LIBGRX20DLL
+#undef HAVE_LIBGPM
+#undef HAVE_LIBSSL
+#undef HAVE_LIBCRYPTO
+#undef HAVE_OPENSSL_SSL_H
+#undef HAVE_OPENSSL_EVP_H
+#undef HAVE_OPENSSL_PEM_H
+#undef HAVE_OPENSSL_ERR_H
+#undef HAVE_OPENSSL_RAND_H
+#undef HAVE_OPENSSL_SHA_H
+#undef HAVE_OPENSSL_ECDH_H
+#undef HAVE_OPENSSL_ECDSA_H
+#undef HAVE_OPENSSL_OBJECTS_H
+#undef HAVE_OPENSSL_X509_H
+#undef HAVE_TIFF
+#undef HAVE_LIBTIFF
+#undef HAVE_LIBPNG
+#undef HAVE_PNG_H
+#undef HAVE_LIBZ
+#undef HAVE_ZLIB_H
+#undef HAVE_LIBJPEG
+#undef HAVE_JPEG_H
+#undef HAVE_LIBGIF
+#undef HAVE_GIF_H
+#undef HAVE_LIBWEBP
+#undef HAVE_WEBP_H
+#undef HAVE_LIBAVIF
+#undef HAVE_AVIF_H
+#undef HAVE_LIBSVGA
+#undef HAVE_LIBVGA
+#undef HAVE_LIBVGA_CONFIG
+#undef HAVE_DIRECTFB
+#undef HAVE_FONTCONFIG
+#undef HAVE_FREETYPE
+#undef HAVE_LIBFREETYPE
+#undef HAVE_FT2BUILD_H
+#undef HAVE_FRIBIDI
+#undef HAVE_LIBFRIBIDI
+#undef HAVE_IPV6
+#undef HAVE_GETHOSTBYNAME2
+#undef HAVE_SOCKS5
 #define HAVE_AF_UNIX 1
 #define HAVE_SYS_UN_H 1
-#define HAVE_PTHREAD 0
-#define HAVE_PTHREADS 0
-#define HAVE_FORK_IS_THREAD 0
+#undef HAVE_PTHREAD
+#undef HAVE_PTHREADS
+#undef HAVE_FORK_IS_THREAD
 #define OS_UNIX 1
 #define HAVE_STRLCAT 1
 #define HAVE_STRLCPY 1
 #define NO_IE 1
-#define GRDRV_VIBEOS 1
+/* Terminal port (Build.links2.mk runs WITHOUT -DG): the vibeos graphics
+ * driver drags in GRDRV_VIRTUAL_DEVICES and the png-based glyph pipeline,
+ * and this tree vendors no libpng. Re-enable only together with a G-mode
+ * build + png backend. */
+#undef GRDRV_VIBEOS

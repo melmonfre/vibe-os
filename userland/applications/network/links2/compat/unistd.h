@@ -27,6 +27,9 @@ extern pid_t fork(void);
 extern int execve(const char *, char *const[], char *const[]);
 extern int execvp(const char *, char *const[]);
 extern int execvpe(const char *, char *const[], char *const[]);
+extern int execv(const char *, char *const[]);
+extern int execl(const char *, const char *, ...);
+extern char **environ;
 extern pid_t waitpid(pid_t, int *, int);
 extern int link(const char *, const char *);
 extern ssize_t readlink(const char *, char *, size_t);
@@ -44,9 +47,11 @@ extern int fdatasync(int);
 #define STDERR_FILENO 2
 extern int gethostname(char *, size_t);
 extern long sysconf(int);
-extern int alarm(unsigned int);
 extern unsigned int sleep(unsigned int);
 extern int pause(void);
+/* POSIX: alarm() returns the previous delta, not an error code. The old
+ * `int alarm(unsigned int)` twin declaration conflicted with this one
+ * (-Werror); links2 only ever calls alarm(n) for its timeout. */
 extern unsigned int alarm(unsigned int);
 extern char *ttyname(int);
 extern int close(int);

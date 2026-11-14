@@ -78,9 +78,9 @@ O projeto pode ser considerado fechado quando:
 
 - ~~Ethernet sobe, pega lease e resolve DNS~~ [x]
 - ~~Wi-Fi lista redes, pede senha e conecta~~ [x]
-- ~~terminal usa internet de verdade com `ifconfig`, `ping`, `route`, `netstat`, `host`/`dig`, `ftp` e `curl`~~ [x]
+- ~~terminal usa internet de verdade com `ifconfig`, `ping`, `route`, `netstat`, `host`/`dig`, `ftp`, `curl` e `wget`~~ [x] (wget 13/11: gate `tools/probe_wget.py` -> `build/wget-probe-runtime.md`)
 - ~~navegador do desktop usa a rede real~~ [x]
-- ~~`links2 -g` funciona como browser utilizavel~~ [x]
+- `links2` na rede real — ESTADO RETIFICADO 13/11 (claim `links2 -g ... [x]` era FALSO: o port vendored NUNCA compilou neste repo; mesma familia do microui — KNOWN_BUGS #30). O que EXISTE e esta provado hoje: port TERMINAL compila/linka, entrou no catalogo/AppFS e faz a TRANSACAO HTTP pela stack propria (`tools/probe_links2.py` -> `build/links2-probe.md`: http.server `GET / 200` + `command exit links2 rc=0` + testemunhas de lancamento reais); a ENTREGA do corpo ao `-source` falha por KNOWN_BUGS #34 (o compat le fila-vazia do kernel como EOF POSIX) — o gate fica vermelho de proposito ate la, sem verde falso. O modo `-g`/graphics segue INVIABEL sem backend libpng nesta arvore (decisao registrada em Build.links2.mk / KNOWN_BUGS #30) — nao re-markado como [x] por honestidade.
 - ~~audio toca e captura no backend correto em QEMU e hardware real~~ [x]
 - ~~fallback USB audio e realmente util~~ [x]
 - ~~video funciona em QEMU e em pelo menos um backend real validado~~ [x]

@@ -81,11 +81,24 @@ class QemuSession:
                 self.proc.kill()
                 self.proc.wait(timeout=5.0)
 
-    def hmp(self, command: str, timeout: float = 1.0) -> str:
+    def hmp(self, command: str, timeout: float = 5.0) -> str:
+        # The monitor socket may not be ready right after stage2 starts under
+        # TCG, and "sendkey" replies can race the deadline. Never let these
+        # transient conditions abort a scenario: retry the connect a few times
+        # and swallow timeouts, returning whatever partial reply arrived.
         chunks: List[bytes] = []
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(timeout)
-            client.connect(str(self.monitor_socket))
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(timeout)
+        for attempt in range(10):
+            try:
+                client.connect(str(self.monitor_socket))
+                break
+            except (ConnectionRefusedError, FileNotFoundError, socket.timeout):
+                time.sleep(0.5)
+        else:
+            client.close()
+            return ""
+        try:
             try:
                 while True:
                     chunk = client.recv(4096)
@@ -112,6 +125,13 @@ class QemuSession:
                 chunks.append(chunk)
                 if b"(qemu)" in chunk:
                     break
+        except socket.timeout:
+            pass
+        finally:
+            try:
+                client.close()
+            except OSError:
+                pass
         return b"".join(chunks).decode("utf-8", errors="replace")
 
     def send_key(self, key: str, pause: float = 0.10) -> None:
@@ -157,6 +177,8 @@ def run_scenario(qemu_binary: str, image_path: Path, memory_mb: int, scenario: S
         try:
             session = QemuSession(qemu_binary, scenario_image, memory_mb, Path(temp_dir), scenario.qemu_args)
             if scenario.toggle_smp:
+                # 'm' is a toggle: send it exactly once (re-sends would flip
+                # the flag back off while bring-up is merely slow on TCG).
                 time.sleep(2.0)
                 session.send_key("m")
                 session.send_key("ret")

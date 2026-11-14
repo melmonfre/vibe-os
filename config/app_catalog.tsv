@@ -107,3 +107,4 @@ dig	DIG_APP_BIN	1	0	/usr/bin/dig,/bin/dig,/compat/bin/dig
 ftp	FTP_APP_BIN	1	0	/usr/bin/ftp,/bin/ftp,/compat/bin/ftp
 curl	CURL_APP_BIN	1	0	/usr/bin/curl,/bin/curl,/compat/bin/curl
 wget	WGET_APP_BIN	1	0	/usr/bin/wget,/bin/wget,/compat/bin/wget
+links2	LINKS2_APP_BIN	1	0	/usr/bin/links2,/bin/links2

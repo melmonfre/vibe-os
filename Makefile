@@ -1257,6 +1257,7 @@ DIG_APP_BIN := $(BUILD_DIR)/ported/dig.app
 FTP_APP_BIN := $(BUILD_DIR)/ported/ftp.app
 CURL_APP_BIN := $(BUILD_DIR)/ported/curl.app
 WGET_APP_BIN := $(BUILD_DIR)/ported/wget.app
+LINKS2_APP_BIN := $(BUILD_DIR)/links2/links2.app
 PORTED_APPS_STAMP := $(BUILD_DIR)/.ported_apps.stamp
 ADVENTURE_APP_BIN := $(BUILD_DIR)/ported/adventure.app
 ARITHMETIC_APP_BIN := $(BUILD_DIR)/ported/arithmetic.app
@@ -1305,7 +1306,14 @@ $(shell mkdir -p $(APP_CATALOG_GENERATED_DIR))
 $(shell $(PYTHON) tools/generate_app_catalog.py --manifest $(APP_CATALOG_MANIFEST) --mk $(APP_CATALOG_GENERATED_MK) --header $(APP_CATALOG_GENERATED_H))
 -include $(APP_CATALOG_GENERATED_MK)
 
-LANG_APP_BINS := $(APP_CATALOG_APP_BINS)
+# Deferred (=, not :=): APP_CATALOG_APP_BINS is a list of variable
+# REFERENCES, and several *_APP_BIN definitions live further down this
+# file (LINKS2_APP_BIN lived only at ~:2552 — with := it expanded to the
+# empty word and links2 silently vanished from the AppFS directory while
+# the generated header still advertised it: "runtime externo nao
+# instalado" at launch). Recursive expansion resolves every referenced
+# variable at use time, making source order irrelevant.
+LANG_APP_BINS = $(APP_CATALOG_APP_BINS)
 IMAGE_APP_BINS ?= $(LANG_APP_BINS)
 BOOT_SMOKE_APP_BINS := \
 	$(USERLAND_BOOT_APP_BIN) \
@@ -2548,13 +2556,23 @@ test-host: test-fdopen test-dns
 
 .PHONY: test-host
 
-# Links2 Web Browser port
-LINKS2_APP_BIN := build/links2/links2.app
+# Links2 Web Browser port (LINKS2_APP_BIN is defined next to the other
+# *_APP_BIN variables earlier in this file)
 LINKS2_STAMP := build/links2.stamp
 
+# LINKS2_SRCS drives stamp invalidation: the vendored browser tree edits
+# (main.c witness, compat headers, config.h) MUST re-run the sub-make.
+# Without this the stamp only watched Build.links2.mk itself, so source
+# changes silently kept a stale links2.app in the image.
+LINKS2_SRCS := $(wildcard userland/applications/network/links2/*.c) \
+	$(wildcard userland/applications/network/links2/*.h) \
+	$(wildcard userland/applications/network/links2/compat/*.h) \
+	$(wildcard userland/applications/network/links2/compat/sys/*.h) \
+	$(wildcard userland/applications/network/links2/compat/netinet/*.h) \
+	$(wildcard userland/applications/network/links2/compat/arpa/*.h)
+
 $(LINKS2_STAMP): $(COMPAT_LIB) Build.links2.mk lang/sdk/app_entry.c lang/sdk/app_runtime.c lang/include/vibe_app.h tools/patch_app_header.py \
-	userland/applications/network/links2/config-vibeos.h \
-	userland/applications/network/links2/vibeos.c userland/applications/network/links2/vibeos.h
+	$(LINKS2_SRCS)
 	@mkdir -p $(dir $@)
 	$(MAKE) -j1 -f Build.links2.mk \
 		CC="$(CC)" LD="$(LD)" OBJCOPY="$(OBJCOPY)" NM="$(NM)" AR="$(AR)" RANLIB="$(RANLIB)" \

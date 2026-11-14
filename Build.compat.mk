@@ -59,6 +59,7 @@ COMPAT_SRCS := \
 	compat/src/posix/time.c \
 	compat/src/posix/signal.c \
 	compat/src/posix/socket.c \
+	compat/src/posix/netdb.c \
 	compat/src/posix/select.c \
 	compat/src/posix/sched.c \
 	compat/src/posix/pthread.c \

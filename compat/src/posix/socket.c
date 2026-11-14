@@ -762,3 +762,20 @@ int sockatmark(int sockfd) {
     errno = EINVAL;
     return -1;
 }
+
+/*
+ * getsockname(): the kernel socket ABI (65-72) never reports the local
+ * address it assigned (connect/bind return only success). ftp passive
+ * mode and links2's local-port introspection would therefore get a fake
+ * zero sockaddr; ENOSYS + diagnostic is the honest answer until the
+ * socket-list mapping (netstat's SYSCALL_NETWORK_SOCKET_LIST) grows a
+ * per-fd query. KNOWN gap, documented in the links2 port note.
+ */
+int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
+    (void)sockfd; (void)addr; (void)addrlen;
+    (void)compat_syscall5(11, (int)(uintptr_t)
+        "compat: getsockname unsupported (kernel keeps local addr) [ENOSYS]\n",
+        0, 0, 0, 0);
+    errno = ENOSYS;
+    return -1;
+}

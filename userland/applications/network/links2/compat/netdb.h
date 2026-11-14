@@ -9,6 +9,8 @@ struct hostent {
 	int h_length;
 	char **h_addr_list;
 };
+/* BSD/POSIX alias used by dns.c's address walk. */
+#define h_addr h_addr_list[0]
 struct addrinfo {
 	int ai_flags;
 	int ai_family;

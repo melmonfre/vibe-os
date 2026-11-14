@@ -140,3 +140,89 @@ void srand(unsigned int seed) { next_rand = seed; }
 void srand_deterministic(unsigned int seed) { srand(seed); }
 
 /* abs, labs, llabs, div, ldiv, lldiv are in desktop_math_compat.c */
+
+/*
+ * strtod(): this libc had none, so any program that asked for it silently
+ * fell back to vendor-side replacements that themselves needed sscanf
+ * (also absent) — links2's font/HTTP numeric parsing was the first victim.
+ * Covers sign, integer, fraction and decimal exponent with saturation at
+ * the decade limit; a non-numeric prefix returns 0 with endptr==s, per
+ * the C standard.
+ */
+double strtod(const char *s, char **endptr) {
+    const char *p = s;
+    double sign = 1.0;
+    double value = 0.0;
+    double divisor = 1.0;
+    int seen = 0;
+
+    while (*p == ' ' || (*p >= '\t' && *p <= '\r')) {
+        ++p;
+    }
+    if (*p == '-') {
+        sign = -1.0;
+        ++p;
+    } else if (*p == '+') {
+        ++p;
+    }
+    while (*p >= '0' && *p <= '9') {
+        value = value * 10.0 + (double)(*p - '0');
+        seen = 1;
+        ++p;
+    }
+    if (*p == '.') {
+        ++p;
+        while (*p >= '0' && *p <= '9') {
+            divisor *= 10.0;
+            value += (double)(*p - '0') / divisor;
+            seen = 1;
+            ++p;
+        }
+    }
+    if (!seen) {
+        if (endptr) {
+            *endptr = (char *)s;
+        }
+        return 0.0;
+    }
+    if ((*p == 'e' || *p == 'E')) {
+        const char *pe = p + 1;
+        int eneg = 0, e = 0, eseen = 0;
+        if (*pe == '-') {
+            eneg = 1;
+            ++pe;
+        } else if (*pe == '+') {
+            ++pe;
+        }
+        while (*pe >= '0' && *pe <= '9') {
+            if (e < 308) {
+                e = e * 10 + (*pe - '0');
+                if (e > 308) {
+                    e = 308;
+                }
+            }
+            eseen = 1;
+            ++pe;
+        }
+        if (eseen) {
+            int i;
+            p = pe;
+            for (i = 0; i < e; ++i) {
+                if (eneg) {
+                    value /= 10.0;
+                } else {
+                    value *= 10.0;
+                }
+            }
+        }
+    }
+    if (endptr) {
+        *endptr = (char *)p;
+    }
+    return sign * value;
+}
+
+/* atof(): declared by stdlib.h, implemented on top of the strtod above. */
+double atof(const char *s) {
+    return strtod(s, (char **)0);
+}

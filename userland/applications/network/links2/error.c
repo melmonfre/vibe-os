@@ -371,6 +371,23 @@ void error(const char *m, ...)
 {
 	va_list l;
 
+	/* Serial mirror: the error dialog lands on the VGA console which the
+	 * monitor cannot read (see KNOWN_BUGS #33); without this the HTTP
+	 * session failure reason is invisible in gates. Same raw syscall as
+	 * main.c's dump witness. */
+	{
+		va_list ldbg;
+		char msg[160];
+		int n;
+		va_start(ldbg, m);
+		n = vsnprintf(msg, sizeof(msg), m, ldbg);
+		va_end(ldbg);
+		if (n > 0)
+			__asm__ volatile("int $0x80" ::
+				"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0)
+				: "memory", "cc");
+	}
+
 	va_start(l, m);
 	os_report_error_va("Error", m, l);
 	va_end(l);

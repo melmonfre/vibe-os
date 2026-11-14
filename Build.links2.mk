@@ -59,7 +59,12 @@ CPU_ARCH_CFLAGS := -march=i586 -mtune=generic -mno-mmx -mno-sse -mno-sse2
 CFLAGS := -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie \
 	-fno-stack-protector -fno-builtin -nostdlib -nostdinc -Wall -Wextra \
 	-Wno-pointer-sign -Wno-unused-parameter -Wno-unused-variable
-CFLAGS += -DHAVE_CONFIG_H -DG -DNO_IE
+# Terminal-mode port for P3 (HTTP engine proof): NO -DG. The graphics
+# engine needs libpng (glyph rendering goes through png in dip.c; the tree
+# vendors no png backend), and the P3 gate target is `links -source URL`
+# plus the text browser, neither of which touches G. The -DG flavor was
+# never buildable here (it had not compiled since the vendoring).
+CFLAGS += -DHAVE_CONFIG_H -DNO_IE
 CFLAGS += -Iuserland/applications/network/links2/compat
 CFLAGS += -Iuserland/applications/network/links2
 CFLAGS += -Iheaders -Ilang/include
@@ -130,6 +135,7 @@ LINKS2_CORE_SRCS := \
 	$(LINKS2_DIR)/charsets.c \
 	$(LINKS2_DIR)/language.c \
 	$(LINKS2_DIR)/objreq.c \
+	$(LINKS2_DIR)/jsint.c \
 	$(LINKS2_DIR)/fn_impl.c \
 	$(LINKS2_DIR)/af_unix.c \
 	$(LINKS2_DIR)/vibeos.c
@@ -147,16 +153,19 @@ build:
 build/links2:
 	@mkdir -p $@
 
+# app_entry.c/app_runtime.c reference SDK headers by repo-root-relative
+# paths (<lang/include/vibe_app_runtime.h>); the -nostdinc chain above has
+# no -I., which is why these two steps failed first at include resolution.
 build/app_entry_links2.o: $(APP_ENTRY) | build
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) \
+	$(CC) $(CFLAGS) -I. \
 		-DVIBE_APP_BUILD_NAME=\"links2\" \
 		-DVIBE_APP_BUILD_HEAP_SIZE=$(LINKS2_HEAP_SIZE)u \
 		-c $< -o $@
 
 build/app_runtime_links2.o: $(APP_RUNTIME) | build
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -I. -c $< -o $@
 
 build/links2/%.o: $(LINKS2_DIR)/%.c $(COMPAT_LIB) | build/links2
 	@mkdir -p $(dir $@)

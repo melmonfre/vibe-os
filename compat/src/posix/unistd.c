@@ -893,3 +893,29 @@ int setrlimit(int resource, const struct rlimit *rlim) {
 }
 
 
+
+/*
+ * fsync()/rename(): the userland fs module owns writeback (tick-driven)
+ * and node removal, and neither is reachable from the kernel-side fd path
+ * these apps use (host table has no remove/fsync, SYSCALL list has no
+ * rename/unlink). Both return ENOSYS with an explicit serial diagnostic
+ * instead of pretending: links2's cache/history writers then report the
+ * failure honestly and continue (graceful degradation, KNOWN limit).
+ */
+static void compat_gap_debug(const char *msg) {
+    (void)syscall6(SYSCALL_WRITE_DEBUG, (long)(uintptr_t)msg, 0, 0, 0, 0, 0);
+}
+
+int fsync(int fd) {
+    (void)fd;
+    compat_gap_debug("compat: fsync unsupported (no kernel flush path) [ENOSYS]\n");
+    errno = ENOSYS;
+    return -1;
+}
+
+int rename(const char *oldpath, const char *newpath) {
+    (void)oldpath; (void)newpath;
+    compat_gap_debug("compat: rename unsupported (no kernel unlink) [ENOSYS]\n");
+    errno = ENOSYS;
+    return -1;
+}

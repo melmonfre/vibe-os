@@ -1,6 +1,7 @@
 #include <compat/posix/errno.h>
 #include <compat/posix/unistd.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <sys/wait.h>
 #include <include/userland_api.h>
 
@@ -346,4 +347,108 @@ int getrusage(int who, struct rusage *usage) {
         usage->ru_nivcsw = 0;
     }
     return 0;
+}
+
+/*
+ * execl()/execv(): the POSIX variadic and path-only wrappers were declared
+ * in compat/include/compat/posix/unistd.h but never implemented anywhere in
+ * the tree (link-time gap that killed the links2 port). They collect into
+ * the same argv shape execve already consumes; execve dispatches by the
+ * AppFS registry name (argv[0] basename), so execlp/execvpe inherit that
+ * resolution with no separate lookup path.
+ */
+int execv(const char *path, char *const argv[]) {
+    return execve(path, argv, environ);
+}
+
+int execl(const char *path, const char *arg, ...) {
+    char *argv[32];
+    const char *a;
+    va_list ap;
+    int argc = 0;
+
+    if (path == 0 || arg == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    argv[argc++] = (char *)arg;
+    va_start(ap, arg);
+    while (argc < 31 && (a = va_arg(ap, const char *)) != 0) {
+        argv[argc++] = (char *)a;
+    }
+    va_end(ap);
+    if (a != 0) {
+        /* more args than the registry path transports */
+        errno = E2BIG;
+        return -1;
+    }
+    argv[argc] = 0;
+    return execve(path, argv, environ);
+}
+
+/* POSIX wait(): the options-0 form of waitpid(). links2's select.c reaper
+ * calls it; the symbol was declared but absent, exactly like execl(). */
+pid_t wait(int *status) {
+    return waitpid((pid_t)-1, status, 0);
+}
+
+/*
+ * execvp(): same registry dispatch as execve (argv[0] basename resolves
+ * the AppFS name), with the ambient environ.
+ */
+int execvp(const char *file, char *const argv[]) {
+    return execve(file, argv, environ);
+}
+
+/*
+ * system(): fork + execv of the whitespace-tokenized command + waitpid.
+ * This OS has no /bin/sh to spawn for quoted-command semantics, so the
+ * documented simplification is whitespace tokenization only (no quote,
+ * redirect or glob processing); non-zero exit is reported via the
+ * wait-status like POSIX. links2's call sites (external viewers, stty
+ * resets on error paths) stay reachable instead of failing the link.
+ */
+int system(const char *command) {
+    char *argv[32];
+    const char *p;
+    int argc = 0;
+    int status = 0;
+    pid_t pid;
+
+    if (command == 0) {
+        return 0; /* shell-existence probe: no sh here; 0 == false */
+    }
+    p = command;
+    while (*p != '\0' && argc < 31) {
+        while (*p == ' ' || (*p >= '\t' && *p <= '\r')) {
+            ++p;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        argv[argc++] = (char *)p;
+        while (*p != '\0' && *p != ' ' && !(*p >= '\t' && *p <= '\r')) {
+            ++p;
+        }
+        if (*p == '\0') {
+            break;
+        }
+    }
+    if (argc == 0) {
+        return 0; /* empty command: success per POSIX */
+    }
+    argv[argc] = 0;
+
+    pid = fork();
+    if (pid < 0) {
+        return -1;
+    }
+    if (pid == 0) {
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    if (waitpid(pid, &status, 0) < 0) {
+        return -1;
+    }
+    return status;
 }

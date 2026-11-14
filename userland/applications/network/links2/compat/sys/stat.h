@@ -40,6 +40,7 @@ struct stat {
 #define S_ISVTX 01000
 extern int stat(const char *, struct stat *);
 extern int fstat(int, struct stat *);
+extern int lstat(const char *, struct stat *);
 extern int mkdir(const char *, mode_t);
 extern int chmod(const char *, mode_t);
 #endif

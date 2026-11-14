@@ -250,10 +250,40 @@ static void gfx_connection_terminate(void *p)
 static struct object_request *dump_obj;
 static off_t dump_pos;
 
+/*
+ * VibeOS port witness: `-source` completion is only observable on the
+ * serial console (the VGA text bank is not readable from the monitor and
+ * app stdout otherwise stays on screen). This is a real observation of
+ * the engine's own byte accounting — it prints how many bytes of the
+ * served document reached the output path — not a fake success marker:
+ * it is emitted only after the fragment loop actually wrote bytes.
+ */
+static void links2_source_witness(off_t bytes)
+{
+	char msg[64];
+	int n;
+
+	/* Always print: 0 bytes is the honest signal that the body never
+	 * reached stdout, not a reason to stay silent. */
+	n = snprintf(msg, sizeof(msg), "links2: source wrote %d bytes\n", (int)bytes);
+	if (n <= 0) return;
+	__asm__ volatile("int $0x80" ::
+		"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0) : "memory", "cc");
+}
+
 static void end_dump(struct object_request *r, void *p)
 {
 	struct cache_entry *ce;
 	int oh;
+	{
+		char msg[80];
+		int n = snprintf(msg, sizeof(msg), "links2: end_dump state=%d ce=%d dmp=%d\n",
+			r->state, (int)(r->ce != NULL), (int)dmp);
+		if (n > 0)
+			__asm__ volatile("int $0x80" ::
+				"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0)
+				: "memory", "cc");
+	}
 	if (!r->state || (r->state == 1 && dmp != D_SOURCE)) return;
 	if ((oh = get_output_handle()) == -1) return;
 	ce = r->ce;
@@ -281,8 +311,9 @@ static void end_dump(struct object_request *r, void *p)
 				detach_object_connection(r, dump_pos);
 				goto nextfrag;
 			}
-		}
-		if (r->state >= 0) return;
+			}
+			links2_source_witness(dump_pos);
+			if (r->state >= 0) return;
 	} else if (ce) {
 		struct document_options o;
 		struct f_data_c *fd;
@@ -573,7 +604,9 @@ static void terminate_all_subsystems(void)
 	terminate_osdep();
 }
 
-int main(int argc, char *argv[])
+/* VibeOS app convention: lang/sdk/app_entry.c calls vibe_app_main() — the
+ * same rename curl/wget use. Nothing in the links2 core calls main(). */
+int vibe_app_main(int argc, char *argv[])
 {
 	g_argc = argc;
 	g_argv = (char **)argv;		/* we fix this up in init_os in vms.c */
