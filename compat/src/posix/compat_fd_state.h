@@ -7,6 +7,21 @@
 
 #define COMPAT_MAX_FDS 32
 
+/*
+ * Mirror of the kernel's socket-list export (SYSCALL_NETWORK_SOCKET_LIST
+ * 232, headers/kernel/microkernel/network.h) — the layout the ABI
+ * publishes; userland sees it as an opaque k-th entry.
+ */
+struct compat_socket_list_entry {
+    unsigned int proto;
+    unsigned int state;
+    unsigned int recv_ready;
+    unsigned int local_port;
+    unsigned int remote_ipv4;
+    unsigned int remote_port;
+    unsigned int owner_pid;
+};
+
 #define COMPAT_SOCKET_READY_RECV    0x01
 #define COMPAT_SOCKET_READY_SEND    0x02
 #define COMPAT_SOCKET_READY_ACCEPT  0x04

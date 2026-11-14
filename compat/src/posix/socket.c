@@ -270,7 +270,59 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     }
     entry->socket_state_flags |= COMPAT_SOCKET_STATE_BOUND;
     entry->socket_error = 0;
+    /* Same #34-root-4 policy: a bound socket is sendable in this stack
+     * (UDP clients bind-then-send without connect). */
+    entry->socket_ready_flags |= COMPAT_SOCKET_READY_SEND;
     return 0;
+}
+
+/*
+ * Blocking connect completion (KNOWN_BUGS #34 root 5): the kernel accepts
+ * a TCP connect while still in SYN_SENT and starts the handshake, so a
+ * caller that treats rc==0 as ESTABLISHED (every BSD-style user, links2
+ * included) sends immediately into a non-established socket and gets the
+ * send rejected. Poll the authoritative socket-list export (same query
+ * as the select readiness) until ESTABLISHED/loopback-connected, the
+ * entry disappears (peer refused/reset), or a 20s ceiling (ETIMEDOUT).
+ * UDP/ICMP/UNIX connects resolve synchronously (state 5) and return at
+ * once.
+ */
+static int compat_socket_await_established(const struct compat_fd_entry *entry) {
+    unsigned int mypid = (unsigned int)getpid();
+    int saw_connecting = 0;
+    int i;
+
+    for (i = 0; i < 400; ++i) { /* 400 * 50ms = 20s */
+        unsigned int index;
+
+        for (index = 0u; index < 128u; ++index) {
+            struct compat_socket_list_entry sle;
+
+            if (compat_syscall5(SYSCALL_NETWORK_SOCKET_LIST, (int)index,
+                                (int)(uintptr_t)&sle, 0, 0, 0) != 0) {
+                break;
+            }
+            if (sle.owner_pid != mypid) {
+                continue;
+            }
+            if (sle.remote_ipv4 != entry->socket_peer_ipv4 ||
+                sle.remote_port != entry->socket_peer_port) {
+                continue;
+            }
+            if (sle.state == 3u || sle.state == 5u) {
+                return 0; /* ESTABLISHED / loopback-connected */
+            }
+            if (sle.state == 2u) {
+                saw_connecting = 1; /* CONNECTING: keep waiting */
+            }
+            break;
+        }
+        if (saw_connecting && index >= 128u) {
+            return -1; /* entry vanished: peer refused/reset */
+        }
+        vibe_app_sleep_ms(50u);
+    }
+    return -1; /* ETIMEDOUT territory */
 }
 
 int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
@@ -303,9 +355,20 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         errno = ECONNREFUSED;
         return -1;
     }
+    if (compat_socket_await_established(entry) != 0) {
+        entry->socket_error = ECONNREFUSED;
+        errno = ECONNREFUSED;
+        return -1;
+    }
     entry->socket_state_flags |= COMPAT_SOCKET_STATE_CONNECTED;
     entry->socket_state_flags &= ~COMPAT_SOCKET_STATE_LISTENING;
     entry->socket_error = 0;
+    /* A connected TCP socket is sendable in this stack (accept() marked
+     * its sockets this way; the client path was missing it — a connected
+     * links2 socket never became POLLOUT and its request was never
+     * written: KNOWN_BUGS #34 root 4). TX-full is still reported by the
+     * next send() instead. */
+    entry->socket_ready_flags |= COMPAT_SOCKET_READY_SEND;
     if (addrlen >= 8u) {
         const unsigned char *raw = (const unsigned char *)addr;
         /* BSD repo layout: sa_len@0, sa_family@1, sin_port@2..3,

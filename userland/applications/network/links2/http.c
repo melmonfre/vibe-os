@@ -965,6 +965,7 @@ static void read_http_data(struct connection *c, struct read_buffer *rb)
 {
 	struct http_connection_info *info = c->info;
 	int a;
+	links2_http_trace("rhd len", rb->len);
 	set_connection_timeout(c);
 	if (rb->close == 2) {
 		http_end_request(c, 0, 0, S__OK);
@@ -1095,6 +1096,7 @@ static int get_header(struct read_buffer *rb)
 static void http_got_header(struct connection *c, struct read_buffer *rb)
 {
 	off_t cf;
+	links2_http_trace("hdr len", rb->len);
 	int state = c->state != S_PROC ? S_GETH : S_PROC;
 	unsigned char *head;
 	int a, h = 0, version = 0;	/* against warning */

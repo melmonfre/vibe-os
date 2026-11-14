@@ -118,16 +118,6 @@ static unsigned int compat_timeval_to_ms(const struct timeval *timeout) {
  * list entry's recv_ready bit is computed live from the RX queue, so it
  * closes the race without any ABI change.
  */
-struct compat_socket_list_entry {
-    unsigned int proto;
-    unsigned int state;
-    unsigned int recv_ready;
-    unsigned int local_port;
-    unsigned int remote_ipv4;
-    unsigned int remote_port;
-    unsigned int owner_pid;
-};
-
 static int compat_socket_kernel_recv_ready(const struct compat_fd_entry *entry) {
     struct compat_socket_list_entry sle;
     unsigned int index;

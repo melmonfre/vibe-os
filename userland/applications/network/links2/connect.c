@@ -747,6 +747,7 @@ static void connected(void *c_)
 {
 	struct connection *c = (struct connection *)c_;
 	struct conn_info *b = c->newconn;
+	links2_conn_trace(1);
 #ifdef SO_ERROR
 	int err = 0;
 	socklen_t len = sizeof(int);
