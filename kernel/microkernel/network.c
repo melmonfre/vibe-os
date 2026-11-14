@@ -2234,6 +2234,12 @@ static int mk_network_wait_for_arp(uint32_t target_ipv4, uint8_t *mac_out, uint3
             return 0;
         }
     }
+    /* Permanent witness (KNOWN_BUGS #34): names the connect failures that
+     * stall past ARP resolve (gateway reply lost / not ingested). */
+    kernel_debug_printf("network: arp wait timeout %u.%u.%u.%u ticks=%u\n",
+                        (target_ipv4 >> 24) & 0xffu, (target_ipv4 >> 16) & 0xffu,
+                        (target_ipv4 >> 8) & 0xffu, target_ipv4 & 0xffu,
+                        timeout_ticks);
     return -1;
 }
 
@@ -4848,6 +4854,13 @@ int mk_network_service_socket_connect(int handle, const struct sockaddr *address
         }
         socket_state->tcp_snd_nxt += 1u;
         mk_network_tcp_rtt_start(socket_state);
+        /* Permanent witness (KNOWN_BUGS #34): one line per client connect,
+         * so a missing `tcp connected` names the SYN/handshake leg. */
+        kernel_debug_printf("network: tcp syn out handle=%d dst=%u.%u.%u.%u:%u\n",
+                            (int)handle,
+                            (remote_ipv4 >> 24) & 0xffu, (remote_ipv4 >> 16) & 0xffu,
+                            (remote_ipv4 >> 8) & 0xffu, remote_ipv4 & 0xffu,
+                            (unsigned int)remote_port);
         return 0;
     }
 
