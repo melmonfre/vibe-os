@@ -234,6 +234,8 @@ static int compat_select_scan(int nfds,
     return ready;
 }
 
+static int compat_sel_dbg_left = 40;
+
 static int compat_select_wait_loop(int nfds,
                                    fd_set *readfds,
                                    const fd_set *in_read,
@@ -260,6 +262,13 @@ static int compat_select_wait_loop(int nfds,
                                    in_write,
                                    exceptfds,
                                    in_except);
+        if (ready != 0 && compat_sel_dbg_left > 0) {
+            /* #34 witness, capped: which fd select() reports ready */
+            char tr[96];
+            int n = snprintf(tr, sizeof(tr), "compat: sel rdy=%d nfds=%d\n", ready, nfds);
+            if (n > 0) (void)compat_syscall5(11, (int)(unsigned long)tr, 0, 0, 0, 0);
+            compat_sel_dbg_left--;
+        }
         if (ready != 0) {
             return ready;
         }

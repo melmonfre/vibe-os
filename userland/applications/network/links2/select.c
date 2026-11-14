@@ -1080,6 +1080,15 @@ void select_loop(void (*init)(void))
 		i = -1;
 		while (n > 0 && ++i < ww_max) {
 			int k = 0;
+			if (n > 0 && FD_ISSET(i, &x_write) && threads[i].write_func) {
+				/* #34 witness, capped by the compat side */
+				char msg[64];
+				int m = snprintf(msg, sizeof(msg), "links2 dsel: w fd=%d\n", i);
+				if (m > 0)
+					__asm__ volatile("int $0x80" ::
+						"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0)
+						: "memory", "cc");
+			}
 			if (FD_ISSET(i, &x_read)) {
 				if (threads[i].read_func) {
 #ifdef DEBUG_CALLS
