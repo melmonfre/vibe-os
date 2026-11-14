@@ -337,11 +337,22 @@ static void set_ce_internal(struct object_request *rq)
 	}
 }
 
+static void links2_objreq_trace(int state)
+{
+	char msg[64];
+	int n = snprintf(msg, sizeof(msg), "links2 objreq: end stat=%d\n", state);
+	if (n > 0)
+		__asm__ volatile("int $0x80" ::
+			"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0)
+			: "memory", "cc");
+}
+
 static void objreq_end(struct status *stat, void *data)
 {
 	struct object_request *rq = (struct object_request *)data;
 
 	set_ce_internal(rq);
+	links2_objreq_trace(stat->state);
 
 	if (stat->state < 0) {
 #ifdef HAVE_SSL_CERTIFICATES

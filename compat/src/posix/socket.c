@@ -179,6 +179,63 @@ int socket(int domain, int type, int protocol) {
     return fd;
 }
 
+
+/*
+ * Sockaddr layout bridge (KNOWN_BUGS #34, root fix).
+ *
+ * Callers compiled against Linux-style headers (sa_family as an
+ * unsigned short at offset 0 — the vendored links2 tree) meet network
+ * syscalls that expect the BSD-published sockaddr ABI (sa_len@0,
+ * sa_family@1 — the contract fixed in KNOWN_BUGS #20). A Linux-style
+ * AF_INET sockaddr therefore reaches the kernel with family byte 0 and
+ * every connect/bind/sendto is rejected (-1 -> ECONNREFUSED here).
+ * Translate at this wrapper so vendored ports and SDK apps share one
+ * network ABI; nothing else in the tree calls these with BSD input.
+ */
+#define COMPAT_SOCKADDR_CAP 28u
+
+static int compat_sockaddr_to_kernel(const struct sockaddr *in, socklen_t len,
+                                     unsigned char *out) {
+    const unsigned char *raw = (const unsigned char *)in;
+    unsigned int family;
+
+    if (raw == 0 || len < 2u || len > COMPAT_SOCKADDR_CAP) {
+        return -1;
+    }
+    family = (unsigned int)raw[0] | ((unsigned int)raw[1] << 8);
+    if (family > 255u) {
+        return -1; /* not a family this OS speaks */
+    }
+    out[0] = (unsigned char)len;
+    out[1] = (unsigned char)family;
+    {
+        unsigned int i;
+        for (i = 2u; i < (unsigned int)len; ++i) {
+            out[i] = raw[i];
+        }
+    }
+    return 0;
+}
+
+static void compat_sockaddr_from_kernel(const unsigned char *in, socklen_t len,
+                                        struct sockaddr *out) {
+    unsigned char *raw = (unsigned char *)out;
+    unsigned int family;
+
+    if (in == 0 || out == 0 || len < 2u) {
+        return;
+    }
+    family = in[1];
+    raw[0] = (unsigned char)(family & 0xffu);
+    raw[1] = 0u;
+    {
+        unsigned int i;
+        for (i = 2u; i < (unsigned int)len; ++i) {
+            raw[i] = in[i];
+        }
+    }
+}
+
 int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     struct compat_fd_entry *entry;
     int rc;
@@ -191,12 +248,21 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         return -1;
     }
 
-    rc = compat_syscall5(SYSCALL_NETWORK_BIND,
-                         entry->host_fd,
-                         (int)(uintptr_t)addr,
-                         (int)addrlen,
-                         0,
-                         0);
+    {
+        unsigned char ksa[COMPAT_SOCKADDR_CAP];
+        const void *kaddr = addr;
+        if (compat_sockaddr_to_kernel(addr, addrlen, ksa) != 0) {
+            errno = EINVAL;
+            return -1;
+        }
+        kaddr = ksa;
+        rc = compat_syscall5(SYSCALL_NETWORK_BIND,
+                             entry->host_fd,
+                             (int)(uintptr_t)kaddr,
+                             (int)addrlen,
+                             0,
+                             0);
+    }
     if (rc != 0) {
         entry->socket_error = EINVAL;
         errno = EINVAL;
@@ -219,12 +285,19 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         return -1;
     }
 
-    rc = compat_syscall5(SYSCALL_NETWORK_CONNECT,
-                         entry->host_fd,
-                         (int)(uintptr_t)addr,
-                         (int)addrlen,
-                         0,
-                         0);
+    {
+        unsigned char ksa[COMPAT_SOCKADDR_CAP];
+        if (compat_sockaddr_to_kernel(addr, addrlen, ksa) != 0) {
+            errno = EINVAL;
+            return -1;
+        }
+        rc = compat_syscall5(SYSCALL_NETWORK_CONNECT,
+                             entry->host_fd,
+                             (int)(uintptr_t)ksa,
+                             (int)addrlen,
+                             0,
+                             0);
+    }
     if (rc != 0) {
         entry->socket_error = ECONNREFUSED;
         errno = ECONNREFUSED;
@@ -233,6 +306,17 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
     entry->socket_state_flags |= COMPAT_SOCKET_STATE_CONNECTED;
     entry->socket_state_flags &= ~COMPAT_SOCKET_STATE_LISTENING;
     entry->socket_error = 0;
+    if (addrlen >= 8u) {
+        const unsigned char *raw = (const unsigned char *)addr;
+        /* BSD repo layout: sa_len@0, sa_family@1, sin_port@2..3,
+         * sin_addr@4..7; both fields kept in network byte order, which
+         * is exactly what the socket-list export reports. */
+        entry->socket_peer_port = (unsigned int)raw[2] << 8 | (unsigned int)raw[3];
+        entry->socket_peer_ipv4 = (unsigned int)raw[4] << 24 |
+                                  (unsigned int)raw[5] << 16 |
+                                  (unsigned int)raw[6] << 8 |
+                                  (unsigned int)raw[7];
+    }
     return 0;
 }
 
@@ -456,6 +540,12 @@ ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
             errno = EINTR;
             return -1;
         }
+    }
+    /* kernel wrote the BSD-published layout; hand callers the style their
+     * headers compiled against (KNOWN_BUGS #34 bridge). */
+    if (src_addr != (struct sockaddr *)0 && addrlen != (socklen_t *)0 &&
+        *addrlen >= 2u) {
+        compat_sockaddr_from_kernel((const unsigned char *)src_addr, *addrlen, src_addr);
     }
     compat_fd_socket_update_ready_by_host(entry->host_fd, 0, COMPAT_SOCKET_READY_RECV);
     entry->socket_error = 0;

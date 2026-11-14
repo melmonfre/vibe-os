@@ -108,6 +108,56 @@ static unsigned int compat_timeval_to_ms(const struct timeval *timeout) {
     return (unsigned int)ms;
 }
 
+/*
+ * Authoritative per-socket RX readiness via SYSCALL_NETWORK_SOCKET_LIST
+ * (232). The local socket_ready_flags bitmap is only an event-cache: a
+ * SOCKET_RECV event published before this process subscribed (or dropped
+ * by the 8-slot subscriber ring) is invisible forever, and a BSD/POSIX
+ * select() that misses data already sitting in the kernel RX queue hangs
+ * the caller (measured as KNOWN_BUGS #34 with the links2 engine). The
+ * list entry's recv_ready bit is computed live from the RX queue, so it
+ * closes the race without any ABI change.
+ */
+struct compat_socket_list_entry {
+    unsigned int proto;
+    unsigned int state;
+    unsigned int recv_ready;
+    unsigned int local_port;
+    unsigned int remote_ipv4;
+    unsigned int remote_port;
+    unsigned int owner_pid;
+};
+
+static int compat_socket_kernel_recv_ready(const struct compat_fd_entry *entry) {
+    struct compat_socket_list_entry sle;
+    unsigned int index;
+    unsigned int mypid;
+
+    mypid = (unsigned int)getpid();
+    /* The list export is positional (k-th live socket, no handle field),
+     * so scan until the entry matches this process and the recorded
+     * connect() peer. The kernel's recv_ready bit is the queue's own
+     * readiness state, which the event cache can never miss. */
+    if (entry->host_fd <= 0 || entry->socket_peer_port == 0u) {
+        return 0;
+    }
+    for (index = 0u; index < 128u; ++index) {
+        if (compat_syscall5(SYSCALL_NETWORK_SOCKET_LIST, (int)index,
+                            (int)(uintptr_t)&sle, 0, 0, 0) != 0) {
+            break;
+        }
+        if (sle.owner_pid != mypid) {
+            continue;
+        }
+        if (sle.remote_ipv4 == entry->socket_peer_ipv4 &&
+            sle.remote_port == entry->socket_peer_port &&
+            sle.recv_ready != 0u) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int compat_fd_ready_for_read(int fd) {
     const struct compat_fd_entry *entry;
 
@@ -122,6 +172,11 @@ static int compat_fd_ready_for_read(int fd) {
         int ready = compat_fd_socket_readiness(fd);
 
         if ((ready & (COMPAT_SOCKET_READY_RECV | COMPAT_SOCKET_READY_ACCEPT)) != 0) {
+            return 1;
+        }
+        if (compat_socket_kernel_recv_ready(entry)) {
+            compat_fd_socket_update_ready_by_host(entry->host_fd,
+                                                  COMPAT_SOCKET_READY_RECV, 0);
             return 1;
         }
         return 0;

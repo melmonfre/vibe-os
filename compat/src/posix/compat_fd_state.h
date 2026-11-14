@@ -37,6 +37,11 @@ struct compat_fd_entry {
     int socket_ready_flags;
     int socket_options;
     int socket_error;
+    /* connect() peer in host byte order, kept so select() can match the
+     * kernel socket-list export (which carries no handle) back to this fd
+     * when consulting authoritative recv_ready (KNOWN_BUGS #34). */
+    unsigned int socket_peer_ipv4;
+    unsigned int socket_peer_port;
     int socket_sndbuf;
     int socket_rcvbuf;
     struct termios termios_state;

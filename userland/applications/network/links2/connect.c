@@ -190,8 +190,19 @@ struct conn_info {
 	unsigned char host[1];
 };
 
+static void links2_conn_trace(int v)
+{
+	char msg[64];
+	int n = snprintf(msg, sizeof(msg), "links2 conn: mk %d\n", v);
+	if (n > 0)
+		__asm__ volatile("int $0x80" ::
+			"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0)
+			: "memory", "cc");
+}
+
 void make_connection(struct connection *c, int port, int *sock, void (*func)(struct connection *))
 {
+	links2_conn_trace(port);
 	int socks_port = -1;
 	unsigned char *host;
 	size_t sl;
@@ -1022,10 +1033,13 @@ void write_to_socket(struct connection *c, int s, unsigned char *data, int len, 
 #define READ_SIZE	64240
 #define TOTAL_READ	(4193008 - READ_SIZE)
 
+static void links2_dispatch_trace(int v);
+
 static void read_select(void *c_)
 {
 	struct connection *c = (struct connection *)c_;
 	int total_read = 0;
+	links2_dispatch_trace(c->state);
 	struct read_buffer *rb;
 	int rd;
 	if (!(rb = c->buffer)) {
@@ -1126,4 +1140,14 @@ void kill_buffer_data(struct read_buffer *rb, int n)
 	}
 	memmove(rb->data, rb->data + n, rb->len - n);
 	rb->len -= n;
+}
+
+/* VibeOS port witness for KNOWN_BUGS #34 dispatch leg (syscall-11 serial). */
+static void links2_dispatch_trace(int v)
+{
+	char msg[64];
+	int n = snprintf(msg, sizeof(msg), "links2 conn: read_select state=%d\n", v);
+	if (n <= 0) return;
+	__asm__ volatile("int $0x80" ::
+		"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0) : "memory", "cc");
 }

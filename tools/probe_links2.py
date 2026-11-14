@@ -119,6 +119,21 @@ def main() -> int:
                          if "end_dump state=" in ln]
             lines.append("- info serial: end_dump diag: "
                          + (diag_line[-1] if diag_line else "(callback never ran)"))
+            http_trace = [ln for ln in log.splitlines()
+                          if ("links2 http:" in ln or "links2 conn:" in ln
+                              or "compat: slk" in ln or "compat: conn" in ln
+                              or "links2 objreq:" in ln or "links2 sched:" in ln
+                              or ln.startswith("net: ")
+                              or "links2: source wrote" in ln
+                              or "end_dump state=" in ln)]
+            lines.append("- info serial: port traces ("
+                         + str(len(http_trace)) + "): "
+                         + " | ".join(http_trace[:24]))
+            lines.append("")
+            lines.append("## port traces (full)")
+            lines.append("```text")
+            lines.extend(http_trace)
+            lines.append("```")
             lines.append(f"- {'PASS' if witness_line else 'FAIL'} serial: "
                          f"engine body witness: "
                          + (witness_line[0] if witness_line else "(none)"))
@@ -164,7 +179,10 @@ def main() -> int:
             lines.extend(
                 ln for ln in log.splitlines()
                 if any(m in ln for m in ("links2", "tcp", "shell: command",
-                                         "shell: ready", "busybox", "http"))
+                                         "shell: ready", "busybox", "http",
+                                         "compat: conn", "compat: slk",
+                                         "links2 sched:", "links2 objreq:",
+                                         "end_dump state=", "source wrote"))
             )
             lines.append("```")
             lines.append("")

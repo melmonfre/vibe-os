@@ -771,8 +771,19 @@ int disallow_url(unsigned char *url, int allow_flags)
 
 /* prev_url is a pointer to previous url or NULL */
 /* prev_url will NOT be deallocated */
+static void links2_load_trace(int v)
+{
+	char msg[64];
+	int n = snprintf(msg, sizeof(msg), "links2 sched: load %d\n", v);
+	if (n > 0)
+		__asm__ volatile("int $0x80" ::
+			"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0)
+			: "memory", "cc");
+}
+
 void load_url(unsigned char *url, unsigned char *prev_url, struct status *stat, int pri, int no_cache, int no_compress, int doh, int allow_flags, off_t position)
 {
+	links2_load_trace(pri);
 	struct cache_entry *e = NULL;
 	struct connection *c;
 	struct list_head *lc;
@@ -802,6 +813,7 @@ void load_url(unsigned char *url, unsigned char *prev_url, struct status *stat, 
 	}
 #endif
 	if (!doh && is_url_blocked(url)) {
+		links2_load_trace(9016);
 		if (stat) {
 			stat->state = S_BLOCKED_URL;
 			if (stat->end) stat->end(stat, stat->data);
@@ -810,6 +822,7 @@ void load_url(unsigned char *url, unsigned char *prev_url, struct status *stat, 
 	}
 	err = disallow_url(url, allow_flags);
 	if (err) {
+		links2_load_trace(9017 + err);
 		if (stat) {
 			stat->state = err;
 			if (stat->end) stat->end(stat, stat->data);
@@ -848,6 +861,7 @@ void load_url(unsigned char *url, unsigned char *prev_url, struct status *stat, 
 	}
 	skip_cache:
 	if (is_proxy_url(url)) {
+		links2_load_trace(9009);
 		if (stat) {
 			stat->state = S_BAD_URL;
 			if (stat->end) stat->end(stat, stat->data);
@@ -954,6 +968,7 @@ void load_url(unsigned char *url, unsigned char *prev_url, struct status *stat, 
 		stat->ce = NULL;
 		add_to_list(c->statuss, stat);
 	}
+	links2_load_trace(9000);
 	add_to_queue(c);
 	setcstate(c, S_WAIT);
 	check_queue_bugs();

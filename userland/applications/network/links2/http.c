@@ -305,9 +305,12 @@ static int check_http_server_bugs(unsigned char *url, struct http_connection_inf
 	return 0;
 }
 
+static void links2_http_trace(const char *tag, int v);
+
 static void http_end_request(struct connection *c, int notrunc, int nokeepalive, int state)
 {
 	struct http_connection_info *info = c->info;
+	links2_http_trace("end_request", state == S__OK ? 9999 : (state < 0 ? -1 : state));
 	if (state == S__OK) {
 		if (c->cache) {
 			if (!notrunc) truncate_entry(c->cache, c->from, 1);
@@ -323,6 +326,20 @@ static void http_end_request(struct connection *c, int notrunc, int nokeepalive,
 	} else {
 		abort_connection(c);
 	}
+}
+
+/* VibeOS port tracing for KNOWN_BUGS #34 (gate witness; same syscall-11
+ * serial channel used by main.c's end_dump witness). Temporary until the
+ * http->cache wiring is proven fixed. */
+static void links2_http_trace(const char *tag, int v)
+{
+	char msg[96];
+	int n;
+
+	n = snprintf(msg, sizeof(msg), "links2 http: %s %d\n", tag, v);
+	if (n <= 0) return;
+	__asm__ volatile("int $0x80" ::
+		"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0) : "memory", "cc");
 }
 
 void http_func(struct connection *c)
@@ -1045,6 +1062,7 @@ static void read_http_data(struct connection *c, struct read_buffer *rb)
 	}
 	read_more:
 	read_from_socket(c, c->sock1, rb, read_http_data);
+	links2_http_trace("S_TRANS", 0);
 	setcstate(c, S_TRANS);
 }
 
@@ -1211,6 +1229,7 @@ static void http_got_header(struct connection *c, struct read_buffer *rb)
 	if (!c->cache) {
 		if (get_connection_cache_entry(c)) {
 			mem_free(head);
+			links2_http_trace("cache FAIL", h);
 			setcstate(c, S_OUT_OF_MEM);
 			abort_connection(c);
 			return;
@@ -1218,6 +1237,7 @@ static void http_got_header(struct connection *c, struct read_buffer *rb)
 		c->cache->refcount--;
 	}
 	e = c->cache;
+	links2_http_trace("head code", h);
 	previous_http_code = e->http_code;
 	e->http_code = h;
 	if (e->head) mem_free(e->head);

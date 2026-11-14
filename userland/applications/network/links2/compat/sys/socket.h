@@ -38,12 +38,29 @@ extern int getsockname(int, struct sockaddr *, socklen_t *);
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
 #define SOCK_RAW 3
-#define SOL_SOCKET 1
-#define SO_REUSEADDR 2
-#define SO_KEEPALIVE 8
-#define SO_LINGER 13
-#define SO_SNDTIMEO 21
-#define SO_RCVTIMEO 20
-#define SO_BROADCAST 6
-#define SO_ERROR 4
+/*
+ * Option numbers MUST equal the system-published values in
+ * headers/sys/socket.h: libcompat's getsockopt/setsockopt switches were
+ * compiled against those headers, and a vendored tree using BSD-style
+ * numbers (SOL_SOCKET 1, SO_ERROR 4) fell through to ENOPROTOOPT - the
+ * measured -42 that killed links2's connected() (KNOWN_BUGS #34).
+ */
+#define SOL_SOCKET 0xffff
+#define SO_DEBUG 0x0001
+#define SO_ACCEPTCONN 0x0002
+#define SO_REUSEADDR 0x0004
+#define SO_KEEPALIVE 0x0008
+#define SO_DONTROUTE 0x0010
+#define SO_BROADCAST 0x0020
+#define SO_LINGER 0x0080
+#define SO_OOBINLINE 0x0100
+#define SO_REUSEPORT 0x0200
+#define SO_SNDBUF 0x1001
+#define SO_RCVBUF 0x1002
+#define SO_SNDTIMEO 0x1005
+#define SO_RCVTIMEO 0x1006
+#define SO_ERROR 0x1007
+#define SO_TYPE 0x1008
+#define SO_DOMAIN 0x1024
+#define SO_PROTOCOL 0x1025
 #endif
