@@ -254,6 +254,21 @@ static int compat_select_wait_loop(int nfds,
     for (;;) {
         int ready;
 
+        if (compat_sel_dbg_left > 0) {
+            /* #34 probe: what select() received (capped). */
+            char tr[128];
+            int n, off = 0, fd;
+            n = snprintf(tr, sizeof(tr), "compat: sel call n=%d r=", nfds);
+            off = n;
+            for (fd = 0; fd < nfds && off < (int)sizeof(tr) - 4; ++fd) {
+                if (in_read != 0 && FD_ISSET(fd, in_read)) tr[off++] = 'R';
+                if (in_write != 0 && FD_ISSET(fd, in_write)) tr[off++] = 'W';
+            }
+            tr[off] = 0;
+            (void)compat_syscall5(11, (int)(unsigned long)tr, 0, 0, 0, 0);
+            compat_sel_dbg_left--;
+        }
+
         compat_network_drain_events();
         ready = compat_select_scan(nfds,
                                    readfds,

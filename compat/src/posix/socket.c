@@ -287,6 +287,8 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
  * UDP/ICMP/UNIX connects resolve synchronously (state 5) and return at
  * once.
  */
+static int compat_socket_await_dbg_left = 12;
+
 static int compat_socket_await_established(const struct compat_fd_entry *entry) {
     unsigned int mypid = (unsigned int)getpid();
     int saw_connecting = 0;
@@ -301,6 +303,14 @@ static int compat_socket_await_established(const struct compat_fd_entry *entry) 
             if (compat_syscall5(SYSCALL_NETWORK_SOCKET_LIST, (int)index,
                                 (int)(uintptr_t)&sle, 0, 0, 0) != 0) {
                 break;
+            }
+            if (compat_socket_await_dbg_left > 0) {
+                /* #34 probe: name what the scan actually sees (capped). */
+                char tr[96];
+                int n = snprintf(tr, sizeof(tr), "compat: await e=%u pid=%u me=%u st=%u\n",
+                                 index, sle.owner_pid, mypid, sle.state);
+                if (n > 0) (void)compat_syscall5(11, (int)(unsigned long)tr, 0, 0, 0, 0);
+                compat_socket_await_dbg_left--;
             }
             if (sle.owner_pid != mypid) {
                 continue;
@@ -355,6 +365,21 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         errno = ECONNREFUSED;
         return -1;
     }
+    if (addrlen >= 8u) {
+        const unsigned char *raw = (const unsigned char *)addr;
+        /* BSD repo layout: sa_len@0, sa_family@1, sin_port@2..3,
+         * sin_addr@4..7; both fields kept in network byte order, which
+         * is exactly what the socket-list export reports. MUST be set
+         * BEFORE await_established: the await matches the kernel socket
+         * by this recorded peer, and with it still zeroed no entry ever
+         * matches (measured: 12x `await e=3 st=3` scans that never match,
+         * then a 20s timeout — KNOWN_BUGS #34 final root). */
+        entry->socket_peer_port = (unsigned int)raw[2] << 8 | (unsigned int)raw[3];
+        entry->socket_peer_ipv4 = (unsigned int)raw[4] << 24 |
+                                  (unsigned int)raw[5] << 16 |
+                                  (unsigned int)raw[6] << 8 |
+                                  (unsigned int)raw[7];
+    }
     if (compat_socket_await_established(entry) != 0) {
         entry->socket_error = ECONNREFUSED;
         errno = ECONNREFUSED;
@@ -369,17 +394,6 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
      * written: KNOWN_BUGS #34 root 4). TX-full is still reported by the
      * next send() instead. */
     entry->socket_ready_flags |= COMPAT_SOCKET_READY_SEND;
-    if (addrlen >= 8u) {
-        const unsigned char *raw = (const unsigned char *)addr;
-        /* BSD repo layout: sa_len@0, sa_family@1, sin_port@2..3,
-         * sin_addr@4..7; both fields kept in network byte order, which
-         * is exactly what the socket-list export reports. */
-        entry->socket_peer_port = (unsigned int)raw[2] << 8 | (unsigned int)raw[3];
-        entry->socket_peer_ipv4 = (unsigned int)raw[4] << 24 |
-                                  (unsigned int)raw[5] << 16 |
-                                  (unsigned int)raw[6] << 8 |
-                                  (unsigned int)raw[7];
-    }
     return 0;
 }
 
