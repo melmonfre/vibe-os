@@ -126,13 +126,25 @@ static int compat_tty_translate_input(const struct termios *termios_state, int c
     return c;
 }
 
-static int compat_tty_poll_char(void) {
+/*
+ * KNOWN_BUGS #34 root 7 (relocates the part-7 fix): the busy-wait here was
+ * the actual blocker — raw/canonical read could never observe a "no char"
+ * result, so the O_NONBLOCK EAGAIN contract was unreachable code. Blocking
+ * mode keeps the historical poll+yield wait; nonblocking mode returns the
+ * -1 sentinel immediately when no char is pending (callers map it to
+ * EAGAIN). The INPUT service request timeout (~27s/round) no longer
+ * starves the links2 select() dispatch round.
+ */
+static int compat_tty_poll_char(int nonblock) {
     int c;
 
     for (;;) {
         c = vibe_app_poll_key();
         if (c > 0) {
             return c;
+        }
+        if (nonblock) {
+            return -1;
         }
         vibe_app_yield();
     }
@@ -172,7 +184,7 @@ static ssize_t compat_tty_read_canonical(const struct termios *termios_state, vo
     g_compat_tty_canon_len = 0u;
 
     for (;;) {
-        int c = compat_tty_poll_char();
+        int c = compat_tty_poll_char(nonblock);
 
         c = compat_tty_translate_input(termios_state, c);
         if (c < 0) {
@@ -246,7 +258,7 @@ static ssize_t compat_tty_read_raw(const struct termios *termios_state, void *bu
     }
 
     while (got < need) {
-        int c = compat_tty_poll_char();
+        int c = compat_tty_poll_char(nonblock);
 
         c = compat_tty_translate_input(termios_state, c);
         if (c < 0) {

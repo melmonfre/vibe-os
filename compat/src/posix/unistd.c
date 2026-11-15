@@ -145,6 +145,21 @@ ssize_t read(int fd, void *buf, size_t count) {
         errno = EBADF;
         return -1;
     }
+    if (entry->kind == COMPAT_FD_KIND_PIPE) {
+        /* #34 root 8: pipes are kernel-ramfs fds behind a compat entry;
+         * ramfs_read returns 0 when empty (nonblocking), >0 with data. */
+        rc = compat_syscall5(SYSCALL_READ,
+                             entry->host_fd,
+                             (int)(uintptr_t)buf,
+                             (int)count,
+                             0,
+                             0);
+        if (rc < 0) {
+            errno = EAGAIN;
+            return -1;
+        }
+        return (ssize_t)rc;
+    }
     if (entry->kind == COMPAT_FD_KIND_SOCKET) {
         rc = compat_syscall5(SYSCALL_NETWORK_RECV,
                              entry->host_fd,
@@ -188,6 +203,22 @@ ssize_t write(int fd, const void *buf, size_t count) {
         errno = EBADF;
         return -1;
     }
+    if (entry->kind == COMPAT_FD_KIND_PIPE) {
+        /* #34 root 8: pipe writes go to the kernel ramfs fd. The ramfs
+         * pipe buffer is fixed; a full pipe returns -1 -> ENOSPC/EPIPE. */
+        int rc = compat_syscall5(SYSCALL_WRITE,
+                                 entry->host_fd,
+                                 (int)(uintptr_t)buf,
+                                 (int)count,
+                                 0,
+                                 0);
+
+        if (rc < 0) {
+            errno = EPIPE;
+            return -1;
+        }
+        return (ssize_t)rc;
+    }
     if (entry->kind == COMPAT_FD_KIND_SOCKET) {
         int rc = compat_syscall5(SYSCALL_NETWORK_SEND,
                                  entry->host_fd,
@@ -230,6 +261,8 @@ int close(int fd) {
     if (host_fd >= 0 && !compat_fd_refs_host(host_fd, entry->kind, fd)) {
         if (entry->kind == COMPAT_FD_KIND_SOCKET) {
             (void)compat_syscall5(SYSCALL_NETWORK_CLOSE, host_fd, 0, 0, 0, 0);
+        } else if (entry->kind == COMPAT_FD_KIND_PIPE) {
+            (void)compat_syscall5(SYSCALL_CLOSE, host_fd, 0, 0, 0, 0);
         } else {
             (void)vibe_app_close(host_fd);
         }
@@ -348,6 +381,12 @@ int fstat(int fd, struct stat *buf) {
     if (entry->kind == COMPAT_FD_KIND_SOCKET) {
         memset(buf, 0, sizeof(*buf));
         buf->st_mode = 0140666;
+        buf->st_nlink = 1;
+        return 0;
+    }
+    if (entry->kind == COMPAT_FD_KIND_PIPE) {
+        memset(buf, 0, sizeof(*buf));
+        buf->st_mode = 0010644; /* FIFO */
         buf->st_nlink = 1;
         return 0;
     }

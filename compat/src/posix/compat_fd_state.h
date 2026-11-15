@@ -30,7 +30,12 @@ struct compat_socket_list_entry {
 enum compat_fd_kind {
     COMPAT_FD_KIND_NONE = 0,
     COMPAT_FD_KIND_FILE = 1,
-    COMPAT_FD_KIND_SOCKET = 2
+    COMPAT_FD_KIND_SOCKET = 2,
+    /* pipe(): kernel ramfs fds must never surface as app fds (they
+     * collide with stdio 0-2 and with the compat table itself —
+     * KNOWN_BUGS #34 root 8). A PIPE entry keeps the kernel fd in
+     * host_fd and routes read/write/fstat via SYSCALL_READ/WRITE/FSTAT. */
+    COMPAT_FD_KIND_PIPE = 3
 };
 
 struct compat_fd_entry {
@@ -69,6 +74,7 @@ struct compat_fd_entry *compat_fd_get(int fd);
 const struct compat_fd_entry *compat_fd_get_const(int fd);
 int compat_fd_bind(int fd, int host_fd, int flags, int is_tty, int is_stdio);
 int compat_fd_bind_socket(int fd, int host_fd, int domain, int type, int protocol);
+int compat_fd_bind_pipe(int fd, int host_fd, int flags);
 int compat_fd_duplicate(int src_fd, int dst_fd, int cloexec);
 int compat_fd_refs_host(int host_fd, int kind, int skip_fd);
 void compat_fd_reset(int fd);

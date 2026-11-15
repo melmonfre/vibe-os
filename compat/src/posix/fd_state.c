@@ -188,6 +188,22 @@ int compat_fd_bind_socket(int fd, int host_fd, int domain, int type, int protoco
     compat_fd_init_socket(entry, domain, type, protocol);
     return 0;
 }
+int compat_fd_bind_pipe(int fd, int host_fd, int flags) {
+    struct compat_fd_entry *entry;
+
+    compat_fd_bootstrap();
+    if (fd < 3 || fd >= COMPAT_MAX_FDS) {
+        return -1;
+    }
+    entry = &g_compat_fds[fd];
+    memset(entry, 0, sizeof(*entry));
+    entry->used = 1;
+    entry->kind = COMPAT_FD_KIND_PIPE;
+    entry->host_fd = host_fd;
+    entry->flags = flags;
+    return 0;
+}
+
 
 int compat_fd_duplicate(int src_fd, int dst_fd, int cloexec) {
     const struct compat_fd_entry *src;

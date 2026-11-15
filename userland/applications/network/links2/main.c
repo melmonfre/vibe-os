@@ -390,7 +390,14 @@ static void init(void)
 	if (!dmp && !ggr) {
 		init_os_terminal();
 	}
-	if (!ggr && !no_connect && (uh = bind_to_af_unix(NULL)) != -1) {
+	/* VibeOS port fix (KNOWN_BUGS #34 root 7): this multi-instance block is
+	 * the EARLY entry (attach-to-running-instance + return). In dump mode
+	 * (`-source`/`-dump`) it must not run: handle_trm → attach_terminal
+	 * registers in_term on fd 0, whose blocking read() starves every
+	 * select() round on an INPUT-service timeout (~27s/measure), and the
+	 * dump flow below (request_object at ~:536) would never run when
+	 * bind_to_af_unix succeeds. dump/attach semantics don't apply. */
+	if (!dmp && !ggr && !no_connect && (uh = bind_to_af_unix(NULL)) != -1) {
 		close_socket(&terminal_pipe[0]);
 		close_socket(&terminal_pipe[1]);
 		info = create_session_info(base_session, u, default_target, &len);
