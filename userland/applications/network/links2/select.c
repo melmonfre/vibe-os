@@ -953,6 +953,7 @@ void reinit_child(void)
 }
 
 int terminate_loop = 0;
+static int links2_dsel_dbg_left = 24;
 
 void select_loop(void (*init)(void))
 {
@@ -1078,17 +1079,32 @@ void select_loop(void (*init)(void))
 		 * Sometimes it returns unusually high values.
 		 */
 		i = -1;
+		if (links2_dsel_dbg_left > 0) {
+			/* #34 probe: dispatch loop entered (capped) */
+			char msg[64];
+			int m = snprintf(msg, sizeof(msg), "links2 dsel: enter n=%d\n", n);
+			if (m > 0) {
+				links2_dsel_dbg_left--;
+				__asm__ volatile("int $0x80" ::
+					"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0)
+					: "memory", "cc");
+			}
+		}
 		while (n > 0 && ++i < ww_max) {
 			int k = 0;
-			if (n > 0 && FD_ISSET(i, &x_write) && threads[i].write_func) {
-				/* #34 witness, capped by the compat side */
+			{
+				/* #34 witness, capped: which bits the loop sees per fd */
 				char msg[64];
-				int m = snprintf(msg, sizeof(msg), "links2 dsel: w fd=%d\n", i);
-				if (m > 0)
+				int m = snprintf(msg, sizeof(msg), "links2 dsel: i=%d R=%d W=%d\n",
+					i, FD_ISSET(i, &x_read) ? 1 : 0, FD_ISSET(i, &x_write) ? 1 : 0);
+				if (m > 0 && links2_dsel_dbg_left > 12) {
+					links2_dsel_dbg_left--;
 					__asm__ volatile("int $0x80" ::
 						"a"(11L), "b"((long)(void *)msg), "c"(0), "d"(0), "S"(0), "D"(0)
 						: "memory", "cc");
+				}
 			}
+
 			if (FD_ISSET(i, &x_read)) {
 				if (threads[i].read_func) {
 #ifdef DEBUG_CALLS

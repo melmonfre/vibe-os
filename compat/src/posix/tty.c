@@ -159,7 +159,8 @@ static ssize_t compat_tty_consume_canon(void *buf, size_t count) {
     return (ssize_t)copy_len;
 }
 
-static ssize_t compat_tty_read_canonical(const struct termios *termios_state, void *buf, size_t count) {
+static ssize_t compat_tty_read_canonical(const struct termios *termios_state, void *buf, size_t count,
+                                         int nonblock) {
     ssize_t copied;
 
     copied = compat_tty_consume_canon(buf, count);
@@ -175,6 +176,10 @@ static ssize_t compat_tty_read_canonical(const struct termios *termios_state, vo
 
         c = compat_tty_translate_input(termios_state, c);
         if (c < 0) {
+            if (nonblock && g_compat_tty_canon_len == 0u) {
+                errno = EAGAIN;
+                return -1;
+            }
             continue;
         }
         if (compat_tty_signal_char(termios_state, c) != 0) {
@@ -226,7 +231,8 @@ static ssize_t compat_tty_read_canonical(const struct termios *termios_state, vo
     return compat_tty_consume_canon(buf, count);
 }
 
-static ssize_t compat_tty_read_raw(const struct termios *termios_state, void *buf, size_t count) {
+static ssize_t compat_tty_read_raw(const struct termios *termios_state, void *buf, size_t count,
+                                   int nonblock) {
     size_t need = 1u;
     size_t got = 0u;
 
@@ -244,6 +250,15 @@ static ssize_t compat_tty_read_raw(const struct termios *termios_state, void *bu
 
         c = compat_tty_translate_input(termios_state, c);
         if (c < 0) {
+            /* POSIX: O_NONBLOCK with no char available returns EAGAIN,
+             * it does not spin (KNOWN_BUGS #34: links2 arms fd 0
+             * O_NONBLOCK and the spin in this loop starved the socket
+             * write dispatch in the same select() round). Blocking mode
+             * keeps the historical busy-wait. */
+            if (nonblock && got == 0u) {
+                errno = EAGAIN;
+                return -1;
+            }
             continue;
         }
         if (compat_tty_signal_char(termios_state, c) != 0) {
@@ -274,10 +289,14 @@ ssize_t compat_tty_read(int fd, void *buf, size_t count) {
         errno = EBADF;
         return -1;
     }
-    if ((entry->termios_state.c_lflag & ICANON) != 0) {
-        return compat_tty_read_canonical(&entry->termios_state, buf, count);
+    {
+        int nonblock = (entry->flags & O_NONBLOCK) != 0;
+
+        if ((entry->termios_state.c_lflag & ICANON) != 0) {
+            return compat_tty_read_canonical(&entry->termios_state, buf, count, nonblock);
+        }
+        return compat_tty_read_raw(&entry->termios_state, buf, count, nonblock);
     }
-    return compat_tty_read_raw(&entry->termios_state, buf, count);
 }
 
 static int compat_network_status(struct mk_network_status *status) {

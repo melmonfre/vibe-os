@@ -36,9 +36,19 @@ class QemuSession:
         self._wait_for_monitor()
 
     def _spawn(self) -> None:
+        smp_override = os.environ.get("VIBE_SMP", "")
+        qemu_opts = list(QEMU_OPTS)
+        if smp_override:
+            # A/B of SMP-sensitive kernel paths (KNOWN_BUGS #34/#35):
+            # VIBE_SMP=1 drops the guest to a single CPU.
+            try:
+                i_smp = qemu_opts.index("-smp")
+                qemu_opts[i_smp + 1] = smp_override
+            except ValueError:
+                pass
         args = [
             self.qemu_binary,
-            *QEMU_OPTS,
+            *qemu_opts,
             "-m", str(self.memory_mb),
             "-drive", f"format=raw,file={self.image_path}",
             "-netdev", "user,id=net0",

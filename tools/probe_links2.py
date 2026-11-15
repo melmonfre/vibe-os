@@ -94,14 +94,14 @@ def main() -> int:
         session = QemuSession(args.qemu, scenario_image, args.memory_mb, workspace)
         try:
             scenario_boot_rescue_shell(session)
-            url = f"http://10.0.2.2:{port}/index.html"
+            url = f"http://10.0.2.2:{port}"
             # The token body is tiny on purpose: app stdout lands on VGA
             # char-by-char and the TCG typing wall dominates the run.
             run_command_expect(
                 session,
                 f"links2 -source {url}",
                 ["shell: command exit links2 rc=0"],
-                timeout=1500.0,
+                timeout=2400.0,
             )
             lines.append("- PASS serial: links2 ran and exited rc=0")
 

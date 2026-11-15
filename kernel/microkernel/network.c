@@ -5098,8 +5098,16 @@ int mk_network_service_send(int handle, const void *data, uint32_t size) {
     }
 
     if (mk_network_socket_is_inet_tcp(socket_state)) {
+        static uint32_t g_tcp_send_trace_left = 12u; /* #34 sonda entry/exit */
+        if (g_tcp_send_trace_left > 0u) {
+            kernel_debug_printf("network: tcp send in h=%d sz=%u\n",
+                                (int)handle, (unsigned int)size);
+            g_tcp_send_trace_left--;
+        }
         mk_network_progress_state();
         if (socket_state->connected != 3) {
+            kernel_debug_printf("network: tcp send not-estab h=%d con=%d\n",
+                                (int)handle, socket_state->connected);
             return -1;
         }
         next_hop = mk_network_next_hop_ipv4(socket_state->remote_ipv4);
@@ -5111,6 +5119,7 @@ int mk_network_service_send(int handle, const void *data, uint32_t size) {
                                                g_network_state.local_ipv4,
                                                next_hop);
             if (mk_network_wait_for_arp(next_hop, dest_mac, MK_NETWORK_ICMP_WAIT_TICKS) != 0) {
+                kernel_debug_printf("network: tcp send arp-fail h=%d\n", (int)handle);
                 return -1;
             }
         }
@@ -5125,6 +5134,7 @@ int mk_network_service_send(int handle, const void *data, uint32_t size) {
                                                 MK_TCP_FLAG_ACK | MK_TCP_FLAG_PSH,
                                                 (const uint8_t *)data,
                                                 size) != 0) {
+            kernel_debug_printf("network: tcp send tx-fail h=%d\n", (int)handle);
             return -1;
         }
         if (size > 0u && size <= MK_NETWORK_SOCKET_RX_CAPACITY) {
@@ -5136,6 +5146,8 @@ int mk_network_service_send(int handle, const void *data, uint32_t size) {
         }
         socket_state->tcp_snd_nxt += size;
         mk_network_tcp_rtt_start(socket_state);
+        kernel_debug_printf("network: tcp send out h=%d sz=%u\n",
+                            (int)handle, (unsigned int)size);
         return (int)size;
     }
 

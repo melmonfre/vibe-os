@@ -258,11 +258,17 @@ static int compat_select_wait_loop(int nfds,
             /* #34 probe: what select() received (capped). */
             char tr[128];
             int n, off = 0, fd;
-            n = snprintf(tr, sizeof(tr), "compat: sel call n=%d r=", nfds);
+            n = snprintf(tr, sizeof(tr), "compat: sel n=%d b=", nfds);
             off = n;
             for (fd = 0; fd < nfds && off < (int)sizeof(tr) - 4; ++fd) {
-                if (in_read != 0 && FD_ISSET(fd, in_read)) tr[off++] = 'R';
-                if (in_write != 0 && FD_ISSET(fd, in_write)) tr[off++] = 'W';
+                if (in_read != 0 && FD_ISSET(fd, in_read)) {
+                    tr[off++] = 'R';
+                    tr[off++] = (char)('0' + (fd % 10));
+                }
+                if (in_write != 0 && FD_ISSET(fd, in_write)) {
+                    tr[off++] = 'W';
+                    tr[off++] = (char)('0' + (fd % 10));
+                }
             }
             tr[off] = 0;
             (void)compat_syscall5(11, (int)(unsigned long)tr, 0, 0, 0, 0);
