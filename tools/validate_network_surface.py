@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 import shutil
 import socket
 import subprocess
@@ -35,21 +36,28 @@ class QemuSession:
         self._wait_for_monitor()
 
     def _spawn(self) -> None:
+        args = [
+            self.qemu_binary,
+            *QEMU_OPTS,
+            "-m", str(self.memory_mb),
+            "-drive", f"format=raw,file={self.image_path}",
+            "-netdev", "user,id=net0",
+            "-device", "virtio-net-pci,netdev=net0",
+            "-boot", "c",
+            "-display", "none",
+            "-serial", f"file:{self.serial_log}",
+            "-monitor", f"unix:{self.monitor_socket},server,nowait",
+            "-no-reboot",
+            "-no-shutdown",
+        ]
+        # Wire-level capture of the guest NIC (KNOWN_BUGS #34 probe):
+        # VIBE_NET_DUMP=<path> attaches an slirp filter-dump so gates can
+        # diff probe-vs-app frames without touching QEMU_OPTS.
+        dump_path = os.environ.get("VIBE_NET_DUMP", "")
+        if dump_path:
+            args += ["-object", f"filter-dump,id=f0,netdev=net0,file={dump_path}"]
         self.proc = subprocess.Popen(
-            [
-                self.qemu_binary,
-                *QEMU_OPTS,
-                "-m", str(self.memory_mb),
-                "-drive", f"format=raw,file={self.image_path}",
-                "-netdev", "user,id=net0",
-                "-device", "virtio-net-pci,netdev=net0",
-                "-boot", "c",
-                "-display", "none",
-                "-serial", f"file:{self.serial_log}",
-                "-monitor", f"unix:{self.monitor_socket},server,nowait",
-                "-no-reboot",
-                "-no-shutdown",
-            ],
+            args,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
