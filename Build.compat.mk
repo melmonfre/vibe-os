@@ -117,9 +117,9 @@ COMPAT_REGEX_CFLAGS := $(COMPAT_CFLAGS) \
 	-Icompat/sys \
 	-D__BSD_VISIBLE=1 -D__POSIX_VISIBLE=200809L -D__XPG_VISIBLE=700 -D__ISO_C_VISIBLE=2011 \
 	-D__mode_t=mode_t \
-	-Wno-error=sign-compare \
-	-Wno-error=maybe-uninitialized \
-	-Wno-error=unused-but-set-variable
+	-Wno-sign-compare \
+	-Wno-maybe-uninitialized \
+	-Wno-unused-but-set-variable
 
 # Pattern rule for compat objects
 build/compat/lib/libc/regex/%.o: compat/lib/libc/regex/%.c | build

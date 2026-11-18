@@ -14,8 +14,11 @@ extern long long strtoll(const char *, char **, int);
 extern unsigned long long strtoull(const char *, char **, int);
 extern int rand(void);
 extern void srand(unsigned);
-extern void abort(void);
-extern void exit(int);
+/* noreturn matches the real exit path in compat/src/libc/stdlib.c (routes
+ * to _exit/SYSCALL_EXIT). Without the attribute gcc flagged links2's
+ * noreturn-marked fatal() as "function does return" at error.c. */
+extern void abort(void) __attribute__((noreturn));
+extern void exit(int) __attribute__((noreturn));
 extern int abs(int);
 extern char *getenv(const char *);
 extern int putenv(char *);

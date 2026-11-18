@@ -59,7 +59,6 @@ static int tail_file(const char *filename, int num_lines) {
 
 int vibe_app_main(int argc, char **argv) {
     int num_lines = 10;  /* default */
-    int file_count = 0;
     int error = 0;
     
     argc--;
@@ -96,7 +95,6 @@ int vibe_app_main(int argc, char **argv) {
             error = 1;
         }
         
-        file_count++;
         argc--;
         argv++;
     }

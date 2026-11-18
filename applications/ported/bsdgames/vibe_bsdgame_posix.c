@@ -1617,7 +1617,10 @@ static int bsdgame_exec_current(const char *path, char *const argv[]) {
     }
 
     setprogname(argv[0]);
-    vibe_bsdgame_exit(vibe_bsdgame_main(argc, argv));
+    /* The game's main() is declared char** (vibe_bsdgame_main.c); the const
+     * only belongs to the POSIX exec vector shape. The shim never mutates
+     * the pointer array, so the cast stays inside the exec boundary. */
+    vibe_bsdgame_exit(vibe_bsdgame_main(argc, (char **)argv));
     return -1;
 }
 

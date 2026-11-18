@@ -35,7 +35,9 @@ static uint32_t bsdgame_next_random(void) {
     if (g_bsdgame_random_state == 0u) {
         time_t now = time(0);
 
-        g_bsdgame_random_state = (uint32_t)(now != 0 ? now : 0x12345678u);
+        uint32_t seed = (uint32_t)now;
+
+        g_bsdgame_random_state = seed != 0u ? seed : 0x12345678u;
     }
     g_bsdgame_random_state = (g_bsdgame_random_state * 1664525u) + 1013904223u;
     return g_bsdgame_random_state;
@@ -1124,15 +1126,6 @@ int setvbuf(FILE *stream, char *buf, int mode, size_t size) {
 int fpurge(FILE *stream) {
     (void)stream;
     return 0;
-}
-
-static void bsdgame_swap_bytes(unsigned char *lhs, unsigned char *rhs, size_t size) {
-    while (size-- > 0u) {
-        unsigned char tmp = *lhs;
-
-        *lhs++ = *rhs;
-        *rhs++ = tmp;
-    }
 }
 
 void qsort(void *base, size_t nmemb, size_t size,

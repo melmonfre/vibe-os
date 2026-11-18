@@ -20,15 +20,21 @@ void *realloc(void *ptr, size_t size) {
 
 void free(void *ptr) { vibe_app_free(ptr); }
 
-void exit(int status) { 
-    // TODO: This should terminate the process
-    (void)status; 
-    while(1); 
+/* The kernel's real termination path lives in compat/src/posix/process.c
+ * (_exit -> SYSCALL_EXIT + hlt). exit()/abort() route through it instead of
+ * spinning forever, which used to turn every exit() into a hung task
+ * (the header declared both noreturn while the implementation looped).
+ * Documented gap: this runtime has no atexit registry, so exit handlers do
+ * not run; abort exits with the conventional 128+SIGABRT status because
+ * there is no signal-disposition path for it. */
+extern void _exit(int status) __attribute__((noreturn));
+
+void exit(int status) {
+    _exit(status);
 }
 
-void abort(void) { 
-    // TODO: This should terminate the process
-    while(1); 
+void abort(void) {
+    _exit(134);
 }
 
 int atoi(const char *s) {

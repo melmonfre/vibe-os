@@ -58,6 +58,7 @@ PYTHON ?= python3
 CPU_ARCH_CFLAGS := -march=i586 -mtune=generic -mno-mmx -mno-sse -mno-sse2
 CFLAGS := -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie \
 	-fno-stack-protector -fno-builtin -nostdlib -nostdinc -Wall -Wextra \
+	-Wno-unused-but-set-variable -Wno-unused-function \
 	-Wno-pointer-sign -Wno-unused-parameter -Wno-unused-variable
 # Terminal-mode port for P3 (HTTP engine proof): NO -DG. The graphics
 # engine needs libpng (glyph rendering goes through png in dip.c; the tree

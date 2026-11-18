@@ -79,7 +79,12 @@ PYTHON ?= python3
 HOSTCC ?= cc
 CPU_ARCH_CFLAGS := -march=i586 -mtune=generic -mno-mmx -mno-sse -mno-sse2
 CFLAGS := -m32 $(CPU_ARCH_CFLAGS) -Os -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
-	-fno-builtin -nostdlib -Wall -Wextra
+	-fno-builtin -nostdlib -Wall -Wextra \
+	-Wno-format -Wno-unused-parameter -Wno-implicit-fallthrough -Wno-sign-compare \
+	-Wno-strict-aliasing -Wno-maybe-uninitialized -Wno-unused-but-set-variable \
+	-Wno-misleading-indentation -Wno-pointer-sign -Wno-bool-operation \
+	-Wno-unused-variable -Wno-unterminated-string-initialization -Wno-sequence-point \
+	-Wno-return-type -Wno-int-in-bool-context -Wno-empty-body
 INCLUDES := -I. -Iapplications/ported/bsdgames/include -Iapplications/ported/bsdgames -Icompat/include -Ilang/include -Iapplications/ported/include -Iheaders
 LDFLAGS := -m elf_i386 -T linker/app.ld -nostdlib -N --allow-multiple-definition
 
