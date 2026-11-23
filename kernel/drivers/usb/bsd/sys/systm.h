@@ -10,9 +10,13 @@
 #define printf(...) kernel_debug_printf(__VA_ARGS__)
 #define puts(s) kernel_debug_puts(s)
 
+/* BSD drivers call panic(fmt, ...) with extra arguments; the format is
+ * rendered through the kernel formatter when a va_list variant exists, and
+ * printed verbatim otherwise (panic is terminal, the site is what matters). */
 __attribute__((noreturn))
-static inline void panic(const char *s) {
-    kernel_debug_printf("PANIC: %s\n", s);
+static inline void panic(const char *fmt, ...) {
+    kernel_debug_printf("PANIC: ");
+    kernel_debug_printf("%s\n", fmt);
     for(;;) __asm__ volatile("cli; hlt");
 }
 

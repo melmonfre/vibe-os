@@ -322,3 +322,30 @@ int usbd_str(usb_string_descriptor_t *p, int l, const char *s) {
     return 0;
 }
 
+
+/* ------------------------------------------------------------------ */
+/* xHCI support (BSD OpenBSD dev/usb/xhci.c)                          */
+/* ------------------------------------------------------------------ */
+
+void rw_exit_read(struct rwlock *rw) {
+    (void)rw;
+}
+
+void rw_exit_write(struct rwlock *rw) {
+    (void)rw;
+}
+
+/* The BSD xHCI driver allocates and maps the bounce segments itself and
+ * then asks the DMA layer to publish them in the map. */
+int bus_dmamap_load_raw(bus_dma_tag_t t, bus_dmamap_t map,
+    bus_dma_segment_t *segs, int nsegs, bus_size_t size, bus_dma_flag_t flags) {
+    (void)t;
+    (void)flags;
+    (void)size;
+    if (!map || !segs || nsegs <= 0) {
+        return -1;
+    }
+    map->dm_segs[0] = segs[0];
+    map->addr = segs[0].ds_addr;
+    return 0;
+}

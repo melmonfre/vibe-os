@@ -8,6 +8,7 @@
 
 /* BSD USB driver - defers hardware init to avoid hangs */
 extern void bsd_usb_init(void);
+extern int bsd_usb_init_attached(void);
 #include <kernel/drivers/video/video.h>
 #include <kernel/hal/io.h>
 #include <kernel/kernel_string.h>
@@ -4384,6 +4385,9 @@ void kernel_usb_host_init(void) {
     if (found > 0u) {
         kernel_debug_puts("usb: starting BSD UHCI driver (deferred)\n");
         bsd_usb_init();
+        /* Registra E inicializa: sem o init sincrono os controladores ficam
+         * "deferred" e nada e enumerado (incluindo o xHCI novo). */
+        (void)bsd_usb_init_attached();
         /* P0 adendo 49: EHCI controllers are memory-mapped and need an
          * explicit bring-up (frame list + RUN + port power/reset) BEFORE
          * the port scan; the UHCI path above (bsd) covers only PIO

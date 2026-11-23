@@ -81,6 +81,8 @@ typedef struct bus_dma_segment bus_dma_segment_t;
 #define BUS_DMA_64BIT     0x04
 #define BUS_DMA_READ      0x08
 #define BUS_DMA_WRITE     0x10
+/* Zero-fill flag: OpenBSD's xHCI asks for a zeroed bounce buffer. */
+#define BUS_DMA_ZERO      0x20
 
 int bus_dmamem_alloc(bus_dma_tag_t t, bus_size_t size, bus_size_t align,
     bus_dma_flag_t flags, bus_dma_segment_t *segs, int nsegs, int *rsegs,
@@ -98,6 +100,10 @@ int bus_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map, caddr_t buf,
 void bus_dmamap_unload(bus_dma_tag_t t, bus_dmamap_t map);
 void bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t offset,
     bus_size_t len, int ops);
+/* Raw loader used by the BSD xHCI driver: the caller already allocated and
+ * mapped the physical segments, so the map only has to record them. */
+int bus_dmamap_load_raw(bus_dma_tag_t t, bus_dmamap_t map,
+    bus_dma_segment_t *segs, int nsegs, bus_size_t size, bus_dma_flag_t flags);
 
 #define BUS_DMASYNC_PREREAD  0x01
 #define BUS_DMASYNC_POSTREAD 0x02

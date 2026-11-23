@@ -7,12 +7,16 @@
 BSD_USB_INCDIR := kernel/drivers/usb/bsd
 # Note: kernel/drivers/usb/bsd MUST come before -idirafter headers in KERNEL_CFLAGS
 # The final search order is: -I. ... -Ibsd -Icompat/sys ... -idirafter headers
-BSD_USB_CFLAGS := -I$(BSD_USB_INCDIR) -Icompat/sys -Wno-unused-parameter -Wno-sign-compare
+# The BSD USB sources use the classic empty-statement DPRINTF macro, which
+# trips -Werror=empty-body at every call site; suppress that class only.
+BSD_USB_CFLAGS := -I$(BSD_USB_INCDIR) -Icompat/sys -Wno-unused-parameter -Wno-sign-compare \
+	-Wno-empty-body
 
 # BSD USB source files (from compat/sys/dev/usb/)
 BSD_USB_SRCS := \
 	compat/sys/dev/usb/uhci.c \
-	compat/sys/dev/usb/usb_mem.c
+	compat/sys/dev/usb/usb_mem.c \
+	compat/sys/dev/usb/xhci.c
 
 # VibeOS glue for BSD USB
 BSD_USB_SRCS += \

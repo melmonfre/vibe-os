@@ -294,7 +294,35 @@ def build_scenarios() -> List[Scenario]:
                 # functional read+write proof through the USB backend
                 "init: storage smoke ok",
             ] + SHELL_OR_DESKTOP_READY_MARKERS,
-            notes="Boot path validated through BIOS USB emulation; runtime storage now served by the native UHCI/BOT mass-storage backend (adendo 48), proven by the init read+write+restore smoke on the stick; EHCI/xHCI still missing.",
+            notes="Boot path validated through BIOS USB emulation; runtime storage now served by the native UHCI/BOT mass-storage backend (adendo 48), proven by the init read+write+restore smoke on the stick; EHCI is resolved (adendo 49) and xHCI now has a real driver (see the xhci-driver scenario).",
+        ),
+        Scenario(
+            name="xhci-driver",
+            description="xHCI controller bring-up through the vendored BSD driver",
+            # q35 + QEMU's xHCI device: the controller must be attached and
+            # initialized by compat/sys/dev/usb/xhci.c (reset + rings + event
+            # ring + port scan), not left probe-only. The boot must also stay
+            # healthy through desktop ready.
+            args=[
+                "-machine",
+                "q35",
+                "-m",
+                "{memory_mb}",
+                "-drive",
+                "format=raw,file={image}",
+                "-device",
+                "qemu-xhci,id=xhci",
+                "-boot",
+                "c",
+            ]
+            + headless_tail,
+            must_have=[
+                "bsd_usb: xHCI hw init OK",
+                "bsd_usb: 1/1 controller(s) active",
+            ] + COMMON_SUCCESS_MARKERS,
+            must_have_any=SHELL_OR_DESKTOP_READY_MARKERS,
+            timeout_seconds=200,
+            notes="xHCI is now a real driver (BSD xhci.c); needs physical xHCI hardware for FINAL validation.",
         ),
     ]
 

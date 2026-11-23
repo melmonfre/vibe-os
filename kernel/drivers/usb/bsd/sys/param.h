@@ -63,6 +63,11 @@
 #define min(a,b) ((a) < (b) ? (a) : (b))
 #define max(a,b) ((a) > (b) ? (a) : (b))
 
+/* BSD fls(): 1-based index of the most significant set bit, 0 when zero. */
+static inline int fls(int v) {
+    return v != 0 ? (32 - __builtin_clz((unsigned int)v)) : 0;
+}
+
 #define IPL_BIO 1
 #define IPL_SOFTNET 3
 #define PRIMASK 0
