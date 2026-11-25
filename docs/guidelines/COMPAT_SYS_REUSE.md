@@ -66,8 +66,8 @@ This also clarifies a naming issue: the imported tree is predominantly OpenBSD-s
 ## What Is Still Missing
 
 - The current network path in VibeOS is still a synthetic MVP: `network` exposes control-plane state and in-memory loopback sockets, but there is no real compat NIC driver, no real DHCP path, no real DNS resolver, and no real Wi-Fi stack yet.
-- No generic PCI enumeration and attach framework suitable for extracted drivers
-- No `bus_space` / `bus_dma` compatibility layer
+- PCI enumeration/attach: kernel-side enumeration exists (`kernel/drivers/pci/pci.c`, `kernel/pci_bus.c`) and is what the BSD USB attach uses, but the size-probe of a BAR returns 0 on some firmware/emulation (measured with `qemu-xhci` on q35), so callers must key off the base address. No user-space PCI service yet (the migration-order item 3 target).
+- `bus_space` / `bus_dma`: IMPLEMENTED (23/11). `bus_space_*` lives in the USB shim (`kernel/drivers/usb/bsd/machine/bus.h`), and the generic DMA policy moved OUT of the USB glue into the first-party service `kernel/drivers/pci/pci_dma.c` (`kernel_dma_alloc/free/map/unmap/translate`), with the BSD `bus_dmamap_*` shim delegating to it. Previously `bus_dmamap_create` handed back a shared `static` map and `bus_dmamap_load` published kernel pointers as physical addresses; both are now honest (per-map allocation, explicit failure outside the identity window).
 - No device interrupt routing contract for user-space drivers
 - No real socket layer, protocol switching, `mbuf` allocator, or packet path
 - No NIC RX/TX ring management outside the kernel
@@ -80,6 +80,7 @@ This also clarifies a naming issue: the imported tree is predominantly OpenBSD-s
 1. Keep the control-plane ABI BSD-shaped.
 2. Extend the Vibe-native IPC transport with transfer-buffer-backed bulk sharing across process boundaries.
 3. Add a PCI service with enumeration, BAR mapping policy, IRQ leasing, and DMA-safe buffer registration.
+   Status 23/11: the DMA-safe buffer half exists as a kernel service (`kernel/drivers/pci/pci_dma.c`); enumeration + BAR policy exist kernel-side. IRQ leasing for user-space drivers is still open.
 4. Extract one narrow network target first.
    Suggested order: `virtio-net` if we want QEMU velocity, otherwise `ne2000` for simplicity.
 5. Extract one narrow audio target first.

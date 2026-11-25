@@ -17,6 +17,8 @@
 #include <dev/usb/usbdivar.h>
 #include <dev/usb/usb_mem.h>
 
+#include <kernel/drivers/pci/pci_dma.h>
+
 uint32_t kernel_timer_get_ticks(void);
 void *alloc_phys_pages(size_t count);
 void free_phys_pages(void *page, size_t count);
@@ -174,11 +176,21 @@ int usbd_getnewaddr(struct usbd_bus *bus) {
 int bus_dmamem_alloc(bus_dma_tag_t t, bus_size_t size, bus_size_t align,
     bus_dma_flag_t flags, bus_dma_segment_t *segs, int nsegs, int *rsegs,
     bus_dma_flag_t rflags) {
-    (void)t; (void)align; (void)flags; (void)nsegs; (void)rflags;
-    size_t npages = (size + 0xFFF) >> 12;
-    void *p = alloc_phys_pages(npages);
-    if (!p) return -1;
-    segs[0].ds_addr = (bus_addr_t)(uintptr_t)p;
+    uintptr_t phys = 0u;
+    void *vaddr = NULL;
+    int zero;
+
+    (void)t; (void)nsegs; (void)rflags;
+    if (!segs || !rsegs) {
+        return -1;
+    }
+    /* BUS_DMA_ZERO (bit 0x20 no shim) pede buffer zerado; o servico
+     * generico de DMA cuida do mapeamento e da politica. */
+    zero = (flags & BUS_DMA_ZERO) != 0u;
+    if (kernel_dma_alloc((size_t)size, (size_t)align, zero, &phys, &vaddr) != 0) {
+        return -1;
+    }
+    segs[0].ds_addr = (bus_addr_t)phys;
     segs[0].ds_len = size;
     *rsegs = 1;
     return 0;
@@ -186,15 +198,23 @@ int bus_dmamem_alloc(bus_dma_tag_t t, bus_size_t size, bus_size_t align,
 
 void bus_dmamem_free(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs) {
     (void)t; (void)nsegs;
-    free_phys_pages((void*)(uintptr_t)segs[0].ds_addr,
-        (segs[0].ds_len + 0xFFF) >> 12);
+    if (segs) {
+        kernel_dma_free((uintptr_t)segs[0].ds_addr, (size_t)segs[0].ds_len);
+    }
 }
 
 int bus_dmamem_map(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs,
     bus_size_t size, caddr_t *kaddr, bus_dma_flag_t flags) {
+    void *vaddr = NULL;
+
     (void)t; (void)nsegs; (void)flags;
-    *kaddr = (caddr_t)(uintptr_t)segs[0].ds_addr;
-    (void)size;
+    if (!segs || !kaddr) {
+        return -1;
+    }
+    if (kernel_dma_map((uintptr_t)segs[0].ds_addr, (size_t)size, &vaddr) != 0) {
+        return -1;
+    }
+    *kaddr = (caddr_t)vaddr;
     return 0;
 }
 
@@ -205,23 +225,53 @@ void bus_dmamem_unmap(bus_dma_tag_t t, caddr_t kaddr, bus_size_t size) {
 int bus_dmamap_create(bus_dma_tag_t t, bus_size_t size, int nsegments,
     bus_size_t maxsegsz, bus_size_t boundary, bus_dma_flag_t flags,
     bus_dmamap_t *mapp) {
+    struct bus_dmamap *map;
+
     (void)t; (void)size; (void)nsegments; (void)maxsegsz;
     (void)boundary; (void)flags;
-    static struct bus_dmamap dummy;
-    dummy.addr = 0;
-    *mapp = &dummy;
+    if (!mapp) {
+        return -1;
+    }
+    /* Cada map e um objeto proprio: a versao anterior devolvia um
+     * 'static struct bus_dmamap' compartilhado, entao o segundo map
+     * clobberava o primeiro (dois drivers = um endereco). */
+    map = (struct bus_dmamap *)kernel_malloc(sizeof(struct bus_dmamap));
+    if (!map) {
+        return -1;
+    }
+    map->tag = t;
+    map->addr = 0;
+    map->dm_segs[0].ds_addr = 0;
+    map->dm_segs[0].ds_len = 0;
+    *mapp = map;
     return 0;
 }
 
 void bus_dmamap_destroy(bus_dma_tag_t t, bus_dmamap_t map) {
-    (void)t; (void)map;
+    (void)t;
+    if (map) {
+        kernel_free(map);
+    }
 }
 
 int bus_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map, caddr_t buf,
     bus_size_t buflen, struct proc *p, bus_dma_flag_t flags) {
+    uintptr_t phys = 0u;
+
     (void)t; (void)p; (void)flags;
-    map->addr = (bus_addr_t)(uintptr_t)buf;
-    (void)buflen;
+    if (!map || !buf) {
+        return -1;
+    }
+    /* O endereco publicado ao device tem que ser FISICO. Antes daqui saia
+     * o ponteiro de kernel como se fosse fisico, o que so "funcionava"
+     * porque o kernel e identity-mapped; qualquer buffer fora da janela
+     * fisica agora falha em vez de enganar o device. */
+    if (kernel_dma_translate((uintptr_t)buf, &phys) != 0) {
+        return -1;
+    }
+    map->addr = (bus_addr_t)phys;
+    map->dm_segs[0].ds_addr = (bus_addr_t)phys;
+    map->dm_segs[0].ds_len = buflen;
     return 0;
 }
 
